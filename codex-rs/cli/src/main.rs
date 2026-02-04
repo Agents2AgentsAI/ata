@@ -10,11 +10,12 @@ use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
 use codex_cli::WindowsCommand;
 use codex_cli::login::read_api_key_from_stdin;
+use codex_cli::login::run_list_providers;
 use codex_cli::login::run_login_status;
-use codex_cli::login::run_login_with_api_key;
 use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::login::run_login_with_device_code;
-use codex_cli::login::run_logout;
+use codex_cli::login::run_login_with_provider_api_key;
+use codex_cli::login::run_logout_provider;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
@@ -275,6 +276,10 @@ struct LoginCommand {
     #[arg(long = "device-auth")]
     use_device_code: bool,
 
+    /// Provider to configure (openai, anthropic, gemini). Defaults to openai.
+    #[arg(long = "provider", short = 'P', value_name = "PROVIDER")]
+    provider: Option<String>,
+
     /// EXPERIMENTAL: Use custom OAuth issuer base URL (advanced)
     /// Override the OAuth issuer base URL (advanced)
     #[arg(long = "experimental_issuer", value_name = "URL", hide = true)]
@@ -292,12 +297,18 @@ struct LoginCommand {
 enum LoginSubcommand {
     /// Show login status.
     Status,
+    /// List all configured providers.
+    List,
 }
 
 #[derive(Debug, Parser)]
 struct LogoutCommand {
     #[clap(skip)]
     config_overrides: CliConfigOverrides,
+
+    /// Provider to logout (openai, anthropic, gemini). If not specified, logs out all providers.
+    #[arg(value_name = "PROVIDER")]
+    provider: Option<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -660,6 +671,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 Some(LoginSubcommand::Status) => {
                     run_login_status(login_cli.config_overrides).await;
                 }
+                Some(LoginSubcommand::List) => {
+                    run_list_providers(login_cli.config_overrides).await;
+                }
                 None => {
                     if login_cli.use_device_code {
                         run_login_with_device_code(
@@ -675,7 +689,12 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                         std::process::exit(1);
                     } else if login_cli.with_api_key {
                         let api_key = read_api_key_from_stdin();
-                        run_login_with_api_key(login_cli.config_overrides, api_key).await;
+                        run_login_with_provider_api_key(
+                            login_cli.config_overrides,
+                            api_key,
+                            login_cli.provider,
+                        )
+                        .await;
                     } else {
                         run_login_with_chatgpt(login_cli.config_overrides).await;
                     }
@@ -687,7 +706,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 &mut logout_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            run_logout(logout_cli.config_overrides).await;
+            run_logout_provider(logout_cli.config_overrides, logout_cli.provider).await;
         }
         Some(Subcommand::Completion(completion_cli)) => {
             print_completion(completion_cli);

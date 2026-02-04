@@ -15,6 +15,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 
 use crate::LoginStatus;
 use crate::onboarding::auth::AuthModeWidget;
+use crate::onboarding::auth::ProviderOption;
 use crate::onboarding::auth::SignInOption;
 use crate::onboarding::auth::SignInState;
 use crate::onboarding::trust_directory::TrustDirectorySelection;
@@ -98,6 +99,7 @@ impl OnboardingScreen {
             steps.push(Step::Auth(AuthModeWidget {
                 request_frame: tui.frame_requester(),
                 highlighted_mode,
+                highlighted_provider: ProviderOption::OpenAI,
                 error: None,
                 sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
                 codex_home: codex_home.clone(),
