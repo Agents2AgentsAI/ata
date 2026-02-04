@@ -32,6 +32,8 @@ use std::time::Instant;
 use crate::version::CODEX_CLI_VERSION;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
+use codex_core::auth::list_configured_providers;
+use codex_core::auth::PROVIDER_OPENAI;
 use codex_core::config::Config;
 use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
@@ -3891,6 +3893,7 @@ impl ChatWidget {
         let switch_model = preset.model.to_string();
         let display_name = preset.display_name.to_string();
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
+        let provider_id = preset.provider_id.clone();
 
         let switch_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
             tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
@@ -3899,6 +3902,7 @@ impl ChatWidget {
                 sandbox_policy: None,
                 windows_sandbox_level: None,
                 model: Some(switch_model.clone()),
+                model_provider: provider_id.clone(),
                 effort: Some(Some(default_effort)),
                 summary: None,
                 collaboration_mode: None,
@@ -4018,6 +4022,7 @@ impl ChatWidget {
                         approval_policy: None,
                         sandbox_policy: None,
                         model: None,
+                        model_provider: None,
                         effort: None,
                         summary: None,
                         collaboration_mode: None,
@@ -4093,9 +4098,26 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
+        // Get list of configured providers to filter models
+        let configured_providers: std::collections::HashSet<String> = list_configured_providers(
+            &self.config.codex_home,
+            self.config.cli_auth_credentials_store_mode,
+        )
+        .into_iter()
+        .map(|p| p.provider_id)
+        .collect();
+
         let presets: Vec<ModelPreset> = presets
             .into_iter()
             .filter(|preset| preset.show_in_picker)
+            .filter(|preset| {
+                // Filter by configured provider
+                let provider_id = preset
+                    .provider_id
+                    .as_deref()
+                    .unwrap_or(PROVIDER_OPENAI);
+                configured_providers.contains(provider_id)
+            })
             .collect();
 
         let current_model = self.current_model();
@@ -4122,9 +4144,11 @@ impl ChatWidget {
                 let description =
                     (!preset.description.is_empty()).then_some(preset.description.clone());
                 let model = preset.model.clone();
+                let provider_id = preset.provider_id.clone();
                 let actions = Self::model_selection_actions(
                     model.clone(),
                     Some(preset.default_reasoning_effort),
+                    provider_id,
                 );
                 SelectionItem {
                     name: preset.display_name.clone(),
@@ -4279,6 +4303,7 @@ impl ChatWidget {
     fn model_selection_actions(
         model_for_action: String,
         effort_for_action: Option<ReasoningEffortConfig>,
+        provider_id: Option<String>,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
             let effort_label = effort_for_action
@@ -4290,6 +4315,7 @@ impl ChatWidget {
                 sandbox_policy: None,
                 windows_sandbox_level: None,
                 model: Some(model_for_action.clone()),
+                model_provider: provider_id.clone(),
                 effort: Some(effort_for_action),
                 summary: None,
                 collaboration_mode: None,
@@ -4313,6 +4339,7 @@ impl ChatWidget {
     pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
+        let provider_id = preset.provider_id.clone();
 
         let warn_effort = if supported
             .iter()
@@ -4357,9 +4384,9 @@ impl ChatWidget {
 
         if choices.len() == 1 {
             if let Some(effort) = choices.first().and_then(|c| c.stored) {
-                self.apply_model_and_effort(preset.model, Some(effort));
+                self.apply_model_and_effort(preset.model, Some(effort), provider_id);
             } else {
-                self.apply_model_and_effort(preset.model, None);
+                self.apply_model_and_effort(preset.model, None, provider_id);
             }
             return;
         }
@@ -4418,7 +4445,8 @@ impl ChatWidget {
             };
 
             let model_for_action = model_slug.clone();
-            let actions = Self::model_selection_actions(model_for_action, choice.stored);
+            let actions =
+                Self::model_selection_actions(model_for_action, choice.stored, provider_id.clone());
 
             items.push(SelectionItem {
                 name: effort_label,
@@ -4456,7 +4484,12 @@ impl ChatWidget {
         }
     }
 
-    fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
+    fn apply_model_and_effort(
+        &self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+        provider_id: Option<String>,
+    ) {
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::OverrideTurnContext {
                 cwd: None,
@@ -4464,6 +4497,7 @@ impl ChatWidget {
                 sandbox_policy: None,
                 windows_sandbox_level: None,
                 model: Some(model.clone()),
+                model_provider: provider_id,
                 effort: Some(effort),
                 summary: None,
                 collaboration_mode: None,
@@ -4653,6 +4687,7 @@ impl ChatWidget {
                 sandbox_policy: Some(sandbox_clone.clone()),
                 windows_sandbox_level: None,
                 model: None,
+                model_provider: None,
                 effort: None,
                 summary: None,
                 collaboration_mode: None,

@@ -3,8 +3,16 @@ use codex_common::CliConfigOverrides;
 use codex_core::CodexAuth;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CLIENT_ID;
-use codex_core::auth::login_with_api_key;
+use codex_core::auth::ProviderAuthSource;
+use codex_core::auth::PROVIDER_ANTHROPIC;
+use codex_core::auth::PROVIDER_GEMINI;
+use codex_core::auth::PROVIDER_OPENAI;
+use codex_core::auth::get_provider_api_key;
+use codex_core::auth::list_configured_providers;
+use codex_core::auth::login_with_provider_api_key;
 use codex_core::auth::logout;
+use codex_core::auth::logout_provider;
+use codex_core::auth::provider_env_var;
 use codex_core::config::Config;
 use codex_login::ServerOptions;
 use codex_login::run_device_code_login;
@@ -76,6 +84,16 @@ pub async fn run_login_with_api_key(
     cli_config_overrides: CliConfigOverrides,
     api_key: String,
 ) -> ! {
+    run_login_with_provider_api_key(cli_config_overrides, api_key, None).await
+}
+
+/// Login with an API key for a specific provider.
+/// If provider is None, defaults to OpenAI.
+pub async fn run_login_with_provider_api_key(
+    cli_config_overrides: CliConfigOverrides,
+    api_key: String,
+    provider: Option<String>,
+) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
     if matches!(config.forced_login_method, Some(ForcedLoginMethod::Chatgpt)) {
@@ -83,19 +101,38 @@ pub async fn run_login_with_api_key(
         std::process::exit(1);
     }
 
-    match login_with_api_key(
+    let provider_id = validate_provider_id(provider.as_deref());
+
+    match login_with_provider_api_key(
         &config.codex_home,
+        provider_id,
         &api_key,
         config.cli_auth_credentials_store_mode,
     ) {
         Ok(_) => {
-            eprintln!("{LOGIN_SUCCESS_MESSAGE}");
+            eprintln!("{LOGIN_SUCCESS_MESSAGE} for provider: {provider_id}");
             std::process::exit(0);
         }
         Err(e) => {
             eprintln!("Error logging in: {e}");
             std::process::exit(1);
         }
+    }
+}
+
+/// Validate and normalize provider ID.
+fn validate_provider_id(provider: Option<&str>) -> &str {
+    match provider {
+        None => PROVIDER_OPENAI,
+        Some(p) => match p.to_lowercase().as_str() {
+            "openai" => PROVIDER_OPENAI,
+            "anthropic" => PROVIDER_ANTHROPIC,
+            "gemini" | "google" | "google-gemini" => PROVIDER_GEMINI,
+            _ => {
+                eprintln!("Unknown provider: {p}. Valid providers: openai, anthropic, gemini");
+                std::process::exit(1);
+            }
+        },
     }
 }
 
@@ -224,34 +261,148 @@ pub async fn run_login_with_device_code_fallback_to_browser(
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
+    // Show ChatGPT auth status if available
     match CodexAuth::from_auth_storage(&config.codex_home, config.cli_auth_credentials_store_mode) {
         Ok(Some(auth)) => match auth.api_auth_mode() {
-            AuthMode::ApiKey => match auth.get_token() {
-                Ok(api_key) => {
-                    eprintln!("Logged in using an API key - {}", safe_format_key(&api_key));
-                    std::process::exit(0);
-                }
-                Err(e) => {
-                    eprintln!("Unexpected error retrieving API key: {e}");
-                    std::process::exit(1);
-                }
-            },
+            AuthMode::ApiKey => {
+                // Don't show legacy status, fall through to provider list
+            }
             AuthMode::Chatgpt => {
                 eprintln!("Logged in using ChatGPT");
-                std::process::exit(0);
             }
             AuthMode::ChatgptAuthTokens => {
                 eprintln!("Logged in using ChatGPT (external tokens)");
-                std::process::exit(0);
             }
         },
-        Ok(None) => {
-            eprintln!("Not logged in");
-            std::process::exit(1);
-        }
+        Ok(None) => {}
         Err(e) => {
             eprintln!("Error checking login status: {e}");
             std::process::exit(1);
+        }
+    }
+
+    // Show configured providers
+    let providers =
+        list_configured_providers(&config.codex_home, config.cli_auth_credentials_store_mode);
+
+    if providers.is_empty() {
+        eprintln!("No API keys configured");
+        std::process::exit(1);
+    }
+
+    eprintln!("Configured API keys:");
+    for provider in &providers {
+        let source = match provider.source {
+            ProviderAuthSource::Stored => "stored",
+            ProviderAuthSource::Environment => "env",
+        };
+        eprintln!("  {} ({})", provider.provider_id, source);
+    }
+    std::process::exit(0);
+}
+
+/// List all configured providers.
+pub async fn run_list_providers(cli_config_overrides: CliConfigOverrides) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+
+    let providers =
+        list_configured_providers(&config.codex_home, config.cli_auth_credentials_store_mode);
+
+    if providers.is_empty() {
+        eprintln!("No providers configured");
+        eprintln!();
+        eprintln!("To configure a provider, run:");
+        eprintln!("  codex auth login --provider <provider>");
+        eprintln!();
+        eprintln!("Available providers: openai, anthropic, gemini");
+        std::process::exit(0);
+    }
+
+    eprintln!("Configured providers:");
+    for provider in &providers {
+        let source = match provider.source {
+            ProviderAuthSource::Stored => "stored",
+            ProviderAuthSource::Environment => "env",
+        };
+
+        // Show env var hint for environment-sourced keys
+        let hint = if provider.source == ProviderAuthSource::Environment {
+            provider_env_var(&provider.provider_id)
+                .map(|v| format!(" (${v})"))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        eprintln!("  {} ({}){}", provider.provider_id, source, hint);
+    }
+    std::process::exit(0);
+}
+
+/// Logout a specific provider or all providers.
+pub async fn run_logout_provider(
+    cli_config_overrides: CliConfigOverrides,
+    provider: Option<String>,
+) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+
+    match provider {
+        Some(p) => {
+            let provider_id = validate_provider_id(Some(&p));
+
+            // Check if this provider is set via environment variable
+            if get_provider_api_key(
+                &config.codex_home,
+                provider_id,
+                config.cli_auth_credentials_store_mode,
+            )
+            .is_some()
+            {
+                if let Some(env_var) = provider_env_var(provider_id) {
+                    if std::env::var(env_var).is_ok() {
+                        eprintln!(
+                            "Note: {provider_id} API key is set via ${env_var} environment variable."
+                        );
+                        eprintln!("Removing stored credentials will not affect the environment variable.");
+                    }
+                }
+            }
+
+            match logout_provider(
+                &config.codex_home,
+                provider_id,
+                config.cli_auth_credentials_store_mode,
+            ) {
+                Ok(true) => {
+                    eprintln!("Successfully logged out of {provider_id}");
+                    std::process::exit(0);
+                }
+                Ok(false) => {
+                    eprintln!("No stored credentials found for {provider_id}");
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("Error logging out: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        None => {
+            // Logout all (existing behavior)
+            match logout(&config.codex_home, config.cli_auth_credentials_store_mode) {
+                Ok(true) => {
+                    eprintln!("Successfully logged out");
+                    std::process::exit(0);
+                }
+                Ok(false) => {
+                    eprintln!("Not logged in");
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("Error logging out: {e}");
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }
@@ -293,6 +444,7 @@ async fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config
     }
 }
 
+#[allow(dead_code)]
 fn safe_format_key(key: &str) -> String {
     if key.len() <= 13 {
         return "***".to_string();

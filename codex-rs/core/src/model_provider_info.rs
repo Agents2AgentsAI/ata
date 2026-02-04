@@ -213,6 +213,43 @@ impl ModelProviderInfo {
         }
     }
 
+    /// Get API key for this provider, checking multi-provider storage first.
+    /// Falls back to environment variable if not found in storage.
+    ///
+    /// This method requires the codex_home path to check stored credentials.
+    pub fn api_key_with_auth(
+        &self,
+        codex_home: &std::path::Path,
+        auth_credentials_store_mode: crate::auth::AuthCredentialsStoreMode,
+    ) -> crate::error::Result<Option<String>> {
+        // Map provider name to provider ID for multi-provider lookup
+        let provider_id = self.name_to_provider_id();
+
+        if let Some(provider_id) = provider_id {
+            // Check multi-provider storage (which checks env first, then stored)
+            if let Some(key) = crate::auth::get_provider_api_key(
+                codex_home,
+                provider_id,
+                auth_credentials_store_mode,
+            ) {
+                return Ok(Some(key));
+            }
+        }
+
+        // Fall back to legacy env_key lookup for custom providers
+        self.api_key()
+    }
+
+    /// Map provider name to provider ID for multi-provider storage lookup.
+    fn name_to_provider_id(&self) -> Option<&'static str> {
+        match self.name.to_lowercase().as_str() {
+            "openai" => Some(crate::auth::PROVIDER_OPENAI),
+            "anthropic" => Some(crate::auth::PROVIDER_ANTHROPIC),
+            "google gemini" | "gemini" => Some(crate::auth::PROVIDER_GEMINI),
+            _ => None,
+        }
+    }
+
     /// Effective maximum number of request retries for this provider.
     pub fn request_max_retries(&self) -> u64 {
         self.request_max_retries

@@ -43,6 +43,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             show_in_picker: true,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
+            provider_id: None,
         },
         ModelPreset {
             id: "gpt-5.1-codex-max".to_string(),
@@ -74,6 +75,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             show_in_picker: true,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
+            provider_id: None,
         },
         ModelPreset {
             id: "gpt-5.1-codex-mini".to_string(),
@@ -98,6 +100,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             show_in_picker: true,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
+            provider_id: None,
         },
         ModelPreset {
             id: "gpt-5.2".to_string(),
@@ -129,6 +132,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             show_in_picker: true,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
+            provider_id: None,
         },
         ModelPreset {
             id: "bengalfox".to_string(),
@@ -160,6 +164,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             show_in_picker: false,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
+            provider_id: None,
         },
         ModelPreset {
             id: "boomslang".to_string(),
@@ -191,6 +196,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             show_in_picker: false,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
+            provider_id: None,
         },
         // Deprecated models.
         ModelPreset {
@@ -219,6 +225,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             show_in_picker: false,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
+            provider_id: None,
         },
         ModelPreset {
             id: "gpt-5-codex-mini".to_string(),
@@ -242,6 +249,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             show_in_picker: false,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
+            provider_id: None,
         },
         ModelPreset {
             id: "gpt-5.1-codex".to_string(),
@@ -270,6 +278,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             show_in_picker: false,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
+            provider_id: None,
         },
         ModelPreset {
             id: "gpt-5".to_string(),
@@ -301,6 +310,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             show_in_picker: false,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
+            provider_id: None,
         },
         ModelPreset {
             id: "gpt-5.1".to_string(),
@@ -328,6 +338,69 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             show_in_picker: false,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
+            provider_id: None,
+        },
+        // Anthropic Claude models
+        ModelPreset {
+            id: "claude-sonnet-4.5".to_string(),
+            model: "claude-sonnet-4-5-20250514".to_string(),
+            display_name: "Claude Sonnet 4.5".to_string(),
+            description: "Anthropic's balanced model for coding tasks.".to_string(),
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![],
+            supports_personality: false,
+            is_default: false,
+            upgrade: None,
+            show_in_picker: true,
+            supported_in_api: true,
+            input_modalities: default_input_modalities(),
+            provider_id: Some("anthropic".to_string()),
+        },
+        ModelPreset {
+            id: "claude-opus-4.5".to_string(),
+            model: "claude-opus-4-5-20250514".to_string(),
+            display_name: "Claude Opus 4.5".to_string(),
+            description: "Anthropic's most capable model for complex reasoning.".to_string(),
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![],
+            supports_personality: false,
+            is_default: false,
+            upgrade: None,
+            show_in_picker: true,
+            supported_in_api: true,
+            input_modalities: default_input_modalities(),
+            provider_id: Some("anthropic".to_string()),
+        },
+        // Google Gemini models
+        ModelPreset {
+            id: "gemini-3-pro-preview".to_string(),
+            model: "gemini-3-pro-preview".to_string(),
+            display_name: "Gemini 3 Pro".to_string(),
+            description: "Google's advanced model for complex tasks.".to_string(),
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![],
+            supports_personality: false,
+            is_default: false,
+            upgrade: None,
+            show_in_picker: true,
+            supported_in_api: true,
+            input_modalities: default_input_modalities(),
+            provider_id: Some("gemini".to_string()),
+        },
+        ModelPreset {
+            id: "gemini-3-flash-preview".to_string(),
+            model: "gemini-3-flash-preview".to_string(),
+            display_name: "Gemini 3 Flash".to_string(),
+            description: "Google's fast and efficient model.".to_string(),
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![],
+            supports_personality: false,
+            is_default: false,
+            upgrade: None,
+            show_in_picker: true,
+            supported_in_api: true,
+            input_modalities: default_input_modalities(),
+            provider_id: Some("gemini".to_string()),
         },
     ]
 });

@@ -642,6 +642,15 @@ impl SessionConfiguration {
         if let Some(cwd) = updates.cwd.clone() {
             next_configuration.cwd = cwd;
         }
+        // Switch provider if model_provider is specified
+        if let Some(provider_id) = &updates.model_provider {
+            if let Some(provider) = crate::model_provider_info::built_in_model_providers()
+                .get(provider_id)
+                .cloned()
+            {
+                next_configuration.provider = provider;
+            }
+        }
         Ok(next_configuration)
     }
 }
@@ -656,6 +665,8 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     pub(crate) personality: Option<Personality>,
+    /// Model provider ID to switch to (e.g., "openai", "anthropic", "gemini").
+    pub(crate) model_provider: Option<String>,
 }
 
 impl Session {
@@ -2444,6 +2455,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 sandbox_policy,
                 windows_sandbox_level,
                 model,
+                model_provider,
                 effort,
                 summary,
                 collaboration_mode,
@@ -2470,6 +2482,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         collaboration_mode: Some(collaboration_mode),
                         reasoning_summary: summary,
                         personality,
+                        model_provider,
                         ..Default::default()
                     },
                 )
@@ -2682,6 +2695,7 @@ mod handlers {
                         reasoning_summary: Some(summary),
                         final_output_json_schema: Some(final_output_json_schema),
                         personality,
+                        model_provider: None,
                     },
                 )
             }
