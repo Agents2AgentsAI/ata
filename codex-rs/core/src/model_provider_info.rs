@@ -35,11 +35,15 @@ pub(crate) const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str = "`ollama-chat` is no
 
 /// Wire protocol that the provider speaks.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum WireApi {
     /// The Responses API exposed by OpenAI at `/v1/responses`.
     #[default]
     Responses,
+    /// The Anthropic Messages API at `/v1/messages`.
+    AnthropicMessages,
+    /// The Gemini GenerateContent API.
+    GeminiGenerate,
 }
 
 impl<'de> Deserialize<'de> for WireApi {
@@ -50,8 +54,13 @@ impl<'de> Deserialize<'de> for WireApi {
         let value = String::deserialize(deserializer)?;
         match value.as_str() {
             "responses" => Ok(Self::Responses),
+            "anthropic_messages" => Ok(Self::AnthropicMessages),
+            "gemini_generate" => Ok(Self::GeminiGenerate),
             "chat" => Err(serde::de::Error::custom(CHAT_WIRE_API_REMOVED_ERROR)),
-            _ => Err(serde::de::Error::unknown_variant(&value, &["responses"])),
+            _ => Err(serde::de::Error::unknown_variant(
+                &value,
+                &["responses", "anthropic_messages", "gemini_generate"],
+            )),
         }
     }
 }
@@ -268,6 +277,54 @@ impl ModelProviderInfo {
     pub fn is_openai(&self) -> bool {
         self.name == OPENAI_PROVIDER_NAME
     }
+
+    /// Creates the built-in Anthropic provider configuration.
+    pub fn create_anthropic_provider() -> ModelProviderInfo {
+        ModelProviderInfo {
+            name: "Anthropic".into(),
+            base_url: Some("https://api.anthropic.com/v1".into()),
+            env_key: Some("ANTHROPIC_API_KEY".into()),
+            env_key_instructions: Some(
+                "Get your API key at https://console.anthropic.com/settings/keys".into(),
+            ),
+            experimental_bearer_token: None,
+            wire_api: WireApi::AnthropicMessages,
+            query_params: None,
+            http_headers: Some(
+                [("anthropic-version".to_string(), "2023-06-01".to_string())]
+                    .into_iter()
+                    .collect(),
+            ),
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        }
+    }
+
+    /// Creates the built-in Google Gemini provider configuration.
+    pub fn create_gemini_provider() -> ModelProviderInfo {
+        ModelProviderInfo {
+            name: "Google Gemini".into(),
+            base_url: Some("https://generativelanguage.googleapis.com/v1beta".into()),
+            env_key: Some("GOOGLE_API_KEY".into()),
+            env_key_instructions: Some(
+                "Get your API key at https://aistudio.google.com/apikey".into(),
+            ),
+            experimental_bearer_token: None,
+            wire_api: WireApi::GeminiGenerate,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        }
+    }
 }
 
 pub const DEFAULT_LMSTUDIO_PORT: u16 = 1234;
@@ -280,12 +337,13 @@ pub const OLLAMA_OSS_PROVIDER_ID: &str = "ollama";
 pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
     use ModelProviderInfo as P;
 
-    // We do not want to be in the business of adjucating which third-party
-    // providers are bundled with Codex CLI, so we only include the OpenAI and
-    // open source ("oss") providers by default. Users are encouraged to add to
-    // `model_providers` in config.toml to add their own providers.
+    // We include OpenAI, Anthropic, Gemini, and open source ("oss") providers
+    // by default. Users can add additional providers via `model_providers` in
+    // config.toml.
     [
         ("openai", P::create_openai_provider()),
+        ("anthropic", P::create_anthropic_provider()),
+        ("gemini", P::create_gemini_provider()),
         (
             OLLAMA_OSS_PROVIDER_ID,
             create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),
