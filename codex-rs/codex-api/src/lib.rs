@@ -3,10 +3,14 @@ pub mod common;
 pub mod endpoint;
 pub mod error;
 pub mod provider;
+pub mod provider_adapter;
+pub mod provider_factory;
+pub mod providers;
 pub mod rate_limits;
 pub mod requests;
 pub mod sse;
 pub mod telemetry;
+pub mod tools;
 
 pub use crate::requests::headers::build_conversation_headers;
 pub use codex_client::RequestTelemetry;
@@ -37,3 +41,16 @@ pub use crate::requests::ResponsesRequestBuilder;
 pub use crate::sse::stream_from_fixture;
 pub use crate::telemetry::SseTelemetry;
 pub use crate::telemetry::WebsocketTelemetry;
+
+// Multi-provider support
+pub use crate::provider_adapter::ProviderAdapter;
+pub use crate::provider_adapter::RequestOptions;
+pub use crate::provider_factory::ProviderFactory;
+pub use crate::provider_factory::WireApi as ApiWireApi;
+pub use crate::providers::AnthropicAdapter;
+pub use crate::providers::GeminiAdapter;
+pub use crate::providers::OpenAiAdapter;
+pub use crate::tools::AnthropicToolFormatter;
+pub use crate::tools::GeminiToolFormatter;
+pub use crate::tools::OpenAiToolFormatter;
+pub use crate::tools::ToolFormatter;

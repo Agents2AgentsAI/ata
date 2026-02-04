@@ -1092,6 +1092,20 @@
             "responses"
           ],
           "type": "string"
+        },
+        {
+          "description": "The Anthropic Messages API at `/v1/messages`.",
+          "enum": [
+            "anthropic_messages"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The Gemini GenerateContent API.",
+          "enum": [
+            "gemini_generate"
+          ],
+          "type": "string"
         }
       ]
     }

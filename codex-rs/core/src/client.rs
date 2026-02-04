@@ -258,7 +258,7 @@ impl ModelClient {
 }
 
 impl ModelClientSession {
-    /// Streams a single model turn using the configured Responses transport.
+    /// Streams a single model turn using the configured transport.
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
         let wire_api = self.state.provider.wire_api;
         match wire_api {
@@ -272,6 +272,8 @@ impl ModelClientSession {
                     self.stream_responses_api(prompt).await
                 }
             }
+            WireApi::AnthropicMessages => self.stream_anthropic_api(prompt).await,
+            WireApi::GeminiGenerate => self.stream_gemini_api(prompt).await,
         }
     }
 
@@ -587,6 +589,314 @@ impl ModelClientSession {
                 self.state.otel_manager.clone(),
             ));
         }
+    }
+
+    /// Streams a turn via the Anthropic Messages API.
+    async fn stream_anthropic_api(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        use codex_api::AnthropicAdapter;
+        use codex_api::ProviderAdapter;
+        use eventsource_stream::Eventsource;
+        use futures::TryStreamExt;
+
+        let api_prompt = self.build_responses_request(prompt)?;
+        let adapter = AnthropicAdapter::new();
+
+        // Get API key from environment
+        let api_key = self
+            .state
+            .provider
+            .api_key()?
+            .ok_or_else(|| CodexErr::MissingApiKey("ANTHROPIC_API_KEY".to_string()))?;
+
+        let api_provider = self.state.provider.to_api_provider(None)?;
+
+        // Build request body using adapter
+        let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
+        let input_json: Vec<Value> = api_prompt
+            .input
+            .iter()
+            .map(|item| serde_json::to_value(item).unwrap_or_default())
+            .collect();
+
+        let request_body = adapter
+            .build_request_body(
+                &self.state.model_info.slug,
+                &api_prompt.instructions,
+                &input_json,
+                &tools_json,
+                &codex_api::RequestOptions {
+                    parallel_tool_calls: api_prompt.parallel_tool_calls,
+                    ..Default::default()
+                },
+            )
+            .map_err(map_api_error)?;
+
+        // Build headers
+        let mut headers = adapter.extra_headers();
+        headers.extend(api_provider.headers.clone());
+        headers.insert(
+            http::header::HeaderName::from_static("x-api-key"),
+            http::HeaderValue::from_str(&api_key).map_err(|e| {
+                CodexErr::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            })?,
+        );
+        headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/json"),
+        );
+
+        let endpoint = adapter.streaming_endpoint(&self.state.model_info.slug);
+        let url = format!("{}{}", api_provider.base_url, endpoint);
+
+        // Make streaming request
+        let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
+        let idle_timeout = self.state.provider.stream_idle_timeout();
+
+        let client = build_reqwest_client();
+
+        tokio::spawn(async move {
+            let response: reqwest::Response = match client
+                .post(&url)
+                .headers(headers)
+                .json(&request_body)
+                .send()
+                .await
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    let _ = tx_event
+                        .send(Err(CodexErr::Io(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            e.to_string(),
+                        ))))
+                        .await;
+                    return;
+                }
+            };
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                let _ = tx_event
+                    .send(Err(CodexErr::Api(format!(
+                        "Anthropic API error {}: {}",
+                        status, body
+                    ))))
+                    .await;
+                return;
+            }
+
+            // Process SSE stream
+            let stream = response
+                .bytes_stream()
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+                .eventsource();
+
+            futures::pin_mut!(stream);
+
+            loop {
+                use tokio::time::timeout;
+
+                let result = timeout(idle_timeout, stream.try_next()).await;
+                match result {
+                    Ok(Ok(Some(event))) => {
+                        match adapter.parse_sse_event(&event.event, &event.data) {
+                            Ok(Some(response_event)) => {
+                                let is_completed =
+                                    matches!(response_event, ResponseEvent::Completed { .. });
+                                if tx_event.send(Ok(response_event)).await.is_err() {
+                                    return;
+                                }
+                                if is_completed {
+                                    return;
+                                }
+                            }
+                            Ok(None) => continue,
+                            Err(e) => {
+                                let _ = tx_event.send(Err(map_api_error(e))).await;
+                                return;
+                            }
+                        }
+                    }
+                    Ok(Ok(None)) => {
+                        // Stream ended without completion event
+                        let _ = tx_event
+                            .send(Err(CodexErr::Api(
+                                "Stream ended without completion".to_string(),
+                            )))
+                            .await;
+                        return;
+                    }
+                    Ok(Err(e)) => {
+                        let _ = tx_event
+                            .send(Err(CodexErr::Io(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                e.to_string(),
+                            ))))
+                            .await;
+                        return;
+                    }
+                    Err(_) => {
+                        let _ = tx_event
+                            .send(Err(CodexErr::Api("Idle timeout".to_string())))
+                            .await;
+                        return;
+                    }
+                }
+            }
+        });
+
+        Ok(ResponseStream { rx_event })
+    }
+
+    /// Streams a turn via the Google Gemini GenerateContent API.
+    async fn stream_gemini_api(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        use codex_api::GeminiAdapter;
+        use codex_api::ProviderAdapter;
+
+        let api_prompt = self.build_responses_request(prompt)?;
+        let adapter = GeminiAdapter::new();
+
+        // Get API key from environment
+        let api_key = self
+            .state
+            .provider
+            .api_key()?
+            .ok_or_else(|| CodexErr::MissingApiKey("GOOGLE_API_KEY".to_string()))?;
+
+        let api_provider = self.state.provider.to_api_provider(None)?;
+
+        // Build request body using adapter
+        let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
+        let input_json: Vec<Value> = api_prompt
+            .input
+            .iter()
+            .map(|item| serde_json::to_value(item).unwrap_or_default())
+            .collect();
+
+        let request_body = adapter
+            .build_request_body(
+                &self.state.model_info.slug,
+                &api_prompt.instructions,
+                &input_json,
+                &tools_json,
+                &codex_api::RequestOptions {
+                    parallel_tool_calls: api_prompt.parallel_tool_calls,
+                    ..Default::default()
+                },
+            )
+            .map_err(map_api_error)?;
+
+        // Build headers
+        let mut headers = adapter.extra_headers();
+        headers.extend(api_provider.headers.clone());
+        headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/json"),
+        );
+
+        // Gemini uses query parameter for API key
+        let endpoint = adapter.streaming_endpoint(&self.state.model_info.slug);
+        let url = format!("{}{}?key={}&alt=sse", api_provider.base_url, endpoint, api_key);
+
+        // Make streaming request
+        let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
+        let idle_timeout = self.state.provider.stream_idle_timeout();
+
+        let client = build_reqwest_client();
+
+        tokio::spawn(async move {
+            let response: reqwest::Response = match client
+                .post(&url)
+                .headers(headers)
+                .json(&request_body)
+                .send()
+                .await
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    let _ = tx_event
+                        .send(Err(CodexErr::Io(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            e.to_string(),
+                        ))))
+                        .await;
+                    return;
+                }
+            };
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                let _ = tx_event
+                    .send(Err(CodexErr::Api(format!(
+                        "Gemini API error {}: {}",
+                        status, body
+                    ))))
+                    .await;
+                return;
+            }
+
+            // Process SSE stream (Gemini uses data: prefix for JSON lines)
+            use eventsource_stream::Eventsource;
+            use futures::TryStreamExt;
+
+            let stream = response
+                .bytes_stream()
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+                .eventsource();
+
+            futures::pin_mut!(stream);
+
+            loop {
+                use tokio::time::timeout;
+
+                let result = timeout(idle_timeout, stream.try_next()).await;
+                match result {
+                    Ok(Ok(Some(event))) => {
+                        // Gemini sends data in the data field
+                        match adapter.parse_sse_event(&event.event, &event.data) {
+                            Ok(Some(response_event)) => {
+                                let is_completed =
+                                    matches!(response_event, ResponseEvent::Completed { .. });
+                                if tx_event.send(Ok(response_event)).await.is_err() {
+                                    return;
+                                }
+                                if is_completed {
+                                    return;
+                                }
+                            }
+                            Ok(None) => continue,
+                            Err(e) => {
+                                let _ = tx_event.send(Err(map_api_error(e))).await;
+                                return;
+                            }
+                        }
+                    }
+                    Ok(Ok(None)) => {
+                        // Stream ended - might be normal for Gemini
+                        return;
+                    }
+                    Ok(Err(e)) => {
+                        let _ = tx_event
+                            .send(Err(CodexErr::Io(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                e.to_string(),
+                            ))))
+                            .await;
+                        return;
+                    }
+                    Err(_) => {
+                        let _ = tx_event
+                            .send(Err(CodexErr::Api("Idle timeout".to_string())))
+                            .await;
+                        return;
+                    }
+                }
+            }
+        });
+
+        Ok(ResponseStream { rx_event })
     }
 
     /// Builds request and SSE telemetry for streaming API calls.

@@ -157,6 +157,12 @@ pub enum CodexErr {
     #[error("Fatal error: {0}")]
     Fatal(String),
 
+    #[error("Missing API key: {0}. Please set the environment variable.")]
+    MissingApiKey(String),
+
+    #[error("API error: {0}")]
+    Api(String),
+
     // -----------------------------------------------------------------
     // Automatic conversions for common external error types
     // -----------------------------------------------------------------
@@ -209,7 +215,8 @@ impl CodexErr {
             | CodexErr::Spawn
             | CodexErr::SessionConfiguredNotFirstEvent
             | CodexErr::UsageLimitReached(_)
-            | CodexErr::ModelCap(_) => false,
+            | CodexErr::ModelCap(_)
+            | CodexErr::MissingApiKey(_) => false,
             CodexErr::Stream(..)
             | CodexErr::Timeout
             | CodexErr::UnexpectedStatus(_)
@@ -219,7 +226,8 @@ impl CodexErr {
             | CodexErr::InternalAgentDied
             | CodexErr::Io(_)
             | CodexErr::Json(_)
-            | CodexErr::TokioJoin(_) => true,
+            | CodexErr::TokioJoin(_)
+            | CodexErr::Api(_) => true,
             #[cfg(target_os = "linux")]
             CodexErr::LandlockRuleset(_) | CodexErr::LandlockPathFd(_) => false,
         }
