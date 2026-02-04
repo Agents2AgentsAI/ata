@@ -184,13 +184,16 @@ pub fn convert_anthropic_content_to_response_item(
 }
 
 // Anthropic SSE event types
+// These structs contain fields required for JSON deserialization that may not be directly used.
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct ContentBlockStart {
     index: i64,
     content_block: ContentBlock,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 enum ContentBlock {
@@ -200,12 +203,14 @@ enum ContentBlock {
     ToolUse { id: String, name: String, input: Value },
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct ContentBlockDelta {
     index: i64,
     delta: ContentDelta,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 enum ContentDelta {
@@ -215,18 +220,21 @@ enum ContentDelta {
     InputJsonDelta { partial_json: String },
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct MessageDelta {
     delta: MessageDeltaContent,
     usage: Option<MessageUsage>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct MessageDeltaContent {
     stop_reason: Option<String>,
     stop_sequence: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct MessageUsage {
     output_tokens: i64,

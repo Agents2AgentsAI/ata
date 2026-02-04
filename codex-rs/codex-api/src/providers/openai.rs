@@ -9,18 +9,13 @@ use crate::common::ResponseEvent;
 use crate::error::ApiError;
 use crate::provider_adapter::{ProviderAdapter, RequestOptions};
 use crate::sse::responses::{process_responses_event, ResponsesStreamEvent};
-use crate::tools::OpenAiToolFormatter;
 
 /// OpenAI Responses API adapter.
-pub struct OpenAiAdapter {
-    tool_formatter: OpenAiToolFormatter,
-}
+pub struct OpenAiAdapter;
 
 impl OpenAiAdapter {
     pub fn new() -> Self {
-        Self {
-            tool_formatter: OpenAiToolFormatter::new(),
-        }
+        Self
     }
 }
 
