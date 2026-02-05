@@ -529,7 +529,7 @@ pub(crate) struct App {
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
     pub(crate) deferred_history_lines: Vec<Line<'static>>,
-    pub(crate) has_emitted_history_lines: bool,
+    has_emitted_history_lines: bool,
 
     pub(crate) enhanced_keys_supported: bool,
 
@@ -543,10 +543,6 @@ pub(crate) struct App {
     /// This is used after a confirmed thread rollback to ensure scrollback reflects the trimmed
     /// transcript cells.
     pub(crate) backtrack_render_pending: bool,
-    /// When set, the next draw clears the scrollback and re-renders the full transcript.
-    ///
-    /// This is used when the model changes to update the header display.
-    transcript_refresh_pending: bool,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     feedback_audience: FeedbackAudience,
     /// Set when the user confirms an update; propagated on exit.
@@ -1098,7 +1094,6 @@ impl App {
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
-            transcript_refresh_pending: false,
             feedback: feedback.clone(),
             feedback_audience,
             pending_update_action: None,
@@ -1244,10 +1239,6 @@ impl App {
                     if self.backtrack_render_pending {
                         self.backtrack_render_pending = false;
                         self.render_transcript_once(tui);
-                    }
-                    if self.transcript_refresh_pending {
-                        self.transcript_refresh_pending = false;
-                        self.refresh_transcript_scrollback(tui)?;
                     }
                     self.chat_widget.maybe_post_pending_notification(tui);
                     if self
@@ -1571,15 +1562,9 @@ impl App {
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
-                // Refresh the scrollback so the header shows the updated reasoning effort.
-                self.transcript_refresh_pending = true;
-                tui.frame_requester().schedule_frame();
             }
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
-                // Refresh the scrollback so the header shows the updated model.
-                self.transcript_refresh_pending = true;
-                tui.frame_requester().schedule_frame();
             }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
@@ -2646,7 +2631,6 @@ mod tests {
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
-            transcript_refresh_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
             pending_update_action: None,
@@ -2700,7 +2684,6 @@ mod tests {
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
                 backtrack: BacktrackState::default(),
                 backtrack_render_pending: false,
-                transcript_refresh_pending: false,
                 feedback: codex_feedback::CodexFeedback::new(),
                 feedback_audience: FeedbackAudience::External,
                 pending_update_action: None,

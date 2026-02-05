@@ -251,21 +251,6 @@ impl App {
         }
     }
 
-    /// Clear the scrollback and re-render all transcript cells.
-    ///
-    /// This is used when the model changes to refresh the header display,
-    /// since the header uses a shared Arc for the model that gets updated.
-    pub(crate) fn refresh_transcript_scrollback(
-        &mut self,
-        tui: &mut tui::Tui,
-    ) -> std::io::Result<()> {
-        tui.terminal.clear_scrollback()?;
-        tui.terminal.clear()?;
-        self.has_emitted_history_lines = false;
-        self.render_transcript_once(tui);
-        Ok(())
-    }
-
     /// Initialize backtrack state and show composer hint.
     fn prime_backtrack(&mut self) {
         self.backtrack.primed = true;

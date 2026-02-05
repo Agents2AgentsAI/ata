@@ -347,7 +347,9 @@ impl Codex {
             mode: ModeKind::Default,
             settings: Settings {
                 model: model.clone(),
-                reasoning_effort: config.model_reasoning_effort,
+                reasoning_effort: config
+                    .model_reasoning_effort
+                    .or(model_info.default_reasoning_level),
                 developer_instructions: None,
             },
         };

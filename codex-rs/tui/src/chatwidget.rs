@@ -800,25 +800,6 @@ impl ChatWidget {
 
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
-        // Check if this is a mid-session update (we already have this session configured)
-        // This can happen when model/effort changes trigger a SessionConfigured event
-        let is_mid_session_update = self.thread_id.is_some()
-            && self.thread_id == Some(event.session_id);
-
-        if is_mid_session_update {
-            // Just update the model/effort without creating a new header
-            self.session_header.set_model(&event.model);
-            self.session_header.set_reasoning_effort(event.reasoning_effort);
-            self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
-                Some(event.model.clone()),
-                Some(event.reasoning_effort),
-                None,
-            );
-            self.refresh_model_display();
-            self.request_redraw();
-            return;
-        }
-
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
@@ -845,8 +826,7 @@ impl ChatWidget {
             self.auth_manager
                 .auth_cached()
                 .and_then(|auth| auth.account_plan_type()),
-            self.session_header.shared_model(),
-            self.session_header.shared_reasoning_effort(),
+            self.current_collaboration_mode.reasoning_effort(),
         );
         self.apply_session_info_cell(session_info_cell);
 
@@ -2267,9 +2247,13 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.model.clone())
             .unwrap_or_else(|| model_for_header.clone());
+        let reasoning_effort = active_collaboration_mask
+            .as_ref()
+            .and_then(|mask| mask.reasoning_effort)
+            .flatten();
         let fallback_default = Settings {
             model: header_model.clone(),
-            reasoning_effort: None,
+            reasoning_effort,
             developer_instructions: None,
         };
         // Collaboration modes start in Default mode.
@@ -2278,9 +2262,10 @@ impl ChatWidget {
             settings: fallback_default,
         };
 
-        // Create session_header first so we can share its model with the placeholder cell
-        let session_header = SessionHeader::new(header_model);
-        let active_cell = Some(Self::placeholder_session_header_cell(&session_header, &config));
+        let active_cell = Some(Self::placeholder_session_header_cell(
+            header_model.clone(),
+            &config,
+        ));
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -2306,7 +2291,7 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             otel_manager,
-            session_header,
+            session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
             rate_limit_snapshot: None,
@@ -2415,9 +2400,13 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.model.clone())
             .unwrap_or_else(|| model_for_header.clone());
+        let reasoning_effort = active_collaboration_mask
+            .as_ref()
+            .and_then(|mask| mask.reasoning_effort)
+            .flatten();
         let fallback_default = Settings {
             model: header_model.clone(),
-            reasoning_effort: None,
+            reasoning_effort,
             developer_instructions: None,
         };
         // Collaboration modes start in Default mode.
@@ -2426,9 +2415,10 @@ impl ChatWidget {
             settings: fallback_default,
         };
 
-        // Create session_header first so we can share its model with the placeholder cell
-        let session_header = SessionHeader::new(header_model);
-        let active_cell = Some(Self::placeholder_session_header_cell(&session_header, &config));
+        let active_cell = Some(Self::placeholder_session_header_cell(
+            header_model.clone(),
+            &config,
+        ));
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -2454,7 +2444,7 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             otel_manager,
-            session_header,
+            session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
             rate_limit_snapshot: None,
@@ -2554,9 +2544,13 @@ impl ChatWidget {
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
+        let reasoning_effort = active_collaboration_mask
+            .as_ref()
+            .and_then(|mask| mask.reasoning_effort)
+            .flatten();
         let fallback_default = Settings {
             model: header_model.clone(),
-            reasoning_effort: None,
+            reasoning_effort,
             developer_instructions: None,
         };
         // Collaboration modes start in Default mode.
@@ -2995,12 +2989,23 @@ impl ChatWidget {
                 self.request_quit_without_confirmation();
             }
             SlashCommand::Logout => {
-                // Clear the model selection before logout so the next provider gets its default
-                if let Err(e) = codex_core::config::edit::ConfigEditsBuilder::new(&self.config.codex_home)
-                    .set_model(None, None)
-                    .apply_blocking()
-                {
+                // Clear the model selection before logout so the next provider gets its default.
+                // Clear both global config and active profile (if any) to ensure the model is fully reset.
+                let mut builder = codex_core::config::edit::ConfigEditsBuilder::new(&self.config.codex_home);
+                if let Some(profile) = self.config.active_profile.as_deref() {
+                    builder = builder.with_profile(Some(profile));
+                }
+                if let Err(e) = builder.set_model(None, None).apply_blocking() {
                     tracing::error!("failed to clear model on logout: {e}");
+                }
+                // Also clear the global model setting in case no profile is active
+                if self.config.active_profile.is_some() {
+                    if let Err(e) = codex_core::config::edit::ConfigEditsBuilder::new(&self.config.codex_home)
+                        .set_model(None, None)
+                        .apply_blocking()
+                    {
+                        tracing::error!("failed to clear global model on logout: {e}");
+                    }
                 }
 
                 if let Err(e) = codex_core::auth::logout(
@@ -5362,7 +5367,7 @@ impl ChatWidget {
             .unwrap_or(false)
     }
 
-    /// Set the reasoning effort in the stored collaboration mode and update the session header.
+    /// Set the reasoning effort in the stored collaboration mode.
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.current_collaboration_mode =
             self.current_collaboration_mode
@@ -5372,8 +5377,6 @@ impl ChatWidget {
         {
             mask.reasoning_effort = Some(effort);
         }
-        // Update the session header so the header display reflects the change
-        self.session_header.set_reasoning_effort(effort);
     }
 
     /// Set the personality in the widget's config copy.
@@ -5392,7 +5395,6 @@ impl ChatWidget {
             mask.model = Some(model.to_string());
         }
         self.refresh_model_display();
-        self.request_redraw();
     }
 
     pub(crate) fn current_model(&self) -> &str {
@@ -5624,16 +5626,12 @@ impl ChatWidget {
     }
 
     /// Build a placeholder header cell while the session is configuring.
-    /// Uses shared model and reasoning_effort references so the header updates when they change.
-    fn placeholder_session_header_cell(
-        session_header: &SessionHeader,
-        config: &Config,
-    ) -> Box<dyn HistoryCell> {
+    fn placeholder_session_header_cell(model: String, config: &Config) -> Box<dyn HistoryCell> {
         let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
-        Box::new(history_cell::SessionHeaderHistoryCell::new_with_shared_model(
-            session_header.shared_model(),
+        Box::new(history_cell::SessionHeaderHistoryCell::new_with_style(
+            model,
             placeholder_style,
-            session_header.shared_reasoning_effort(),
+            None,
             config.cwd.clone(),
             CODEX_CLI_VERSION,
         ))
