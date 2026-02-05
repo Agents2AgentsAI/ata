@@ -55,12 +55,31 @@ impl ProviderAdapter for GeminiAdapter {
         // Build contents array from input
         let contents = build_gemini_contents(input)?;
 
+        // Build the generation config with optional thinking config
+        let mut generation_config = json!({
+            "temperature": 0.7
+        });
+
+        // Add thinking config if reasoning options are specified
+        if let Some(reasoning) = &options.reasoning {
+            if let Some(effort) = reasoning.get("effort").and_then(|e| e.as_str()) {
+                let thinking_level = match effort {
+                    "low" => "low",
+                    "medium" => "medium",
+                    "high" => "high",
+                    _ => "medium",
+                };
+                generation_config["thinkingConfig"] = json!({
+                    "thinkingLevel": thinking_level,
+                    "includeThoughts": true
+                });
+            }
+        }
+
         // Build the request body
         let mut body = json!({
             "contents": contents,
-            "generationConfig": {
-                "temperature": 0.7
-            }
+            "generationConfig": generation_config
         });
 
         // Add system instruction if provided, with Gemini-specific guidance
@@ -70,7 +89,10 @@ impl ProviderAdapter for GeminiAdapter {
             let gemini_guidance = "\n\nIMPORTANT for shell commands: Use standard shell syntax. \
                 Do NOT quote shell metacharacters like >, |, <, &, etc. \
                 Correct: cat > file.txt\n\
-                Incorrect: cat '>' file.txt";
+                Incorrect: cat '>' file.txt\n\n\
+                IMPORTANT for MCP tools: When using read_mcp_resource, NEVER guess server names. \
+                Common mistakes include guessing 'filesystem' for file:// URIs. \
+                ALWAYS call list_mcp_resources first to discover the actual server names and URIs.";
             let full_instructions = format!("{}{}", instructions, gemini_guidance);
             body["systemInstruction"] = json!({
                 "parts": [{"text": full_instructions}]

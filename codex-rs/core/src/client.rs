@@ -1064,7 +1064,7 @@ fn serialize_input_items(input: &[ResponseItem]) -> Result<Vec<Value>> {
         .iter()
         .map(|item| {
             serde_json::to_value(item)
-                .map_err(|e| CodexErr::Api(format!("Failed to serialize input item: {}", e)))
+                .map_err(|e| CodexErr::Api(format!("Failed to serialize input item: {e}")))
         })
         .collect()
 }
