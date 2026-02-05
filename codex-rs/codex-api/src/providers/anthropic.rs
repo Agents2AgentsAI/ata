@@ -68,7 +68,7 @@ impl ProviderAdapter for AnthropicAdapter {
         instructions: &str,
         input: &[Value],
         tools: &[Value],
-        _options: &RequestOptions,
+        options: &RequestOptions,
     ) -> Result<Value, ApiError> {
         // Build messages array, extracting system messages
         let messages = build_anthropic_messages(input)?;
@@ -96,6 +96,25 @@ impl ProviderAdapter for AnthropicAdapter {
 
             // Tool choice configuration
             body["tool_choice"] = json!({"type": "auto"});
+        }
+
+        // Add thinking config if reasoning is requested
+        if let Some(reasoning) = &options.reasoning {
+            if let Some(effort) = reasoning.get("effort").and_then(|e| e.as_str()) {
+                match effort {
+                    "none" => { /* skip — no thinking requested */ }
+                    _ => {
+                        let budget = match effort {
+                            "minimal" | "low" => 1024_u32,
+                            "medium" => 10_000,
+                            "high" => 32_000,
+                            _ => max_tokens.saturating_sub(1).max(1024), // xhigh or unknown
+                        };
+                        let budget = budget.max(1024).min(max_tokens.saturating_sub(1));
+                        body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
+                    }
+                }
+            }
         }
 
         Ok(body)
@@ -446,6 +465,102 @@ mod tests {
         assert_eq!(messages[0]["content"][0]["type"], "text");
         assert_eq!(messages[0]["content"][0]["text"], "Hi");
         assert_eq!(messages[1]["role"], "assistant");
+    }
+
+    #[test]
+    fn test_build_request_body_with_thinking_high() {
+        let adapter = AnthropicAdapter::new();
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Hello"}]
+        })];
+        let options = RequestOptions {
+            reasoning: Some(json!({"effort": "high"})),
+            ..Default::default()
+        };
+        let body = adapter
+            .build_request_body(
+                "claude-sonnet-4-20250514",
+                "Be helpful",
+                &input,
+                &[],
+                &options,
+            )
+            .unwrap();
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["thinking"]["budget_tokens"], 32_000);
+    }
+
+    #[test]
+    fn test_build_request_body_with_thinking_medium() {
+        let adapter = AnthropicAdapter::new();
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Hello"}]
+        })];
+        let options = RequestOptions {
+            reasoning: Some(json!({"effort": "medium"})),
+            ..Default::default()
+        };
+        let body = adapter
+            .build_request_body("claude-sonnet-4-20250514", "", &input, &[], &options)
+            .unwrap();
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["thinking"]["budget_tokens"], 10_000);
+    }
+
+    #[test]
+    fn test_build_request_body_with_thinking_low() {
+        let adapter = AnthropicAdapter::new();
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Hello"}]
+        })];
+        let options = RequestOptions {
+            reasoning: Some(json!({"effort": "low"})),
+            ..Default::default()
+        };
+        let body = adapter
+            .build_request_body("claude-sonnet-4-20250514", "", &input, &[], &options)
+            .unwrap();
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["thinking"]["budget_tokens"], 1024);
+    }
+
+    #[test]
+    fn test_build_request_body_with_thinking_none() {
+        let adapter = AnthropicAdapter::new();
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Hello"}]
+        })];
+        let options = RequestOptions {
+            reasoning: Some(json!({"effort": "none"})),
+            ..Default::default()
+        };
+        let body = adapter
+            .build_request_body("claude-sonnet-4-20250514", "", &input, &[], &options)
+            .unwrap();
+        assert!(body.get("thinking").is_none());
+    }
+
+    #[test]
+    fn test_build_request_body_no_reasoning() {
+        let adapter = AnthropicAdapter::new();
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Hello"}]
+        })];
+        let options = RequestOptions::default();
+        let body = adapter
+            .build_request_body("claude-sonnet-4-20250514", "", &input, &[], &options)
+            .unwrap();
+        assert!(body.get("thinking").is_none());
     }
 
     #[test]
