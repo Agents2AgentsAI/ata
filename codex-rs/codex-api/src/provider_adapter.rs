@@ -6,7 +6,6 @@
 use http::HeaderMap;
 use serde_json::Value;
 
-use crate::common::ResponseEvent;
 use crate::error::ApiError;
 
 /// Options for building provider-specific API requests.
@@ -57,12 +56,6 @@ pub trait ProviderAdapter: Send + Sync {
         options: &RequestOptions,
     ) -> Result<Value, ApiError>;
 
-    /// Parses a provider-specific SSE event into unified ResponseEvents.
-    ///
-    /// Returns `Ok(vec![])` for events that should be ignored.
-    fn parse_sse_event(&self, event_type: &str, data: &str)
-    -> Result<Vec<ResponseEvent>, ApiError>;
-
     /// Returns the API endpoint path for streaming requests.
     fn streaming_endpoint(&self, model: &str) -> String;
 
@@ -70,9 +63,6 @@ pub trait ProviderAdapter: Send + Sync {
     fn extra_headers(&self) -> HeaderMap {
         HeaderMap::new()
     }
-
-    /// Returns true if the event type signals stream completion.
-    fn is_completion_event(&self, event_type: &str) -> bool;
 
     /// Returns the authentication header name for this provider.
     /// Defaults to "Authorization" with Bearer token scheme.
