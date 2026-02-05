@@ -529,7 +529,7 @@ pub(crate) struct App {
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
     pub(crate) deferred_history_lines: Vec<Line<'static>>,
-    has_emitted_history_lines: bool,
+    pub(crate) has_emitted_history_lines: bool,
 
     pub(crate) enhanced_keys_supported: bool,
 
@@ -543,6 +543,10 @@ pub(crate) struct App {
     /// This is used after a confirmed thread rollback to ensure scrollback reflects the trimmed
     /// transcript cells.
     pub(crate) backtrack_render_pending: bool,
+    /// When set, the next draw clears the scrollback and re-renders the full transcript.
+    ///
+    /// This is used when the model changes to update the header display.
+    transcript_refresh_pending: bool,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     feedback_audience: FeedbackAudience,
     /// Set when the user confirms an update; propagated on exit.
@@ -1094,6 +1098,7 @@ impl App {
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
+            transcript_refresh_pending: false,
             feedback: feedback.clone(),
             feedback_audience,
             pending_update_action: None,
@@ -1239,6 +1244,10 @@ impl App {
                     if self.backtrack_render_pending {
                         self.backtrack_render_pending = false;
                         self.render_transcript_once(tui);
+                    }
+                    if self.transcript_refresh_pending {
+                        self.transcript_refresh_pending = false;
+                        self.refresh_transcript_scrollback(tui)?;
                     }
                     self.chat_widget.maybe_post_pending_notification(tui);
                     if self
@@ -1562,9 +1571,15 @@ impl App {
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
+                // Refresh the scrollback so the header shows the updated reasoning effort.
+                self.transcript_refresh_pending = true;
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
+                // Refresh the scrollback so the header shows the updated model.
+                self.transcript_refresh_pending = true;
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
@@ -2631,6 +2646,7 @@ mod tests {
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
+            transcript_refresh_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
             pending_update_action: None,
@@ -2684,6 +2700,7 @@ mod tests {
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
                 backtrack: BacktrackState::default(),
                 backtrack_render_pending: false,
+                transcript_refresh_pending: false,
                 feedback: codex_feedback::CodexFeedback::new(),
                 feedback_audience: FeedbackAudience::External,
                 pending_update_action: None,
@@ -2916,8 +2933,9 @@ mod tests {
             )) as Arc<dyn HistoryCell>
         };
 
-        // Create a standalone shared model for the test headers
+        // Create standalone shared model and reasoning_effort for the test headers
         let test_shared_model = Arc::new(std::sync::RwLock::new("gpt-test".to_string()));
+        let test_shared_reasoning_effort = Arc::new(std::sync::RwLock::new(None));
         let make_header = |is_first| {
             let event = SessionConfiguredEvent {
                 session_id: ThreadId::new(),
@@ -2941,6 +2959,7 @@ mod tests {
                 is_first,
                 None,
                 test_shared_model.clone(),
+                test_shared_reasoning_effort.clone(),
             )) as Arc<dyn HistoryCell>
         };
 

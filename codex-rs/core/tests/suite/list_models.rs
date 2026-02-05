@@ -63,6 +63,10 @@ fn expected_models_for_api_key() -> Vec<ModelPreset> {
         gpt_5_codex_mini(),
         bengalfox(),
         boomslang(),
+        claude_sonnet_4_5(),
+        claude_opus_4_5(),
+        gemini_3_pro_preview(),
+        gemini_3_flash_preview(),
     ]
 }
 
@@ -536,5 +540,129 @@ fn effort(reasoning_effort: ReasoningEffort, description: &str) -> ReasoningEffo
     ReasoningEffortPreset {
         effort: reasoning_effort,
         description: description.to_string(),
+    }
+}
+
+fn claude_sonnet_4_5() -> ModelPreset {
+    ModelPreset {
+        id: "claude-sonnet-4.5".to_string(),
+        model: "claude-sonnet-4.5".to_string(),
+        display_name: "Claude Sonnet 4.5".to_string(),
+        description: "Anthropic's balanced model for coding tasks.".to_string(),
+        default_reasoning_effort: ReasoningEffort::Medium,
+        supported_reasoning_efforts: vec![
+            effort(
+                ReasoningEffort::Low,
+                "Fast responses with lighter reasoning",
+            ),
+            effort(
+                ReasoningEffort::Medium,
+                "Balanced reasoning for everyday tasks",
+            ),
+            effort(
+                ReasoningEffort::High,
+                "Greater reasoning depth for complex problems",
+            ),
+        ],
+        supports_personality: false,
+        is_default: false,
+        upgrade: None,
+        show_in_picker: true,
+        supported_in_api: true,
+        provider_id: Some("anthropic".to_string()),
+        input_modalities: default_input_modalities(),
+    }
+}
+
+fn claude_opus_4_5() -> ModelPreset {
+    ModelPreset {
+        id: "claude-opus-4.5".to_string(),
+        model: "claude-opus-4.5".to_string(),
+        display_name: "Claude Opus 4.5".to_string(),
+        description: "Anthropic's most capable model for complex reasoning.".to_string(),
+        default_reasoning_effort: ReasoningEffort::Medium,
+        supported_reasoning_efforts: vec![
+            effort(
+                ReasoningEffort::Low,
+                "Fast responses with lighter reasoning",
+            ),
+            effort(
+                ReasoningEffort::Medium,
+                "Balanced reasoning for everyday tasks",
+            ),
+            effort(
+                ReasoningEffort::High,
+                "Greater reasoning depth for complex problems",
+            ),
+        ],
+        supports_personality: false,
+        is_default: false,
+        upgrade: None,
+        show_in_picker: true,
+        supported_in_api: true,
+        provider_id: Some("anthropic".to_string()),
+        input_modalities: default_input_modalities(),
+    }
+}
+
+fn gemini_3_pro_preview() -> ModelPreset {
+    ModelPreset {
+        id: "gemini-3-pro-preview".to_string(),
+        model: "gemini-3-pro-preview".to_string(),
+        display_name: "Gemini 3 Pro".to_string(),
+        description: "Google's advanced model for complex tasks.".to_string(),
+        default_reasoning_effort: ReasoningEffort::Medium,
+        supported_reasoning_efforts: vec![
+            effort(
+                ReasoningEffort::Low,
+                "Fast responses with lighter reasoning",
+            ),
+            effort(
+                ReasoningEffort::High,
+                "Deep reasoning for complex problems",
+            ),
+        ],
+        supports_personality: false,
+        is_default: false,
+        upgrade: None,
+        show_in_picker: true,
+        supported_in_api: true,
+        provider_id: Some("gemini".to_string()),
+        input_modalities: default_input_modalities(),
+    }
+}
+
+fn gemini_3_flash_preview() -> ModelPreset {
+    ModelPreset {
+        id: "gemini-3-flash-preview".to_string(),
+        model: "gemini-3-flash-preview".to_string(),
+        display_name: "Gemini 3 Flash".to_string(),
+        description: "Google's fast and efficient model.".to_string(),
+        default_reasoning_effort: ReasoningEffort::Medium,
+        supported_reasoning_efforts: vec![
+            effort(
+                ReasoningEffort::Minimal,
+                "Fastest responses with minimal reasoning",
+            ),
+            effort(
+                ReasoningEffort::Low,
+                "Quick responses with light reasoning",
+            ),
+            effort(
+                ReasoningEffort::Medium,
+                "Balanced reasoning for everyday tasks",
+            ),
+            effort(
+                ReasoningEffort::High,
+                "Deep reasoning for complex problems",
+            ),
+        ],
+        supports_personality: false,
+        is_default: false,
+        upgrade: None,
+        show_in_picker: true,
+        supported_in_api: true,
+        provider_id: Some("gemini".to_string()),
+        input_modalities: default_input_modalities(),
     }
 }

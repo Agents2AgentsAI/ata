@@ -386,9 +386,20 @@ where
         if self.viewport_area.is_empty() {
             return Ok(());
         }
-        self.backend
-            .set_cursor_position(self.viewport_area.as_position())?;
-        queue!(self.backend, Clear(crossterm::terminal::ClearType::Purge))?;
+        // ClearType::Purge only affects the terminal's scrollback buffer; it does not reliably
+        // clear the *visible* screen contents in all terminals. Because Codex renders chat history
+        // into the screen area above the inline viewport, we must also clear the full screen or
+        // we'll end up duplicating history when re-rendering the transcript (e.g. after /model).
+        //
+        // We keep `last_known_cursor_pos` stable by restoring the cursor after clearing.
+        let last_cursor_pos = self.last_known_cursor_pos;
+        queue!(
+            self.backend,
+            MoveTo(0, 0),
+            Clear(crossterm::terminal::ClearType::Purge),
+            Clear(crossterm::terminal::ClearType::All),
+            MoveTo(last_cursor_pos.x, last_cursor_pos.y)
+        )?;
         std::io::Write::flush(&mut self.backend)?;
         self.previous_buffer_mut().reset();
         Ok(())
