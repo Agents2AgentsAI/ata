@@ -997,7 +997,7 @@ fn create_read_mcp_resource_tool() -> ToolSpec {
             "server".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "MCP server name exactly as configured. Must match the 'server' field returned by list_mcp_resources."
+                    "IMPORTANT: Do NOT guess server names like 'filesystem' - always use the exact server name from a previous list_mcp_resources call. Must match the 'server' field returned by list_mcp_resources."
                         .to_string(),
                 ),
             },
@@ -1006,7 +1006,7 @@ fn create_read_mcp_resource_tool() -> ToolSpec {
             "uri".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Resource URI to read. Must be one of the URIs returned by list_mcp_resources."
+                    "IMPORTANT: Do NOT construct URIs from file paths - only use URIs returned by list_mcp_resources. Resource URI to read."
                         .to_string(),
                 ),
             },
@@ -1016,7 +1016,7 @@ fn create_read_mcp_resource_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "read_mcp_resource".to_string(),
         description:
-            "Read a specific resource from an MCP server given the server name and resource URI."
+            "IMPORTANT: Always call list_mcp_resources first to discover available servers and URIs. Read a specific resource from an MCP server given the server name and resource URI."
                 .to_string(),
         strict: false,
         parameters: JsonSchema::Object {

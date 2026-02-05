@@ -46,6 +46,9 @@ pub struct GeminiPart {
     pub function_call: Option<GeminiFunctionCall>,
     pub function_response: Option<GeminiFunctionResponse>,
     pub thought_signature: Option<String>,
+    /// Indicates this part is thinking/reasoning content (Gemini thinking mode).
+    #[serde(default)]
+    pub thought: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,6 +72,8 @@ pub struct GeminiUsageMetadata {
     pub candidates_token_count: Option<i64>,
     pub total_token_count: Option<i64>,
     pub cached_content_token_count: Option<i64>,
+    /// Token count for thinking/reasoning content (Gemini thinking mode).
+    pub thoughts_token_count: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,6 +100,10 @@ pub struct GeminiStreamState {
     pub created_sent: bool,
     /// Whether we've emitted OutputItemAdded for the message.
     message_started: bool,
+    /// Counter for tracking current thinking/reasoning section index.
+    thought_index: i64,
+    /// Whether we're currently in a thinking section.
+    in_thought_section: bool,
 }
 
 impl Default for GeminiStreamState {
@@ -109,6 +118,8 @@ impl GeminiStreamState {
             call_id_counter: 0,
             created_sent: false,
             message_started: false,
+            thought_index: 0,
+            in_thought_section: false,
         }
     }
 
@@ -220,6 +231,31 @@ pub fn parse_gemini_chunk(
             if let Some(ref content) = candidate.content {
                 if let Some(ref parts) = content.parts {
                     for part in parts {
+                        // Handle thinking/reasoning content (Gemini thinking mode)
+                        if part.thought {
+                            if let Some(ref text) = part.text {
+                                if !text.is_empty() {
+                                    events.push(ResponseEvent::ReasoningSummaryDelta {
+                                        delta: text.clone(),
+                                        summary_index: state.thought_index,
+                                    });
+                                    if !state.in_thought_section {
+                                        state.in_thought_section = true;
+                                    }
+                                }
+                            }
+                            continue; // Don't process as regular text
+                        }
+
+                        // Emit section break when transitioning out of thought
+                        if state.in_thought_section {
+                            events.push(ResponseEvent::ReasoningSummaryPartAdded {
+                                summary_index: state.thought_index,
+                            });
+                            state.thought_index += 1;
+                            state.in_thought_section = false;
+                        }
+
                         // Handle text content
                         if let Some(ref text) = part.text {
                             if !text.is_empty() {
@@ -279,7 +315,7 @@ pub fn parse_gemini_chunk(
                         input_tokens: usage.prompt_token_count.unwrap_or(0),
                         output_tokens: usage.candidates_token_count.unwrap_or(0),
                         cached_input_tokens: usage.cached_content_token_count.unwrap_or(0),
-                        reasoning_output_tokens: 0,
+                        reasoning_output_tokens: usage.thoughts_token_count.unwrap_or(0),
                         total_tokens: usage.total_token_count.unwrap_or(0),
                     });
 
@@ -299,7 +335,7 @@ pub fn parse_gemini_chunk(
                 input_tokens: usage.prompt_token_count.unwrap_or(0),
                 output_tokens: usage.candidates_token_count.unwrap_or(0),
                 cached_input_tokens: usage.cached_content_token_count.unwrap_or(0),
-                reasoning_output_tokens: 0,
+                reasoning_output_tokens: usage.thoughts_token_count.unwrap_or(0),
                 total_tokens: usage.total_token_count.unwrap_or(0),
             });
 

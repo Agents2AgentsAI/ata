@@ -430,7 +430,17 @@ impl McpConnectionManager {
     async fn client_by_name(&self, name: &str) -> Result<ManagedClient> {
         self.clients
             .get(name)
-            .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))?
+            .ok_or_else(|| {
+                let available: Vec<&str> = self.clients.keys().map(String::as_str).collect();
+                if available.is_empty() {
+                    anyhow!("unknown MCP server '{name}': no MCP servers are configured. Use list_mcp_resources first to discover available servers.")
+                } else {
+                    anyhow!(
+                        "unknown MCP server '{name}': valid servers are: [{}]. Use list_mcp_resources to see available resources per server.",
+                        available.join(", ")
+                    )
+                }
+            })?
             .client()
             .await
             .context("failed to get client")
