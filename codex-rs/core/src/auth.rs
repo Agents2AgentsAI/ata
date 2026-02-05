@@ -474,13 +474,18 @@ pub fn get_provider_api_key(
 
     // Check stored credentials
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-    if let Ok(Some(auth)) = storage.load() {
-        if let Some(key) = auth.get_provider_api_key(provider_id) {
-            return Some(key.to_string());
+    match storage.load() {
+        Ok(Some(auth)) => auth.get_provider_api_key(provider_id).map(|s| s.to_string()),
+        Ok(None) => None,
+        Err(err) => {
+            tracing::warn!(
+                provider_id = provider_id,
+                error = %err,
+                "Failed to load auth storage for provider. Check file permissions or keyring access."
+            );
+            None
         }
     }
-
-    None
 }
 
 /// List all configured providers with their auth status.
@@ -502,25 +507,34 @@ pub fn list_configured_providers(
 
     // Check stored credentials
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-    if let Ok(Some(auth)) = storage.load() {
-        // Check for ChatGPT OAuth authentication (includes OpenAI as configured)
-        if auth.auth_mode == Some(ApiAuthMode::Chatgpt) && auth.tokens.is_some() {
-            if !result.iter().any(|p| p.provider_id == PROVIDER_OPENAI) {
-                result.push(ProviderAuthStatus {
-                    provider_id: PROVIDER_OPENAI.to_string(),
-                    source: ProviderAuthSource::Stored,
-                });
+    match storage.load() {
+        Ok(Some(auth)) => {
+            // Check for ChatGPT OAuth authentication (includes OpenAI as configured)
+            if auth.auth_mode == Some(ApiAuthMode::Chatgpt) && auth.tokens.is_some() {
+                if !result.iter().any(|p| p.provider_id == PROVIDER_OPENAI) {
+                    result.push(ProviderAuthStatus {
+                        provider_id: PROVIDER_OPENAI.to_string(),
+                        source: ProviderAuthSource::Stored,
+                    });
+                }
+            }
+
+            for provider_id in auth.configured_providers() {
+                // Skip if already added from environment or OAuth
+                if !result.iter().any(|p| p.provider_id == provider_id) {
+                    result.push(ProviderAuthStatus {
+                        provider_id,
+                        source: ProviderAuthSource::Stored,
+                    });
+                }
             }
         }
-
-        for provider_id in auth.configured_providers() {
-            // Skip if already added from environment or OAuth
-            if !result.iter().any(|p| p.provider_id == provider_id) {
-                result.push(ProviderAuthStatus {
-                    provider_id,
-                    source: ProviderAuthSource::Stored,
-                });
-            }
+        Ok(None) => {}
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "Failed to load auth storage when listing providers. Check file permissions or keyring access."
+            );
         }
     }
 
