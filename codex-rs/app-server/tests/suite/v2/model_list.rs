@@ -166,6 +166,56 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             supports_personality: false,
             is_default: false,
         },
+        // Anthropic Claude models
+        Model {
+            id: "claude-sonnet-4.5".to_string(),
+            model: "claude-sonnet-4.5".to_string(),
+            upgrade: None,
+            display_name: "Claude Sonnet 4.5".to_string(),
+            description: "Anthropic's balanced model for coding tasks.".to_string(),
+            supported_reasoning_efforts: vec![],
+            default_reasoning_effort: ReasoningEffort::Medium,
+            input_modalities: vec![InputModality::Text, InputModality::Image],
+            supports_personality: false,
+            is_default: false,
+        },
+        Model {
+            id: "claude-opus-4.5".to_string(),
+            model: "claude-opus-4.5".to_string(),
+            upgrade: None,
+            display_name: "Claude Opus 4.5".to_string(),
+            description: "Anthropic's most capable model for complex reasoning.".to_string(),
+            supported_reasoning_efforts: vec![],
+            default_reasoning_effort: ReasoningEffort::Medium,
+            input_modalities: vec![InputModality::Text, InputModality::Image],
+            supports_personality: false,
+            is_default: false,
+        },
+        // Google Gemini models
+        Model {
+            id: "gemini-3-pro-preview".to_string(),
+            model: "gemini-3-pro-preview".to_string(),
+            upgrade: None,
+            display_name: "Gemini 3 Pro".to_string(),
+            description: "Google's advanced model for complex tasks.".to_string(),
+            supported_reasoning_efforts: vec![],
+            default_reasoning_effort: ReasoningEffort::Medium,
+            input_modalities: vec![InputModality::Text, InputModality::Image],
+            supports_personality: false,
+            is_default: false,
+        },
+        Model {
+            id: "gemini-3-flash-preview".to_string(),
+            model: "gemini-3-flash-preview".to_string(),
+            upgrade: None,
+            display_name: "Gemini 3 Flash".to_string(),
+            description: "Google's fast and efficient model.".to_string(),
+            supported_reasoning_efforts: vec![],
+            default_reasoning_effort: ReasoningEffort::Medium,
+            input_modalities: vec![InputModality::Text, InputModality::Image],
+            supports_personality: false,
+            is_default: false,
+        },
     ];
 
     assert_eq!(items, expected_models);
@@ -267,7 +317,99 @@ async fn list_models_pagination_works() -> Result<()> {
 
     assert_eq!(fourth_items.len(), 1);
     assert_eq!(fourth_items[0].id, "gpt-5.2");
-    assert!(fourth_cursor.is_none());
+    let fifth_cursor = fourth_cursor.ok_or_else(|| anyhow!("cursor for fifth page"))?;
+
+    // Fifth page: claude-sonnet-4.5
+    let fifth_request = mcp
+        .send_list_models_request(ModelListParams {
+            limit: Some(1),
+            cursor: Some(fifth_cursor.clone()),
+        })
+        .await?;
+
+    let fifth_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fifth_request)),
+    )
+    .await??;
+
+    let ModelListResponse {
+        data: fifth_items,
+        next_cursor: fifth_cursor,
+    } = to_response::<ModelListResponse>(fifth_response)?;
+
+    assert_eq!(fifth_items.len(), 1);
+    assert_eq!(fifth_items[0].id, "claude-sonnet-4.5");
+    let sixth_cursor = fifth_cursor.ok_or_else(|| anyhow!("cursor for sixth page"))?;
+
+    // Sixth page: claude-opus-4.5
+    let sixth_request = mcp
+        .send_list_models_request(ModelListParams {
+            limit: Some(1),
+            cursor: Some(sixth_cursor.clone()),
+        })
+        .await?;
+
+    let sixth_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(sixth_request)),
+    )
+    .await??;
+
+    let ModelListResponse {
+        data: sixth_items,
+        next_cursor: sixth_cursor,
+    } = to_response::<ModelListResponse>(sixth_response)?;
+
+    assert_eq!(sixth_items.len(), 1);
+    assert_eq!(sixth_items[0].id, "claude-opus-4.5");
+    let seventh_cursor = sixth_cursor.ok_or_else(|| anyhow!("cursor for seventh page"))?;
+
+    // Seventh page: gemini-3-pro-preview
+    let seventh_request = mcp
+        .send_list_models_request(ModelListParams {
+            limit: Some(1),
+            cursor: Some(seventh_cursor.clone()),
+        })
+        .await?;
+
+    let seventh_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(seventh_request)),
+    )
+    .await??;
+
+    let ModelListResponse {
+        data: seventh_items,
+        next_cursor: seventh_cursor,
+    } = to_response::<ModelListResponse>(seventh_response)?;
+
+    assert_eq!(seventh_items.len(), 1);
+    assert_eq!(seventh_items[0].id, "gemini-3-pro-preview");
+    let eighth_cursor = seventh_cursor.ok_or_else(|| anyhow!("cursor for eighth page"))?;
+
+    // Eighth page: gemini-3-flash-preview (last)
+    let eighth_request = mcp
+        .send_list_models_request(ModelListParams {
+            limit: Some(1),
+            cursor: Some(eighth_cursor.clone()),
+        })
+        .await?;
+
+    let eighth_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(eighth_request)),
+    )
+    .await??;
+
+    let ModelListResponse {
+        data: eighth_items,
+        next_cursor: eighth_cursor,
+    } = to_response::<ModelListResponse>(eighth_response)?;
+
+    assert_eq!(eighth_items.len(), 1);
+    assert_eq!(eighth_items[0].id, "gemini-3-flash-preview");
+    assert!(eighth_cursor.is_none());
     Ok(())
 }
 
