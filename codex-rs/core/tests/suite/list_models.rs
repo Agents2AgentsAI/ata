@@ -617,10 +617,7 @@ fn gemini_3_pro_preview() -> ModelPreset {
                 ReasoningEffort::Low,
                 "Fast responses with lighter reasoning",
             ),
-            effort(
-                ReasoningEffort::High,
-                "Deep reasoning for complex problems",
-            ),
+            effort(ReasoningEffort::High, "Deep reasoning for complex problems"),
         ],
         supports_personality: false,
         is_default: false,
@@ -644,18 +641,12 @@ fn gemini_3_flash_preview() -> ModelPreset {
                 ReasoningEffort::Minimal,
                 "Fastest responses with minimal reasoning",
             ),
-            effort(
-                ReasoningEffort::Low,
-                "Quick responses with light reasoning",
-            ),
+            effort(ReasoningEffort::Low, "Quick responses with light reasoning"),
             effort(
                 ReasoningEffort::Medium,
                 "Balanced reasoning for everyday tasks",
             ),
-            effort(
-                ReasoningEffort::High,
-                "Deep reasoning for complex problems",
-            ),
+            effort(ReasoningEffort::High, "Deep reasoning for complex problems"),
         ],
         supports_personality: false,
         is_default: false,

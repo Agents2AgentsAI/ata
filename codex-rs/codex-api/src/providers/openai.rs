@@ -3,12 +3,15 @@
 //! This adapter wraps the existing OpenAI Responses API implementation,
 //! providing a consistent interface through the `ProviderAdapter` trait.
 
-use serde_json::{json, Value};
+use serde_json::Value;
+use serde_json::json;
 
 use crate::common::ResponseEvent;
 use crate::error::ApiError;
-use crate::provider_adapter::{ProviderAdapter, RequestOptions};
-use crate::sse::responses::{process_responses_event, ResponsesStreamEvent};
+use crate::provider_adapter::ProviderAdapter;
+use crate::provider_adapter::RequestOptions;
+use crate::sse::responses::ResponsesStreamEvent;
+use crate::sse::responses::process_responses_event;
 
 /// OpenAI Responses API adapter.
 pub struct OpenAiAdapter;

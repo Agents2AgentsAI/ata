@@ -465,13 +465,14 @@ async fn run_ratatui_app(
     );
     let login_status = get_login_status(&initial_config);
     let should_show_trust_screen_flag = should_show_trust_screen(&initial_config);
+    let show_login_screen = should_show_login_screen(login_status, &initial_config);
     let should_show_onboarding =
         should_show_onboarding(login_status, &initial_config, should_show_trust_screen_flag);
 
     let config = if should_show_onboarding {
         let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
-                show_login_screen: should_show_login_screen(login_status, &initial_config),
+                show_login_screen,
                 show_trust_screen: should_show_trust_screen_flag,
                 login_status,
                 auth_manager: auth_manager.clone(),
@@ -492,9 +493,9 @@ async fn run_ratatui_app(
                 exit_reason: ExitReason::UserRequested,
             });
         }
-        // If the user made an explicit trust decision, reload config so current
-        // process state reflects what was persisted to config.toml.
-        if onboarding_result.directory_trust_decision.is_some() {
+        // If onboarding updated persisted config (trust decision or login),
+        // reload so the current process state reflects config.toml.
+        if onboarding_result.directory_trust_decision.is_some() || show_login_screen {
             load_config_or_exit(
                 cli_kv_overrides.clone(),
                 overrides.clone(),

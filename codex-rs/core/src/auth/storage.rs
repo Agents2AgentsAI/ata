@@ -139,9 +139,9 @@ impl AuthDotJson {
 
     /// Check if there are any provider API keys configured.
     pub fn has_any_provider_api_key(&self) -> bool {
-        self.providers.values().any(|cred| {
-            matches!(cred, ProviderCredential::Api { .. })
-        })
+        self.providers
+            .values()
+            .any(|cred| matches!(cred, ProviderCredential::Api { .. }))
     }
 
     /// Set API key for a specific provider in the providers map.
@@ -580,7 +580,10 @@ mod tests {
             .try_read_auth_json(&file)
             .context("failed to read auth file after save")?;
         assert_eq!(auth_dot_json.auth_mode, same_auth_dot_json.auth_mode);
-        assert_eq!(auth_dot_json.openai_api_key, same_auth_dot_json.openai_api_key);
+        assert_eq!(
+            auth_dot_json.openai_api_key,
+            same_auth_dot_json.openai_api_key
+        );
         Ok(())
     }
 
@@ -999,7 +1002,9 @@ mod tests {
 
         let deserialized: ProviderCredential = serde_json::from_str(&json).unwrap();
         match deserialized {
-            ProviderCredential::Oauth { access, refresh, .. } => {
+            ProviderCredential::Oauth {
+                access, refresh, ..
+            } => {
                 assert_eq!(access, "access-token");
                 assert_eq!(refresh, "refresh-token");
             }

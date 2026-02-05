@@ -3,10 +3,10 @@ use codex_common::CliConfigOverrides;
 use codex_core::CodexAuth;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CLIENT_ID;
-use codex_core::auth::ProviderAuthSource;
 use codex_core::auth::PROVIDER_ANTHROPIC;
 use codex_core::auth::PROVIDER_GEMINI;
 use codex_core::auth::PROVIDER_OPENAI;
+use codex_core::auth::ProviderAuthSource;
 use codex_core::auth::get_provider_api_key;
 use codex_core::auth::list_configured_providers;
 use codex_core::auth::login_with_provider_api_key;
@@ -14,6 +14,8 @@ use codex_core::auth::logout;
 use codex_core::auth::logout_provider;
 use codex_core::auth::provider_env_var;
 use codex_core::config::Config;
+use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::edit::default_model_for_provider;
 use codex_login::ServerOptions;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
@@ -110,6 +112,13 @@ pub async fn run_login_with_provider_api_key(
         config.cli_auth_credentials_store_mode,
     ) {
         Ok(_) => {
+            let default_model = default_model_for_provider(provider_id);
+            if let Err(err) = ConfigEditsBuilder::new(&config.codex_home)
+                .set_model(default_model, None)
+                .apply_blocking()
+            {
+                eprintln!("Warning: failed to set default model for provider {provider_id}: {err}");
+            }
             eprintln!("{LOGIN_SUCCESS_MESSAGE} for provider: {provider_id}");
             std::process::exit(0);
         }
@@ -363,7 +372,9 @@ pub async fn run_logout_provider(
                         eprintln!(
                             "Note: {provider_id} API key is set via ${env_var} environment variable."
                         );
-                        eprintln!("Removing stored credentials will not affect the environment variable.");
+                        eprintln!(
+                            "Removing stored credentials will not affect the environment variable."
+                        );
                     }
                 }
             }
