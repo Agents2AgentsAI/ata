@@ -946,18 +946,21 @@ pub(crate) fn new_session_info(
     is_first_event: bool,
     auth_plan: Option<PlanType>,
     shared_model: Arc<RwLock<String>>,
+    shared_reasoning_effort: Arc<RwLock<Option<ReasoningEffortConfig>>>,
 ) -> SessionInfoCell {
     let SessionConfiguredEvent {
         model,
         reasoning_effort,
         ..
     } = event;
+    // Update the shared reasoning effort with the value from the event
+    *shared_reasoning_effort.write().unwrap() = reasoning_effort;
     // Header box rendered as history (so it appears at the very top)
-    // Use the shared model reference so the header updates when the model changes.
+    // Use the shared model and reasoning_effort references so the header updates when they change.
     let header = SessionHeaderHistoryCell::new_with_shared_model(
         shared_model,
         Style::default(),
-        reasoning_effort,
+        shared_reasoning_effort,
         config.cwd.clone(),
         CODEX_CLI_VERSION,
     );
@@ -1036,17 +1039,17 @@ pub(crate) struct SessionHeaderHistoryCell {
     version: &'static str,
     model: Arc<RwLock<String>>,
     model_style: Style,
-    reasoning_effort: Option<ReasoningEffortConfig>,
+    reasoning_effort: Arc<RwLock<Option<ReasoningEffortConfig>>>,
     directory: PathBuf,
 }
 
 impl SessionHeaderHistoryCell {
-    /// Create a new session header with a shared model reference.
-    /// This allows the model to be updated externally and the header will reflect changes.
+    /// Create a new session header with shared model and reasoning_effort references.
+    /// This allows the model and reasoning effort to be updated externally and the header will reflect changes.
     pub(crate) fn new_with_shared_model(
         model: Arc<RwLock<String>>,
         model_style: Style,
-        reasoning_effort: Option<ReasoningEffortConfig>,
+        reasoning_effort: Arc<RwLock<Option<ReasoningEffortConfig>>>,
         directory: PathBuf,
         version: &'static str,
     ) -> Self {
@@ -1087,7 +1090,7 @@ impl SessionHeaderHistoryCell {
     }
 
     fn reasoning_label(&self) -> Option<&'static str> {
-        self.reasoning_effort.map(|effort| match effort {
+        self.reasoning_effort.read().unwrap().map(|effort| match effort {
             ReasoningEffortConfig::Minimal => "minimal",
             ReasoningEffortConfig::Low => "low",
             ReasoningEffortConfig::Medium => "medium",
@@ -2920,7 +2923,7 @@ mod tests {
         let cell = SessionHeaderHistoryCell::new_with_shared_model(
             Arc::new(RwLock::new("gpt-4o".to_string())),
             Style::default(),
-            Some(ReasoningEffortConfig::High),
+            Arc::new(RwLock::new(Some(ReasoningEffortConfig::High))),
             std::env::temp_dir(),
             "test",
         );

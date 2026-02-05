@@ -800,6 +800,25 @@ impl ChatWidget {
 
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
+        // Check if this is a mid-session update (we already have this session configured)
+        // This can happen when model/effort changes trigger a SessionConfigured event
+        let is_mid_session_update = self.thread_id.is_some()
+            && self.thread_id == Some(event.session_id);
+
+        if is_mid_session_update {
+            // Just update the model/effort without creating a new header
+            self.session_header.set_model(&event.model);
+            self.session_header.set_reasoning_effort(event.reasoning_effort);
+            self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
+                Some(event.model.clone()),
+                Some(event.reasoning_effort),
+                None,
+            );
+            self.refresh_model_display();
+            self.request_redraw();
+            return;
+        }
+
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
@@ -827,6 +846,7 @@ impl ChatWidget {
                 .auth_cached()
                 .and_then(|auth| auth.account_plan_type()),
             self.session_header.shared_model(),
+            self.session_header.shared_reasoning_effort(),
         );
         self.apply_session_info_cell(session_info_cell);
 
@@ -5342,7 +5362,7 @@ impl ChatWidget {
             .unwrap_or(false)
     }
 
-    /// Set the reasoning effort in the stored collaboration mode.
+    /// Set the reasoning effort in the stored collaboration mode and update the session header.
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.current_collaboration_mode =
             self.current_collaboration_mode
@@ -5352,6 +5372,8 @@ impl ChatWidget {
         {
             mask.reasoning_effort = Some(effort);
         }
+        // Update the session header so the header display reflects the change
+        self.session_header.set_reasoning_effort(effort);
     }
 
     /// Set the personality in the widget's config copy.
@@ -5602,7 +5624,7 @@ impl ChatWidget {
     }
 
     /// Build a placeholder header cell while the session is configuring.
-    /// Uses a shared model reference so the header updates when the model changes.
+    /// Uses shared model and reasoning_effort references so the header updates when they change.
     fn placeholder_session_header_cell(
         session_header: &SessionHeader,
         config: &Config,
@@ -5611,7 +5633,7 @@ impl ChatWidget {
         Box::new(history_cell::SessionHeaderHistoryCell::new_with_shared_model(
             session_header.shared_model(),
             placeholder_style,
-            None,
+            session_header.shared_reasoning_effort(),
             config.cwd.clone(),
             CODEX_CLI_VERSION,
         ))
