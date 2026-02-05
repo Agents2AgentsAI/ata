@@ -315,12 +315,14 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
     } else if slug.starts_with("gemini-3-pro") {
         model_info!(
             slug,
+            supports_reasoning_summaries: true,
             supported_reasoning_levels: supported_reasoning_level_low_high(),
             default_reasoning_level: Some(ReasoningEffort::High),
         )
     } else if slug.starts_with("gemini-3-flash") {
         model_info!(
             slug,
+            supports_reasoning_summaries: true,
             supported_reasoning_levels: supported_reasoning_level_minimal_low_medium_high(),
             default_reasoning_level: Some(ReasoningEffort::Medium),
         )
