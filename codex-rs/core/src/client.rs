@@ -601,11 +601,14 @@ impl ModelClientSession {
         let api_prompt = self.build_responses_request(prompt)?;
         let adapter = AnthropicAdapter::new();
 
-        // Get API key from environment
+        // Get API key from stored credentials or environment
         let api_key = self
             .state
             .provider
-            .api_key()?
+            .api_key_with_auth(
+                &self.state.config.codex_home,
+                self.state.config.cli_auth_credentials_store_mode,
+            )?
             .ok_or_else(|| CodexErr::MissingApiKey("ANTHROPIC_API_KEY".to_string()))?;
 
         let api_provider = self.state.provider.to_api_provider(None)?;
@@ -757,11 +760,14 @@ impl ModelClientSession {
         let api_prompt = self.build_responses_request(prompt)?;
         let adapter = GeminiAdapter::new();
 
-        // Get API key from environment
+        // Get API key from stored credentials or environment
         let api_key = self
             .state
             .provider
-            .api_key()?
+            .api_key_with_auth(
+                &self.state.config.codex_home,
+                self.state.config.cli_auth_credentials_store_mode,
+            )?
             .ok_or_else(|| CodexErr::MissingApiKey("GOOGLE_API_KEY".to_string()))?;
 
         let api_provider = self.state.provider.to_api_provider(None)?;

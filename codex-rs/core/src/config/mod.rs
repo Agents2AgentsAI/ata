@@ -1,4 +1,6 @@
 use crate::auth::AuthCredentialsStoreMode;
+use crate::auth::list_configured_providers;
+use crate::auth::PROVIDER_OPENAI;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
@@ -848,9 +850,10 @@ pub struct ConfigToml {
     pub forced_login_method: Option<ForcedLoginMethod>,
 
     /// Preferred backend for storing CLI auth credentials.
-    /// file (default): Use a file in the Codex home directory.
+    /// file: Use a file in the Codex home directory with 0600 permissions.
     /// keyring: Use an OS-specific keyring service.
-    /// auto: Use the keyring if available, otherwise use a file.
+    /// auto (default): Use keyring when available, fall back to file. If keyring access
+    ///                 fails, it remembers and uses file storage for the session.
     #[serde(default)]
     pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
 
@@ -1443,10 +1446,27 @@ impl Config {
             model_providers.entry(key).or_insert(provider);
         }
 
+        // Determine the auth credentials store mode for checking configured providers
+        let cli_auth_credentials_store_mode = cfg.cli_auth_credentials_store.unwrap_or_default();
+
+        // Determine the default provider based on configured API keys
+        let default_provider_id = {
+            let configured = list_configured_providers(&codex_home, cli_auth_credentials_store_mode);
+            // Prefer OpenAI if configured, otherwise use the first configured provider
+            if configured.iter().any(|p| p.provider_id == PROVIDER_OPENAI) {
+                PROVIDER_OPENAI.to_string()
+            } else if let Some(first) = configured.first() {
+                first.provider_id.clone()
+            } else {
+                // No providers configured, default to OpenAI (will fail with auth error later)
+                PROVIDER_OPENAI.to_string()
+            }
+        };
+
         let model_provider_id = model_provider
             .or(config_profile.model_provider)
             .or(cfg.model_provider)
-            .unwrap_or_else(|| "openai".to_string());
+            .unwrap_or(default_provider_id);
         let model_provider = model_providers
             .get(&model_provider_id)
             .ok_or_else(|| {
@@ -1515,7 +1535,15 @@ impl Config {
 
         let forced_login_method = cfg.forced_login_method;
 
-        let model = model.or(config_profile.model).or(cfg.model);
+        // Determine the model, with provider-specific defaults
+        let model = model.or(config_profile.model).or(cfg.model).or_else(|| {
+            // If no model is specified, set a default based on the provider
+            match model_provider_id.as_str() {
+                "anthropic" => Some("claude-sonnet-4-20250514".to_string()),
+                "gemini" => Some("gemini-2.0-flash".to_string()),
+                _ => None, // OpenAI and others will use the model manager's default
+            }
+        });
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
             let trimmed = value.trim();
@@ -2271,7 +2299,7 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn config_defaults_to_file_cli_auth_store_mode() -> std::io::Result<()> {
+    fn config_defaults_to_auto_cli_auth_store_mode() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml::default();
 
@@ -2281,9 +2309,10 @@ trust_level = "trusted"
             codex_home.path().to_path_buf(),
         )?;
 
+        // Default is Auto - tries keyring first, falls back to file if it fails
         assert_eq!(
             config.cli_auth_credentials_store_mode,
-            AuthCredentialsStoreMode::File,
+            AuthCredentialsStoreMode::Auto,
         );
 
         Ok(())

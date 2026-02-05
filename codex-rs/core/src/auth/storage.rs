@@ -52,12 +52,14 @@ pub enum ProviderCredential {
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthCredentialsStoreMode {
-    #[default]
-    /// Persist credentials in CODEX_HOME/auth.json.
+    /// Persist credentials in CODEX_HOME/auth.json with 0600 permissions.
     File,
     /// Persist credentials in the keyring. Fail if unavailable.
     Keyring,
+    #[default]
     /// Use keyring when available; otherwise, fall back to a file in CODEX_HOME.
+    /// More secure - stores credentials in OS keyring. If keyring access fails once,
+    /// it automatically falls back to file storage for the session to avoid repeated prompts.
     Auto,
     /// Store credentials in memory only for the current process.
     Ephemeral,
@@ -132,6 +134,13 @@ impl AuthDotJson {
         self.providers.get(provider_id).and_then(|cred| match cred {
             ProviderCredential::Api { key } => Some(key.as_str()),
             ProviderCredential::Oauth { .. } => None,
+        })
+    }
+
+    /// Check if there are any provider API keys configured.
+    pub fn has_any_provider_api_key(&self) -> bool {
+        self.providers.values().any(|cred| {
+            matches!(cred, ProviderCredential::Api { .. })
         })
     }
 
@@ -342,46 +351,107 @@ impl AuthStorageBackend for KeyringAuthStorage {
     }
 }
 
+/// Tracks whether we should skip keyring and use file storage for a given codex_home path.
+/// This is set when:
+/// 1. Keyring access fails (unavailable or denied)
+/// 2. Keyring has no data but file does (to avoid repeated prompts for migration)
+static USE_FILE_STORAGE: Lazy<Mutex<std::collections::HashSet<String>>> =
+    Lazy::new(|| Mutex::new(std::collections::HashSet::new()));
+
 #[derive(Clone, Debug)]
 struct AutoAuthStorage {
     keyring_storage: Arc<KeyringAuthStorage>,
     file_storage: Arc<FileAuthStorage>,
+    codex_home: PathBuf,
+    codex_home_key: String,
 }
 
 impl AutoAuthStorage {
     fn new(codex_home: PathBuf, keyring_store: Arc<dyn KeyringStore>) -> Self {
+        let codex_home_key = codex_home.to_string_lossy().to_string();
         Self {
             keyring_storage: Arc::new(KeyringAuthStorage::new(codex_home.clone(), keyring_store)),
-            file_storage: Arc::new(FileAuthStorage::new(codex_home)),
+            file_storage: Arc::new(FileAuthStorage::new(codex_home.clone())),
+            codex_home,
+            codex_home_key,
+        }
+    }
+
+    /// Check if we should skip keyring and use file storage.
+    fn should_use_file_storage(&self) -> bool {
+        USE_FILE_STORAGE
+            .lock()
+            .map(|guard| guard.contains(&self.codex_home_key))
+            .unwrap_or(false)
+    }
+
+    /// Mark that we should use file storage for this codex_home to avoid future keyring prompts.
+    fn mark_use_file_storage(&self) {
+        if let Ok(mut guard) = USE_FILE_STORAGE.lock() {
+            guard.insert(self.codex_home_key.clone());
         }
     }
 }
 
 impl AuthStorageBackend for AutoAuthStorage {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
+        // Skip keyring if we've already decided to use file storage
+        if self.should_use_file_storage() {
+            return self.file_storage.load();
+        }
+
         match self.keyring_storage.load() {
             Ok(Some(auth)) => Ok(Some(auth)),
-            Ok(None) => self.file_storage.load(),
+            Ok(None) => {
+                // Keyring works but has no data - check file storage
+                let file_result = self.file_storage.load();
+                // If file has data but keyring doesn't, use file storage for this session
+                // to avoid prompting user to migrate to keyring on every operation
+                if matches!(&file_result, Ok(Some(_))) {
+                    self.mark_use_file_storage();
+                }
+                file_result
+            }
             Err(err) => {
                 warn!("failed to load CLI auth from keyring, falling back to file storage: {err}");
+                self.mark_use_file_storage();
                 self.file_storage.load()
             }
         }
     }
 
     fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
+        // Skip keyring if we've already decided to use file storage
+        if self.should_use_file_storage() {
+            return self.file_storage.save(auth);
+        }
+
         match self.keyring_storage.save(auth) {
             Ok(()) => Ok(()),
             Err(err) => {
                 warn!("failed to save auth to keyring, falling back to file storage: {err}");
+                self.mark_use_file_storage();
                 self.file_storage.save(auth)
             }
         }
     }
 
     fn delete(&self) -> std::io::Result<bool> {
-        // Keyring storage will delete from disk as well
-        self.keyring_storage.delete()
+        // Skip keyring if we've decided to use file storage
+        if self.should_use_file_storage() {
+            return delete_file_if_exists(&self.codex_home);
+        }
+
+        // Try to delete from both keyring and file
+        let keyring_result = self.keyring_storage.delete();
+        match keyring_result {
+            Ok(removed) => Ok(removed),
+            Err(err) => {
+                warn!("failed to delete from keyring: {err}");
+                self.mark_use_file_storage();
+                delete_file_if_exists(&self.codex_home)
+            }
+        }
     }
 }
 

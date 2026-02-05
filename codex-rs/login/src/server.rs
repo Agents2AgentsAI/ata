@@ -16,7 +16,7 @@ use base64::Engine;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
 use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::auth::AuthDotJson;
+use codex_core::auth::load_auth_dot_json;
 use codex_core::auth::save_auth;
 use codex_core::default_client::originator;
 use codex_core::token_data::TokenData;
@@ -559,7 +559,11 @@ pub(crate) async fn persist_tokens_async(
         {
             tokens.account_id = Some(acc.to_string());
         }
-        let mut auth = AuthDotJson::default();
+        // Load existing auth to preserve other provider credentials (e.g., Anthropic, Gemini)
+        let mut auth = load_auth_dot_json(&codex_home, auth_credentials_store_mode)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         auth.auth_mode = Some(AuthMode::Chatgpt);
         auth.openai_api_key = api_key;
         auth.tokens = Some(tokens);
