@@ -3,18 +3,20 @@
 use std::sync::Arc;
 
 use crate::provider_adapter::ProviderAdapter;
-use crate::providers::{AnthropicAdapter, GeminiAdapter, OpenAiAdapter};
+use crate::providers::AnthropicAdapter;
+use crate::providers::GeminiAdapter;
+use crate::providers::OpenAiAdapter;
 
 /// Wire API variants for provider selection.
 ///
 /// This mirrors the `WireApi` enum in `codex-core` to avoid circular dependencies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WireApi {
-    /// OpenAI Responses API
+    /// OpenAI Responses API at `/v1/responses`.
     Responses,
-    /// Anthropic Messages API
+    /// Anthropic Messages API at `/v1/messages`.
     AnthropicMessages,
-    /// Google Gemini GenerateContent API
+    /// Google Gemini GenerateContent API.
     GeminiGenerate,
 }
 

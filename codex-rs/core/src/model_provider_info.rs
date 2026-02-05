@@ -40,9 +40,9 @@ pub enum WireApi {
     /// The Responses API exposed by OpenAI at `/v1/responses`.
     #[default]
     Responses,
-    /// The Anthropic Messages API at `/v1/messages`.
+    /// Anthropic Messages API at `/v1/messages`.
     AnthropicMessages,
-    /// The Gemini GenerateContent API.
+    /// Google Gemini GenerateContent API.
     GeminiGenerate,
 }
 
@@ -327,11 +327,7 @@ impl ModelProviderInfo {
             experimental_bearer_token: None,
             wire_api: WireApi::AnthropicMessages,
             query_params: None,
-            http_headers: Some(
-                [("anthropic-version".to_string(), "2023-06-01".to_string())]
-                    .into_iter()
-                    .collect(),
-            ),
+            http_headers: None,
             env_http_headers: None,
             request_max_retries: None,
             stream_max_retries: None,

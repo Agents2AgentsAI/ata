@@ -212,6 +212,7 @@ fn trailing_codex_generated_tokens_exclude_function_call_tail() {
         name: "not-generated".to_string(),
         arguments: "{}".to_string(),
         call_id: "call-tail".to_string(),
+        thought_signature: None,
     }]);
 
     assert_eq!(history.get_trailing_codex_generated_items_tokens(), 0);
@@ -260,6 +261,7 @@ fn remove_first_item_removes_matching_output_for_function_call() {
             name: "do_it".to_string(),
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
+            thought_signature: None,
         },
         ResponseItem::FunctionCallOutput {
             call_id: "call-1".to_string(),
@@ -289,6 +291,7 @@ fn remove_first_item_removes_matching_call_for_output() {
             name: "do_it".to_string(),
             arguments: "{}".to_string(),
             call_id: "call-2".to_string(),
+            thought_signature: None,
         },
     ];
     let mut h = create_history_with_items(items);
@@ -305,6 +308,7 @@ fn remove_last_item_removes_matching_call_for_output() {
             name: "do_it".to_string(),
             arguments: "{}".to_string(),
             call_id: "call-delete-last".to_string(),
+            thought_signature: None,
         },
         ResponseItem::FunctionCallOutput {
             call_id: "call-delete-last".to_string(),
@@ -766,6 +770,7 @@ fn normalize_adds_missing_output_for_function_call() {
         name: "do_it".to_string(),
         arguments: "{}".to_string(),
         call_id: "call-x".to_string(),
+        thought_signature: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -779,6 +784,7 @@ fn normalize_adds_missing_output_for_function_call() {
                 name: "do_it".to_string(),
                 arguments: "{}".to_string(),
                 call_id: "call-x".to_string(),
+                thought_signature: None,
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "call-x".to_string(),
@@ -909,6 +915,7 @@ fn normalize_mixed_inserts_and_removals() {
             name: "f1".to_string(),
             arguments: "{}".to_string(),
             call_id: "c1".to_string(),
+            thought_signature: None,
         },
         // Orphan output that should be removed
         ResponseItem::FunctionCallOutput {
@@ -952,6 +959,7 @@ fn normalize_mixed_inserts_and_removals() {
                 name: "f1".to_string(),
                 arguments: "{}".to_string(),
                 call_id: "c1".to_string(),
+                thought_signature: None,
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "c1".to_string(),
@@ -1001,6 +1009,7 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
         name: "do_it".to_string(),
         arguments: "{}".to_string(),
         call_id: "call-x".to_string(),
+        thought_signature: None,
     }];
     let mut h = create_history_with_items(items);
     h.normalize_history();
@@ -1012,6 +1021,7 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
                 name: "do_it".to_string(),
                 arguments: "{}".to_string(),
                 call_id: "call-x".to_string(),
+                thought_signature: None,
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "call-x".to_string(),
@@ -1096,6 +1106,7 @@ fn normalize_mixed_inserts_and_removals_panics_in_debug() {
             name: "f1".to_string(),
             arguments: "{}".to_string(),
             call_id: "c1".to_string(),
+            thought_signature: None,
         },
         ResponseItem::FunctionCallOutput {
             call_id: "c2".to_string(),

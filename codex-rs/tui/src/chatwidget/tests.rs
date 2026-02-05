@@ -17,6 +17,9 @@ use assert_matches::assert_matches;
 use codex_common::approval_presets::builtin_approval_presets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
+use codex_core::auth::PROVIDER_OPENAI;
+use codex_core::auth::login_with_provider_api_key;
+use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
@@ -90,6 +93,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use tempfile::tempdir;
+use tempfile::TempDir;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
 use toml::Value as TomlValue;
@@ -102,6 +106,30 @@ async fn test_config() -> Config {
         .build()
         .await
         .expect("config")
+}
+
+/// Creates a test config with OpenAI credentials stored in a unique temp directory.
+/// Returns both the config and the TempDir (which must be kept alive for the test duration).
+async fn test_config_with_provider() -> (Config, TempDir) {
+    let temp_dir = tempdir().expect("create temp dir");
+    let codex_home = temp_dir.path().to_path_buf();
+
+    // Store OpenAI credentials so list_configured_providers returns OpenAI
+    login_with_provider_api_key(
+        &codex_home,
+        PROVIDER_OPENAI,
+        "sk-test-key",
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("store test credentials");
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .build()
+        .await
+        .expect("config");
+
+    (config, temp_dir)
 }
 
 fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> ConstraintError {
@@ -898,6 +926,120 @@ async fn make_chatwidget_manual(
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
+}
+
+/// Creates a ChatWidget with OpenAI credentials stored, so model popup filtering works.
+/// Returns the widget, receivers, and TempDir (which must be kept alive for the test duration).
+async fn make_chatwidget_with_provider(
+    model_override: Option<&str>,
+) -> (
+    ChatWidget,
+    tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    tokio::sync::mpsc::UnboundedReceiver<Op>,
+    TempDir,
+) {
+    let (tx_raw, rx) = unbounded_channel::<AppEvent>();
+    let app_event_tx = AppEventSender::new(tx_raw);
+    let (op_tx, op_rx) = unbounded_channel::<Op>();
+    let (mut cfg, temp_dir) = test_config_with_provider().await;
+    let resolved_model = model_override
+        .map(str::to_owned)
+        .unwrap_or_else(|| ModelsManager::get_model_offline(cfg.model.as_deref()));
+    if let Some(model) = model_override {
+        cfg.model = Some(model.to_string());
+    }
+    let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
+    let mut bottom = BottomPane::new(BottomPaneParams {
+        app_event_tx: app_event_tx.clone(),
+        frame_requester: FrameRequester::test_dummy(),
+        has_input_focus: true,
+        enhanced_keys_supported: false,
+        placeholder_text: "Ask Codex to do anything".to_string(),
+        disable_paste_burst: false,
+        animations_enabled: cfg.animations,
+        skills: None,
+    });
+    bottom.set_steer_enabled(true);
+    bottom.set_collaboration_modes_enabled(cfg.features.enabled(Feature::CollaborationModes));
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let codex_home = cfg.codex_home.clone();
+    let models_manager = Arc::new(ModelsManager::new(codex_home, auth_manager.clone()));
+    let reasoning_effort = None;
+    let base_mode = CollaborationMode {
+        mode: ModeKind::Default,
+        settings: Settings {
+            model: resolved_model.clone(),
+            reasoning_effort,
+            developer_instructions: None,
+        },
+    };
+    let current_collaboration_mode = base_mode;
+    let mut widget = ChatWidget {
+        app_event_tx,
+        codex_op_tx: op_tx,
+        bottom_pane: bottom,
+        active_cell: None,
+        active_cell_revision: 0,
+        config: cfg,
+        current_collaboration_mode,
+        active_collaboration_mask: None,
+        auth_manager,
+        models_manager,
+        otel_manager,
+        session_header: SessionHeader::new(resolved_model.clone()),
+        initial_user_message: None,
+        token_info: None,
+        rate_limit_snapshot: None,
+        plan_type: None,
+        rate_limit_warnings: RateLimitWarningState::default(),
+        rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
+        rate_limit_poller: None,
+        adaptive_chunking: crate::streaming::chunking::AdaptiveChunkingPolicy::default(),
+        stream_controller: None,
+        plan_stream_controller: None,
+        running_commands: HashMap::new(),
+        suppressed_exec_calls: HashSet::new(),
+        skills_all: Vec::new(),
+        skills_initial_state: None,
+        last_unified_wait: None,
+        unified_exec_wait_streak: None,
+        task_complete_pending: false,
+        unified_exec_processes: Vec::new(),
+        agent_turn_running: false,
+        mcp_startup_status: None,
+        connectors_cache: ConnectorsCacheState::default(),
+        interrupts: InterruptManager::new(),
+        reasoning_buffer: String::new(),
+        full_reasoning_buffer: String::new(),
+        current_status_header: String::from("Working"),
+        retry_status_header: None,
+        thread_id: None,
+        thread_name: None,
+        forked_from: None,
+        frame_requester: FrameRequester::test_dummy(),
+        show_welcome_banner: true,
+        queued_user_messages: VecDeque::new(),
+        suppress_session_configured_redraw: false,
+        pending_notification: None,
+        quit_shortcut_expires_at: None,
+        quit_shortcut_key: None,
+        is_review_mode: false,
+        pre_review_token_info: None,
+        needs_final_message_separator: false,
+        had_work_activity: false,
+        saw_plan_update_this_turn: false,
+        saw_plan_item_this_turn: false,
+        plan_delta_buffer: String::new(),
+        plan_item_active: false,
+        last_separator_elapsed_secs: None,
+        last_rendered_width: std::cell::Cell::new(None),
+        feedback: codex_feedback::CodexFeedback::new(),
+        feedback_audience: FeedbackAudience::External,
+        current_rollout_path: None,
+        external_editor_state: ExternalEditorState::Closed,
+    };
+    widget.set_model(&resolved_model);
+    (widget, rx, op_rx, temp_dir)
 }
 
 // ChatWidget may emit other `Op`s (e.g. history/logging updates) on the same channel; this helper
@@ -3216,7 +3358,9 @@ async fn experimental_features_toggle_saves_on_exit() {
 
 #[tokio::test]
 async fn model_selection_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
+    // Use make_chatwidget_with_provider so OpenAI models show in the picker
+    let (mut chat, _rx, _op_rx, _temp_dir) =
+        make_chatwidget_with_provider(Some("gpt-5-codex")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.open_model_popup();
 
@@ -3236,7 +3380,9 @@ async fn personality_selection_popup_snapshot() {
 
 #[tokio::test]
 async fn model_picker_hides_show_in_picker_false_models_from_cache() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("test-visible-model")).await;
+    // Use make_chatwidget_with_provider so OpenAI models show in the picker
+    let (mut chat, _rx, _op_rx, _temp_dir) =
+        make_chatwidget_with_provider(Some("test-visible-model")).await;
     chat.thread_id = Some(ThreadId::new());
     let preset = |slug: &str, show_in_picker: bool| ModelPreset {
         id: slug.to_string(),
@@ -3541,7 +3687,9 @@ async fn feedback_upload_consent_popup_snapshot() {
 
 #[tokio::test]
 async fn reasoning_popup_escape_returns_to_model_popup() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    // Use make_chatwidget_with_provider so OpenAI models show in the picker
+    let (mut chat, _rx, _op_rx, _temp_dir) =
+        make_chatwidget_with_provider(Some("gpt-5.1-codex-max")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.open_model_popup();
 
