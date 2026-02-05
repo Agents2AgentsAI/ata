@@ -3933,7 +3933,12 @@ impl ChatWidget {
         let switch_model = preset.model.to_string();
         let display_name = preset.display_name.to_string();
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
-        let provider_id = preset.provider_id.clone();
+        let provider_id = Some(
+            preset
+                .provider_id
+                .clone()
+                .unwrap_or_else(|| PROVIDER_OPENAI.to_string()),
+        );
 
         let switch_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
             tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
@@ -4181,8 +4186,12 @@ impl ChatWidget {
                 let description =
                     (!preset.description.is_empty()).then_some(preset.description.clone());
                 let model = preset.model.clone();
-                let provider_id = Some(preset.provider_id.clone()
-                    .unwrap_or_else(|| PROVIDER_OPENAI.to_string()));
+                let provider_id = Some(
+                    preset
+                        .provider_id
+                        .clone()
+                        .unwrap_or_else(|| PROVIDER_OPENAI.to_string()),
+                );
                 let actions = Self::model_selection_actions(
                     model.clone(),
                     Some(preset.default_reasoning_effort),
@@ -4378,7 +4387,12 @@ impl ChatWidget {
     pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
-        let provider_id = preset.provider_id.clone();
+        let provider_id = Some(
+            preset
+                .provider_id
+                .clone()
+                .unwrap_or_else(|| PROVIDER_OPENAI.to_string()),
+        );
 
         let warn_effort = if supported
             .iter()

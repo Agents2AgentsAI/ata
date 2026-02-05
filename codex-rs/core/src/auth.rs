@@ -475,7 +475,9 @@ pub fn get_provider_api_key(
     // Check stored credentials
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
     match storage.load() {
-        Ok(Some(auth)) => auth.get_provider_api_key(provider_id).map(|s| s.to_string()),
+        Ok(Some(auth)) => auth
+            .get_provider_api_key(provider_id)
+            .map(|s| s.to_string()),
         Ok(None) => None,
         Err(err) => {
             tracing::warn!(

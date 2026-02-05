@@ -266,7 +266,11 @@ impl ConfigDocument {
 
     fn apply(&mut self, edit: &ConfigEdit) -> anyhow::Result<bool> {
         match edit {
-            ConfigEdit::SetModel { model, effort, model_provider } => Ok({
+            ConfigEdit::SetModel {
+                model,
+                effort,
+                model_provider,
+            } => Ok({
                 let mut mutated = false;
                 mutated |= self.write_profile_value(
                     &["model"],
@@ -278,7 +282,9 @@ impl ConfigDocument {
                 );
                 mutated |= self.write_profile_value(
                     &["model_provider"],
-                    model_provider.as_ref().map(|provider| value(provider.clone())),
+                    model_provider
+                        .as_ref()
+                        .map(|provider| value(provider.clone())),
                 );
                 mutated
             }),
@@ -734,7 +740,12 @@ impl ConfigEditsBuilder {
         self
     }
 
-    pub fn set_model(mut self, model: Option<&str>, effort: Option<ReasoningEffort>, model_provider: Option<String>) -> Self {
+    pub fn set_model(
+        mut self,
+        model: Option<&str>,
+        effort: Option<ReasoningEffort>,
+        model_provider: Option<String>,
+    ) -> Self {
         self.edits.push(ConfigEdit::SetModel {
             model: model.map(ToOwned::to_owned),
             effort,
