@@ -4,6 +4,7 @@
 //! This module handles the interleaved streaming of text and tool calls.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -11,7 +12,9 @@ use serde_json::Value;
 use crate::common::ResponseEvent;
 use crate::error::ApiError;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::TokenUsage;
 
 /// Anthropic SSE event types.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +62,24 @@ pub struct AnthropicStreamState {
     created_sent: bool,
     /// Response ID from message_start.
     response_id: String,
+
+    // Thinking/reasoning state
+    /// Block indices that are thinking blocks.
+    thinking_blocks: HashSet<u32>,
+    /// Current thinking summary index (incremented per thinking block).
+    thinking_index: i64,
+    /// Whether we are currently inside a thinking content block.
+    in_thinking_section: bool,
+    /// Accumulated thinking text for the current thinking block.
+    accumulated_thinking_text: String,
+    /// Whether we've emitted the Reasoning OutputItemAdded event.
+    reasoning_item_started: bool,
+
+    // Token usage
+    input_tokens: Option<i64>,
+    output_tokens: Option<i64>,
+    cache_creation_input_tokens: Option<i64>,
+    cache_read_input_tokens: Option<i64>,
 }
 
 impl AnthropicStreamState {
@@ -135,6 +156,10 @@ pub enum ContentBlock {
         name: String,
         input: Value,
     },
+    #[serde(rename = "thinking")]
+    Thinking { thinking: String },
+    #[serde(rename = "redacted_thinking")]
+    RedactedThinking { data: String },
 }
 
 /// Content block delta payload.
@@ -151,6 +176,10 @@ pub enum ContentDelta {
     TextDelta { text: String },
     #[serde(rename = "input_json_delta")]
     InputJsonDelta { partial_json: String },
+    #[serde(rename = "thinking_delta")]
+    ThinkingDelta { thinking: String },
+    #[serde(rename = "signature_delta")]
+    SignatureDelta { signature: String },
 }
 
 /// Message delta payload (for stop reason and final usage).
@@ -206,6 +235,14 @@ pub fn parse_anthropic_event(
 
             state.response_id = payload.message.id;
 
+            // Capture initial usage from message_start
+            if let Some(usage) = &payload.message.usage {
+                state.input_tokens = usage.input_tokens;
+                state.output_tokens = usage.output_tokens;
+                state.cache_creation_input_tokens = usage.cache_creation_input_tokens;
+                state.cache_read_input_tokens = usage.cache_read_input_tokens;
+            }
+
             if !state.created_sent {
                 events.push(ResponseEvent::Created);
                 state.created_sent = true;
@@ -223,6 +260,22 @@ pub fn parse_anthropic_event(
                 }
                 ContentBlock::Text { .. } => {
                     // Text blocks are handled via deltas
+                }
+                ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {
+                    state.thinking_blocks.insert(payload.index);
+                    state.in_thinking_section = true;
+                    state.accumulated_thinking_text.clear();
+
+                    // Emit the Reasoning item on the first thinking block
+                    if !state.reasoning_item_started {
+                        state.reasoning_item_started = true;
+                        events.push(ResponseEvent::OutputItemAdded(ResponseItem::Reasoning {
+                            id: String::new(),
+                            summary: vec![],
+                            content: None,
+                            encrypted_content: None,
+                        }));
+                    }
                 }
             }
         }
@@ -242,6 +295,18 @@ pub fn parse_anthropic_event(
                 ContentDelta::InputJsonDelta { partial_json } => {
                     state.append_tool_arguments(payload.index, &partial_json);
                 }
+                ContentDelta::ThinkingDelta { thinking } => {
+                    if !thinking.is_empty() {
+                        state.accumulated_thinking_text.push_str(&thinking);
+                        events.push(ResponseEvent::ReasoningSummaryDelta {
+                            delta: thinking,
+                            summary_index: state.thinking_index,
+                        });
+                    }
+                }
+                ContentDelta::SignatureDelta { .. } => {
+                    // Signature deltas are opaque verification data; ignore.
+                }
             }
         }
 
@@ -256,8 +321,23 @@ pub fn parse_anthropic_event(
                 ApiError::Stream(format!("Failed to parse content_block_stop: {e}"))
             })?;
 
-            // If this was a tool call block, emit the completed tool call
-            if let Some((id, name)) = state.get_tool(payload.index).cloned() {
+            if state.thinking_blocks.contains(&payload.index) {
+                // Finalize the thinking block
+                let summary_index = state.thinking_index;
+                events.push(ResponseEvent::ReasoningSummaryPartAdded { summary_index });
+
+                let text = std::mem::take(&mut state.accumulated_thinking_text);
+                events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
+                    id: String::new(),
+                    summary: vec![ReasoningItemReasoningSummary::SummaryText { text }],
+                    content: None,
+                    encrypted_content: None,
+                }));
+
+                state.thinking_index += 1;
+                state.in_thinking_section = false;
+            } else if let Some((id, name)) = state.get_tool(payload.index).cloned() {
+                // If this was a tool call block, emit the completed tool call
                 let arguments = state
                     .get_tool_arguments(payload.index)
                     .cloned()
@@ -277,11 +357,32 @@ pub fn parse_anthropic_event(
             let payload: MessageDeltaPayload = serde_json::from_str(data)
                 .map_err(|e| ApiError::Stream(format!("Failed to parse message_delta: {e}")))?;
 
-            // We'll use this info in MessageStop
-            let _ = payload;
+            // Capture final output_tokens from message_delta usage
+            if let Some(usage) = &payload.usage {
+                if let Some(output_tokens) = usage.output_tokens {
+                    state.output_tokens = Some(output_tokens);
+                }
+            }
         }
 
         AnthropicEventType::MessageStop => {
+            // Flush any in-progress thinking section
+            if state.in_thinking_section && !state.accumulated_thinking_text.is_empty() {
+                let summary_index = state.thinking_index;
+                events.push(ResponseEvent::ReasoningSummaryPartAdded { summary_index });
+
+                let text = std::mem::take(&mut state.accumulated_thinking_text);
+                events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
+                    id: String::new(),
+                    summary: vec![ReasoningItemReasoningSummary::SummaryText { text }],
+                    content: None,
+                    encrypted_content: None,
+                }));
+
+                state.thinking_index += 1;
+                state.in_thinking_section = false;
+            }
+
             // Build the final message if we have text content
             if !state.text_content.is_empty() {
                 events.push(ResponseEvent::OutputItemDone(ResponseItem::Message {
@@ -295,9 +396,24 @@ pub fn parse_anthropic_event(
                 }));
             }
 
+            // Build token usage from accumulated state
+            let input_tokens = state.input_tokens.unwrap_or(0);
+            let output_tokens = state.output_tokens.unwrap_or(0);
+            let cached_input_tokens = state
+                .cache_read_input_tokens
+                .unwrap_or(0)
+                .saturating_add(state.cache_creation_input_tokens.unwrap_or(0));
+            let token_usage = TokenUsage {
+                input_tokens,
+                output_tokens,
+                cached_input_tokens,
+                reasoning_output_tokens: 0,
+                total_tokens: input_tokens.saturating_add(output_tokens),
+            };
+
             events.push(ResponseEvent::Completed {
                 response_id: state.response_id.clone(),
-                token_usage: None, // Usage comes from message_delta
+                token_usage: Some(token_usage),
             });
         }
 
@@ -447,11 +563,17 @@ mod tests {
             &events[0],
             ResponseEvent::OutputItemDone(ResponseItem::Message { .. })
         ));
-        // Second should be completed
-        assert!(matches!(
-            &events[1],
-            ResponseEvent::Completed { response_id, .. } if response_id == "msg_123"
-        ));
+        // Second should be completed with token usage
+        match &events[1] {
+            ResponseEvent::Completed {
+                response_id,
+                token_usage,
+            } => {
+                assert_eq!(response_id, "msg_123");
+                assert!(token_usage.is_some());
+            }
+            _ => panic!("Expected Completed event"),
+        }
     }
 
     #[test]
@@ -477,5 +599,247 @@ mod tests {
         assert!(is_completion_event("message_stop"));
         assert!(!is_completion_event("message_start"));
         assert!(!is_completion_event("content_block_delta"));
+    }
+
+    #[test]
+    fn test_parse_thinking_block() {
+        let mut state = AnthropicStreamState::new();
+        state.created_sent = true;
+
+        // Start thinking block
+        let start_data = r#"{
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "thinking",
+                "thinking": ""
+            }
+        }"#;
+        let events = parse_anthropic_event("content_block_start", start_data, &mut state).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            ResponseEvent::OutputItemAdded(ResponseItem::Reasoning { .. })
+        ));
+        assert!(state.thinking_blocks.contains(&0));
+
+        // Thinking delta
+        let delta_data = r#"{
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "thinking_delta",
+                "thinking": "Let me think..."
+            }
+        }"#;
+        let events = parse_anthropic_event("content_block_delta", delta_data, &mut state).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            ResponseEvent::ReasoningSummaryDelta { delta, summary_index: 0 } if delta == "Let me think..."
+        ));
+        assert_eq!(state.accumulated_thinking_text, "Let me think...");
+
+        // Stop thinking block
+        let stop_data = r#"{"type": "content_block_stop", "index": 0}"#;
+        let events = parse_anthropic_event("content_block_stop", stop_data, &mut state).unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            &events[0],
+            ResponseEvent::ReasoningSummaryPartAdded { summary_index: 0 }
+        ));
+        match &events[1] {
+            ResponseEvent::OutputItemDone(ResponseItem::Reasoning { summary, .. }) => {
+                assert_eq!(summary.len(), 1);
+                match &summary[0] {
+                    ReasoningItemReasoningSummary::SummaryText { text } => {
+                        assert_eq!(text, "Let me think...");
+                    }
+                }
+            }
+            _ => panic!("Expected Reasoning OutputItemDone"),
+        }
+        assert_eq!(state.thinking_index, 1);
+    }
+
+    #[test]
+    fn test_parse_thinking_then_text() {
+        let mut state = AnthropicStreamState::new();
+        state.created_sent = true;
+
+        // Start thinking block
+        let _ = parse_anthropic_event(
+            "content_block_start",
+            r#"{"index": 0, "content_block": {"type": "thinking", "thinking": ""}}"#,
+            &mut state,
+        )
+        .unwrap();
+
+        // Thinking delta
+        let _ = parse_anthropic_event(
+            "content_block_delta",
+            r#"{"index": 0, "delta": {"type": "thinking_delta", "thinking": "reasoning"}}"#,
+            &mut state,
+        )
+        .unwrap();
+
+        // Stop thinking block
+        let _ = parse_anthropic_event("content_block_stop", r#"{"index": 0}"#, &mut state).unwrap();
+
+        // Start text block
+        let _ = parse_anthropic_event(
+            "content_block_start",
+            r#"{"index": 1, "content_block": {"type": "text", "text": ""}}"#,
+            &mut state,
+        )
+        .unwrap();
+
+        // Text delta
+        let events = parse_anthropic_event(
+            "content_block_delta",
+            r#"{"index": 1, "delta": {"type": "text_delta", "text": "Hello!"}}"#,
+            &mut state,
+        )
+        .unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], ResponseEvent::OutputTextDelta(s) if s == "Hello!"));
+
+        // Stop text block + message_stop
+        let _ = parse_anthropic_event("content_block_stop", r#"{"index": 1}"#, &mut state).unwrap();
+        let events = parse_anthropic_event("message_stop", r#"{}"#, &mut state).unwrap();
+
+        // Should have Message + Completed
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            &events[0],
+            ResponseEvent::OutputItemDone(ResponseItem::Message { .. })
+        ));
+        assert!(matches!(&events[1], ResponseEvent::Completed { .. }));
+    }
+
+    #[test]
+    fn test_signature_delta_ignored() {
+        let mut state = AnthropicStreamState::new();
+        state.created_sent = true;
+        state.thinking_blocks.insert(0);
+        state.in_thinking_section = true;
+
+        let data = r#"{
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "signature_delta",
+                "signature": "abc123sig"
+            }
+        }"#;
+        let events = parse_anthropic_event("content_block_delta", data, &mut state).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_token_usage_populated() {
+        let mut state = AnthropicStreamState::new();
+        state.created_sent = true;
+        state.response_id = "msg_456".to_string();
+
+        // message_start with usage
+        let start_data = r#"{
+            "message": {
+                "id": "msg_456",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-20250514",
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 0,
+                    "cache_read_input_tokens": 50,
+                    "cache_creation_input_tokens": 10
+                }
+            }
+        }"#;
+        let _ = parse_anthropic_event("message_start", start_data, &mut state).unwrap();
+        assert_eq!(state.input_tokens, Some(100));
+        assert_eq!(state.cache_read_input_tokens, Some(50));
+
+        // message_delta with output_tokens
+        let delta_data = r#"{
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 42}
+        }"#;
+        let _ = parse_anthropic_event("message_delta", delta_data, &mut state).unwrap();
+        assert_eq!(state.output_tokens, Some(42));
+
+        // message_stop should include token usage
+        let events = parse_anthropic_event("message_stop", r#"{}"#, &mut state).unwrap();
+        match &events[events.len() - 1] {
+            ResponseEvent::Completed { token_usage, .. } => {
+                let usage = token_usage.as_ref().expect("expected token usage");
+                assert_eq!(usage.input_tokens, 100);
+                assert_eq!(usage.output_tokens, 42);
+                assert_eq!(usage.cached_input_tokens, 60); // 50 + 10
+                assert_eq!(usage.total_tokens, 142);
+            }
+            _ => panic!("Expected Completed event"),
+        }
+    }
+
+    #[test]
+    fn test_message_stop_flushes_thinking() {
+        let mut state = AnthropicStreamState::new();
+        state.created_sent = true;
+        state.response_id = "msg_789".to_string();
+        state.in_thinking_section = true;
+        state.accumulated_thinking_text = "partial thought".to_string();
+        state.reasoning_item_started = true;
+
+        let events = parse_anthropic_event("message_stop", r#"{}"#, &mut state).unwrap();
+
+        // Should flush: ReasoningSummaryPartAdded, Reasoning OutputItemDone, Completed
+        assert_eq!(events.len(), 3);
+        assert!(matches!(
+            &events[0],
+            ResponseEvent::ReasoningSummaryPartAdded { summary_index: 0 }
+        ));
+        match &events[1] {
+            ResponseEvent::OutputItemDone(ResponseItem::Reasoning { summary, .. }) => {
+                assert_eq!(summary.len(), 1);
+                match &summary[0] {
+                    ReasoningItemReasoningSummary::SummaryText { text } => {
+                        assert_eq!(text, "partial thought");
+                    }
+                }
+            }
+            _ => panic!("Expected Reasoning OutputItemDone"),
+        }
+        match &events[2] {
+            ResponseEvent::Completed { token_usage, .. } => {
+                assert!(token_usage.is_some());
+            }
+            _ => panic!("Expected Completed"),
+        }
+    }
+
+    #[test]
+    fn test_redacted_thinking_block() {
+        let mut state = AnthropicStreamState::new();
+        state.created_sent = true;
+
+        let start_data = r#"{
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "redacted_thinking",
+                "data": "encrypted_data_here"
+            }
+        }"#;
+        let events = parse_anthropic_event("content_block_start", start_data, &mut state).unwrap();
+
+        // Should emit OutputItemAdded for Reasoning
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            ResponseEvent::OutputItemAdded(ResponseItem::Reasoning { .. })
+        ));
+        assert!(state.thinking_blocks.contains(&0));
     }
 }
