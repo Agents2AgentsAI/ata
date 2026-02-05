@@ -821,6 +821,22 @@ impl ModelClientSession {
         // Convert input items to JSON values
         let input_values = serialize_input_items(&api_prompt.input)?;
 
+        // Build reasoning config for Gemini (mirrors build_responses_options logic)
+        let model_info = &self.state.model_info;
+        let reasoning_value = if model_info.supports_reasoning_summaries {
+            let reasoning = Reasoning {
+                effort: self.state.effort.or(model_info.default_reasoning_level),
+                summary: if self.state.summary == ReasoningSummaryConfig::None {
+                    None
+                } else {
+                    Some(self.state.summary)
+                },
+            };
+            serde_json::to_value(reasoning).ok()
+        } else {
+            None
+        };
+
         // Build request body
         let body = adapter
             .build_request_body(
@@ -830,6 +846,7 @@ impl ModelClientSession {
                 &api_prompt.tools,
                 &codex_api::RequestOptions {
                     parallel_tool_calls: api_prompt.parallel_tool_calls,
+                    reasoning: reasoning_value,
                     ..Default::default()
                 },
             )
