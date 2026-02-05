@@ -2916,6 +2916,8 @@ mod tests {
             )) as Arc<dyn HistoryCell>
         };
 
+        // Create a standalone shared model for the test headers
+        let test_shared_model = Arc::new(std::sync::RwLock::new("gpt-test".to_string()));
         let make_header = |is_first| {
             let event = SessionConfiguredEvent {
                 session_id: ThreadId::new(),
@@ -2938,7 +2940,7 @@ mod tests {
                 event,
                 is_first,
                 None,
-                app.chat_widget.shared_model(),
+                test_shared_model.clone(),
             )) as Arc<dyn HistoryCell>
         };
 
