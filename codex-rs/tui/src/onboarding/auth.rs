@@ -904,7 +904,7 @@ impl AuthModeWidget {
                 // Set provider-specific default model
                 let default_model = default_model_for_provider(provider_id);
                 if let Err(e) = ConfigEditsBuilder::new(&self.codex_home)
-                    .set_model(default_model, None)
+                    .set_model(default_model, None, Some(provider_id.to_string()))
                     .apply_blocking()
                 {
                     tracing::error!("failed to set default model for provider {provider_id}: {e}");
@@ -988,7 +988,7 @@ impl AuthModeWidget {
 
                             // Clear model to use remote default for ChatGPT
                             if let Err(e) = ConfigEditsBuilder::new(&codex_home)
-                                .set_model(None, None)
+                                .set_model(None, None, None)
                                 .apply_blocking()
                             {
                                 tracing::error!("failed to clear model on ChatGPT login: {e}");

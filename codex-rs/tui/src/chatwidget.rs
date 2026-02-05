@@ -2996,14 +2996,14 @@ impl ChatWidget {
                 if let Some(profile) = self.config.active_profile.as_deref() {
                     builder = builder.with_profile(Some(profile));
                 }
-                if let Err(e) = builder.set_model(None, None).apply_blocking() {
+                if let Err(e) = builder.set_model(None, None, None).apply_blocking() {
                     tracing::error!("failed to clear model on logout: {e}");
                 }
                 // Also clear the global model setting in case no profile is active
                 if self.config.active_profile.is_some() {
                     if let Err(e) =
                         codex_core::config::edit::ConfigEditsBuilder::new(&self.config.codex_home)
-                            .set_model(None, None)
+                            .set_model(None, None, None)
                             .apply_blocking()
                     {
                         tracing::error!("failed to clear global model on logout: {e}");
@@ -4181,7 +4181,8 @@ impl ChatWidget {
                 let description =
                     (!preset.description.is_empty()).then_some(preset.description.clone());
                 let model = preset.model.clone();
-                let provider_id = preset.provider_id.clone();
+                let provider_id = Some(preset.provider_id.clone()
+                    .unwrap_or_else(|| PROVIDER_OPENAI.to_string()));
                 let actions = Self::model_selection_actions(
                     model.clone(),
                     Some(preset.default_reasoning_effort),
@@ -4363,6 +4364,7 @@ impl ChatWidget {
             tx.send(AppEvent::PersistModelSelection {
                 model: model_for_action.clone(),
                 effort: effort_for_action,
+                provider: provider_id.clone(),
             });
             tracing::info!(
                 "Selected model: {}, Selected effort: {}",
@@ -4534,7 +4536,7 @@ impl ChatWidget {
                 sandbox_policy: None,
                 windows_sandbox_level: None,
                 model: Some(model.clone()),
-                model_provider: provider_id,
+                model_provider: provider_id.clone(),
                 effort: Some(effort),
                 summary: None,
                 collaboration_mode: None,
@@ -4546,6 +4548,7 @@ impl ChatWidget {
         self.app_event_tx.send(AppEvent::PersistModelSelection {
             model: model.clone(),
             effort,
+            provider: provider_id,
         });
         tracing::info!(
             "Selected model: {}, Selected effort: {}",

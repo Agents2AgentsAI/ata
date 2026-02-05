@@ -105,7 +105,7 @@ impl ProviderAdapter for AnthropicAdapter {
         &self,
         event_type: &str,
         data: &str,
-    ) -> Result<Option<ResponseEvent>, ApiError> {
+    ) -> Result<Vec<ResponseEvent>, ApiError> {
         let mut state = self
             .stream_state
             .lock()
@@ -113,8 +113,7 @@ impl ProviderAdapter for AnthropicAdapter {
 
         let events = parse_anthropic_event(event_type, data, &mut state)?;
 
-        // Return the first event if any
-        Ok(events.into_iter().next())
+        Ok(events)
     }
 
     fn streaming_endpoint(&self, _model: &str) -> String {
