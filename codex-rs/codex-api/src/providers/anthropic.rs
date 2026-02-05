@@ -10,13 +10,9 @@ use http::HeaderValue;
 use serde_json::Value;
 use serde_json::json;
 
-use crate::common::ResponseEvent;
 use crate::error::ApiError;
 use crate::provider_adapter::ProviderAdapter;
 use crate::provider_adapter::RequestOptions;
-use crate::sse::anthropic::AnthropicStreamState;
-use crate::sse::anthropic::is_completion_event;
-use crate::sse::anthropic::parse_anthropic_event;
 use crate::tools::ToolFormatter;
 use crate::tools::anthropic::AnthropicToolFormatter;
 
@@ -26,23 +22,12 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// Anthropic Messages API adapter.
 pub struct AnthropicAdapter {
     tool_formatter: AnthropicToolFormatter,
-    /// Stream state for parsing SSE events.
-    /// Note: This needs to be managed externally for proper stateful parsing.
-    stream_state: std::sync::Mutex<AnthropicStreamState>,
 }
 
 impl AnthropicAdapter {
     pub fn new() -> Self {
         Self {
             tool_formatter: AnthropicToolFormatter::new(),
-            stream_state: std::sync::Mutex::new(AnthropicStreamState::new()),
-        }
-    }
-
-    /// Resets the stream state. Call this before starting a new stream.
-    pub fn reset_stream_state(&self) {
-        if let Ok(mut state) = self.stream_state.lock() {
-            *state = AnthropicStreamState::new();
         }
     }
 }
@@ -120,21 +105,6 @@ impl ProviderAdapter for AnthropicAdapter {
         Ok(body)
     }
 
-    fn parse_sse_event(
-        &self,
-        event_type: &str,
-        data: &str,
-    ) -> Result<Vec<ResponseEvent>, ApiError> {
-        let mut state = self
-            .stream_state
-            .lock()
-            .map_err(|_| ApiError::Stream("Failed to acquire stream state lock".to_string()))?;
-
-        let events = parse_anthropic_event(event_type, data, &mut state)?;
-
-        Ok(events)
-    }
-
     fn streaming_endpoint(&self, _model: &str) -> String {
         "/messages".to_string()
     }
@@ -153,10 +123,6 @@ impl ProviderAdapter for AnthropicAdapter {
         }
 
         headers
-    }
-
-    fn is_completion_event(&self, event_type: &str) -> bool {
-        is_completion_event(event_type)
     }
 
     fn auth_header_name(&self) -> &str {

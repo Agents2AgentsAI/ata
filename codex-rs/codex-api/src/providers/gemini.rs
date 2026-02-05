@@ -7,12 +7,9 @@ use http::HeaderMap;
 use serde_json::Value;
 use serde_json::json;
 
-use crate::common::ResponseEvent;
 use crate::error::ApiError;
 use crate::provider_adapter::ProviderAdapter;
 use crate::provider_adapter::RequestOptions;
-use crate::sse::gemini::GeminiStreamState;
-use crate::sse::gemini::parse_gemini_chunk;
 use crate::tools::ToolFormatter;
 use crate::tools::gemini::GeminiToolFormatter;
 
@@ -134,21 +131,6 @@ impl ProviderAdapter for GeminiAdapter {
         Ok(body)
     }
 
-    fn parse_sse_event(
-        &self,
-        _event_type: &str,
-        data: &str,
-    ) -> Result<Vec<ResponseEvent>, ApiError> {
-        // Gemini uses JSON lines, not SSE events
-        // This method is called for each line/chunk
-        // For proper stateful parsing, we'd need to maintain state externally
-        // For now, we'll create a temporary state for each call
-        let mut state = GeminiStreamState::new();
-        let events = parse_gemini_chunk(data, &mut state)?;
-
-        Ok(events)
-    }
-
     fn streaming_endpoint(&self, model: &str) -> String {
         // Gemini streaming endpoint format
         // Note: The model parameter needs URL encoding for model names with special chars
@@ -158,11 +140,6 @@ impl ProviderAdapter for GeminiAdapter {
     fn extra_headers(&self) -> HeaderMap {
         // Gemini doesn't require extra headers beyond auth
         HeaderMap::new()
-    }
-
-    fn is_completion_event(&self, _event_type: &str) -> bool {
-        // Gemini uses finishReason in the response JSON, not event types
-        false
     }
 
     fn auth_header_name(&self) -> &str {

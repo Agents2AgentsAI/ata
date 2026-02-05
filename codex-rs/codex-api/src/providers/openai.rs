@@ -6,12 +6,9 @@
 use serde_json::Value;
 use serde_json::json;
 
-use crate::common::ResponseEvent;
 use crate::error::ApiError;
 use crate::provider_adapter::ProviderAdapter;
 use crate::provider_adapter::RequestOptions;
-use crate::sse::responses::ResponsesStreamEvent;
-use crate::sse::responses::process_responses_event;
 
 /// OpenAI Responses API adapter.
 pub struct OpenAiAdapter;
@@ -73,26 +70,7 @@ impl ProviderAdapter for OpenAiAdapter {
         Ok(body)
     }
 
-    fn parse_sse_event(
-        &self,
-        _event_type: &str,
-        data: &str,
-    ) -> Result<Vec<ResponseEvent>, ApiError> {
-        let event: ResponsesStreamEvent = serde_json::from_str(data)
-            .map_err(|e| ApiError::Stream(format!("Failed to parse SSE: {}", e)))?;
-
-        match process_responses_event(event) {
-            Ok(Some(event)) => Ok(vec![event]),
-            Ok(None) => Ok(vec![]),
-            Err(e) => Err(e.into_api_error()),
-        }
-    }
-
     fn streaming_endpoint(&self, _model: &str) -> String {
         "/responses".to_string()
-    }
-
-    fn is_completion_event(&self, event_type: &str) -> bool {
-        matches!(event_type, "response.completed" | "response.done")
     }
 }
