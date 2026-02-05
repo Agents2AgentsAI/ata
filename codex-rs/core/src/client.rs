@@ -613,11 +613,7 @@ impl ModelClientSession {
         let adapter = AnthropicAdapter::new();
 
         // Convert input items to JSON values
-        let input_values: Vec<Value> = api_prompt
-            .input
-            .iter()
-            .filter_map(|item| serde_json::to_value(item).ok())
-            .collect();
+        let input_values = serialize_input_items(&api_prompt.input)?;
 
         // Build request body
         let body = adapter
@@ -823,11 +819,7 @@ impl ModelClientSession {
         let adapter = GeminiAdapter::new();
 
         // Convert input items to JSON values
-        let input_values: Vec<Value> = api_prompt
-            .input
-            .iter()
-            .filter_map(|item| serde_json::to_value(item).ok())
-            .collect();
+        let input_values = serialize_input_items(&api_prompt.input)?;
 
         // Build request body
         let body = adapter
@@ -843,7 +835,7 @@ impl ModelClientSession {
             )
             .map_err(|e| CodexErr::Api(e.to_string()))?;
 
-        // Build URL - Gemini uses query param for API key and ?alt=sse for streaming
+        // Build URL - Gemini uses ?alt=sse for streaming
         let base_url = self
             .state
             .provider
@@ -851,13 +843,17 @@ impl ModelClientSession {
             .as_deref()
             .unwrap_or("https://generativelanguage.googleapis.com/v1beta");
         let endpoint = adapter.streaming_endpoint(&self.state.model_info.slug);
-        let url = format!("{}{}?key={}&alt=sse", base_url, endpoint, api_key);
+        let url = format!("{}{}?alt=sse", base_url, endpoint);
 
-        // Build request
+        // Build request with API key in header (not URL) to prevent leakage in error messages
         let client = build_reqwest_client();
         let request = client
             .post(&url)
             .header("Content-Type", "application/json")
+            .header(
+                adapter.auth_header_name(),
+                adapter.format_auth_header(&api_key),
+            )
             .json(&body);
 
         let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
@@ -1057,6 +1053,20 @@ impl ModelClient {
         let request_telemetry: Arc<dyn RequestTelemetry> = telemetry;
         request_telemetry
     }
+}
+
+/// Serializes input items with proper error handling.
+///
+/// Unlike `filter_map(...ok())`, this returns an error if any item fails to serialize,
+/// preventing incomplete prompts from being sent silently.
+fn serialize_input_items(input: &[ResponseItem]) -> Result<Vec<Value>> {
+    input
+        .iter()
+        .map(|item| {
+            serde_json::to_value(item)
+                .map_err(|e| CodexErr::Api(format!("Failed to serialize input item: {}", e)))
+        })
+        .collect()
 }
 
 /// Adapts the core `Prompt` type into the `codex-api` payload shape.
