@@ -15,4 +15,9 @@ export type ResponseItem = { "type": "message", role: string, content: Array<Con
 /**
  * Set when using the Responses API.
  */
-call_id: string | null, status: LocalShellStatus, action: LocalShellAction, } | { "type": "function_call", name: string, arguments: string, call_id: string, } | { "type": "function_call_output", call_id: string, output: FunctionCallOutputPayload, } | { "type": "custom_tool_call", status?: string, call_id: string, name: string, input: string, } | { "type": "custom_tool_call_output", call_id: string, output: string, } | { "type": "web_search_call", status?: string, action?: WebSearchAction, } | { "type": "ghost_snapshot", ghost_commit: GhostCommit, } | { "type": "compaction", encrypted_content: string, } | { "type": "other" };
+call_id: string | null, status: LocalShellStatus, action: LocalShellAction, } | { "type": "function_call", name: string, arguments: string, call_id: string, 
+/**
+ * Gemini thought signature for multi-turn reasoning.
+ * Must be preserved and passed back in subsequent requests.
+ */
+thought_signature?: string, } | { "type": "function_call_output", call_id: string, output: FunctionCallOutputPayload, } | { "type": "custom_tool_call", status?: string, call_id: string, name: string, input: string, } | { "type": "custom_tool_call_output", call_id: string, output: string, } | { "type": "web_search_call", status?: string, action?: WebSearchAction, } | { "type": "ghost_snapshot", ghost_commit: GhostCommit, } | { "type": "compaction", encrypted_content: string, } | { "type": "other" };

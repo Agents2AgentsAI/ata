@@ -173,7 +173,20 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             upgrade: None,
             display_name: "Claude Sonnet 4.5".to_string(),
             description: "Anthropic's balanced model for coding tasks.".to_string(),
-            supported_reasoning_efforts: vec![],
+            supported_reasoning_efforts: vec![
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Low,
+                    description: "Fast responses with lighter reasoning".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Medium,
+                    description: "Balanced reasoning for everyday tasks".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::High,
+                    description: "Greater reasoning depth for complex problems".to_string(),
+                },
+            ],
             default_reasoning_effort: ReasoningEffort::Medium,
             input_modalities: vec![InputModality::Text, InputModality::Image],
             supports_personality: false,
@@ -185,7 +198,20 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             upgrade: None,
             display_name: "Claude Opus 4.5".to_string(),
             description: "Anthropic's most capable model for complex reasoning.".to_string(),
-            supported_reasoning_efforts: vec![],
+            supported_reasoning_efforts: vec![
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Low,
+                    description: "Fast responses with lighter reasoning".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Medium,
+                    description: "Balanced reasoning for everyday tasks".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::High,
+                    description: "Greater reasoning depth for complex problems".to_string(),
+                },
+            ],
             default_reasoning_effort: ReasoningEffort::Medium,
             input_modalities: vec![InputModality::Text, InputModality::Image],
             supports_personality: false,
@@ -198,7 +224,16 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             upgrade: None,
             display_name: "Gemini 3 Pro".to_string(),
             description: "Google's advanced model for complex tasks.".to_string(),
-            supported_reasoning_efforts: vec![],
+            supported_reasoning_efforts: vec![
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Low,
+                    description: "Fast responses with lighter reasoning".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::High,
+                    description: "Deep reasoning for complex problems".to_string(),
+                },
+            ],
             default_reasoning_effort: ReasoningEffort::Medium,
             input_modalities: vec![InputModality::Text, InputModality::Image],
             supports_personality: false,
@@ -210,7 +245,24 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             upgrade: None,
             display_name: "Gemini 3 Flash".to_string(),
             description: "Google's fast and efficient model.".to_string(),
-            supported_reasoning_efforts: vec![],
+            supported_reasoning_efforts: vec![
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Minimal,
+                    description: "Fastest responses with minimal reasoning".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Low,
+                    description: "Quick responses with light reasoning".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Medium,
+                    description: "Balanced reasoning for everyday tasks".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::High,
+                    description: "Deep reasoning for complex problems".to_string(),
+                },
+            ],
             default_reasoning_effort: ReasoningEffort::Medium,
             input_modalities: vec![InputModality::Text, InputModality::Image],
             supports_personality: false,
