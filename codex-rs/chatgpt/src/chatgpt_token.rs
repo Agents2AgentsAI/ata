@@ -26,8 +26,11 @@ pub async fn init_chatgpt_token_from_auth(
     let auth_manager =
         AuthManager::new(codex_home.to_path_buf(), false, auth_credentials_store_mode);
     if let Some(auth) = auth_manager.auth().await {
-        let token_data = auth.get_token_data()?;
-        set_chatgpt_token_data(token_data);
+        // Only get token data for ChatGPT auth (OAuth), not API key auth
+        if auth.is_chatgpt_auth() {
+            let token_data = auth.get_token_data()?;
+            set_chatgpt_token_data(token_data);
+        }
     }
     Ok(())
 }

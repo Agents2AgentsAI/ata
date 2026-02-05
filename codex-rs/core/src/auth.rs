@@ -503,8 +503,18 @@ pub fn list_configured_providers(
     // Check stored credentials
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
     if let Ok(Some(auth)) = storage.load() {
+        // Check for ChatGPT OAuth authentication (includes OpenAI as configured)
+        if auth.auth_mode == Some(ApiAuthMode::Chatgpt) && auth.tokens.is_some() {
+            if !result.iter().any(|p| p.provider_id == PROVIDER_OPENAI) {
+                result.push(ProviderAuthStatus {
+                    provider_id: PROVIDER_OPENAI.to_string(),
+                    source: ProviderAuthSource::Stored,
+                });
+            }
+        }
+
         for provider_id in auth.configured_providers() {
-            // Skip if already added from environment
+            // Skip if already added from environment or OAuth
             if !result.iter().any(|p| p.provider_id == provider_id) {
                 result.push(ProviderAuthStatus {
                     provider_id,
@@ -905,6 +915,10 @@ impl AuthDotJson {
             return mode;
         }
         if self.openai_api_key.is_some() {
+            return ApiAuthMode::ApiKey;
+        }
+        // Check if there are any provider API keys in the providers map
+        if self.has_any_provider_api_key() {
             return ApiAuthMode::ApiKey;
         }
         ApiAuthMode::Chatgpt
