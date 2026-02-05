@@ -10,6 +10,7 @@ use serde_json::json;
 use crate::common::ResponseEvent;
 use crate::error::ApiError;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 
@@ -104,6 +105,10 @@ pub struct GeminiStreamState {
     thought_index: i64,
     /// Whether we're currently in a thinking section.
     in_thought_section: bool,
+    /// Accumulated thinking text for the current reasoning item.
+    accumulated_thought_text: String,
+    /// Whether we've emitted OutputItemAdded for a Reasoning item.
+    reasoning_item_started: bool,
 }
 
 impl Default for GeminiStreamState {
@@ -120,6 +125,8 @@ impl GeminiStreamState {
             message_started: false,
             thought_index: 0,
             in_thought_section: false,
+            accumulated_thought_text: String::new(),
+            reasoning_item_started: false,
         }
     }
 
@@ -235,10 +242,23 @@ pub fn parse_gemini_chunk(
                         if part.thought {
                             if let Some(ref text) = part.text {
                                 if !text.is_empty() {
+                                    // Emit OutputItemAdded for Reasoning on first thinking part
+                                    if !state.reasoning_item_started {
+                                        state.reasoning_item_started = true;
+                                        events.push(ResponseEvent::OutputItemAdded(
+                                            ResponseItem::Reasoning {
+                                                id: String::new(),
+                                                summary: vec![],
+                                                content: None,
+                                                encrypted_content: None,
+                                            },
+                                        ));
+                                    }
                                     events.push(ResponseEvent::ReasoningSummaryDelta {
                                         delta: text.clone(),
                                         summary_index: state.thought_index,
                                     });
+                                    state.accumulated_thought_text.push_str(text);
                                     if !state.in_thought_section {
                                         state.in_thought_section = true;
                                     }
@@ -247,13 +267,28 @@ pub fn parse_gemini_chunk(
                             continue; // Don't process as regular text
                         }
 
-                        // Emit section break when transitioning out of thought
+                        // Emit section break and Reasoning item done when transitioning out of thought
                         if state.in_thought_section {
                             events.push(ResponseEvent::ReasoningSummaryPartAdded {
                                 summary_index: state.thought_index,
                             });
+                            events.push(ResponseEvent::OutputItemDone(
+                                ResponseItem::Reasoning {
+                                    id: String::new(),
+                                    summary: vec![
+                                        ReasoningItemReasoningSummary::SummaryText {
+                                            text: std::mem::take(
+                                                &mut state.accumulated_thought_text,
+                                            ),
+                                        },
+                                    ],
+                                    content: None,
+                                    encrypted_content: None,
+                                },
+                            ));
                             state.thought_index += 1;
                             state.in_thought_section = false;
+                            state.reasoning_item_started = false;
                         }
 
                         // Handle text content
@@ -310,6 +345,30 @@ pub fn parse_gemini_chunk(
                     || finish_reason == "RECITATION"
                     || finish_reason == "OTHER"
                 {
+                    // Flush any outstanding thinking section before completing
+                    if state.in_thought_section {
+                        events.push(ResponseEvent::ReasoningSummaryPartAdded {
+                            summary_index: state.thought_index,
+                        });
+                        events.push(ResponseEvent::OutputItemDone(
+                            ResponseItem::Reasoning {
+                                id: String::new(),
+                                summary: vec![
+                                    ReasoningItemReasoningSummary::SummaryText {
+                                        text: std::mem::take(
+                                            &mut state.accumulated_thought_text,
+                                        ),
+                                    },
+                                ],
+                                content: None,
+                                encrypted_content: None,
+                            },
+                        ));
+                        state.thought_index += 1;
+                        state.in_thought_section = false;
+                        state.reasoning_item_started = false;
+                    }
+
                     // Get usage from the chunk if available
                     let token_usage = chunk.usage_metadata.as_ref().map(|usage| TokenUsage {
                         input_tokens: usage.prompt_token_count.unwrap_or(0),
@@ -331,6 +390,30 @@ pub fn parse_gemini_chunk(
     // If no candidates but we have usage metadata, this might be a final chunk
     if chunk.candidates.is_none() {
         if let Some(usage) = chunk.usage_metadata {
+            // Flush any outstanding thinking section before completing
+            if state.in_thought_section {
+                events.push(ResponseEvent::ReasoningSummaryPartAdded {
+                    summary_index: state.thought_index,
+                });
+                events.push(ResponseEvent::OutputItemDone(
+                    ResponseItem::Reasoning {
+                        id: String::new(),
+                        summary: vec![
+                            ReasoningItemReasoningSummary::SummaryText {
+                                text: std::mem::take(
+                                    &mut state.accumulated_thought_text,
+                                ),
+                            },
+                        ],
+                        content: None,
+                        encrypted_content: None,
+                    },
+                ));
+                state.thought_index += 1;
+                state.in_thought_section = false;
+                state.reasoning_item_started = false;
+            }
+
             let token_usage = Some(TokenUsage {
                 input_tokens: usage.prompt_token_count.unwrap_or(0),
                 output_tokens: usage.candidates_token_count.unwrap_or(0),
