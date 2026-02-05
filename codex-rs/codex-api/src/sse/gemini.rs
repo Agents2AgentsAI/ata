@@ -272,20 +272,14 @@ pub fn parse_gemini_chunk(
                             events.push(ResponseEvent::ReasoningSummaryPartAdded {
                                 summary_index: state.thought_index,
                             });
-                            events.push(ResponseEvent::OutputItemDone(
-                                ResponseItem::Reasoning {
-                                    id: String::new(),
-                                    summary: vec![
-                                        ReasoningItemReasoningSummary::SummaryText {
-                                            text: std::mem::take(
-                                                &mut state.accumulated_thought_text,
-                                            ),
-                                        },
-                                    ],
-                                    content: None,
-                                    encrypted_content: None,
-                                },
-                            ));
+                            events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
+                                id: String::new(),
+                                summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                                    text: std::mem::take(&mut state.accumulated_thought_text),
+                                }],
+                                content: None,
+                                encrypted_content: None,
+                            }));
                             state.thought_index += 1;
                             state.in_thought_section = false;
                             state.reasoning_item_started = false;
@@ -350,20 +344,14 @@ pub fn parse_gemini_chunk(
                         events.push(ResponseEvent::ReasoningSummaryPartAdded {
                             summary_index: state.thought_index,
                         });
-                        events.push(ResponseEvent::OutputItemDone(
-                            ResponseItem::Reasoning {
-                                id: String::new(),
-                                summary: vec![
-                                    ReasoningItemReasoningSummary::SummaryText {
-                                        text: std::mem::take(
-                                            &mut state.accumulated_thought_text,
-                                        ),
-                                    },
-                                ],
-                                content: None,
-                                encrypted_content: None,
-                            },
-                        ));
+                        events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
+                            id: String::new(),
+                            summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                                text: std::mem::take(&mut state.accumulated_thought_text),
+                            }],
+                            content: None,
+                            encrypted_content: None,
+                        }));
                         state.thought_index += 1;
                         state.in_thought_section = false;
                         state.reasoning_item_started = false;
@@ -395,20 +383,14 @@ pub fn parse_gemini_chunk(
                 events.push(ResponseEvent::ReasoningSummaryPartAdded {
                     summary_index: state.thought_index,
                 });
-                events.push(ResponseEvent::OutputItemDone(
-                    ResponseItem::Reasoning {
-                        id: String::new(),
-                        summary: vec![
-                            ReasoningItemReasoningSummary::SummaryText {
-                                text: std::mem::take(
-                                    &mut state.accumulated_thought_text,
-                                ),
-                            },
-                        ],
-                        content: None,
-                        encrypted_content: None,
-                    },
-                ));
+                events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
+                    id: String::new(),
+                    summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                        text: std::mem::take(&mut state.accumulated_thought_text),
+                    }],
+                    content: None,
+                    encrypted_content: None,
+                }));
                 state.thought_index += 1;
                 state.in_thought_section = false;
                 state.reasoning_item_started = false;

@@ -63,16 +63,30 @@ impl ProviderAdapter for GeminiAdapter {
         // Add thinking config if reasoning options are specified
         if let Some(reasoning) = &options.reasoning {
             if let Some(effort) = reasoning.get("effort").and_then(|e| e.as_str()) {
-                let thinking_level = match effort {
-                    "low" => "low",
-                    "medium" => "medium",
-                    "high" => "high",
-                    _ => "medium",
-                };
-                generation_config["thinkingConfig"] = json!({
-                    "thinkingLevel": thinking_level,
-                    "includeThoughts": true
-                });
+                match effort {
+                    "none" => {
+                        // No thinking requested — skip thinkingConfig entirely
+                    }
+                    "minimal" | "low" => {
+                        generation_config["thinkingConfig"] = json!({
+                            "thinkingLevel": "low",
+                            "includeThoughts": true
+                        });
+                    }
+                    "medium" => {
+                        generation_config["thinkingConfig"] = json!({
+                            "thinkingLevel": "medium",
+                            "includeThoughts": true
+                        });
+                    }
+                    // "high", "xhigh", or any unknown value
+                    _ => {
+                        generation_config["thinkingConfig"] = json!({
+                            "thinkingLevel": "high",
+                            "includeThoughts": true
+                        });
+                    }
+                }
             }
         }
 
