@@ -78,7 +78,7 @@ fn create_config_toml(codex_home: &Path, params: CreateConfigTomlParams) -> std:
 model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
-cli_auth_credentials_store_mode = "file"
+cli_auth_credentials_store = "file"
 {forced_line}
 {forced_workspace_line}
 
