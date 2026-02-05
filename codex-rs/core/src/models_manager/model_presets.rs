@@ -347,7 +347,20 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "Claude Sonnet 4.5".to_string(),
             description: "Anthropic's balanced model for coding tasks.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![],
+            supported_reasoning_efforts: vec![
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Low,
+                    description: "Fast responses with lighter reasoning".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Medium,
+                    description: "Balanced reasoning for everyday tasks".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::High,
+                    description: "Greater reasoning depth for complex problems".to_string(),
+                },
+            ],
             supports_personality: false,
             is_default: false,
             upgrade: None,
@@ -362,7 +375,20 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "Claude Opus 4.5".to_string(),
             description: "Anthropic's most capable model for complex reasoning.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![],
+            supported_reasoning_efforts: vec![
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Low,
+                    description: "Fast responses with lighter reasoning".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Medium,
+                    description: "Balanced reasoning for everyday tasks".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::High,
+                    description: "Greater reasoning depth for complex problems".to_string(),
+                },
+            ],
             supports_personality: false,
             is_default: false,
             upgrade: None,
@@ -378,7 +404,16 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "Gemini 3 Pro".to_string(),
             description: "Google's advanced model for complex tasks.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![],
+            supported_reasoning_efforts: vec![
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Low,
+                    description: "Fast responses with lighter reasoning".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::High,
+                    description: "Deep reasoning for complex problems".to_string(),
+                },
+            ],
             supports_personality: false,
             is_default: false,
             upgrade: None,
@@ -393,7 +428,24 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             display_name: "Gemini 3 Flash".to_string(),
             description: "Google's fast and efficient model.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![],
+            supported_reasoning_efforts: vec![
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Minimal,
+                    description: "Fastest responses with minimal reasoning".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Low,
+                    description: "Quick responses with light reasoning".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Medium,
+                    description: "Balanced reasoning for everyday tasks".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::High,
+                    description: "Deep reasoning for complex problems".to_string(),
+                },
+            ],
             supports_personality: false,
             is_default: false,
             upgrade: None,

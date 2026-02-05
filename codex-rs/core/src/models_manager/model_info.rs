@@ -312,6 +312,24 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             context_window: Some(CONTEXT_WINDOW_272K),
         )
+    } else if slug.starts_with("gemini-3-pro") {
+        model_info!(
+            slug,
+            supported_reasoning_levels: supported_reasoning_level_low_high(),
+            default_reasoning_level: Some(ReasoningEffort::High),
+        )
+    } else if slug.starts_with("gemini-3-flash") {
+        model_info!(
+            slug,
+            supported_reasoning_levels: supported_reasoning_level_minimal_low_medium_high(),
+            default_reasoning_level: Some(ReasoningEffort::Medium),
+        )
+    } else if slug.starts_with("claude-sonnet-4") || slug.starts_with("claude-opus-4") {
+        model_info!(
+            slug,
+            supported_reasoning_levels: supported_reasoning_level_low_medium_high(),
+            default_reasoning_level: Some(ReasoningEffort::Medium),
+        )
     } else {
         warn!("Unknown model {slug} is used. This will degrade the performance of Codex.");
         model_info!(
@@ -395,6 +413,40 @@ fn supported_reasoning_level_low_medium_high_xhigh_non_codex() -> Vec<ReasoningE
         ReasoningEffortPreset {
             effort: ReasoningEffort::XHigh,
             description: "Extra high reasoning for complex problems".to_string(),
+        },
+    ]
+}
+
+fn supported_reasoning_level_low_high() -> Vec<ReasoningEffortPreset> {
+    vec![
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Low,
+            description: "Fast responses with lighter reasoning".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::High,
+            description: "Deep reasoning for complex problems".to_string(),
+        },
+    ]
+}
+
+fn supported_reasoning_level_minimal_low_medium_high() -> Vec<ReasoningEffortPreset> {
+    vec![
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Minimal,
+            description: "Fastest responses with minimal reasoning".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Low,
+            description: "Quick responses with light reasoning".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: "Balanced reasoning for everyday tasks".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::High,
+            description: "Deep reasoning for complex problems".to_string(),
         },
     ]
 }
