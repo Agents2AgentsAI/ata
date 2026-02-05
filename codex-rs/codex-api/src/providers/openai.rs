@@ -77,12 +77,13 @@ impl ProviderAdapter for OpenAiAdapter {
         &self,
         _event_type: &str,
         data: &str,
-    ) -> Result<Option<ResponseEvent>, ApiError> {
+    ) -> Result<Vec<ResponseEvent>, ApiError> {
         let event: ResponsesStreamEvent = serde_json::from_str(data)
             .map_err(|e| ApiError::Stream(format!("Failed to parse SSE: {}", e)))?;
 
         match process_responses_event(event) {
-            Ok(event) => Ok(event),
+            Ok(Some(event)) => Ok(vec![event]),
+            Ok(None) => Ok(vec![]),
             Err(e) => Err(e.into_api_error()),
         }
     }

@@ -124,7 +124,7 @@ impl ProviderAdapter for GeminiAdapter {
         &self,
         _event_type: &str,
         data: &str,
-    ) -> Result<Option<ResponseEvent>, ApiError> {
+    ) -> Result<Vec<ResponseEvent>, ApiError> {
         // Gemini uses JSON lines, not SSE events
         // This method is called for each line/chunk
         // For proper stateful parsing, we'd need to maintain state externally
@@ -132,8 +132,7 @@ impl ProviderAdapter for GeminiAdapter {
         let mut state = GeminiStreamState::new();
         let events = parse_gemini_chunk(data, &mut state)?;
 
-        // Return the first event if any
-        Ok(events.into_iter().next())
+        Ok(events)
     }
 
     fn streaming_endpoint(&self, model: &str) -> String {

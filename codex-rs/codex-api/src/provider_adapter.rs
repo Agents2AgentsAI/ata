@@ -57,14 +57,14 @@ pub trait ProviderAdapter: Send + Sync {
         options: &RequestOptions,
     ) -> Result<Value, ApiError>;
 
-    /// Parses a provider-specific SSE event into a unified ResponseEvent.
+    /// Parses a provider-specific SSE event into unified ResponseEvents.
     ///
-    /// Returns `Ok(None)` for events that should be ignored.
+    /// Returns `Ok(vec![])` for events that should be ignored.
     fn parse_sse_event(
         &self,
         event_type: &str,
         data: &str,
-    ) -> Result<Option<ResponseEvent>, ApiError>;
+    ) -> Result<Vec<ResponseEvent>, ApiError>;
 
     /// Returns the API endpoint path for streaming requests.
     fn streaming_endpoint(&self, model: &str) -> String;

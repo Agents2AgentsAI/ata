@@ -485,6 +485,7 @@ async fn handle_model_migration_prompt_if_needed(
                 app_event_tx.send(AppEvent::PersistModelSelection {
                     model: target_model.clone(),
                     effort: mapped_effort,
+                    provider: None,
                 });
             }
             ModelMigrationOutcome::Rejected => {
@@ -1831,11 +1832,11 @@ impl App {
                     let _ = (preset, mode);
                 }
             }
-            AppEvent::PersistModelSelection { model, effort } => {
+            AppEvent::PersistModelSelection { model, effort, provider } => {
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
-                    .set_model(Some(model.as_str()), effort)
+                    .set_model(Some(model.as_str()), effort, provider)
                     .apply()
                     .await
                 {

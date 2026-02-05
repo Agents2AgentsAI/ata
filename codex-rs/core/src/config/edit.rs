@@ -24,6 +24,7 @@ pub enum ConfigEdit {
     SetModel {
         model: Option<String>,
         effort: Option<ReasoningEffort>,
+        model_provider: Option<String>,
     },
     /// Update the active (or default) model personality.
     SetModelPersonality { personality: Option<Personality> },
@@ -265,7 +266,7 @@ impl ConfigDocument {
 
     fn apply(&mut self, edit: &ConfigEdit) -> anyhow::Result<bool> {
         match edit {
-            ConfigEdit::SetModel { model, effort } => Ok({
+            ConfigEdit::SetModel { model, effort, model_provider } => Ok({
                 let mut mutated = false;
                 mutated |= self.write_profile_value(
                     &["model"],
@@ -274,6 +275,10 @@ impl ConfigDocument {
                 mutated |= self.write_profile_value(
                     &["model_reasoning_effort"],
                     effort.map(|effort| value(effort.to_string())),
+                );
+                mutated |= self.write_profile_value(
+                    &["model_provider"],
+                    model_provider.as_ref().map(|provider| value(provider.clone())),
                 );
                 mutated
             }),
@@ -729,10 +734,11 @@ impl ConfigEditsBuilder {
         self
     }
 
-    pub fn set_model(mut self, model: Option<&str>, effort: Option<ReasoningEffort>) -> Self {
+    pub fn set_model(mut self, model: Option<&str>, effort: Option<ReasoningEffort>, model_provider: Option<String>) -> Self {
         self.edits.push(ConfigEdit::SetModel {
             model: model.map(ToOwned::to_owned),
             effort,
+            model_provider,
         });
         self
     }
@@ -856,6 +862,7 @@ mod tests {
             &[ConfigEdit::SetModel {
                 model: Some("gpt-5.1-codex".to_string()),
                 effort: Some(ReasoningEffort::High),
+                model_provider: None,
             }],
         )
         .expect("persist");
@@ -955,6 +962,7 @@ profiles = { fast = { model = "gpt-4o", sandbox_mode = "strict" } }
             &[ConfigEdit::SetModel {
                 model: Some("o4-mini".to_string()),
                 effort: None,
+                model_provider: None,
             }],
         )
         .expect("persist");
@@ -1000,6 +1008,7 @@ profiles = { fast = { model = "gpt-4o", sandbox_mode = "strict" } }
             &[ConfigEdit::SetModel {
                 model: Some("gpt-5.1-codex".to_string()),
                 effort: Some(ReasoningEffort::High),
+                model_provider: None,
             }],
         )
         .expect("persist");
@@ -1033,6 +1042,7 @@ model_reasoning_effort = "high"
             &[ConfigEdit::SetModel {
                 model: Some("gpt-5.1-codex".to_string()),
                 effort: None,
+                model_provider: None,
             }],
         )
         .expect("persist");
@@ -1128,6 +1138,7 @@ profiles = { fast = { model = "gpt-4o", sandbox_mode = "strict" } }
             &[ConfigEdit::SetModel {
                 model: None,
                 effort: Some(ReasoningEffort::High),
+                model_provider: None,
             }],
         )
         .expect("persist");
@@ -1163,6 +1174,7 @@ model_reasoning_effort = "low"
             &[ConfigEdit::SetModel {
                 model: Some("o5-preview".to_string()),
                 effort: Some(ReasoningEffort::Minimal),
+                model_provider: None,
             }],
         )
         .expect("persist");
@@ -1196,6 +1208,7 @@ model = "gpt-5.1-codex"
             &[ConfigEdit::SetModel {
                 model: Some("o4-mini".to_string()),
                 effort: None,
+                model_provider: None,
             }],
         )
         .expect("persist");
@@ -1682,7 +1695,7 @@ foo = { command = "cmd" , enabled = false }
         let codex_home = tmp.path().to_path_buf();
 
         ConfigEditsBuilder::new(&codex_home)
-            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High))
+            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High), None)
             .apply()
             .await
             .expect("persist");
@@ -1704,7 +1717,7 @@ model_reasoning_effort = "high"
 model_reasoning_effort = "low"
 "#;
         ConfigEditsBuilder::new(codex_home)
-            .set_model(Some("o4-mini"), Some(ReasoningEffort::Low))
+            .set_model(Some("o4-mini"), Some(ReasoningEffort::Low), None)
             .apply_blocking()
             .expect("persist initial");
         let mut contents =
@@ -1715,14 +1728,14 @@ model_reasoning_effort = "low"
 model_reasoning_effort = "high"
 "#;
         ConfigEditsBuilder::new(codex_home)
-            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High))
+            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High), None)
             .apply_blocking()
             .expect("persist update");
         contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         assert_eq!(contents, updated_expected);
 
         ConfigEditsBuilder::new(codex_home)
-            .set_model(Some("o4-mini"), Some(ReasoningEffort::Low))
+            .set_model(Some("o4-mini"), Some(ReasoningEffort::Low), None)
             .apply_blocking()
             .expect("persist revert");
         contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");

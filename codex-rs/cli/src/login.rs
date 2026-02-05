@@ -114,7 +114,7 @@ pub async fn run_login_with_provider_api_key(
         Ok(_) => {
             let default_model = default_model_for_provider(provider_id);
             if let Err(err) = ConfigEditsBuilder::new(&config.codex_home)
-                .set_model(default_model, None)
+                .set_model(default_model, None, Some(provider_id.to_string()))
                 .apply_blocking()
             {
                 eprintln!("Warning: failed to set default model for provider {provider_id}: {err}");
@@ -271,6 +271,7 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
     // Show ChatGPT auth status if available
+    let mut chatgpt_auth = false;
     match CodexAuth::from_auth_storage(&config.codex_home, config.cli_auth_credentials_store_mode) {
         Ok(Some(auth)) => match auth.api_auth_mode() {
             AuthMode::ApiKey => {
@@ -278,9 +279,11 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
             }
             AuthMode::Chatgpt => {
                 eprintln!("Logged in using ChatGPT");
+                chatgpt_auth = true;
             }
             AuthMode::ChatgptAuthTokens => {
                 eprintln!("Logged in using ChatGPT (external tokens)");
+                chatgpt_auth = true;
             }
         },
         Ok(None) => {}
@@ -295,6 +298,9 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
         list_configured_providers(&config.codex_home, config.cli_auth_credentials_store_mode);
 
     if providers.is_empty() {
+        if chatgpt_auth {
+            std::process::exit(0);
+        }
         eprintln!("No API keys configured");
         std::process::exit(1);
     }

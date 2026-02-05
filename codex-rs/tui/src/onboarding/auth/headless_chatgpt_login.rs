@@ -63,7 +63,7 @@ pub(super) fn start_headless_chatgpt_login(widget: &mut AuthModeWidget, mut opts
                                     auth_manager.reload();
                                     // Clear model to use remote default for ChatGPT
                                     if let Err(e) = ConfigEditsBuilder::new(&codex_home)
-                                        .set_model(None, None)
+                                        .set_model(None, None, None)
                                         .apply_blocking()
                                     {
                                         tracing::error!(
@@ -256,7 +256,7 @@ fn set_device_code_success_message_for_active_attempt(
     auth_manager.reload();
     // Clear model to use remote default for ChatGPT
     if let Err(e) = ConfigEditsBuilder::new(codex_home)
-        .set_model(None, None)
+        .set_model(None, None, None)
         .apply_blocking()
     {
         tracing::error!("failed to clear model on ChatGPT login: {e}");
