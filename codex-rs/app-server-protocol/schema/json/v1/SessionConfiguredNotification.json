@@ -3802,6 +3802,13 @@
             "name": {
               "type": "string"
             },
+            "thought_signature": {
+              "description": "Gemini thought signature for multi-turn reasoning. Must be preserved and passed back in subsequent requests.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "type": {
               "enum": [
                 "function_call"

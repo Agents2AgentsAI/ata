@@ -5370,6 +5370,7 @@ impl ChatWidget {
             mask.model = Some(model.to_string());
         }
         self.refresh_model_display();
+        self.request_redraw();
     }
 
     pub(crate) fn current_model(&self) -> &str {

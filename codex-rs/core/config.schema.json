@@ -92,7 +92,7 @@
       "description": "Determine where Codex should store CLI auth credentials.",
       "oneOf": [
         {
-          "description": "Persist credentials in CODEX_HOME/auth.json.",
+          "description": "Persist credentials in CODEX_HOME/auth.json with 0600 permissions.",
           "enum": [
             "file"
           ],
@@ -106,7 +106,7 @@
           "type": "string"
         },
         {
-          "description": "Use keyring when available; otherwise, fall back to a file in CODEX_HOME.",
+          "description": "Use keyring when available; otherwise, fall back to a file in CODEX_HOME. More secure - stores credentials in OS keyring. If keyring access fails once, it automatically falls back to file storage for the session to avoid repeated prompts.",
           "enum": [
             "auto"
           ],
@@ -1094,14 +1094,14 @@
           "type": "string"
         },
         {
-          "description": "The Anthropic Messages API at `/v1/messages`.",
+          "description": "Anthropic Messages API at `/v1/messages`.",
           "enum": [
             "anthropic_messages"
           ],
           "type": "string"
         },
         {
-          "description": "The Gemini GenerateContent API.",
+          "description": "Google Gemini GenerateContent API.",
           "enum": [
             "gemini_generate"
           ],
@@ -1151,7 +1151,7 @@
         }
       ],
       "default": null,
-      "description": "Preferred backend for storing CLI auth credentials. file (default): Use a file in the Codex home directory. keyring: Use an OS-specific keyring service. auto: Use the keyring if available, otherwise use a file."
+      "description": "Preferred backend for storing CLI auth credentials. file: Use a file in the Codex home directory with 0600 permissions. keyring: Use an OS-specific keyring service. auto (default): Use keyring when available, fall back to file. If keyring access fails, it remembers and uses file storage for the session."
     },
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
