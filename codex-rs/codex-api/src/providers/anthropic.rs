@@ -4,15 +4,21 @@
 //! response parsing, including system message extraction, tool choice mapping,
 //! and max_tokens defaults.
 
-use http::{HeaderMap, HeaderName, HeaderValue};
-use serde_json::{json, Value};
+use http::HeaderMap;
+use http::HeaderName;
+use http::HeaderValue;
+use serde_json::Value;
+use serde_json::json;
 
 use crate::common::ResponseEvent;
 use crate::error::ApiError;
-use crate::provider_adapter::{ProviderAdapter, RequestOptions};
-use crate::sse::anthropic::{is_completion_event, parse_anthropic_event, AnthropicStreamState};
-use crate::tools::anthropic::AnthropicToolFormatter;
+use crate::provider_adapter::ProviderAdapter;
+use crate::provider_adapter::RequestOptions;
+use crate::sse::anthropic::AnthropicStreamState;
+use crate::sse::anthropic::is_completion_event;
+use crate::sse::anthropic::parse_anthropic_event;
 use crate::tools::ToolFormatter;
+use crate::tools::anthropic::AnthropicToolFormatter;
 
 /// Current Anthropic API version.
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -120,18 +126,12 @@ impl ProviderAdapter for AnthropicAdapter {
 
         // Required anthropic-version header
         if let Ok(value) = HeaderValue::from_str(ANTHROPIC_VERSION) {
-            headers.insert(
-                HeaderName::from_static("anthropic-version"),
-                value,
-            );
+            headers.insert(HeaderName::from_static("anthropic-version"), value);
         }
 
         // Enable beta features for streaming
         if let Ok(value) = HeaderValue::from_str("messages-2023-12-15") {
-            headers.insert(
-                HeaderName::from_static("anthropic-beta"),
-                value,
-            );
+            headers.insert(HeaderName::from_static("anthropic-beta"), value);
         }
 
         headers
@@ -185,8 +185,7 @@ fn build_anthropic_messages(input: &[Value]) -> Result<Vec<Value>, ApiError> {
                             }
                             "input_image" => {
                                 // Handle image content
-                                if let Some(url) = block.get("image_url").and_then(|u| u.as_str())
-                                {
+                                if let Some(url) = block.get("image_url").and_then(|u| u.as_str()) {
                                     if url.starts_with("data:") {
                                         // Base64 data URL
                                         if let Some((media_type, data)) = parse_data_url(url) {
@@ -338,14 +337,20 @@ mod tests {
     #[test]
     fn test_streaming_endpoint() {
         let adapter = AnthropicAdapter::new();
-        assert_eq!(adapter.streaming_endpoint("claude-sonnet-4-20250514"), "/messages");
+        assert_eq!(
+            adapter.streaming_endpoint("claude-sonnet-4-20250514"),
+            "/messages"
+        );
     }
 
     #[test]
     fn test_auth_header() {
         let adapter = AnthropicAdapter::new();
         assert_eq!(adapter.auth_header_name(), "x-api-key");
-        assert_eq!(adapter.format_auth_header("sk-ant-api03-xxx"), "sk-ant-api03-xxx");
+        assert_eq!(
+            adapter.format_auth_header("sk-ant-api03-xxx"),
+            "sk-ant-api03-xxx"
+        );
     }
 
     #[test]

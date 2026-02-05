@@ -3,10 +3,10 @@
 use codex_core::AuthManager;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CLIENT_ID;
-use codex_core::auth::ProviderAuthSource;
 use codex_core::auth::PROVIDER_ANTHROPIC;
 use codex_core::auth::PROVIDER_GEMINI;
 use codex_core::auth::PROVIDER_OPENAI;
+use codex_core::auth::ProviderAuthSource;
 use codex_core::auth::list_configured_providers;
 use codex_core::auth::login_with_provider_api_key;
 use codex_core::auth::provider_env_var;
@@ -65,8 +65,8 @@ pub(crate) enum SignInState {
     ChatGptSuccess,
     ApiKeyEntry(ApiKeyInputState),
     ApiKeyConfigured,
-    PickProvider,     // Select which provider to configure
-    ProviderList,     // Show all configured providers
+    PickProvider, // Select which provider to configure
+    ProviderList, // Show all configured providers
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -208,17 +208,15 @@ impl KeyboardHandler for AuthModeWidget {
             KeyCode::Char('4') => {
                 self.select_option_by_index(3);
             }
-            KeyCode::Enter => {
-                match sign_in_state {
-                    SignInState::PickMode => {
-                        self.handle_sign_in_option(self.highlighted_mode);
-                    }
-                    SignInState::ChatGptSuccessMessage => {
-                        *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccess;
-                    }
-                    _ => {}
+            KeyCode::Enter => match sign_in_state {
+                SignInState::PickMode => {
+                    self.handle_sign_in_option(self.highlighted_mode);
                 }
-            }
+                SignInState::ChatGptSuccessMessage => {
+                    *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccess;
+                }
+                _ => {}
+            },
             KeyCode::Esc => {
                 tracing::info!("Esc pressed");
                 let mut sign_in_state = self.sign_in_state.write().unwrap();
@@ -299,7 +297,11 @@ impl AuthModeWidget {
     }
 
     fn provider_options(&self) -> Vec<ProviderOption> {
-        vec![ProviderOption::OpenAI, ProviderOption::Anthropic, ProviderOption::Gemini]
+        vec![
+            ProviderOption::OpenAI,
+            ProviderOption::Anthropic,
+            ProviderOption::Gemini,
+        ]
     }
 
     fn move_provider_highlight(&mut self, delta: isize) {
@@ -668,10 +670,8 @@ impl AuthModeWidget {
     }
 
     fn render_pick_provider(&self, area: Rect, buf: &mut Buffer) {
-        let providers = list_configured_providers(
-            &self.codex_home,
-            self.cli_auth_credentials_store_mode,
-        );
+        let providers =
+            list_configured_providers(&self.codex_home, self.cli_auth_credentials_store_mode);
 
         let mut lines: Vec<Line> = vec![
             Line::from(vec!["> ".into(), "Configure API keys for providers".bold()]),
@@ -726,10 +726,8 @@ impl AuthModeWidget {
     }
 
     fn render_provider_list(&self, area: Rect, buf: &mut Buffer) {
-        let providers = list_configured_providers(
-            &self.codex_home,
-            self.cli_auth_credentials_store_mode,
-        );
+        let providers =
+            list_configured_providers(&self.codex_home, self.cli_auth_credentials_store_mode);
 
         let mut lines: Vec<Line> = vec![
             Line::from(vec!["> ".into(), "Configured providers".bold()]),

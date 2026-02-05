@@ -593,10 +593,10 @@ impl ModelClientSession {
 
     /// Streams a turn via the Anthropic Messages API.
     async fn stream_anthropic_api(&self, prompt: &Prompt) -> Result<ResponseStream> {
-        use codex_api::AnthropicAdapter;
-        use codex_api::ProviderAdapter;
-        use codex_api::AnthropicStreamState;
         use crate::client_common::ResponseStream;
+        use codex_api::AnthropicAdapter;
+        use codex_api::AnthropicStreamState;
+        use codex_api::ProviderAdapter;
 
         let api_prompt = self.build_responses_request(prompt)?;
 
@@ -620,27 +620,40 @@ impl ModelClientSession {
             .collect();
 
         // Build request body
-        let body = adapter.build_request_body(
-            &self.state.model_info.slug,
-            &api_prompt.instructions,
-            &input_values,
-            &api_prompt.tools,
-            &codex_api::RequestOptions {
-                parallel_tool_calls: api_prompt.parallel_tool_calls,
-                ..Default::default()
-            },
-        ).map_err(|e| CodexErr::Api(e.to_string()))?;
+        let body = adapter
+            .build_request_body(
+                &self.state.model_info.slug,
+                &api_prompt.instructions,
+                &input_values,
+                &api_prompt.tools,
+                &codex_api::RequestOptions {
+                    parallel_tool_calls: api_prompt.parallel_tool_calls,
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| CodexErr::Api(e.to_string()))?;
 
         // Build URL
-        let base_url = self.state.provider.base_url.as_deref()
+        let base_url = self
+            .state
+            .provider
+            .base_url
+            .as_deref()
             .unwrap_or("https://api.anthropic.com/v1");
-        let url = format!("{}{}", base_url, adapter.streaming_endpoint(&self.state.model_info.slug));
+        let url = format!(
+            "{}{}",
+            base_url,
+            adapter.streaming_endpoint(&self.state.model_info.slug)
+        );
 
         // Build request
         let client = build_reqwest_client();
         let mut request = client
             .post(&url)
-            .header(adapter.auth_header_name(), adapter.format_auth_header(&api_key))
+            .header(
+                adapter.auth_header_name(),
+                adapter.format_auth_header(&api_key),
+            )
             .json(&body);
 
         // Add extra headers
@@ -660,9 +673,12 @@ impl ModelClientSession {
                     if !response.status().is_success() {
                         let status = response.status();
                         let body = response.text().await.unwrap_or_default();
-                        let _ = tx_event.send(Err(CodexErr::Api(
-                            format!("Anthropic API error {}: {}", status, body)
-                        ))).await;
+                        let _ = tx_event
+                            .send(Err(CodexErr::Api(format!(
+                                "Anthropic API error {}: {}",
+                                status, body
+                            ))))
+                            .await;
                         return;
                     }
 
@@ -684,7 +700,9 @@ impl ModelClientSession {
 
                                 // Process complete SSE events
                                 // Anthropic format: event: <type>\ndata: <json>\n\n
-                                while let Some(end_pos) = buffer.find("\n\n").or_else(|| buffer.find("\r\n\r\n")) {
+                                while let Some(end_pos) =
+                                    buffer.find("\n\n").or_else(|| buffer.find("\r\n\r\n"))
+                                {
                                     let event_end = if buffer[end_pos..].starts_with("\r\n\r\n") {
                                         end_pos + 4
                                     } else {
@@ -721,10 +739,15 @@ impl ModelClientSession {
                                     }
 
                                     // Parse the event
-                                    match codex_api::sse::anthropic::parse_anthropic_event(&event_type, &data, &mut state) {
+                                    match codex_api::sse::anthropic::parse_anthropic_event(
+                                        &event_type,
+                                        &data,
+                                        &mut state,
+                                    ) {
                                         Ok(evts) => {
                                             for evt in evts {
-                                                let is_completed = matches!(evt, ResponseEvent::Completed { .. });
+                                                let is_completed =
+                                                    matches!(evt, ResponseEvent::Completed { .. });
                                                 if tx_event.send(Ok(evt)).await.is_err() {
                                                     return;
                                                 }
@@ -734,33 +757,43 @@ impl ModelClientSession {
                                             }
                                         }
                                         Err(e) => {
-                                            let _ = tx_event.send(Err(CodexErr::Api(e.to_string()))).await;
+                                            let _ = tx_event
+                                                .send(Err(CodexErr::Api(e.to_string())))
+                                                .await;
                                             return;
                                         }
                                     }
                                 }
                             }
                             Ok(Some(Err(e))) => {
-                                let _ = tx_event.send(Err(CodexErr::Api(format!("Stream error: {}", e)))).await;
+                                let _ = tx_event
+                                    .send(Err(CodexErr::Api(format!("Stream error: {}", e))))
+                                    .await;
                                 return;
                             }
                             Ok(None) => {
                                 // Stream ended
-                                let _ = tx_event.send(Ok(ResponseEvent::Completed {
-                                    response_id: String::new(),
-                                    token_usage: None,
-                                })).await;
+                                let _ = tx_event
+                                    .send(Ok(ResponseEvent::Completed {
+                                        response_id: String::new(),
+                                        token_usage: None,
+                                    }))
+                                    .await;
                                 return;
                             }
                             Err(_) => {
-                                let _ = tx_event.send(Err(CodexErr::Api("Stream timeout".to_string()))).await;
+                                let _ = tx_event
+                                    .send(Err(CodexErr::Api("Stream timeout".to_string())))
+                                    .await;
                                 return;
                             }
                         }
                     }
                 }
                 Err(e) => {
-                    let _ = tx_event.send(Err(CodexErr::Api(format!("Request failed: {}", e)))).await;
+                    let _ = tx_event
+                        .send(Err(CodexErr::Api(format!("Request failed: {}", e))))
+                        .await;
                 }
             }
         });
@@ -770,10 +803,10 @@ impl ModelClientSession {
 
     /// Streams a turn via the Gemini GenerateContent API.
     async fn stream_gemini_api(&self, prompt: &Prompt) -> Result<ResponseStream> {
-        use codex_api::GeminiAdapter;
-        use codex_api::ProviderAdapter;
-        use codex_api::GeminiStreamState;
         use crate::client_common::ResponseStream;
+        use codex_api::GeminiAdapter;
+        use codex_api::GeminiStreamState;
+        use codex_api::ProviderAdapter;
 
         let api_prompt = self.build_responses_request(prompt)?;
 
@@ -797,19 +830,25 @@ impl ModelClientSession {
             .collect();
 
         // Build request body
-        let body = adapter.build_request_body(
-            &self.state.model_info.slug,
-            &api_prompt.instructions,
-            &input_values,
-            &api_prompt.tools,
-            &codex_api::RequestOptions {
-                parallel_tool_calls: api_prompt.parallel_tool_calls,
-                ..Default::default()
-            },
-        ).map_err(|e| CodexErr::Api(e.to_string()))?;
+        let body = adapter
+            .build_request_body(
+                &self.state.model_info.slug,
+                &api_prompt.instructions,
+                &input_values,
+                &api_prompt.tools,
+                &codex_api::RequestOptions {
+                    parallel_tool_calls: api_prompt.parallel_tool_calls,
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| CodexErr::Api(e.to_string()))?;
 
         // Build URL - Gemini uses query param for API key and ?alt=sse for streaming
-        let base_url = self.state.provider.base_url.as_deref()
+        let base_url = self
+            .state
+            .provider
+            .base_url
+            .as_deref()
             .unwrap_or("https://generativelanguage.googleapis.com/v1beta");
         let endpoint = adapter.streaming_endpoint(&self.state.model_info.slug);
         let url = format!("{}{}?key={}&alt=sse", base_url, endpoint, api_key);
@@ -831,9 +870,12 @@ impl ModelClientSession {
                     if !response.status().is_success() {
                         let status = response.status();
                         let body = response.text().await.unwrap_or_default();
-                        let _ = tx_event.send(Err(CodexErr::Api(
-                            format!("Gemini API error {}: {}", status, body)
-                        ))).await;
+                        let _ = tx_event
+                            .send(Err(CodexErr::Api(format!(
+                                "Gemini API error {}: {}",
+                                status, body
+                            ))))
+                            .await;
                         return;
                     }
 
@@ -864,7 +906,9 @@ impl ModelClientSession {
                                 }
 
                                 // Process complete SSE events (separated by \n\n or \r\n\r\n)
-                                while let Some(end_pos) = buffer.find("\n\n").or_else(|| buffer.find("\r\n\r\n")) {
+                                while let Some(end_pos) =
+                                    buffer.find("\n\n").or_else(|| buffer.find("\r\n\r\n"))
+                                {
                                     let event_end = if buffer[end_pos..].starts_with("\r\n\r\n") {
                                         end_pos + 4
                                     } else {
@@ -880,8 +924,8 @@ impl ModelClientSession {
                                     }
 
                                     // Parse SSE event - look for "data: " prefix
-                                    let data = if let Some(data_line) = event_str.lines()
-                                        .find(|line| line.starts_with("data: "))
+                                    let data = if let Some(data_line) =
+                                        event_str.lines().find(|line| line.starts_with("data: "))
                                     {
                                         &data_line[6..] // Skip "data: " prefix
                                     } else if event_str.starts_with("data:") {
@@ -893,22 +937,27 @@ impl ModelClientSession {
 
                                     // Skip [DONE] marker if present
                                     if data.trim() == "[DONE]" {
-                                        let _ = tx_event.send(Ok(ResponseEvent::Completed {
-                                            response_id: String::new(),
-                                            token_usage: None,
-                                        })).await;
+                                        let _ = tx_event
+                                            .send(Ok(ResponseEvent::Completed {
+                                                response_id: String::new(),
+                                                token_usage: None,
+                                            }))
+                                            .await;
                                         return;
                                     }
 
                                     // Parse JSON and extract events
-                                    match codex_api::sse::gemini::parse_gemini_chunk(data, &mut state) {
+                                    match codex_api::sse::gemini::parse_gemini_chunk(
+                                        data, &mut state,
+                                    ) {
                                         Ok(evts) => {
                                             for evt in evts {
                                                 // Skip duplicate Created events
                                                 if matches!(evt, ResponseEvent::Created) {
                                                     continue;
                                                 }
-                                                let is_completed = matches!(evt, ResponseEvent::Completed { .. });
+                                                let is_completed =
+                                                    matches!(evt, ResponseEvent::Completed { .. });
                                                 if tx_event.send(Ok(evt)).await.is_err() {
                                                     return;
                                                 }
@@ -919,22 +968,33 @@ impl ModelClientSession {
                                         }
                                         Err(e) => {
                                             // Log parsing error but continue - might be a partial chunk
-                                            tracing::debug!("Gemini parse error (continuing): {}", e);
+                                            tracing::debug!(
+                                                "Gemini parse error (continuing): {}",
+                                                e
+                                            );
                                         }
                                     }
                                 }
                             }
                             Ok(Some(Err(e))) => {
-                                let _ = tx_event.send(Err(CodexErr::Api(format!("Stream error: {}", e)))).await;
+                                let _ = tx_event
+                                    .send(Err(CodexErr::Api(format!("Stream error: {}", e))))
+                                    .await;
                                 return;
                             }
                             Ok(None) => {
                                 // Stream ended - process any remaining buffer
                                 if !buffer.trim().is_empty() {
-                                    if let Some(data_line) = buffer.lines().find(|line| line.starts_with("data: ")) {
+                                    if let Some(data_line) =
+                                        buffer.lines().find(|line| line.starts_with("data: "))
+                                    {
                                         let data = &data_line[6..];
                                         if data.trim() != "[DONE]" {
-                                            if let Ok(evts) = codex_api::sse::gemini::parse_gemini_chunk(data, &mut state) {
+                                            if let Ok(evts) =
+                                                codex_api::sse::gemini::parse_gemini_chunk(
+                                                    data, &mut state,
+                                                )
+                                            {
                                                 for evt in evts {
                                                     if matches!(evt, ResponseEvent::Created) {
                                                         continue;
@@ -946,21 +1006,27 @@ impl ModelClientSession {
                                     }
                                 }
                                 // Send completion
-                                let _ = tx_event.send(Ok(ResponseEvent::Completed {
-                                    response_id: String::new(),
-                                    token_usage: None,
-                                })).await;
+                                let _ = tx_event
+                                    .send(Ok(ResponseEvent::Completed {
+                                        response_id: String::new(),
+                                        token_usage: None,
+                                    }))
+                                    .await;
                                 return;
                             }
                             Err(_) => {
-                                let _ = tx_event.send(Err(CodexErr::Api("Stream timeout".to_string()))).await;
+                                let _ = tx_event
+                                    .send(Err(CodexErr::Api("Stream timeout".to_string())))
+                                    .await;
                                 return;
                             }
                         }
                     }
                 }
                 Err(e) => {
-                    let _ = tx_event.send(Err(CodexErr::Api(format!("Request failed: {}", e)))).await;
+                    let _ = tx_event
+                        .send(Err(CodexErr::Api(format!("Request failed: {}", e))))
+                        .await;
                 }
             }
         });

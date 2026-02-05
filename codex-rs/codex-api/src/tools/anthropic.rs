@@ -3,7 +3,8 @@
 //! This module handles tool formatting for Anthropic Claude API,
 //! converting from OpenAI's format to Anthropic's expected format.
 
-use serde_json::{json, Value};
+use serde_json::Value;
+use serde_json::json;
 
 use super::ToolFormatter;
 use crate::error::ApiError;
@@ -34,10 +35,7 @@ impl ToolFormatter for AnthropicToolFormatter {
             // OpenAI format: { "type": "function", "function": { "name", "description", "parameters" } }
             // Anthropic format: { "name", "description", "input_schema" }
             if let Some(function) = tool.get("function") {
-                let name = function
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let name = function.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let description = function
                     .get("description")
                     .and_then(|v| v.as_str())

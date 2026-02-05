@@ -4,11 +4,13 @@
 //! Each response chunk contains candidates with content parts.
 
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::Value;
+use serde_json::json;
 
 use crate::common::ResponseEvent;
 use crate::error::ApiError;
-use codex_protocol::models::{ContentItem, ResponseItem};
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 
 /// Gemini streaming response chunk structure.
@@ -128,7 +130,11 @@ impl GeminiStreamState {
 /// - Converting patterns like `'>'` back to `>` for proper shell redirection
 fn fix_gemini_command_quoting(args: &Value) -> Value {
     if let Some(obj) = args.as_object() {
-        if let Some(cmd) = obj.get("cmd").or_else(|| obj.get("command")).and_then(|v| v.as_str()) {
+        if let Some(cmd) = obj
+            .get("cmd")
+            .or_else(|| obj.get("command"))
+            .and_then(|v| v.as_str())
+        {
             // Strip leading/trailing quotes only if the ENTIRE command is wrapped in matching quotes
             let cmd = if (cmd.starts_with('\'') && cmd.ends_with('\''))
                 || (cmd.starts_with('"') && cmd.ends_with('"'))
@@ -246,13 +252,15 @@ pub fn parse_gemini_chunk(
                             let arguments = fixed_args.to_string();
 
                             // Emit the function call as an OutputItemDone
-                            events.push(ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
-                                id: None,
-                                call_id,
-                                name: function_call.name.clone(),
-                                arguments,
-                                thought_signature: part.thought_signature.clone(),
-                            }));
+                            events.push(ResponseEvent::OutputItemDone(
+                                ResponseItem::FunctionCall {
+                                    id: None,
+                                    call_id,
+                                    name: function_call.name.clone(),
+                                    arguments,
+                                    thought_signature: part.thought_signature.clone(),
+                                },
+                            ));
                         }
                     }
                 }
@@ -426,12 +434,12 @@ mod tests {
 
         let events2 = parse_gemini_chunk(data, &mut state).unwrap();
         // Second call should not have Created or OutputItemAdded
-        assert!(!events2
-            .iter()
-            .any(|e| matches!(e, ResponseEvent::Created)));
-        assert!(!events2
-            .iter()
-            .any(|e| matches!(e, ResponseEvent::OutputItemAdded(_))));
+        assert!(!events2.iter().any(|e| matches!(e, ResponseEvent::Created)));
+        assert!(
+            !events2
+                .iter()
+                .any(|e| matches!(e, ResponseEvent::OutputItemAdded(_)))
+        );
     }
 
     #[test]

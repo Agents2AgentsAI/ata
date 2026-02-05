@@ -1,6 +1,6 @@
 use crate::auth::AuthCredentialsStoreMode;
-use crate::auth::list_configured_providers;
 use crate::auth::PROVIDER_OPENAI;
+use crate::auth::list_configured_providers;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
@@ -1451,7 +1451,8 @@ impl Config {
 
         // Determine the default provider based on configured API keys
         let default_provider_id = {
-            let configured = list_configured_providers(&codex_home, cli_auth_credentials_store_mode);
+            let configured =
+                list_configured_providers(&codex_home, cli_auth_credentials_store_mode);
             // Prefer OpenAI if configured, otherwise use the first configured provider
             if configured.iter().any(|p| p.provider_id == PROVIDER_OPENAI) {
                 PROVIDER_OPENAI.to_string()

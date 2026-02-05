@@ -32,8 +32,8 @@ use std::time::Instant;
 use crate::version::CODEX_CLI_VERSION;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
-use codex_core::auth::list_configured_providers;
 use codex_core::auth::PROVIDER_OPENAI;
+use codex_core::auth::list_configured_providers;
 use codex_core::config::Config;
 use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
@@ -2991,7 +2991,8 @@ impl ChatWidget {
             SlashCommand::Logout => {
                 // Clear the model selection before logout so the next provider gets its default.
                 // Clear both global config and active profile (if any) to ensure the model is fully reset.
-                let mut builder = codex_core::config::edit::ConfigEditsBuilder::new(&self.config.codex_home);
+                let mut builder =
+                    codex_core::config::edit::ConfigEditsBuilder::new(&self.config.codex_home);
                 if let Some(profile) = self.config.active_profile.as_deref() {
                     builder = builder.with_profile(Some(profile));
                 }
@@ -3000,9 +3001,10 @@ impl ChatWidget {
                 }
                 // Also clear the global model setting in case no profile is active
                 if self.config.active_profile.is_some() {
-                    if let Err(e) = codex_core::config::edit::ConfigEditsBuilder::new(&self.config.codex_home)
-                        .set_model(None, None)
-                        .apply_blocking()
+                    if let Err(e) =
+                        codex_core::config::edit::ConfigEditsBuilder::new(&self.config.codex_home)
+                            .set_model(None, None)
+                            .apply_blocking()
                     {
                         tracing::error!("failed to clear global model on logout: {e}");
                     }
@@ -4150,10 +4152,7 @@ impl ChatWidget {
             .filter(|preset| preset.show_in_picker)
             .filter(|preset| {
                 // Filter by configured provider
-                let provider_id = preset
-                    .provider_id
-                    .as_deref()
-                    .unwrap_or(PROVIDER_OPENAI);
+                let provider_id = preset.provider_id.as_deref().unwrap_or(PROVIDER_OPENAI);
                 configured_providers.contains(provider_id)
             })
             .collect();

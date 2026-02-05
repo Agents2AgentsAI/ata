@@ -361,11 +361,8 @@ mod tests {
         let sign_in_state = device_code_sign_in_state(cancel.clone());
         let temp_dir = TempDir::new().unwrap();
         let codex_home = temp_dir.path().to_path_buf();
-        let auth_manager = AuthManager::shared(
-            codex_home.clone(),
-            false,
-            AuthCredentialsStoreMode::File,
-        );
+        let auth_manager =
+            AuthManager::shared(codex_home.clone(), false, AuthCredentialsStoreMode::File);
 
         assert_eq!(
             set_device_code_success_message_for_active_attempt(

@@ -4,14 +4,17 @@
 //! including the critical schema transformation to remove unsupported properties.
 
 use http::HeaderMap;
-use serde_json::{json, Value};
+use serde_json::Value;
+use serde_json::json;
 
 use crate::common::ResponseEvent;
 use crate::error::ApiError;
-use crate::provider_adapter::{ProviderAdapter, RequestOptions};
-use crate::sse::gemini::{parse_gemini_chunk, GeminiStreamState};
-use crate::tools::gemini::GeminiToolFormatter;
+use crate::provider_adapter::ProviderAdapter;
+use crate::provider_adapter::RequestOptions;
+use crate::sse::gemini::GeminiStreamState;
+use crate::sse::gemini::parse_gemini_chunk;
 use crate::tools::ToolFormatter;
+use crate::tools::gemini::GeminiToolFormatter;
 
 /// Gemini GenerateContent API adapter.
 pub struct GeminiAdapter {
@@ -142,7 +145,8 @@ impl ProviderAdapter for GeminiAdapter {
 fn build_gemini_contents(input: &[Value]) -> Result<Vec<Value>, ApiError> {
     let mut contents = Vec::new();
     // Track function call_id -> function name mapping
-    let mut call_id_to_name: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut call_id_to_name: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
 
     for item in input {
         let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
@@ -168,8 +172,7 @@ fn build_gemini_contents(input: &[Value]) -> Result<Vec<Value>, ApiError> {
                             }
                             "input_image" => {
                                 // Handle image content
-                                if let Some(url) = block.get("image_url").and_then(|u| u.as_str())
-                                {
+                                if let Some(url) = block.get("image_url").and_then(|u| u.as_str()) {
                                     if url.starts_with("data:") {
                                         // Base64 data URL
                                         if let Some((mime, data)) = parse_data_url(url) {
@@ -204,9 +207,7 @@ fn build_gemini_contents(input: &[Value]) -> Result<Vec<Value>, ApiError> {
                     .get("arguments")
                     .and_then(|a| a.as_str())
                     .unwrap_or("{}");
-                let thought_signature = item
-                    .get("thought_signature")
-                    .and_then(|t| t.as_str());
+                let thought_signature = item.get("thought_signature").and_then(|t| t.as_str());
 
                 // Track call_id -> name mapping for later function_call_output
                 if !call_id.is_empty() && !name.is_empty() {
@@ -358,7 +359,13 @@ mod tests {
         let options = RequestOptions::default();
 
         let body = adapter
-            .build_request_body("gemini-2.0-flash", "You are helpful", &input, &tools, &options)
+            .build_request_body(
+                "gemini-2.0-flash",
+                "You are helpful",
+                &input,
+                &tools,
+                &options,
+            )
             .unwrap();
 
         assert!(body.get("contents").is_some());
@@ -370,13 +377,19 @@ mod tests {
     #[test]
     fn test_map_tool_choice() {
         assert_eq!(map_tool_choice(None, false), json!({"mode": "AUTO"}));
-        assert_eq!(map_tool_choice(Some("auto"), false), json!({"mode": "AUTO"}));
+        assert_eq!(
+            map_tool_choice(Some("auto"), false),
+            json!({"mode": "AUTO"})
+        );
         assert_eq!(map_tool_choice(Some("auto"), true), json!({"mode": "ANY"}));
         assert_eq!(
             map_tool_choice(Some("required"), false),
             json!({"mode": "ANY"})
         );
-        assert_eq!(map_tool_choice(Some("none"), false), json!({"mode": "NONE"}));
+        assert_eq!(
+            map_tool_choice(Some("none"), false),
+            json!({"mode": "NONE"})
+        );
         assert_eq!(
             map_tool_choice(Some("get_weather"), false),
             json!({"mode": "ANY", "allowedFunctionNames": ["get_weather"]})

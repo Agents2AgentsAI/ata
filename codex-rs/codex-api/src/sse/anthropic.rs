@@ -10,7 +10,8 @@ use serde_json::Value;
 
 use crate::common::ResponseEvent;
 use crate::error::ApiError;
-use codex_protocol::models::{ContentItem, ResponseItem};
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 
 /// Anthropic SSE event types.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,7 +130,11 @@ pub enum ContentBlock {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "tool_use")]
-    ToolUse { id: String, name: String, input: Value },
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
 }
 
 /// Content block delta payload.
@@ -208,8 +213,9 @@ pub fn parse_anthropic_event(
         }
 
         AnthropicEventType::ContentBlockStart => {
-            let payload: ContentBlockStartPayload = serde_json::from_str(data)
-                .map_err(|e| ApiError::Stream(format!("Failed to parse content_block_start: {e}")))?;
+            let payload: ContentBlockStartPayload = serde_json::from_str(data).map_err(|e| {
+                ApiError::Stream(format!("Failed to parse content_block_start: {e}"))
+            })?;
 
             match payload.content_block {
                 ContentBlock::ToolUse { id, name, .. } => {
@@ -222,8 +228,9 @@ pub fn parse_anthropic_event(
         }
 
         AnthropicEventType::ContentBlockDelta => {
-            let payload: ContentBlockDeltaPayload = serde_json::from_str(data)
-                .map_err(|e| ApiError::Stream(format!("Failed to parse content_block_delta: {e}")))?;
+            let payload: ContentBlockDeltaPayload = serde_json::from_str(data).map_err(|e| {
+                ApiError::Stream(format!("Failed to parse content_block_delta: {e}"))
+            })?;
 
             match payload.delta {
                 ContentDelta::TextDelta { text } => {
@@ -245,8 +252,9 @@ pub fn parse_anthropic_event(
                 index: u32,
             }
 
-            let payload: ContentBlockStopPayload = serde_json::from_str(data)
-                .map_err(|e| ApiError::Stream(format!("Failed to parse content_block_stop: {e}")))?;
+            let payload: ContentBlockStopPayload = serde_json::from_str(data).map_err(|e| {
+                ApiError::Stream(format!("Failed to parse content_block_stop: {e}"))
+            })?;
 
             // If this was a tool call block, emit the completed tool call
             if let Some((id, name)) = state.get_tool(payload.index).cloned() {
@@ -397,7 +405,10 @@ mod tests {
         }"#;
 
         let _ = parse_anthropic_event("content_block_delta", delta_data, &mut state).unwrap();
-        assert_eq!(state.get_tool_arguments(1).unwrap(), "{\"location\": \"SF\"}");
+        assert_eq!(
+            state.get_tool_arguments(1).unwrap(),
+            "{\"location\": \"SF\"}"
+        );
 
         // Finally, content_block_stop
         let stop_data = r#"{"type": "content_block_stop", "index": 1}"#;

@@ -20,11 +20,11 @@ use codex_protocol::config_types::ForcedLoginMethod;
 
 pub use crate::auth::storage::AuthCredentialsStoreMode;
 pub use crate::auth::storage::AuthDotJson;
-pub use crate::auth::storage::ProviderCredential;
+use crate::auth::storage::AuthStorageBackend;
 pub use crate::auth::storage::PROVIDER_ANTHROPIC;
 pub use crate::auth::storage::PROVIDER_GEMINI;
 pub use crate::auth::storage::PROVIDER_OPENAI;
-use crate::auth::storage::AuthStorageBackend;
+pub use crate::auth::storage::ProviderCredential;
 use crate::auth::storage::create_auth_storage;
 use crate::config::Config;
 use crate::error::RefreshTokenFailedError;
@@ -1570,7 +1570,10 @@ mod tests {
             tokens.id_token.chatgpt_plan_type,
             Some(InternalPlanType::Known(InternalKnownPlan::Pro))
         );
-        assert_eq!(tokens.id_token.chatgpt_user_id, Some("user-12345".to_string()));
+        assert_eq!(
+            tokens.id_token.chatgpt_user_id,
+            Some("user-12345".to_string())
+        );
         assert_eq!(tokens.id_token.chatgpt_account_id, None);
         assert_eq!(tokens.id_token.raw_jwt, fake_jwt);
         assert_eq!(tokens.access_token, "test-access-token");
@@ -1863,8 +1866,11 @@ mod tests {
         )
         .expect("should store key");
 
-        let key =
-            get_provider_api_key(dir.path(), PROVIDER_ANTHROPIC, AuthCredentialsStoreMode::File);
+        let key = get_provider_api_key(
+            dir.path(),
+            PROVIDER_ANTHROPIC,
+            AuthCredentialsStoreMode::File,
+        );
         assert_eq!(key, Some("sk-ant-test".to_string()));
     }
 
@@ -1896,7 +1902,11 @@ mod tests {
             Some("sk-openai".to_string())
         );
         assert_eq!(
-            get_provider_api_key(dir.path(), PROVIDER_ANTHROPIC, AuthCredentialsStoreMode::File),
+            get_provider_api_key(
+                dir.path(),
+                PROVIDER_ANTHROPIC,
+                AuthCredentialsStoreMode::File
+            ),
             Some("sk-ant".to_string())
         );
     }
@@ -1919,8 +1929,11 @@ mod tests {
         let _guard = EnvVarGuard::set(ANTHROPIC_API_KEY_ENV_VAR, "sk-env");
 
         // Env should take precedence
-        let key =
-            get_provider_api_key(dir.path(), PROVIDER_ANTHROPIC, AuthCredentialsStoreMode::File);
+        let key = get_provider_api_key(
+            dir.path(),
+            PROVIDER_ANTHROPIC,
+            AuthCredentialsStoreMode::File,
+        );
         assert_eq!(key, Some("sk-env".to_string()));
     }
 
@@ -1992,15 +2005,22 @@ mod tests {
         .expect("store anthropic");
 
         // Remove anthropic
-        let removed =
-            logout_provider(dir.path(), PROVIDER_ANTHROPIC, AuthCredentialsStoreMode::File)
-                .expect("logout should succeed");
+        let removed = logout_provider(
+            dir.path(),
+            PROVIDER_ANTHROPIC,
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("logout should succeed");
         assert!(removed);
 
         // Anthropic should be gone
         assert!(
-            get_provider_api_key(dir.path(), PROVIDER_ANTHROPIC, AuthCredentialsStoreMode::File)
-                .is_none()
+            get_provider_api_key(
+                dir.path(),
+                PROVIDER_ANTHROPIC,
+                AuthCredentialsStoreMode::File
+            )
+            .is_none()
         );
 
         // OpenAI should still be there
@@ -2026,8 +2046,12 @@ mod tests {
         assert!(auth_file.exists());
 
         // Remove the only provider
-        logout_provider(dir.path(), PROVIDER_ANTHROPIC, AuthCredentialsStoreMode::File)
-            .expect("logout should succeed");
+        logout_provider(
+            dir.path(),
+            PROVIDER_ANTHROPIC,
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("logout should succeed");
 
         // File should be deleted since no providers remain
         assert!(!auth_file.exists());
@@ -2035,12 +2059,18 @@ mod tests {
 
     #[test]
     fn provider_env_var_returns_correct_vars() {
-        assert_eq!(provider_env_var(PROVIDER_OPENAI), Some(OPENAI_API_KEY_ENV_VAR));
+        assert_eq!(
+            provider_env_var(PROVIDER_OPENAI),
+            Some(OPENAI_API_KEY_ENV_VAR)
+        );
         assert_eq!(
             provider_env_var(PROVIDER_ANTHROPIC),
             Some(ANTHROPIC_API_KEY_ENV_VAR)
         );
-        assert_eq!(provider_env_var(PROVIDER_GEMINI), Some(GOOGLE_API_KEY_ENV_VAR));
+        assert_eq!(
+            provider_env_var(PROVIDER_GEMINI),
+            Some(GOOGLE_API_KEY_ENV_VAR)
+        );
         assert_eq!(provider_env_var("unknown"), None);
     }
 }

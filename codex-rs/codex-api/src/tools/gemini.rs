@@ -4,7 +4,8 @@
 //! the critical transformation of removing `additionalProperties` and `$schema`
 //! from JSON schemas, which Gemini does not support.
 
-use serde_json::{json, Value};
+use serde_json::Value;
+use serde_json::json;
 
 use super::ToolFormatter;
 use crate::error::ApiError;
@@ -35,10 +36,7 @@ impl ToolFormatter for GeminiToolFormatter {
             // OpenAI format: { "type": "function", "function": { "name", "description", "parameters" } }
             // Gemini format: { "name", "description", "parameters" }
             if let Some(function) = tool.get("function") {
-                let name = function
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let name = function.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let description = function
                     .get("description")
                     .and_then(|v| v.as_str())
@@ -164,11 +162,13 @@ mod tests {
 
         assert!(processed.get("additionalProperties").is_none());
         assert!(processed.get("$schema").is_none());
-        assert!(processed
-            .get("properties")
-            .and_then(|p| p.get("nested"))
-            .and_then(|n| n.get("additionalProperties"))
-            .is_none());
+        assert!(
+            processed
+                .get("properties")
+                .and_then(|p| p.get("nested"))
+                .and_then(|n| n.get("additionalProperties"))
+                .is_none()
+        );
     }
 
     #[test]
