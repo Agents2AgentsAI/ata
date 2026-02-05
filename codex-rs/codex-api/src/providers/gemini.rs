@@ -1,17 +1,19 @@
 //! Gemini provider adapter implementation.
 //!
-//! This adapter handles the Google Gemini GenerateContent API, converting between
-//! the internal ResponseItem format and Gemini's content format.
+//! This adapter handles Gemini API-specific request building and response parsing,
+//! including the critical schema transformation to remove unsupported properties.
 
+use http::HeaderMap;
 use serde_json::{json, Value};
 
 use crate::common::ResponseEvent;
 use crate::error::ApiError;
 use crate::provider_adapter::{ProviderAdapter, RequestOptions};
-use crate::sse::gemini::parse_gemini_event;
-use crate::tools::GeminiToolFormatter;
+use crate::sse::gemini::{parse_gemini_chunk, GeminiStreamState};
+use crate::tools::gemini::GeminiToolFormatter;
+use crate::tools::ToolFormatter;
 
-/// Google Gemini GenerateContent API adapter.
+/// Gemini GenerateContent API adapter.
 pub struct GeminiAdapter {
     tool_formatter: GeminiToolFormatter,
 }
@@ -20,89 +22,6 @@ impl GeminiAdapter {
     pub fn new() -> Self {
         Self {
             tool_formatter: GeminiToolFormatter::new(),
-        }
-    }
-
-    /// Converts internal ResponseItem format to Gemini contents format.
-    fn convert_input_to_contents(&self, input: &[Value]) -> Vec<Value> {
-        input
-            .iter()
-            .filter_map(|item| {
-                let item_type = item.get("type")?.as_str()?;
-                match item_type {
-                    "message" => {
-                        let role = item.get("role")?.as_str()?;
-                        let content = item.get("content")?;
-                        let gemini_role = if role == "assistant" { "model" } else { "user" };
-
-                        let parts: Vec<Value> = content
-                            .as_array()?
-                            .iter()
-                            .filter_map(|c| self.convert_part(c))
-                            .collect();
-
-                        if parts.is_empty() {
-                            return None;
-                        }
-
-                        Some(json!({
-                            "role": gemini_role,
-                            "parts": parts
-                        }))
-                    }
-                    "function_call" => {
-                        let name = item.get("name")?.as_str()?;
-                        let arguments = item.get("arguments")?.as_str()?;
-                        let args: Value =
-                            serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
-
-                        Some(json!({
-                            "role": "model",
-                            "parts": [{
-                                "functionCall": {
-                                    "name": name,
-                                    "args": args
-                                }
-                            }]
-                        }))
-                    }
-                    "function_call_output" => {
-                        let output = item.get("output")?;
-                        let content_str = output.get("content")?.as_str()?;
-                        let response: Value = serde_json::from_str(content_str)
-                            .unwrap_or_else(|_| json!({"result": content_str}));
-
-                        // Try to get the function name from the call_id or context
-                        // Gemini requires the function name in the response
-                        let name = item
-                            .get("name")
-                            .and_then(|n| n.as_str())
-                            .unwrap_or("function");
-
-                        Some(json!({
-                            "role": "user",
-                            "parts": [{
-                                "functionResponse": {
-                                    "name": name,
-                                    "response": response
-                                }
-                            }]
-                        }))
-                    }
-                    _ => None,
-                }
-            })
-            .collect()
-    }
-
-    fn convert_part(&self, block: &Value) -> Option<Value> {
-        let block_type = block.get("type")?.as_str()?;
-        match block_type {
-            "output_text" | "input_text" => {
-                let text = block.get("text")?.as_str()?;
-                Some(json!({"text": text}))
-            }
-            _ => None,
         }
     }
 }
@@ -119,7 +38,6 @@ impl ProviderAdapter for GeminiAdapter {
     }
 
     fn format_tools(&self, tools: &[Value]) -> Result<Vec<Value>, ApiError> {
-        use crate::tools::ToolFormatter;
         self.tool_formatter.format_tools(tools)
     }
 
@@ -129,32 +47,50 @@ impl ProviderAdapter for GeminiAdapter {
         instructions: &str,
         input: &[Value],
         tools: &[Value],
-        _options: &RequestOptions,
+        options: &RequestOptions,
     ) -> Result<Value, ApiError> {
-        let contents = self.convert_input_to_contents(input);
-        let formatted_tools = self.format_tools(tools)?;
+        // Build contents array from input
+        let contents = build_gemini_contents(input)?;
 
+        // Build the request body
         let mut body = json!({
+            "contents": contents,
             "generationConfig": {
-                "temperature": 1.0,
-                "maxOutputTokens": 8192
+                "temperature": 0.7
             }
         });
 
-        // Add system instruction if provided
+        // Add system instruction if provided, with Gemini-specific guidance
         if !instructions.is_empty() {
-            body["system_instruction"] = json!({
-                "parts": [{"text": instructions}]
+            // Append Gemini-specific guidance for shell commands to prevent
+            // the model from incorrectly quoting shell metacharacters
+            let gemini_guidance = "\n\nIMPORTANT for shell commands: Use standard shell syntax. \
+                Do NOT quote shell metacharacters like >, |, <, &, etc. \
+                Correct: cat > file.txt\n\
+                Incorrect: cat '>' file.txt";
+            let full_instructions = format!("{}{}", instructions, gemini_guidance);
+            body["systemInstruction"] = json!({
+                "parts": [{"text": full_instructions}]
             });
         }
 
-        // Add contents (conversation history)
-        body["contents"] = json!(contents);
-
         // Add tools if any
-        if !formatted_tools.is_empty() {
-            body["tools"] = json!(formatted_tools);
+        if !tools.is_empty() {
+            let formatted_tools = self.format_tools(tools)?;
+            body["tools"] = json!([{
+                "functionDeclarations": formatted_tools
+            }]);
+
+            // Tool configuration
+            body["toolConfig"] = json!({
+                "functionCallingConfig": {
+                    "mode": "AUTO"
+                }
+            });
         }
+
+        // Handle parallel tool calls (Gemini doesn't have direct equivalent)
+        let _ = options.parallel_tool_calls;
 
         Ok(body)
     }
@@ -164,30 +100,320 @@ impl ProviderAdapter for GeminiAdapter {
         _event_type: &str,
         data: &str,
     ) -> Result<Option<ResponseEvent>, ApiError> {
-        // Gemini doesn't use standard SSE event types, just JSON lines
-        parse_gemini_event(data)
+        // Gemini uses JSON lines, not SSE events
+        // This method is called for each line/chunk
+        // For proper stateful parsing, we'd need to maintain state externally
+        // For now, we'll create a temporary state for each call
+        let mut state = GeminiStreamState::new();
+        let events = parse_gemini_chunk(data, &mut state)?;
+
+        // Return the first event if any
+        Ok(events.into_iter().next())
     }
 
     fn streaming_endpoint(&self, model: &str) -> String {
-        // Gemini uses model name in the URL path
-        // The API key is added as a query parameter by the caller
+        // Gemini streaming endpoint format
+        // Note: The model parameter needs URL encoding for model names with special chars
         format!("/models/{}:streamGenerateContent", model)
     }
 
+    fn extra_headers(&self) -> HeaderMap {
+        // Gemini doesn't require extra headers beyond auth
+        HeaderMap::new()
+    }
+
     fn is_completion_event(&self, _event_type: &str) -> bool {
-        // Gemini completion is detected from response content (finishReason)
-        // not from event type
+        // Gemini uses finishReason in the response JSON, not event types
         false
     }
 
     fn auth_header_name(&self) -> &str {
-        // Gemini uses query parameter auth, not header
-        // But we'll return a dummy header name and handle it specially
+        // Gemini uses x-goog-api-key header
         "x-goog-api-key"
     }
 
     fn format_auth_header(&self, api_key: &str) -> String {
-        // Gemini typically uses query params, but also supports this header
+        // Gemini API key is passed directly, not as Bearer token
         api_key.to_string()
+    }
+}
+
+/// Converts input ResponseItems to Gemini contents format.
+fn build_gemini_contents(input: &[Value]) -> Result<Vec<Value>, ApiError> {
+    let mut contents = Vec::new();
+    // Track function call_id -> function name mapping
+    let mut call_id_to_name: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+    for item in input {
+        let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+        match item_type {
+            "message" => {
+                let role = item.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+                let gemini_role = match role {
+                    "user" => "user",
+                    "assistant" => "model",
+                    _ => "user",
+                };
+
+                let mut parts = Vec::new();
+                if let Some(content) = item.get("content").and_then(|c| c.as_array()) {
+                    for block in content {
+                        let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                        match block_type {
+                            "input_text" | "output_text" => {
+                                if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                    parts.push(json!({"text": text}));
+                                }
+                            }
+                            "input_image" => {
+                                // Handle image content
+                                if let Some(url) = block.get("image_url").and_then(|u| u.as_str())
+                                {
+                                    if url.starts_with("data:") {
+                                        // Base64 data URL
+                                        if let Some((mime, data)) = parse_data_url(url) {
+                                            parts.push(json!({
+                                                "inlineData": {
+                                                    "mimeType": mime,
+                                                    "data": data
+                                                }
+                                            }));
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                if !parts.is_empty() {
+                    contents.push(json!({
+                        "role": gemini_role,
+                        "parts": parts
+                    }));
+                }
+            }
+
+            "function_call" => {
+                // Gemini function calls are part of model content
+                let name = item.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let call_id = item.get("call_id").and_then(|c| c.as_str()).unwrap_or("");
+                let arguments = item
+                    .get("arguments")
+                    .and_then(|a| a.as_str())
+                    .unwrap_or("{}");
+                let thought_signature = item
+                    .get("thought_signature")
+                    .and_then(|t| t.as_str());
+
+                // Track call_id -> name mapping for later function_call_output
+                if !call_id.is_empty() && !name.is_empty() {
+                    call_id_to_name.insert(call_id.to_string(), name.to_string());
+                }
+
+                let args: Value = serde_json::from_str(arguments).unwrap_or(json!({}));
+
+                let mut part = json!({
+                    "functionCall": {
+                        "name": name,
+                        "args": args
+                    }
+                });
+
+                // Include thought signature if present (required for Gemini 3 models)
+                if let Some(sig) = thought_signature {
+                    part["thoughtSignature"] = json!(sig);
+                }
+
+                contents.push(json!({
+                    "role": "model",
+                    "parts": [part]
+                }));
+            }
+
+            "function_call_output" => {
+                // Gemini function responses
+                let call_id = item.get("call_id").and_then(|c| c.as_str()).unwrap_or("");
+                let output = item.get("output").cloned().unwrap_or(json!({}));
+
+                // Get the function name from our mapping, or use call_id as fallback
+                let name = call_id_to_name
+                    .get(call_id)
+                    .cloned()
+                    .unwrap_or_else(|| call_id.to_string());
+
+                // Gemini requires response to be a JSON object (Struct), not a string
+                // If output is a string or other primitive, wrap it in an object
+                let response_obj = match &output {
+                    Value::Object(_) => output,
+                    Value::String(s) => json!({"result": s}),
+                    Value::Array(_) => json!({"result": output}),
+                    Value::Number(n) => json!({"result": n}),
+                    Value::Bool(b) => json!({"result": b}),
+                    Value::Null => json!({"result": null}),
+                };
+
+                contents.push(json!({
+                    "role": "user",
+                    "parts": [{
+                        "functionResponse": {
+                            "name": name,
+                            "response": response_obj
+                        }
+                    }]
+                }));
+            }
+
+            _ => {
+                // Skip unsupported item types
+            }
+        }
+    }
+
+    Ok(contents)
+}
+
+/// Parses a data URL into (mime_type, base64_data).
+fn parse_data_url(url: &str) -> Option<(String, String)> {
+    // Format: data:mime/type;base64,<data>
+    let url = url.strip_prefix("data:")?;
+    let (header, data) = url.split_once(',')?;
+    let mime = header.strip_suffix(";base64")?;
+    Some((mime.to_string(), data.to_string()))
+}
+
+/// Maps tool choice to Gemini function calling mode.
+///
+/// Gemini supports:
+/// - AUTO: Let the model decide
+/// - ANY: Force function calling (at least one must be called)
+/// - NONE: Disable function calling
+///
+/// Note: Gemini's AUTO mode doesn't support allowedFunctionNames,
+/// so if specific functions are required, use ANY mode instead.
+pub fn map_tool_choice(choice: Option<&str>, has_allowed_tools: bool) -> Value {
+    match choice {
+        None | Some("auto") => {
+            // Quirk: Gemini Auto doesn't support allowed_function_names
+            // If we have allowed tools, use ANY mode instead
+            if has_allowed_tools {
+                json!({ "mode": "ANY" })
+            } else {
+                json!({ "mode": "AUTO" })
+            }
+        }
+        Some("required") => json!({ "mode": "ANY" }),
+        Some("none") => json!({ "mode": "NONE" }),
+        Some(specific) => json!({
+            "mode": "ANY",
+            "allowedFunctionNames": [specific]
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_streaming_endpoint() {
+        let adapter = GeminiAdapter::new();
+        assert_eq!(
+            adapter.streaming_endpoint("gemini-2.0-flash"),
+            "/models/gemini-2.0-flash:streamGenerateContent"
+        );
+    }
+
+    #[test]
+    fn test_auth_header() {
+        let adapter = GeminiAdapter::new();
+        assert_eq!(adapter.auth_header_name(), "x-goog-api-key");
+        assert_eq!(adapter.format_auth_header("my_key"), "my_key");
+    }
+
+    #[test]
+    fn test_build_request_body() {
+        let adapter = GeminiAdapter::new();
+
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Hello"}]
+        })];
+
+        let tools = vec![json!({
+            "type": "function",
+            "function": {
+                "name": "test",
+                "description": "A test function",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        })];
+
+        let options = RequestOptions::default();
+
+        let body = adapter
+            .build_request_body("gemini-2.0-flash", "You are helpful", &input, &tools, &options)
+            .unwrap();
+
+        assert!(body.get("contents").is_some());
+        assert!(body.get("systemInstruction").is_some());
+        assert!(body.get("tools").is_some());
+        assert!(body.get("toolConfig").is_some());
+    }
+
+    #[test]
+    fn test_map_tool_choice() {
+        assert_eq!(map_tool_choice(None, false), json!({"mode": "AUTO"}));
+        assert_eq!(map_tool_choice(Some("auto"), false), json!({"mode": "AUTO"}));
+        assert_eq!(map_tool_choice(Some("auto"), true), json!({"mode": "ANY"}));
+        assert_eq!(
+            map_tool_choice(Some("required"), false),
+            json!({"mode": "ANY"})
+        );
+        assert_eq!(map_tool_choice(Some("none"), false), json!({"mode": "NONE"}));
+        assert_eq!(
+            map_tool_choice(Some("get_weather"), false),
+            json!({"mode": "ANY", "allowedFunctionNames": ["get_weather"]})
+        );
+    }
+
+    #[test]
+    fn test_parse_data_url() {
+        let url = "data:image/png;base64,iVBORw0KGgo=";
+        let result = parse_data_url(url);
+        assert!(result.is_some());
+        let (mime, data) = result.unwrap();
+        assert_eq!(mime, "image/png");
+        assert_eq!(data, "iVBORw0KGgo=");
+    }
+
+    #[test]
+    fn test_build_gemini_contents() {
+        let input = vec![
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Hi"}]
+            }),
+            json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Hello!"}]
+            }),
+        ];
+
+        let contents = build_gemini_contents(&input).unwrap();
+
+        assert_eq!(contents.len(), 2);
+        assert_eq!(contents[0]["role"], "user");
+        assert_eq!(contents[0]["parts"][0]["text"], "Hi");
+        assert_eq!(contents[1]["role"], "model");
+        assert_eq!(contents[1]["parts"][0]["text"], "Hello!");
     }
 }

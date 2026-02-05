@@ -826,6 +826,7 @@ impl ChatWidget {
             self.auth_manager
                 .auth_cached()
                 .and_then(|auth| auth.account_plan_type()),
+            self.session_header.shared_model(),
         );
         self.apply_session_info_cell(session_info_cell);
 
@@ -2257,7 +2258,9 @@ impl ChatWidget {
             settings: fallback_default,
         };
 
-        let active_cell = Some(Self::placeholder_session_header_cell(&config));
+        // Create session_header first so we can share its model with the placeholder cell
+        let session_header = SessionHeader::new(header_model);
+        let active_cell = Some(Self::placeholder_session_header_cell(&session_header, &config));
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -2283,7 +2286,7 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             otel_manager,
-            session_header: SessionHeader::new(header_model),
+            session_header,
             initial_user_message,
             token_info: None,
             rate_limit_snapshot: None,
@@ -2403,7 +2406,9 @@ impl ChatWidget {
             settings: fallback_default,
         };
 
-        let active_cell = Some(Self::placeholder_session_header_cell(&config));
+        // Create session_header first so we can share its model with the placeholder cell
+        let session_header = SessionHeader::new(header_model);
+        let active_cell = Some(Self::placeholder_session_header_cell(&session_header, &config));
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -2429,7 +2434,7 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             otel_manager,
-            session_header: SessionHeader::new(header_model),
+            session_header,
             initial_user_message,
             token_info: None,
             rate_limit_snapshot: None,
@@ -2970,6 +2975,14 @@ impl ChatWidget {
                 self.request_quit_without_confirmation();
             }
             SlashCommand::Logout => {
+                // Clear the model selection before logout so the next provider gets its default
+                if let Err(e) = codex_core::config::edit::ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_model(None, None)
+                    .apply_blocking()
+                {
+                    tracing::error!("failed to clear model on logout: {e}");
+                }
+
                 if let Err(e) = codex_core::auth::logout(
                     &self.config.codex_home,
                     self.config.cli_auth_credentials_store_mode,
@@ -5369,6 +5382,11 @@ impl ChatWidget {
             .unwrap_or_else(|| self.current_collaboration_mode.model())
     }
 
+    /// Get a clone of the shared model Arc for passing to SessionHeaderHistoryCell.
+    pub(crate) fn shared_model(&self) -> std::sync::Arc<std::sync::RwLock<String>> {
+        self.session_header.shared_model()
+    }
+
     fn sync_personality_command_enabled(&mut self) {
         self.bottom_pane
             .set_personality_command_enabled(self.config.features.enabled(Feature::Personality));
@@ -5588,10 +5606,14 @@ impl ChatWidget {
     }
 
     /// Build a placeholder header cell while the session is configuring.
-    fn placeholder_session_header_cell(config: &Config) -> Box<dyn HistoryCell> {
+    /// Uses a shared model reference so the header updates when the model changes.
+    fn placeholder_session_header_cell(
+        session_header: &SessionHeader,
+        config: &Config,
+    ) -> Box<dyn HistoryCell> {
         let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
-        Box::new(history_cell::SessionHeaderHistoryCell::new_with_style(
-            DEFAULT_MODEL_DISPLAY_NAME.to_string(),
+        Box::new(history_cell::SessionHeaderHistoryCell::new_with_shared_model(
+            session_header.shared_model(),
             placeholder_style,
             None,
             config.cwd.clone(),

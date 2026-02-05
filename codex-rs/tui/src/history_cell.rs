@@ -945,6 +945,7 @@ pub(crate) fn new_session_info(
     event: SessionConfiguredEvent,
     is_first_event: bool,
     auth_plan: Option<PlanType>,
+    shared_model: Arc<RwLock<String>>,
 ) -> SessionInfoCell {
     let SessionConfiguredEvent {
         model,
@@ -952,8 +953,10 @@ pub(crate) fn new_session_info(
         ..
     } = event;
     // Header box rendered as history (so it appears at the very top)
-    let header = SessionHeaderHistoryCell::new(
-        model.clone(),
+    // Use the shared model reference so the header updates when the model changes.
+    let header = SessionHeaderHistoryCell::new_with_shared_model(
+        shared_model,
+        Style::default(),
         reasoning_effort,
         config.cwd.clone(),
         CODEX_CLI_VERSION,
@@ -1026,33 +1029,22 @@ pub(crate) fn new_user_prompt(
     }
 }
 
+use std::sync::{Arc, RwLock};
+
 #[derive(Debug)]
 pub(crate) struct SessionHeaderHistoryCell {
     version: &'static str,
-    model: String,
+    model: Arc<RwLock<String>>,
     model_style: Style,
     reasoning_effort: Option<ReasoningEffortConfig>,
     directory: PathBuf,
 }
 
 impl SessionHeaderHistoryCell {
-    pub(crate) fn new(
-        model: String,
-        reasoning_effort: Option<ReasoningEffortConfig>,
-        directory: PathBuf,
-        version: &'static str,
-    ) -> Self {
-        Self::new_with_style(
-            model,
-            Style::default(),
-            reasoning_effort,
-            directory,
-            version,
-        )
-    }
-
-    pub(crate) fn new_with_style(
-        model: String,
+    /// Create a new session header with a shared model reference.
+    /// This allows the model to be updated externally and the header will reflect changes.
+    pub(crate) fn new_with_shared_model(
+        model: Arc<RwLock<String>>,
         model_style: Style,
         reasoning_effort: Option<ReasoningEffortConfig>,
         directory: PathBuf,
@@ -1133,10 +1125,11 @@ impl HistoryCell for SessionHeaderHistoryCell {
             label_width = label_width
         );
         let reasoning_label = self.reasoning_label();
+        let model_value = self.model.read().unwrap().clone();
         let model_spans: Vec<Span<'static>> = {
             let mut spans = vec![
                 Span::from(format!("{model_label} ")).dim(),
-                Span::styled(self.model.clone(), self.model_style),
+                Span::styled(model_value, self.model_style),
             ];
             if let Some(reasoning) = reasoning_label {
                 spans.push(Span::from(" "));
@@ -2924,8 +2917,9 @@ mod tests {
 
     #[test]
     fn session_header_includes_reasoning_level_when_present() {
-        let cell = SessionHeaderHistoryCell::new(
-            "gpt-4o".to_string(),
+        let cell = SessionHeaderHistoryCell::new_with_shared_model(
+            Arc::new(RwLock::new("gpt-4o".to_string())),
+            Style::default(),
             Some(ReasoningEffortConfig::High),
             std::env::temp_dir(),
             "test",

@@ -9,6 +9,7 @@ pub mod gemini;
 pub mod openai;
 
 pub use anthropic::AnthropicToolFormatter;
+pub use gemini::process_schema_for_gemini;
 pub use gemini::GeminiToolFormatter;
 pub use openai::OpenAiToolFormatter;
 

@@ -128,6 +128,11 @@ pub enum ResponseItem {
         // Session::handle_function_call parse it into a Value.
         arguments: String,
         call_id: String,
+        /// Gemini thought signature for multi-turn reasoning.
+        /// Must be preserved and passed back in subsequent requests.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        thought_signature: Option<String>,
     },
     // NOTE: The input schema for `function_call_output` objects that clients send to the
     // OpenAI /v1/responses endpoint is NOT the same shape as the objects the server returns on the

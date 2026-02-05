@@ -1,4 +1,5 @@
 use codex_core::AuthManager;
+use codex_core::config::edit::ConfigEditsBuilder;
 use codex_login::ServerOptions;
 use codex_login::complete_device_code_login;
 use codex_login::request_device_code;
@@ -10,6 +11,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 use tokio::sync::Notify;
@@ -27,6 +29,7 @@ pub(super) fn start_headless_chatgpt_login(widget: &mut AuthModeWidget, mut opts
     let sign_in_state = widget.sign_in_state.clone();
     let request_frame = widget.request_frame.clone();
     let auth_manager = widget.auth_manager.clone();
+    let codex_home = widget.codex_home.clone();
     let cancel = begin_device_code_attempt(&sign_in_state, &request_frame);
 
     tokio::spawn(async move {
@@ -58,6 +61,15 @@ pub(super) fn start_headless_chatgpt_login(widget: &mut AuthModeWidget, mut opts
                             match r {
                                 Ok(()) => {
                                     auth_manager.reload();
+                                    // Clear model to use remote default for ChatGPT
+                                    if let Err(e) = ConfigEditsBuilder::new(&codex_home)
+                                        .set_model(None, None)
+                                        .apply_blocking()
+                                    {
+                                        tracing::error!(
+                                            "failed to clear model on ChatGPT login: {e}"
+                                        );
+                                    }
                                     *sign_in_state.write().unwrap() =
                                         SignInState::ChatGptSuccessMessage;
                                     request_frame.schedule_frame();
@@ -111,6 +123,7 @@ pub(super) fn start_headless_chatgpt_login(widget: &mut AuthModeWidget, mut opts
                             &sign_in_state,
                             &request_frame,
                             &auth_manager,
+                            &codex_home,
                             &cancel,
                         );
                     }
@@ -232,6 +245,7 @@ fn set_device_code_success_message_for_active_attempt(
     sign_in_state: &Arc<RwLock<SignInState>>,
     request_frame: &FrameRequester,
     auth_manager: &AuthManager,
+    codex_home: &PathBuf,
     cancel: &Arc<Notify>,
 ) -> bool {
     let mut guard = sign_in_state.write().unwrap();
@@ -240,6 +254,13 @@ fn set_device_code_success_message_for_active_attempt(
     }
 
     auth_manager.reload();
+    // Clear model to use remote default for ChatGPT
+    if let Err(e) = ConfigEditsBuilder::new(codex_home)
+        .set_model(None, None)
+        .apply_blocking()
+    {
+        tracing::error!("failed to clear model on ChatGPT login: {e}");
+    }
     *guard = SignInState::ChatGptSuccessMessage;
     drop(guard);
     request_frame.schedule_frame();
@@ -339,8 +360,9 @@ mod tests {
         let cancel = Arc::new(Notify::new());
         let sign_in_state = device_code_sign_in_state(cancel.clone());
         let temp_dir = TempDir::new().unwrap();
+        let codex_home = temp_dir.path().to_path_buf();
         let auth_manager = AuthManager::shared(
-            temp_dir.path().to_path_buf(),
+            codex_home.clone(),
             false,
             AuthCredentialsStoreMode::File,
         );
@@ -350,6 +372,7 @@ mod tests {
                 &sign_in_state,
                 &request_frame,
                 &auth_manager,
+                &codex_home,
                 &cancel,
             ),
             true
@@ -365,6 +388,7 @@ mod tests {
                 &sign_in_state,
                 &request_frame,
                 &auth_manager,
+                &codex_home,
                 &cancel,
             ),
             false

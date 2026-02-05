@@ -12,6 +12,8 @@ use codex_core::auth::login_with_provider_api_key;
 use codex_core::auth::provider_env_var;
 use codex_core::auth::read_api_key_from_env;
 use codex_core::auth::read_openai_api_key_from_env;
+use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::edit::default_model_for_provider;
 use codex_login::DeviceCode;
 use codex_login::ServerOptions;
 use codex_login::ShutdownHandle;
@@ -901,6 +903,15 @@ impl AuthModeWidget {
                 self.error = None;
                 self.auth_manager.reload();
 
+                // Set provider-specific default model
+                let default_model = default_model_for_provider(provider_id);
+                if let Err(e) = ConfigEditsBuilder::new(&self.codex_home)
+                    .set_model(default_model, None)
+                    .apply_blocking()
+                {
+                    tracing::error!("failed to set default model for provider {provider_id}: {e}");
+                }
+
                 // Update login status and go to configured screen for all providers
                 self.login_status = LoginStatus::AuthMode(AuthMode::ApiKey);
                 *self.sign_in_state.write().unwrap() = SignInState::ApiKeyConfigured;
@@ -960,6 +971,7 @@ impl AuthModeWidget {
                 let sign_in_state = self.sign_in_state.clone();
                 let request_frame = self.request_frame.clone();
                 let auth_manager = self.auth_manager.clone();
+                let codex_home = self.codex_home.clone();
                 tokio::spawn(async move {
                     let auth_url = child.auth_url.clone();
                     {
@@ -975,6 +987,14 @@ impl AuthModeWidget {
                         Ok(()) => {
                             // Force the auth manager to reload the new auth information.
                             auth_manager.reload();
+
+                            // Clear model to use remote default for ChatGPT
+                            if let Err(e) = ConfigEditsBuilder::new(&codex_home)
+                                .set_model(None, None)
+                                .apply_blocking()
+                            {
+                                tracing::error!("failed to clear model on ChatGPT login: {e}");
+                            }
 
                             *sign_in_state.write().unwrap() = SignInState::ChatGptSuccessMessage;
                             request_frame.schedule_frame();

@@ -1,185 +1,24 @@
-//! Gemini streaming response parser.
+//! Gemini SSE/streaming response parser.
 //!
-//! Gemini's GenerateContent API streams responses as JSON lines, not standard SSE.
-//! Each line is a complete JSON object with candidates and usage metadata.
+//! Gemini uses a JSON lines streaming format rather than standard SSE.
+//! Each response chunk contains candidates with content parts.
 
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::TokenUsage;
 use serde::Deserialize;
-use serde_json::Value;
-use tracing::debug;
+use serde_json::{json, Value};
 
 use crate::common::ResponseEvent;
 use crate::error::ApiError;
+use codex_protocol::models::{ContentItem, ResponseItem};
+use codex_protocol::protocol::TokenUsage;
 
-/// Parses a Gemini streaming response line into a ResponseEvent.
-pub fn parse_gemini_event(data: &str) -> Result<Option<ResponseEvent>, ApiError> {
-    // Gemini streams JSON lines, not standard SSE events
-    let response: GeminiStreamResponse = serde_json::from_str(data)
-        .map_err(|e| ApiError::Stream(format!("Failed to parse Gemini response: {e}")))?;
-
-    // Check for errors first
-    if let Some(error) = response.error {
-        return Err(map_gemini_error(&error));
-    }
-
-    // Process candidates
-    if let Some(candidates) = response.candidates {
-        if let Some(candidate) = candidates.first() {
-            // Check for finish reason (completion)
-            if let Some(finish_reason) = &candidate.finish_reason {
-                let token_usage = response.usage_metadata.map(|u| TokenUsage {
-                    input_tokens: u.prompt_token_count.unwrap_or(0),
-                    output_tokens: u.candidates_token_count.unwrap_or(0),
-                    total_tokens: u.total_token_count.unwrap_or(0),
-                    cached_input_tokens: u.cached_content_token_count.unwrap_or(0),
-                    reasoning_output_tokens: 0,
-                });
-
-                match finish_reason.as_str() {
-                    "STOP" | "END_TURN" => {
-                        return Ok(Some(ResponseEvent::Completed {
-                            response_id: String::new(),
-                            token_usage,
-                        }));
-                    }
-                    "MAX_TOKENS" => {
-                        return Err(ApiError::ContextWindowExceeded);
-                    }
-                    "SAFETY" => {
-                        return Err(ApiError::InvalidRequest {
-                            message: "Response blocked due to safety settings".to_string(),
-                        });
-                    }
-                    "RECITATION" => {
-                        return Err(ApiError::InvalidRequest {
-                            message: "Response blocked due to recitation".to_string(),
-                        });
-                    }
-                    _ => {
-                        debug!("Unknown finish reason: {}", finish_reason);
-                    }
-                }
-            }
-
-            // Extract content parts
-            if let Some(content) = &candidate.content {
-                for part in &content.parts {
-                    match part {
-                        GeminiPart::Text { text } => {
-                            return Ok(Some(ResponseEvent::OutputTextDelta(text.clone())));
-                        }
-                        GeminiPart::FunctionCall { function_call } => {
-                            // Function call - we need to emit this as OutputItemDone
-                            debug!(
-                                "Gemini function call: {} with args {:?}",
-                                function_call.name, function_call.args
-                            );
-                            // For now, just acknowledge - full handling requires stateful parsing
-                            return Ok(None);
-                        }
-                        GeminiPart::FunctionResponse { .. } => {
-                            // Function response from user - shouldn't appear in streaming
-                            return Ok(None);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(None)
-}
-
-/// Converts a Gemini response to ResponseItem.
-pub fn convert_gemini_to_response_item(candidate: &GeminiCandidate) -> Option<ResponseItem> {
-    let content = candidate.content.as_ref()?;
-
-    let mut text_parts = Vec::new();
-    let mut function_calls = Vec::new();
-
-    for part in &content.parts {
-        match part {
-            GeminiPart::Text { text } => {
-                text_parts.push(ContentItem::OutputText {
-                    text: text.clone(),
-                });
-            }
-            GeminiPart::FunctionCall { function_call } => {
-                function_calls.push(function_call.clone());
-            }
-            GeminiPart::FunctionResponse { .. } => {
-                // Skip function responses
-            }
-        }
-    }
-
-    // Return text message if we have text
-    if !text_parts.is_empty() {
-        return Some(ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: text_parts,
-            end_turn: None,
-            phase: None,
-        });
-    }
-
-    // Return function call if we have one
-    if let Some(fc) = function_calls.into_iter().next() {
-        let arguments = serde_json::to_string(&fc.args).unwrap_or_default();
-        // Generate a unique call_id since Gemini doesn't provide one
-        let call_id = format!("gemini_call_{}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0));
-        return Some(ResponseItem::FunctionCall {
-            id: None,
-            call_id,
-            name: fc.name,
-            arguments,
-        });
-    }
-
-    None
-}
-
-fn map_gemini_error(error: &GeminiError) -> ApiError {
-    let code = error.code.unwrap_or(0);
-    let message = error
-        .message
-        .clone()
-        .unwrap_or_else(|| "Unknown error".to_string());
-    let status = error.status.as_deref().unwrap_or("UNKNOWN");
-
-    match status {
-        "RESOURCE_EXHAUSTED" | "RATE_LIMIT_EXCEEDED" => ApiError::Retryable {
-            message,
-            delay: None,
-        },
-        "INVALID_ARGUMENT" => {
-            if message.contains("token") || message.contains("context") {
-                ApiError::ContextWindowExceeded
-            } else {
-                ApiError::InvalidRequest { message }
-            }
-        }
-        "PERMISSION_DENIED" => ApiError::InvalidRequest {
-            message: format!("Permission denied: {}", message),
-        },
-        _ => ApiError::Stream(format!("Gemini error {}: {} ({})", code, message, status)),
-    }
-}
-
-// Gemini response types
-
+/// Gemini streaming response chunk structure.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GeminiStreamResponse {
+pub struct GeminiStreamChunk {
     pub candidates: Option<Vec<GeminiCandidate>>,
     pub usage_metadata: Option<GeminiUsageMetadata>,
-    pub error: Option<GeminiError>,
+    #[serde(default)]
+    pub prompt_feedback: Option<GeminiPromptFeedback>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -194,36 +33,31 @@ pub struct GeminiCandidate {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeminiContent {
-    pub parts: Vec<GeminiPart>,
+    pub parts: Option<Vec<GeminiPart>>,
     pub role: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-pub enum GeminiPart {
-    Text {
-        text: String,
-    },
-    FunctionCall {
-        #[serde(rename = "functionCall")]
-        function_call: GeminiFunctionCall,
-    },
-    FunctionResponse {
-        #[serde(rename = "functionResponse")]
-        function_response: GeminiFunctionResponse,
-    },
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeminiPart {
+    pub text: Option<String>,
+    pub function_call: Option<GeminiFunctionCall>,
+    pub function_response: Option<GeminiFunctionResponse>,
+    pub thought_signature: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GeminiFunctionCall {
     pub name: String,
-    pub args: Value,
+    pub args: Option<Value>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GeminiFunctionResponse {
     pub name: String,
-    pub response: Value,
+    pub response: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -236,16 +70,252 @@ pub struct GeminiUsageMetadata {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct GeminiSafetyRating {
-    pub category: Option<String>,
-    pub probability: Option<String>,
+#[serde(rename_all = "camelCase")]
+pub struct GeminiPromptFeedback {
+    pub block_reason: Option<String>,
+    pub safety_ratings: Option<Vec<GeminiSafetyRating>>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct GeminiError {
-    pub code: Option<i32>,
-    pub message: Option<String>,
-    pub status: Option<String>,
+#[serde(rename_all = "camelCase")]
+pub struct GeminiSafetyRating {
+    pub category: String,
+    pub probability: String,
+    #[serde(default)]
+    pub blocked: bool,
+}
+
+/// State tracker for Gemini streaming.
+pub struct GeminiStreamState {
+    /// Counter for generating unique call IDs for function calls.
+    call_id_counter: u64,
+    /// Whether we've sent the Created event.
+    pub created_sent: bool,
+    /// Whether we've emitted OutputItemAdded for the message.
+    message_started: bool,
+}
+
+impl Default for GeminiStreamState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GeminiStreamState {
+    pub fn new() -> Self {
+        Self {
+            call_id_counter: 0,
+            created_sent: false,
+            message_started: false,
+        }
+    }
+
+    fn next_call_id(&mut self) -> String {
+        self.call_id_counter += 1;
+        format!("call_{}", self.call_id_counter)
+    }
+}
+
+/// Fix Gemini's tendency to add quotes around commands and shell metacharacters.
+///
+/// Gemini models sometimes:
+/// - Wrap the entire `cmd` string in quotes
+/// - Quote shell metacharacters like `>`, `|`, `<` within the command
+///
+/// For example, Gemini might generate `cat '>' file.py` instead of `cat > file.py`.
+/// This function fixes these issues by:
+/// - Stripping leading/trailing quotes from the entire `cmd` string (only if the entire string is quoted)
+/// - Converting patterns like `'>'` back to `>` for proper shell redirection
+fn fix_gemini_command_quoting(args: &Value) -> Value {
+    if let Some(obj) = args.as_object() {
+        if let Some(cmd) = obj.get("cmd").or_else(|| obj.get("command")).and_then(|v| v.as_str()) {
+            // Strip leading/trailing quotes only if the ENTIRE command is wrapped in matching quotes
+            let cmd = if (cmd.starts_with('\'') && cmd.ends_with('\''))
+                || (cmd.starts_with('"') && cmd.ends_with('"'))
+            {
+                &cmd[1..cmd.len() - 1]
+            } else {
+                cmd
+            };
+
+            // Fix quoted metacharacters within command.
+            // Order matters: process longer/more specific patterns first to avoid partial matches.
+            let cmd = cmd
+                // Compound redirections (most specific first)
+                .replace("'2>&1'", "2>&1")
+                .replace("'>&2'", ">&2")
+                .replace("'>>'", ">>")
+                .replace("'<<'", "<<")
+                .replace("'2>'", "2>")
+                .replace("'>&'", ">&")
+                // Simple redirections and operators
+                .replace("'>'", ">")
+                .replace("'<'", "<")
+                .replace("'|'", "|")
+                .replace("'&'", "&");
+
+            // Rebuild the object with the fixed command
+            let mut new_obj = obj.clone();
+            if obj.contains_key("cmd") {
+                new_obj.insert("cmd".to_string(), json!(cmd));
+            } else if obj.contains_key("command") {
+                new_obj.insert("command".to_string(), json!(cmd));
+            }
+            return Value::Object(new_obj);
+        }
+    }
+    args.clone()
+}
+
+/// Parses a Gemini streaming response chunk into ResponseEvents.
+///
+/// Gemini streams JSON objects (not SSE), so this function parses
+/// a single JSON chunk and returns any events it contains.
+///
+/// # Returns
+/// A vector of ResponseEvents extracted from the chunk.
+pub fn parse_gemini_chunk(
+    data: &str,
+    state: &mut GeminiStreamState,
+) -> Result<Vec<ResponseEvent>, ApiError> {
+    let chunk: GeminiStreamChunk = serde_json::from_str(data)
+        .map_err(|e| ApiError::Stream(format!("Failed to parse Gemini response: {e}")))?;
+
+    let mut events = Vec::new();
+
+    // Send Created event on first chunk
+    if !state.created_sent {
+        events.push(ResponseEvent::Created);
+        state.created_sent = true;
+    }
+
+    // Check for prompt feedback blocking
+    if let Some(feedback) = &chunk.prompt_feedback {
+        if let Some(reason) = &feedback.block_reason {
+            return Err(ApiError::Stream(format!("Prompt blocked: {reason}")));
+        }
+    }
+
+    // Process candidates
+    if let Some(ref candidates) = chunk.candidates {
+        for candidate in candidates {
+            // Check for blocked content
+            if let Some(ratings) = &candidate.safety_ratings {
+                for rating in ratings {
+                    if rating.blocked {
+                        return Err(ApiError::Stream(format!(
+                            "Content blocked by safety filter: {}",
+                            rating.category
+                        )));
+                    }
+                }
+            }
+
+            if let Some(ref content) = candidate.content {
+                if let Some(ref parts) = content.parts {
+                    for part in parts {
+                        // Handle text content
+                        if let Some(ref text) = part.text {
+                            if !text.is_empty() {
+                                // Emit OutputItemAdded for the message if this is the first text
+                                if !state.message_started {
+                                    state.message_started = true;
+                                    events.push(ResponseEvent::OutputItemAdded(
+                                        ResponseItem::Message {
+                                            id: None,
+                                            role: "assistant".to_string(),
+                                            content: vec![],
+                                            end_turn: None,
+                                            phase: None,
+                                        },
+                                    ));
+                                }
+                                events.push(ResponseEvent::OutputTextDelta(text.clone()));
+                            }
+                        }
+
+                        // Handle function calls
+                        if let Some(ref function_call) = part.function_call {
+                            let call_id = state.next_call_id();
+                            // Fix Gemini's tendency to quote shell metacharacters
+                            let fixed_args = function_call
+                                .args
+                                .as_ref()
+                                .map(fix_gemini_command_quoting)
+                                .unwrap_or_else(|| json!({}));
+                            let arguments = fixed_args.to_string();
+
+                            // Emit the function call as an OutputItemDone
+                            events.push(ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
+                                id: None,
+                                call_id,
+                                name: function_call.name.clone(),
+                                arguments,
+                                thought_signature: part.thought_signature.clone(),
+                            }));
+                        }
+                    }
+                }
+            }
+
+            // Check for completion
+            if let Some(finish_reason) = &candidate.finish_reason {
+                if finish_reason == "STOP"
+                    || finish_reason == "MAX_TOKENS"
+                    || finish_reason == "SAFETY"
+                    || finish_reason == "RECITATION"
+                    || finish_reason == "OTHER"
+                {
+                    // Get usage from the chunk if available
+                    let token_usage = chunk.usage_metadata.as_ref().map(|usage| TokenUsage {
+                        input_tokens: usage.prompt_token_count.unwrap_or(0),
+                        output_tokens: usage.candidates_token_count.unwrap_or(0),
+                        cached_input_tokens: usage.cached_content_token_count.unwrap_or(0),
+                        reasoning_output_tokens: 0,
+                        total_tokens: usage.total_token_count.unwrap_or(0),
+                    });
+
+                    events.push(ResponseEvent::Completed {
+                        response_id: String::new(),
+                        token_usage,
+                    });
+                }
+            }
+        }
+    }
+
+    // If no candidates but we have usage metadata, this might be a final chunk
+    if chunk.candidates.is_none() {
+        if let Some(usage) = chunk.usage_metadata {
+            let token_usage = Some(TokenUsage {
+                input_tokens: usage.prompt_token_count.unwrap_or(0),
+                output_tokens: usage.candidates_token_count.unwrap_or(0),
+                cached_input_tokens: usage.cached_content_token_count.unwrap_or(0),
+                reasoning_output_tokens: 0,
+                total_tokens: usage.total_token_count.unwrap_or(0),
+            });
+
+            events.push(ResponseEvent::Completed {
+                response_id: String::new(),
+                token_usage,
+            });
+        }
+    }
+
+    Ok(events)
+}
+
+/// Converts accumulated text and function calls into a final message ResponseItem.
+pub fn build_message_item(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: text.to_string(),
+        }],
+        end_turn: Some(true),
+        phase: None,
+    }
 }
 
 #[cfg(test)]
@@ -253,26 +323,231 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_text_delta() {
-        let data = r#"{"candidates":[{"content":{"parts":[{"text":"Hello"}],"role":"model"}}]}"#;
-        let result = parse_gemini_event(data);
+    fn test_parse_text_chunk() {
+        let data = r#"{
+            "candidates": [{
+                "content": {
+                    "parts": [{"text": "Hello, "}],
+                    "role": "model"
+                },
+                "index": 0
+            }]
+        }"#;
+
+        let mut state = GeminiStreamState::new();
+        let events = parse_gemini_chunk(data, &mut state).unwrap();
+
+        assert_eq!(events.len(), 3); // Created + OutputItemAdded + TextDelta
+        assert!(matches!(events[0], ResponseEvent::Created));
         assert!(matches!(
-            result,
-            Ok(Some(ResponseEvent::OutputTextDelta(text))) if text == "Hello"
+            events[1],
+            ResponseEvent::OutputItemAdded(ResponseItem::Message { .. })
         ));
+        assert!(matches!(events[2], ResponseEvent::OutputTextDelta(ref s) if s == "Hello, "));
+    }
+
+    #[test]
+    fn test_parse_function_call() {
+        let data = r#"{
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "functionCall": {
+                            "name": "get_weather",
+                            "args": {"location": "San Francisco"}
+                        }
+                    }],
+                    "role": "model"
+                },
+                "index": 0
+            }]
+        }"#;
+
+        let mut state = GeminiStreamState::new();
+        let events = parse_gemini_chunk(data, &mut state).unwrap();
+
+        assert_eq!(events.len(), 2); // Created + FunctionCall
+        assert!(matches!(events[0], ResponseEvent::Created));
+        match &events[1] {
+            ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { name, .. }) => {
+                assert_eq!(name, "get_weather");
+            }
+            _ => panic!("Expected FunctionCall"),
+        }
     }
 
     #[test]
     fn test_parse_completion() {
-        let data = r#"{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"Done"}]}}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}}"#;
-        let result = parse_gemini_event(data);
-        assert!(matches!(result, Ok(Some(ResponseEvent::Completed { .. }))));
+        let data = r#"{
+            "candidates": [{
+                "content": {
+                    "parts": [{"text": "Done!"}],
+                    "role": "model"
+                },
+                "finishReason": "STOP",
+                "index": 0
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 5,
+                "totalTokenCount": 15
+            }
+        }"#;
+
+        let mut state = GeminiStreamState::new();
+        let events = parse_gemini_chunk(data, &mut state).unwrap();
+
+        assert_eq!(events.len(), 4); // Created + OutputItemAdded + TextDelta + Completed
+        assert!(matches!(events[0], ResponseEvent::Created));
+        assert!(matches!(
+            events[1],
+            ResponseEvent::OutputItemAdded(ResponseItem::Message { .. })
+        ));
+        assert!(matches!(events[2], ResponseEvent::OutputTextDelta(_)));
+        match &events[3] {
+            ResponseEvent::Completed { token_usage, .. } => {
+                let usage = token_usage.as_ref().unwrap();
+                assert_eq!(usage.input_tokens, 10);
+                assert_eq!(usage.output_tokens, 5);
+                assert_eq!(usage.total_tokens, 15);
+            }
+            _ => panic!("Expected Completed"),
+        }
     }
 
     #[test]
-    fn test_parse_error() {
-        let data = r#"{"error":{"code":429,"message":"Rate limit exceeded","status":"RESOURCE_EXHAUSTED"}}"#;
-        let result = parse_gemini_event(data);
-        assert!(matches!(result, Err(ApiError::Retryable { .. })));
+    fn test_created_only_sent_once() {
+        let data = r#"{"candidates": [{"content": {"parts": [{"text": "a"}]}}]}"#;
+
+        let mut state = GeminiStreamState::new();
+
+        let events1 = parse_gemini_chunk(data, &mut state).unwrap();
+        assert!(matches!(events1[0], ResponseEvent::Created));
+
+        let events2 = parse_gemini_chunk(data, &mut state).unwrap();
+        // Second call should not have Created or OutputItemAdded
+        assert!(!events2
+            .iter()
+            .any(|e| matches!(e, ResponseEvent::Created)));
+        assert!(!events2
+            .iter()
+            .any(|e| matches!(e, ResponseEvent::OutputItemAdded(_))));
+    }
+
+    #[test]
+    fn test_fix_gemini_command_quoting_strips_outer_quotes() {
+        // Only strip outer quotes if the ENTIRE command is wrapped
+        let args = json!({"cmd": "'echo hello'"});
+        let fixed = fix_gemini_command_quoting(&args);
+        assert_eq!(fixed["cmd"], "echo hello");
+
+        let args = json!({"cmd": "\"echo hello\""});
+        let fixed = fix_gemini_command_quoting(&args);
+        assert_eq!(fixed["cmd"], "echo hello");
+
+        // Should NOT strip if quotes don't wrap the entire command
+        let args = json!({"cmd": "echo 'hello world'"});
+        let fixed = fix_gemini_command_quoting(&args);
+        assert_eq!(fixed["cmd"], "echo 'hello world'");
+    }
+
+    #[test]
+    fn test_fix_gemini_command_quoting_fixes_quoted_metacharacters() {
+        // Test the main issue: cat '>' file.py should become cat > file.py
+        let args = json!({"cmd": "cat '>' fibonacci.py"});
+        let fixed = fix_gemini_command_quoting(&args);
+        assert_eq!(fixed["cmd"], "cat > fibonacci.py");
+
+        // Test pipe
+        let args = json!({"cmd": "ls '|' grep foo"});
+        let fixed = fix_gemini_command_quoting(&args);
+        assert_eq!(fixed["cmd"], "ls | grep foo");
+
+        // Test input redirection
+        let args = json!({"cmd": "sort '<' input.txt"});
+        let fixed = fix_gemini_command_quoting(&args);
+        assert_eq!(fixed["cmd"], "sort < input.txt");
+
+        // Test append redirection
+        let args = json!({"cmd": "echo hello '>>' output.txt"});
+        let fixed = fix_gemini_command_quoting(&args);
+        assert_eq!(fixed["cmd"], "echo hello >> output.txt");
+
+        // Test stderr redirection
+        let args = json!({"cmd": "cmd '2>' errors.log"});
+        let fixed = fix_gemini_command_quoting(&args);
+        assert_eq!(fixed["cmd"], "cmd 2> errors.log");
+
+        // Test stderr to stdout redirect
+        let args = json!({"cmd": "cmd '2>&1'"});
+        let fixed = fix_gemini_command_quoting(&args);
+        assert_eq!(fixed["cmd"], "cmd 2>&1");
+    }
+
+    #[test]
+    fn test_fix_gemini_command_quoting_preserves_other_args() {
+        let args = json!({"cmd": "cat '>' file.py", "workdir": "/tmp", "timeout_ms": 5000});
+        let fixed = fix_gemini_command_quoting(&args);
+        assert_eq!(fixed["cmd"], "cat > file.py");
+        assert_eq!(fixed["workdir"], "/tmp");
+        assert_eq!(fixed["timeout_ms"], 5000);
+    }
+
+    #[test]
+    fn test_fix_gemini_command_quoting_handles_command_key() {
+        // Test with "command" key instead of "cmd"
+        let args = json!({"command": "cat '>' file.py"});
+        let fixed = fix_gemini_command_quoting(&args);
+        assert_eq!(fixed["command"], "cat > file.py");
+    }
+
+    #[test]
+    fn test_fix_gemini_command_quoting_preserves_valid_quotes() {
+        // Quotes inside file paths should be preserved (they're not the patterns we're fixing)
+        let args = json!({"cmd": "cat 'file with spaces.txt'"});
+        let fixed = fix_gemini_command_quoting(&args);
+        // This should be unchanged since 'file with spaces.txt' isn't a metacharacter pattern
+        assert_eq!(fixed["cmd"], "cat 'file with spaces.txt'");
+    }
+
+    #[test]
+    fn test_fix_gemini_command_quoting_non_cmd_args_unchanged() {
+        // Non-command arguments should not be modified
+        let args = json!({"path": "/some/path", "content": "some > content"});
+        let fixed = fix_gemini_command_quoting(&args);
+        assert_eq!(fixed["path"], "/some/path");
+        assert_eq!(fixed["content"], "some > content");
+    }
+
+    #[test]
+    fn test_parse_function_call_with_quoted_redirect() {
+        // Test the full flow: parsing a function call with a quoted redirect
+        let data = r#"{
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "functionCall": {
+                            "name": "shell",
+                            "args": {"cmd": "cat '>' fibonacci.py"}
+                        }
+                    }],
+                    "role": "model"
+                },
+                "index": 0
+            }]
+        }"#;
+
+        let mut state = GeminiStreamState::new();
+        let events = parse_gemini_chunk(data, &mut state).unwrap();
+
+        assert_eq!(events.len(), 2); // Created + FunctionCall
+        match &events[1] {
+            ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { arguments, .. }) => {
+                // The arguments should have the fixed command
+                let args: Value = serde_json::from_str(arguments).unwrap();
+                assert_eq!(args["cmd"], "cat > fibonacci.py");
+            }
+            _ => panic!("Expected FunctionCall"),
+        }
     }
 }
