@@ -5382,11 +5382,6 @@ impl ChatWidget {
             .unwrap_or_else(|| self.current_collaboration_mode.model())
     }
 
-    /// Get a clone of the shared model Arc for passing to SessionHeaderHistoryCell.
-    pub(crate) fn shared_model(&self) -> std::sync::Arc<std::sync::RwLock<String>> {
-        self.session_header.shared_model()
-    }
-
     fn sync_personality_command_enabled(&mut self) {
         self.bottom_pane
             .set_personality_command_enabled(self.config.features.enabled(Feature::Personality));
