@@ -1832,7 +1832,11 @@ impl App {
                     let _ = (preset, mode);
                 }
             }
-            AppEvent::PersistModelSelection { model, effort, provider } => {
+            AppEvent::PersistModelSelection {
+                model,
+                effort,
+                provider,
+            } => {
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
