@@ -1,7 +1,7 @@
-use codex_app_server_protocol::AuthMode;
 use codex_common::CliConfigOverrides;
 use codex_core::CodexAuth;
 use codex_core::auth::AuthCredentialsStoreMode;
+use codex_app_server_protocol::AuthMode;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::PROVIDER_ANTHROPIC;
 use codex_core::auth::PROVIDER_GEMINI;

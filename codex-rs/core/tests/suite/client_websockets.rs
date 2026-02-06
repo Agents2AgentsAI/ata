@@ -8,18 +8,20 @@ use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
-use codex_core::TransportManager;
 use codex_core::WireApi;
 use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::SessionSource;
 use codex_otel::OtelManager;
+use codex_otel::TelemetryAuthMode;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::WebSocketTestServer;
@@ -38,10 +40,15 @@ use tempfile::TempDir;
 use tracing_test::traced_test;
 
 const MODEL: &str = "gpt-5.2-codex";
+const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
+const OPENAI_BETA_RESPONSES_WEBSOCKETS: &str = "responses_websockets=2026-02-04";
 
 struct WebsocketTestHarness {
     _codex_home: TempDir,
     client: ModelClient,
+    model_info: ModelInfo,
+    effort: Option<ReasoningEffortConfig>,
+    summary: ReasoningSummary,
     otel_manager: OtelManager,
 }
 
@@ -56,10 +63,10 @@ async fn responses_websocket_streams_request() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut session = harness.client.new_session(None);
+    let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
-    stream_until_complete(&mut session, &prompt).await;
+    stream_until_complete(&mut client_session, &harness, &prompt).await;
 
     let connection = server.single_connection();
     assert_eq!(connection.len(), 1);
@@ -69,6 +76,11 @@ async fn responses_websocket_streams_request() {
     assert_eq!(body["model"].as_str(), Some(MODEL));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
     assert_eq!(body["input"].as_array().map(Vec::len), Some(1));
+    let handshake = server.single_handshake();
+    assert_eq!(
+        handshake.header(OPENAI_BETA_HEADER),
+        Some(OPENAI_BETA_RESPONSES_WEBSOCKETS.to_string())
+    );
 
     server.shutdown().await;
 }
@@ -86,10 +98,10 @@ async fn responses_websocket_emits_websocket_telemetry_events() {
 
     let harness = websocket_harness(&server).await;
     harness.otel_manager.reset_runtime_metrics();
-    let mut session = harness.client.new_session(None);
+    let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
-    stream_until_complete(&mut session, &prompt).await;
+    stream_until_complete(&mut client_session, &harness, &prompt).await;
 
     tokio::time::sleep(Duration::from_millis(10)).await;
 
@@ -115,7 +127,11 @@ async fn responses_websocket_includes_timing_metrics_header_when_runtime_metrics
             "type": "responsesapi.websocket_timing",
             "timing_metrics": {
                 "responses_duration_excl_engine_and_client_tool_time_ms": 120,
-                "engine_service_total_ms": 450
+                "engine_service_total_ms": 450,
+                "engine_iapi_ttft_total_ms": 310,
+                "engine_service_ttft_total_ms": 340,
+                "engine_iapi_tbt_across_engine_calls_ms": 220,
+                "engine_service_tbt_across_engine_calls_ms": 260
             }
         }),
         ev_completed("resp-1"),
@@ -124,10 +140,10 @@ async fn responses_websocket_includes_timing_metrics_header_when_runtime_metrics
 
     let harness = websocket_harness_with_runtime_metrics(&server, true).await;
     harness.otel_manager.reset_runtime_metrics();
-    let mut session = harness.client.new_session(None);
+    let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
-    stream_until_complete(&mut session, &prompt).await;
+    stream_until_complete(&mut client_session, &harness, &prompt).await;
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     let handshake = server.single_handshake();
@@ -142,6 +158,10 @@ async fn responses_websocket_includes_timing_metrics_header_when_runtime_metrics
         .expect("runtime metrics summary");
     assert_eq!(summary.responses_api_overhead_ms, 120);
     assert_eq!(summary.responses_api_inference_time_ms, 450);
+    assert_eq!(summary.responses_api_engine_iapi_ttft_ms, 310);
+    assert_eq!(summary.responses_api_engine_service_ttft_ms, 340);
+    assert_eq!(summary.responses_api_engine_iapi_tbt_ms, 220);
+    assert_eq!(summary.responses_api_engine_service_tbt_ms, 260);
 
     server.shutdown().await;
 }
@@ -157,10 +177,10 @@ async fn responses_websocket_omits_timing_metrics_header_when_runtime_metrics_di
     .await;
 
     let harness = websocket_harness_with_runtime_metrics(&server, false).await;
-    let mut session = harness.client.new_session(None);
+    let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
-    stream_until_complete(&mut session, &prompt).await;
+    stream_until_complete(&mut client_session, &harness, &prompt).await;
 
     let handshake = server.single_handshake();
     assert_eq!(
@@ -182,11 +202,18 @@ async fn responses_websocket_emits_reasoning_included_event() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut session = harness.client.new_session(None);
+    let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
-    let mut stream = session
-        .stream(&prompt)
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            &harness.model_info,
+            &harness.otel_manager,
+            harness.effort,
+            harness.summary,
+            None,
+        )
         .await
         .expect("websocket stream failed");
 
@@ -245,11 +272,18 @@ async fn responses_websocket_emits_rate_limit_events() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut session = harness.client.new_session(None);
+    let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
-    let mut stream = session
-        .stream(&prompt)
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            &harness.model_info,
+            &harness.otel_manager,
+            harness.effort,
+            harness.summary,
+            None,
+        )
         .await
         .expect("websocket stream failed");
 
@@ -300,12 +334,12 @@ async fn responses_websocket_appends_on_prefix() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut session = harness.client.new_session(None);
+    let mut client_session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![message_item("hello"), message_item("second")]);
 
-    stream_until_complete(&mut session, &prompt_one).await;
-    stream_until_complete(&mut session, &prompt_two).await;
+    stream_until_complete(&mut client_session, &harness, &prompt_one).await;
+    stream_until_complete(&mut client_session, &harness, &prompt_two).await;
 
     let connection = server.single_connection();
     assert_eq!(connection.len(), 2);
@@ -336,12 +370,12 @@ async fn responses_websocket_creates_on_non_prefix() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut session = harness.client.new_session(None);
+    let mut client_session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![message_item("different")]);
 
-    stream_until_complete(&mut session, &prompt_one).await;
-    stream_until_complete(&mut session, &prompt_two).await;
+    stream_until_complete(&mut client_session, &harness, &prompt_one).await;
+    stream_until_complete(&mut client_session, &harness, &prompt_two).await;
 
     let connection = server.single_connection();
     assert_eq!(connection.len(), 2);
@@ -425,35 +459,52 @@ async fn websocket_harness_with_runtime_metrics(
         model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
-        auth_manager.get_auth_mode(),
+        auth_manager.auth_mode().map(TelemetryAuthMode::from),
         false,
         "test".to_string(),
         SessionSource::Exec,
     )
     .with_metrics(metrics);
+    let effort = None;
+    let summary = ReasoningSummary::Auto;
     let client = ModelClient::new(
-        Arc::clone(&config),
         None,
-        model_info,
-        otel_manager.clone(),
-        provider.clone(),
-        None,
-        ReasoningSummary::Auto,
         conversation_id,
+        provider.clone(),
         SessionSource::Exec,
-        TransportManager::new(),
+        config.model_verbosity,
+        true,
+        false,
+        runtime_metrics_enabled,
+        None,
+        config.codex_home.clone(),
+        config.cli_auth_credentials_store_mode,
     );
 
     WebsocketTestHarness {
         _codex_home: codex_home,
         client,
+        model_info,
+        effort,
+        summary,
         otel_manager,
     }
 }
 
-async fn stream_until_complete(session: &mut ModelClientSession, prompt: &Prompt) {
-    let mut stream = session
-        .stream(prompt)
+async fn stream_until_complete(
+    client_session: &mut ModelClientSession,
+    harness: &WebsocketTestHarness,
+    prompt: &Prompt,
+) {
+    let mut stream = client_session
+        .stream(
+            prompt,
+            &harness.model_info,
+            &harness.otel_manager,
+            harness.effort,
+            harness.summary,
+            None,
+        )
         .await
         .expect("websocket stream failed");
 
