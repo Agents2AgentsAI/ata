@@ -326,9 +326,17 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             supported_reasoning_levels: supported_reasoning_level_minimal_low_medium_high(),
             default_reasoning_level: Some(ReasoningEffort::Medium),
         )
+    } else if slug.starts_with("claude-opus-4-6") {
+        model_info!(
+            slug,
+            supports_reasoning_summaries: true,
+            supported_reasoning_levels: supported_reasoning_level_low_medium_high_adaptive(),
+            default_reasoning_level: Some(ReasoningEffort::Adaptive),
+        )
     } else if slug.starts_with("claude-sonnet-4") || slug.starts_with("claude-opus-4") {
         model_info!(
             slug,
+            supports_reasoning_summaries: true,
             supported_reasoning_levels: supported_reasoning_level_low_medium_high(),
             default_reasoning_level: Some(ReasoningEffort::Medium),
         )
@@ -341,6 +349,28 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             default_reasoning_level: None
         )
     }
+}
+
+fn supported_reasoning_level_low_medium_high_adaptive() -> Vec<ReasoningEffortPreset> {
+    vec![
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Low,
+            description: "Fast responses with lighter reasoning".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: "Balances speed and reasoning depth for everyday tasks".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::High,
+            description: "Greater reasoning depth for complex problems".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Adaptive,
+            description: "Automatically adjusts reasoning depth based on task complexity"
+                .to_string(),
+        },
+    ]
 }
 
 fn supported_reasoning_level_low_medium_high() -> Vec<ReasoningEffortPreset> {
