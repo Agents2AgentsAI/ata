@@ -327,10 +327,12 @@ fn build_anthropic_messages(input: &[Value]) -> Result<Vec<Value>, ApiError> {
                         match block_type {
                             "input_text" | "output_text" => {
                                 if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                                    blocks.push(json!({
-                                        "type": "text",
-                                        "text": text
-                                    }));
+                                    if !text.trim().is_empty() {
+                                        blocks.push(json!({
+                                            "type": "text",
+                                            "text": text
+                                        }));
+                                    }
                                 }
                             }
                             "input_image" => {
@@ -535,6 +537,19 @@ fn build_anthropic_messages(input: &[Value]) -> Result<Vec<Value>, ApiError> {
         );
     }
 
+    // Ensure the last message has role "user" as required by models that
+    // do not support assistant message prefill (e.g. Claude Opus 4.6).
+    if result
+        .last()
+        .and_then(|m| m.get("role").and_then(|r| r.as_str()))
+        != Some("user")
+    {
+        result.push(json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "Continue."}]
+        }));
+    }
+
     validate_tool_result_sequence(&result)?;
 
     Ok(result)
@@ -695,11 +710,13 @@ mod tests {
 
         let messages = build_anthropic_messages(&input).unwrap();
 
-        assert_eq!(messages.len(), 2);
+        assert_eq!(messages.len(), 3);
         assert_eq!(messages[0]["role"], "user");
         assert_eq!(messages[0]["content"][0]["type"], "text");
         assert_eq!(messages[0]["content"][0]["text"], "Hi");
         assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[2]["role"], "user");
+        assert_eq!(messages[2]["content"][0]["text"], "Continue.");
     }
 
     #[test]
@@ -899,7 +916,7 @@ mod tests {
 
         let messages = build_anthropic_messages(&input).unwrap();
 
-        assert_eq!(messages.len(), 2);
+        assert_eq!(messages.len(), 3);
         assert_eq!(messages[0]["role"], "user");
         assert_eq!(messages[1]["role"], "assistant");
         // Thinking block
@@ -909,6 +926,9 @@ mod tests {
         // Text block (same assistant message)
         assert_eq!(messages[1]["content"][1]["type"], "text");
         assert_eq!(messages[1]["content"][1]["text"], "Here's my answer.");
+        // Trailing user message
+        assert_eq!(messages[2]["role"], "user");
+        assert_eq!(messages[2]["content"][0]["text"], "Continue.");
     }
 
     #[test]
@@ -933,12 +953,15 @@ mod tests {
 
         let messages = build_anthropic_messages(&input).unwrap();
 
-        assert_eq!(messages.len(), 2);
+        assert_eq!(messages.len(), 3);
         assert_eq!(messages[0]["role"], "user");
         assert_eq!(messages[1]["role"], "assistant");
         assert_eq!(messages[1]["content"][0]["type"], "redacted_thinking");
         assert_eq!(messages[1]["content"][0]["data"], "encrypted_data_blob");
         assert_eq!(messages[1]["content"][1]["type"], "text");
+        // Trailing user message
+        assert_eq!(messages[2]["role"], "user");
+        assert_eq!(messages[2]["content"][0]["text"], "Continue.");
     }
 
     #[test]
@@ -1154,5 +1177,87 @@ mod tests {
         assert_eq!(messages[0]["content"][0]["type"], "text");
         assert_eq!(messages[0]["content"][0]["text"], "Continue.");
         assert_eq!(messages[1]["role"], "assistant");
+    }
+
+    #[test]
+    fn test_last_message_not_user_gets_suffix() {
+        let input = vec![
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Hi"}]
+            }),
+            json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Hello!"}]
+            }),
+        ];
+        let messages = build_anthropic_messages(&input).unwrap();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[2]["role"], "user");
+        assert_eq!(messages[2]["content"][0]["text"], "Continue.");
+    }
+
+    #[test]
+    fn test_whitespace_only_text_blocks_are_skipped() {
+        // Anthropic API rejects text content blocks with whitespace-only text
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Hello"},
+                {"type": "input_text", "text": "  "},
+                {"type": "input_text", "text": "\n"},
+                {"type": "input_text", "text": ""}
+            ]
+        })];
+
+        let messages = build_anthropic_messages(&input).unwrap();
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        let content = messages[0]["content"].as_array().unwrap();
+        assert_eq!(
+            content.len(),
+            1,
+            "whitespace-only text blocks should be filtered out"
+        );
+        assert_eq!(content[0]["text"], "Hello");
+    }
+
+    #[test]
+    fn test_message_with_only_whitespace_text_is_skipped() {
+        // A message whose only text block is whitespace should be dropped entirely
+        let input = vec![
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Hi"}]
+            }),
+            json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "  \n  "}]
+            }),
+            json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Real response"}]
+            }),
+        ];
+
+        let messages = build_anthropic_messages(&input).unwrap();
+
+        // The whitespace-only assistant message should be dropped (blocks empty -> skipped)
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["content"][0]["text"], "Real response");
+        // Trailing user message
+        assert_eq!(messages[2]["role"], "user");
+        assert_eq!(messages[2]["content"][0]["text"], "Continue.");
     }
 }
