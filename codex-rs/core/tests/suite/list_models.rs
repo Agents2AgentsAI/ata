@@ -545,9 +545,9 @@ fn effort(reasoning_effort: ReasoningEffort, description: &str) -> ReasoningEffo
 
 fn claude_sonnet_4_5() -> ModelPreset {
     ModelPreset {
-        id: "claude-sonnet-4.5".to_string(),
-        model: "claude-sonnet-4.5".to_string(),
-        display_name: "Claude Sonnet 4.5".to_string(),
+        id: "claude-sonnet-4-5".to_string(),
+        model: "claude-sonnet-4-5".to_string(),
+        display_name: "Claude Sonnet 4-5".to_string(),
         description: "Anthropic's balanced model for coding tasks.".to_string(),
         default_reasoning_effort: ReasoningEffort::Medium,
         supported_reasoning_efforts: vec![
@@ -576,9 +576,9 @@ fn claude_sonnet_4_5() -> ModelPreset {
 
 fn claude_opus_4_5() -> ModelPreset {
     ModelPreset {
-        id: "claude-opus-4.5".to_string(),
-        model: "claude-opus-4.5".to_string(),
-        display_name: "Claude Opus 4.5".to_string(),
+        id: "claude-opus-4-6".to_string(),
+        model: "claude-opus-4-6".to_string(),
+        display_name: "Claude Opus 4-6".to_string(),
         description: "Anthropic's most capable model for complex reasoning.".to_string(),
         default_reasoning_effort: ReasoningEffort::Medium,
         supported_reasoning_efforts: vec![
