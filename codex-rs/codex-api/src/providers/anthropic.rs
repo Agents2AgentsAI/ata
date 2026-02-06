@@ -84,25 +84,22 @@ impl ProviderAdapter for AnthropicAdapter {
         }
 
         // Add thinking config if reasoning is requested
-        let is_opus_4_6 = model.to_lowercase().contains("claude-opus-4-6");
         if let Some(reasoning) = &options.reasoning {
             if let Some(effort) = reasoning.get("effort").and_then(|e| e.as_str()) {
                 match effort {
                     "none" => { /* skip — no thinking requested */ }
+                    "adaptive" => {
+                        body["thinking"] = json!({"type": "adaptive"});
+                    }
                     _ => {
-                        if is_opus_4_6 {
-                            // Opus 4.6 uses adaptive thinking (budget_tokens is deprecated)
-                            body["thinking"] = json!({"type": "adaptive"});
-                        } else {
-                            let budget = match effort {
-                                "minimal" | "low" => 1024_u32,
-                                "medium" => 10_000,
-                                "high" => 32_000,
-                                _ => max_tokens.saturating_sub(1).max(1024), // xhigh or unknown
-                            };
-                            let budget = budget.max(1024).min(max_tokens.saturating_sub(1));
-                            body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
-                        }
+                        let budget = match effort {
+                            "minimal" | "low" => 1024_u32,
+                            "medium" => 10_000,
+                            "high" => 32_000,
+                            _ => max_tokens.saturating_sub(1).max(1024), // xhigh or unknown
+                        };
+                        let budget = budget.max(1024).min(max_tokens.saturating_sub(1));
+                        body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
                     }
                 }
             }
@@ -121,6 +118,14 @@ impl ProviderAdapter for AnthropicAdapter {
         // Required anthropic-version header
         if let Ok(value) = HeaderValue::from_str(ANTHROPIC_VERSION) {
             headers.insert(HeaderName::from_static("anthropic-version"), value);
+        }
+
+        // Enable interleaved thinking so thinking blocks appear after tool
+        // results, not just on the first assistant turn. Safe to send
+        // unconditionally: no effect on Opus 4.6 (adaptive) or non-thinking
+        // requests.
+        if let Ok(value) = HeaderValue::from_str("interleaved-thinking-2025-05-14") {
+            headers.insert(HeaderName::from_static("anthropic-beta"), value);
         }
 
         headers
@@ -625,9 +630,10 @@ mod tests {
         let headers = adapter.extra_headers();
 
         assert!(headers.contains_key("anthropic-version"));
-        assert!(
-            !headers.contains_key("anthropic-beta"),
-            "obsolete anthropic-beta header should not be sent"
+        assert_eq!(
+            headers.get("anthropic-beta").and_then(|v| v.to_str().ok()),
+            Some("interleaved-thinking-2025-05-14"),
+            "anthropic-beta header should enable interleaved thinking"
         );
     }
 
@@ -753,7 +759,7 @@ mod tests {
             "content": [{"type": "input_text", "text": "Hello"}]
         })];
         let options = RequestOptions {
-            reasoning: Some(json!({"effort": "high"})),
+            reasoning: Some(json!({"effort": "adaptive"})),
             ..Default::default()
         };
         let body = adapter
@@ -768,8 +774,33 @@ mod tests {
         assert_eq!(body["thinking"]["type"], "adaptive");
         assert!(
             body["thinking"].get("budget_tokens").is_none(),
-            "Opus 4.6 should use adaptive thinking without budget_tokens"
+            "adaptive effort should use adaptive thinking without budget_tokens"
         );
+    }
+
+    #[test]
+    fn test_build_request_body_opus_4_6_high_thinking() {
+        let adapter = AnthropicAdapter::new();
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Hello"}]
+        })];
+        let options = RequestOptions {
+            reasoning: Some(json!({"effort": "high"})),
+            ..Default::default()
+        };
+        let body = adapter
+            .build_request_body(
+                "claude-opus-4-6-20260101",
+                "Be helpful",
+                &input,
+                &[],
+                &options,
+            )
+            .unwrap();
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["thinking"]["budget_tokens"], 32_000);
     }
 
     #[test]

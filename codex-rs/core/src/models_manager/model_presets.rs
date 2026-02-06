@@ -374,7 +374,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             model: "claude-opus-4-6".to_string(),
             display_name: "Claude Opus 4-6".to_string(),
             description: "Anthropic's most capable model for complex reasoning.".to_string(),
-            default_reasoning_effort: ReasoningEffort::Medium,
+            default_reasoning_effort: ReasoningEffort::Adaptive,
             supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::Low,
@@ -387,6 +387,10 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::High,
                     description: "Greater reasoning depth for complex problems".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Adaptive,
+                    description: "Automatically adjusts reasoning depth based on task complexity".to_string(),
                 },
             ],
             supports_personality: false,

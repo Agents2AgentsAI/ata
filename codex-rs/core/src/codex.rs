@@ -4361,7 +4361,9 @@ async fn try_run_sampling_request(
         FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
-    let mut active_item: Option<TurnItem> = None;
+    let mut active_agent_message_item: Option<TurnItem> = None;
+    let mut active_reasoning_item: Option<TurnItem> = None;
+    let mut active_web_search_item: Option<TurnItem> = None;
     let mut should_emit_turn_diff = false;
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
@@ -4402,7 +4404,18 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
-                let previously_active_item = active_item.take();
+                // Providers can interleave multiple output items (e.g. Anthropic "thinking"
+                // blocks alongside assistant text). Track "active" items by kind so finishing
+                // a reasoning block doesn't clear the active assistant message item.
+                let previously_active_item = match &item {
+                    ResponseItem::Message { role, .. } if role == "assistant" => {
+                        active_agent_message_item.take()
+                    }
+                    ResponseItem::Reasoning { .. } => active_reasoning_item.take(),
+                    ResponseItem::WebSearchCall { .. } => active_web_search_item.take(),
+                    _ => None,
+                };
+
                 if let Some(state) = plan_mode_state.as_mut() {
                     if let Some(previous) = previously_active_item.as_ref() {
                         let item_id = previous.id();
@@ -4460,7 +4473,14 @@ async fn try_run_sampling_request(
                     } else {
                         sess.emit_turn_item_started(&turn_context, &turn_item).await;
                     }
-                    active_item = Some(turn_item);
+                    match turn_item {
+                        TurnItem::AgentMessage(_) => active_agent_message_item = Some(turn_item),
+                        TurnItem::Reasoning(_) => active_reasoning_item = Some(turn_item),
+                        TurnItem::WebSearch(_) => active_web_search_item = Some(turn_item),
+                        TurnItem::UserMessage(_)
+                        | TurnItem::Plan(_)
+                        | TurnItem::ContextCompaction(_) => {}
+                    }
                 }
             }
             ResponseEvent::ServerReasoningIncluded(included) => {
@@ -4500,11 +4520,9 @@ async fn try_run_sampling_request(
             ResponseEvent::OutputTextDelta(delta) => {
                 // In review child threads, suppress assistant text deltas; the
                 // UI will show a selection popup from the final ReviewOutput.
-                if let Some(active) = active_item.as_ref() {
+                if let Some(active) = active_agent_message_item.as_ref() {
                     let item_id = active.id();
-                    if let Some(state) = plan_mode_state.as_mut()
-                        && matches!(active, TurnItem::AgentMessage(_))
-                    {
+                    if let Some(state) = plan_mode_state.as_mut() {
                         let segments = state
                             .plan_parsers
                             .assistant_parser_mut(&item_id)
@@ -4528,7 +4546,7 @@ async fn try_run_sampling_request(
                 delta,
                 summary_index,
             } => {
-                if let Some(active) = active_item.as_ref() {
+                if let Some(active) = active_reasoning_item.as_ref() {
                     let event = ReasoningContentDeltaEvent {
                         thread_id: sess.conversation_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
@@ -4543,7 +4561,7 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
-                if let Some(active) = active_item.as_ref() {
+                if let Some(active) = active_reasoning_item.as_ref() {
                     let event =
                         EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
                             item_id: active.id(),
@@ -4558,7 +4576,7 @@ async fn try_run_sampling_request(
                 delta,
                 content_index,
             } => {
-                if let Some(active) = active_item.as_ref() {
+                if let Some(active) = active_reasoning_item.as_ref() {
                     let event = ReasoningRawContentDeltaEvent {
                         thread_id: sess.conversation_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
