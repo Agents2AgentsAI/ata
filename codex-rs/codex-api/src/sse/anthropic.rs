@@ -72,8 +72,16 @@ pub struct AnthropicStreamState {
     in_thinking_section: bool,
     /// Accumulated thinking text for the current thinking block.
     accumulated_thinking_text: String,
+    /// Accumulated signature for the current thinking block.
+    accumulated_signature: String,
+    /// Whether the current thinking block is a redacted_thinking block.
+    is_redacted_thinking: bool,
+    /// The encrypted data from a redacted_thinking block.
+    redacted_thinking_data: String,
     /// Whether we've emitted the Reasoning OutputItemAdded event.
     reasoning_item_started: bool,
+    /// Whether we've emitted the Message OutputItemAdded event for text.
+    text_item_started: bool,
 
     // Token usage
     input_tokens: Option<i64>,
@@ -160,26 +168,64 @@ pub enum ContentBlock {
     Thinking { thinking: String },
     #[serde(rename = "redacted_thinking")]
     RedactedThinking { data: String },
+    /// Catch-all for unknown/new content block types (e.g. `server_tool_use`,
+    /// `web_search_tool_result`). Gracefully ignored.
+    #[serde(other)]
+    Unknown,
 }
 
-/// Content block delta payload.
-#[derive(Debug, Deserialize)]
+/// Content block delta payload — parsed manually to handle unknown delta types gracefully.
+#[derive(Debug)]
 pub struct ContentBlockDeltaPayload {
     pub index: u32,
-    pub delta: ContentDelta,
+    pub delta: Option<ContentDelta>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
+#[derive(Debug)]
 pub enum ContentDelta {
-    #[serde(rename = "text_delta")]
     TextDelta { text: String },
-    #[serde(rename = "input_json_delta")]
     InputJsonDelta { partial_json: String },
-    #[serde(rename = "thinking_delta")]
     ThinkingDelta { thinking: String },
-    #[serde(rename = "signature_delta")]
     SignatureDelta { signature: String },
+}
+
+impl ContentBlockDeltaPayload {
+    /// Parse from a `serde_json::Value`, returning `None` for the delta
+    /// if the delta type is unknown rather than failing.
+    fn from_value(v: &Value) -> Result<Self, ApiError> {
+        let index =
+            v.get("index").and_then(|i| i.as_u64()).ok_or_else(|| {
+                ApiError::Stream("Missing index in content_block_delta".to_string())
+            })? as u32;
+
+        let delta = v.get("delta").and_then(|d| {
+            let delta_type = d.get("type").and_then(|t| t.as_str())?;
+            match delta_type {
+                "text_delta" => {
+                    let text = d.get("text").and_then(|t| t.as_str())?.to_string();
+                    Some(ContentDelta::TextDelta { text })
+                }
+                "input_json_delta" => {
+                    let partial_json = d.get("partial_json").and_then(|t| t.as_str())?.to_string();
+                    Some(ContentDelta::InputJsonDelta { partial_json })
+                }
+                "thinking_delta" => {
+                    let thinking = d.get("thinking").and_then(|t| t.as_str())?.to_string();
+                    Some(ContentDelta::ThinkingDelta { thinking })
+                }
+                "signature_delta" => {
+                    let signature = d.get("signature").and_then(|t| t.as_str())?.to_string();
+                    Some(ContentDelta::SignatureDelta { signature })
+                }
+                other => {
+                    tracing::debug!(delta_type = other, "Skipping unknown content delta type");
+                    None
+                }
+            }
+        });
+
+        Ok(Self { index, delta })
+    }
 }
 
 /// Message delta payload (for stop reason and final usage).
@@ -223,12 +269,17 @@ pub fn parse_anthropic_event(
     data: &str,
     state: &mut AnthropicStreamState,
 ) -> Result<Vec<ResponseEvent>, ApiError> {
-    let event_type = AnthropicEventType::from_str(event_type)
-        .ok_or_else(|| ApiError::Stream(format!("Unknown Anthropic event type: {event_type}")))?;
+    let parsed_event_type = match AnthropicEventType::from_str(event_type) {
+        Some(et) => et,
+        None => {
+            tracing::debug!(event_type, "Skipping unknown Anthropic SSE event type");
+            return Ok(vec![]);
+        }
+    };
 
     let mut events = Vec::new();
 
-    match event_type {
+    match parsed_event_type {
         AnthropicEventType::MessageStart => {
             let payload: MessageStartPayload = serde_json::from_str(data)
                 .map_err(|e| ApiError::Stream(format!("Failed to parse message_start: {e}")))?;
@@ -259,12 +310,23 @@ pub fn parse_anthropic_event(
                     state.register_tool(payload.index, id, name);
                 }
                 ContentBlock::Text { .. } => {
-                    // Text blocks are handled via deltas
+                    if !state.text_item_started {
+                        state.text_item_started = true;
+                        events.push(ResponseEvent::OutputItemAdded(ResponseItem::Message {
+                            id: None,
+                            role: "assistant".to_string(),
+                            content: vec![],
+                            end_turn: None,
+                            phase: None,
+                        }));
+                    }
                 }
-                ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {
+                ContentBlock::Thinking { .. } => {
                     state.thinking_blocks.insert(payload.index);
                     state.in_thinking_section = true;
+                    state.is_redacted_thinking = false;
                     state.accumulated_thinking_text.clear();
+                    state.accumulated_signature.clear();
 
                     // Emit the Reasoning item on the first thinking block
                     if !state.reasoning_item_started {
@@ -277,35 +339,60 @@ pub fn parse_anthropic_event(
                         }));
                     }
                 }
+                ContentBlock::RedactedThinking { data } => {
+                    state.thinking_blocks.insert(payload.index);
+                    state.in_thinking_section = true;
+                    state.is_redacted_thinking = true;
+                    state.redacted_thinking_data = data;
+                    state.accumulated_thinking_text.clear();
+                    state.accumulated_signature.clear();
+
+                    // Emit the Reasoning item on the first thinking block
+                    if !state.reasoning_item_started {
+                        state.reasoning_item_started = true;
+                        events.push(ResponseEvent::OutputItemAdded(ResponseItem::Reasoning {
+                            id: String::new(),
+                            summary: vec![],
+                            content: None,
+                            encrypted_content: None,
+                        }));
+                    }
+                }
+                ContentBlock::Unknown => {
+                    tracing::debug!(index = payload.index, "Skipping unknown content block type");
+                }
             }
         }
 
         AnthropicEventType::ContentBlockDelta => {
-            let payload: ContentBlockDeltaPayload = serde_json::from_str(data).map_err(|e| {
+            let parsed: Value = serde_json::from_str(data).map_err(|e| {
                 ApiError::Stream(format!("Failed to parse content_block_delta: {e}"))
             })?;
+            let payload = ContentBlockDeltaPayload::from_value(&parsed)?;
 
-            match payload.delta {
-                ContentDelta::TextDelta { text } => {
-                    if !text.is_empty() {
-                        state.text_content.push_str(&text);
-                        events.push(ResponseEvent::OutputTextDelta(text));
+            if let Some(delta) = payload.delta {
+                match delta {
+                    ContentDelta::TextDelta { text } => {
+                        if !text.is_empty() {
+                            state.text_content.push_str(&text);
+                            events.push(ResponseEvent::OutputTextDelta(text));
+                        }
                     }
-                }
-                ContentDelta::InputJsonDelta { partial_json } => {
-                    state.append_tool_arguments(payload.index, &partial_json);
-                }
-                ContentDelta::ThinkingDelta { thinking } => {
-                    if !thinking.is_empty() {
-                        state.accumulated_thinking_text.push_str(&thinking);
-                        events.push(ResponseEvent::ReasoningSummaryDelta {
-                            delta: thinking,
-                            summary_index: state.thinking_index,
-                        });
+                    ContentDelta::InputJsonDelta { partial_json } => {
+                        state.append_tool_arguments(payload.index, &partial_json);
                     }
-                }
-                ContentDelta::SignatureDelta { .. } => {
-                    // Signature deltas are opaque verification data; ignore.
+                    ContentDelta::ThinkingDelta { thinking } => {
+                        if !thinking.is_empty() {
+                            state.accumulated_thinking_text.push_str(&thinking);
+                            events.push(ResponseEvent::ReasoningSummaryDelta {
+                                delta: thinking,
+                                summary_index: state.thinking_index,
+                            });
+                        }
+                    }
+                    ContentDelta::SignatureDelta { signature } => {
+                        state.accumulated_signature.push_str(&signature);
+                    }
                 }
             }
         }
@@ -326,16 +413,34 @@ pub fn parse_anthropic_event(
                 let summary_index = state.thinking_index;
                 events.push(ResponseEvent::ReasoningSummaryPartAdded { summary_index });
 
-                let text = std::mem::take(&mut state.accumulated_thinking_text);
-                events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
-                    id: String::new(),
-                    summary: vec![ReasoningItemReasoningSummary::SummaryText { text }],
-                    content: None,
-                    encrypted_content: None,
-                }));
+                if state.is_redacted_thinking {
+                    // Redacted thinking: store data in encrypted_content, empty summary
+                    let data = std::mem::take(&mut state.redacted_thinking_data);
+                    events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
+                        id: String::new(),
+                        summary: vec![],
+                        content: None,
+                        encrypted_content: Some(data),
+                    }));
+                } else {
+                    // Normal thinking: text in summary, signature in encrypted_content
+                    let text = std::mem::take(&mut state.accumulated_thinking_text);
+                    let signature = std::mem::take(&mut state.accumulated_signature);
+                    events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
+                        id: String::new(),
+                        summary: vec![ReasoningItemReasoningSummary::SummaryText { text }],
+                        content: None,
+                        encrypted_content: if signature.is_empty() {
+                            None
+                        } else {
+                            Some(signature)
+                        },
+                    }));
+                }
 
                 state.thinking_index += 1;
                 state.in_thinking_section = false;
+                state.is_redacted_thinking = false;
             } else if let Some((id, name)) = state.get_tool(payload.index).cloned() {
                 // If this was a tool call block, emit the completed tool call
                 let arguments = state
@@ -367,20 +472,38 @@ pub fn parse_anthropic_event(
 
         AnthropicEventType::MessageStop => {
             // Flush any in-progress thinking section
-            if state.in_thinking_section && !state.accumulated_thinking_text.is_empty() {
+            if state.in_thinking_section
+                && (!state.accumulated_thinking_text.is_empty() || state.is_redacted_thinking)
+            {
                 let summary_index = state.thinking_index;
                 events.push(ResponseEvent::ReasoningSummaryPartAdded { summary_index });
 
-                let text = std::mem::take(&mut state.accumulated_thinking_text);
-                events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
-                    id: String::new(),
-                    summary: vec![ReasoningItemReasoningSummary::SummaryText { text }],
-                    content: None,
-                    encrypted_content: None,
-                }));
+                if state.is_redacted_thinking {
+                    let data = std::mem::take(&mut state.redacted_thinking_data);
+                    events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
+                        id: String::new(),
+                        summary: vec![],
+                        content: None,
+                        encrypted_content: Some(data),
+                    }));
+                } else {
+                    let text = std::mem::take(&mut state.accumulated_thinking_text);
+                    let signature = std::mem::take(&mut state.accumulated_signature);
+                    events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
+                        id: String::new(),
+                        summary: vec![ReasoningItemReasoningSummary::SummaryText { text }],
+                        content: None,
+                        encrypted_content: if signature.is_empty() {
+                            None
+                        } else {
+                            Some(signature)
+                        },
+                    }));
+                }
 
                 state.thinking_index += 1;
                 state.in_thinking_section = false;
+                state.is_redacted_thinking = false;
             }
 
             // Build the final message if we have text content
@@ -718,7 +841,7 @@ mod tests {
     }
 
     #[test]
-    fn test_signature_delta_ignored() {
+    fn test_signature_delta_captured() {
         let mut state = AnthropicStreamState::new();
         state.created_sent = true;
         state.thinking_blocks.insert(0);
@@ -734,6 +857,7 @@ mod tests {
         }"#;
         let events = parse_anthropic_event("content_block_delta", data, &mut state).unwrap();
         assert!(events.is_empty());
+        assert_eq!(state.accumulated_signature, "abc123sig");
     }
 
     #[test]
@@ -841,5 +965,128 @@ mod tests {
             ResponseEvent::OutputItemAdded(ResponseItem::Reasoning { .. })
         ));
         assert!(state.thinking_blocks.contains(&0));
+        assert!(state.is_redacted_thinking);
+        assert_eq!(state.redacted_thinking_data, "encrypted_data_here");
+
+        // Stop the block — should produce a Reasoning with encrypted_content
+        let stop_data = r#"{"type": "content_block_stop", "index": 0}"#;
+        let events = parse_anthropic_event("content_block_stop", stop_data, &mut state).unwrap();
+        assert_eq!(events.len(), 2);
+        match &events[1] {
+            ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
+                summary,
+                encrypted_content,
+                ..
+            }) => {
+                assert!(summary.is_empty());
+                assert_eq!(encrypted_content.as_deref(), Some("encrypted_data_here"));
+            }
+            _ => panic!("Expected Reasoning OutputItemDone with encrypted_content"),
+        }
+    }
+
+    #[test]
+    fn test_signature_captured_in_thinking_block() {
+        let mut state = AnthropicStreamState::new();
+        state.created_sent = true;
+
+        // Start thinking block
+        let _ = parse_anthropic_event(
+            "content_block_start",
+            r#"{"index": 0, "content_block": {"type": "thinking", "thinking": ""}}"#,
+            &mut state,
+        )
+        .unwrap();
+
+        // Thinking delta
+        let _ = parse_anthropic_event(
+            "content_block_delta",
+            r#"{"index": 0, "delta": {"type": "thinking_delta", "thinking": "deep thought"}}"#,
+            &mut state,
+        )
+        .unwrap();
+
+        // Signature delta
+        let _ = parse_anthropic_event(
+            "content_block_delta",
+            r#"{"index": 0, "delta": {"type": "signature_delta", "signature": "sig_part1"}}"#,
+            &mut state,
+        )
+        .unwrap();
+        let _ = parse_anthropic_event(
+            "content_block_delta",
+            r#"{"index": 0, "delta": {"type": "signature_delta", "signature": "sig_part2"}}"#,
+            &mut state,
+        )
+        .unwrap();
+
+        // Stop thinking block
+        let events =
+            parse_anthropic_event("content_block_stop", r#"{"index": 0}"#, &mut state).unwrap();
+
+        assert_eq!(events.len(), 2);
+        match &events[1] {
+            ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
+                summary,
+                encrypted_content,
+                ..
+            }) => {
+                assert_eq!(summary.len(), 1);
+                match &summary[0] {
+                    ReasoningItemReasoningSummary::SummaryText { text } => {
+                        assert_eq!(text, "deep thought");
+                    }
+                }
+                assert_eq!(encrypted_content.as_deref(), Some("sig_part1sig_part2"));
+            }
+            _ => panic!("Expected Reasoning OutputItemDone with signature"),
+        }
+    }
+
+    // ── Unknown type handling tests ──────────────────
+
+    #[test]
+    fn test_unknown_event_type_returns_empty() {
+        let mut state = AnthropicStreamState::new();
+        let events = parse_anthropic_event("some_new_event", r#"{"foo": "bar"}"#, &mut state)
+            .expect("unknown event types should not error");
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_unknown_content_block_type_returns_empty() {
+        let mut state = AnthropicStreamState::new();
+        state.created_sent = true;
+
+        let data = r#"{
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_abc",
+                "name": "web_search"
+            }
+        }"#;
+        let events = parse_anthropic_event("content_block_start", data, &mut state)
+            .expect("unknown content block types should not error");
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_unknown_delta_type_returns_empty() {
+        let mut state = AnthropicStreamState::new();
+        state.created_sent = true;
+
+        let data = r#"{
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "web_search_result_delta",
+                "result": "some data"
+            }
+        }"#;
+        let events = parse_anthropic_event("content_block_delta", data, &mut state)
+            .expect("unknown delta types should not error");
+        assert!(events.is_empty());
     }
 }

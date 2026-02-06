@@ -645,7 +645,7 @@ fn normalize_skill_config_path(path: &Path) -> String {
 pub fn default_model_for_provider(provider_id: &str) -> Option<&'static str> {
     match provider_id {
         "openai" => Some("gpt-5.2-codex"),
-        "anthropic" => Some("claude-sonnet-4-5-20250514"),
+        "anthropic" => Some("claude-sonnet-4-5"),
         "gemini" => Some("gemini-3-flash-preview"),
         _ => None, // Unknown provider, clear model
     }
