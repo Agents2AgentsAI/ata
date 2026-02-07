@@ -14,6 +14,7 @@ use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_reasoning_item;
+use core_test_support::responses::ev_reasoning_item_added;
 use core_test_support::responses::ev_reasoning_summary_text_delta;
 use core_test_support::responses::ev_reasoning_text_delta;
 use core_test_support::responses::ev_response_created;
@@ -554,6 +555,7 @@ async fn record_responses_sets_span_fields_for_response_events() {
         ev_custom_tool_call("custom-1", "custom_tool", "{\"key\":\"value\"}"),
         ev_message_item_added("msg-added", "hi there"),
         ev_output_text_delta("delta"),
+        ev_reasoning_item_added("reasoning-1", &[]),
         ev_reasoning_summary_text_delta("summary-delta"),
         ev_reasoning_text_delta("raw-delta"),
         ev_function_call("call-1", "fn", "{\"key\":\"value\"}"),

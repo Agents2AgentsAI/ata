@@ -422,14 +422,20 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     });
     let expected_permissions_msg = body1["input"][0].clone();
     let body1_input = body1["input"].as_array().expect("input array");
+    let body2_input = body2["input"].as_array().expect("input array");
     // After overriding the turn context, emit one updated permissions message.
-    let expected_permissions_msg_2 = body2["input"][body1_input.len()].clone();
+    let expected_permissions_msg_2 = body2_input[body1_input.len()].clone();
     assert_ne!(
         expected_permissions_msg_2, expected_permissions_msg,
         "expected updated permissions message after override"
     );
+    // Collect all settings update items emitted after override (permissions,
+    // model_switch, etc.) which sit between the cached prefix and the new user
+    // message.
     let mut expected_body2 = body1_input.to_vec();
-    expected_body2.push(expected_permissions_msg_2);
+    for item in &body2_input[body1_input.len()..body2_input.len() - 1] {
+        expected_body2.push(item.clone());
+    }
     expected_body2.push(expected_user_message_2);
     assert_eq!(body2["input"], serde_json::Value::Array(expected_body2));
 
