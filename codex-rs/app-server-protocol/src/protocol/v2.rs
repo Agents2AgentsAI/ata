@@ -533,6 +533,7 @@ pub struct ConfigReadResponse {
 pub struct ConfigRequirements {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
+    pub allowed_web_search_modes: Option<Vec<WebSearchMode>>,
     pub enforce_residency: Option<ResidencyRequirement>,
 }
 
@@ -2499,6 +2500,7 @@ pub enum CommandExecutionStatus {
 pub enum CollabAgentTool {
     SpawnAgent,
     SendInput,
+    ResumeAgent,
     Wait,
     CloseAgent,
 }
@@ -3249,6 +3251,7 @@ mod tests {
                     text: "world".to_string(),
                 },
             ],
+            phase: None,
         });
 
         assert_eq!(
