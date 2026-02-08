@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use cache::ResponseCache;
 use config::ResearchConfig;
+#[allow(unused_imports)]
 use error::ResearchError;
 use error::Result;
 use http_client::HttpClient;
@@ -27,9 +28,17 @@ use types::RepoListResult;
 use types::SearchResult;
 use types::SotaResult;
 use types::SotaSearchParams;
+use types::ZoteroAttachmentsResult;
+use types::ZoteroCollectionItemsParams;
+use types::ZoteroCollectionsParams;
+use types::ZoteroCollectionsResult;
+use types::ZoteroFullTextResult;
 use types::ZoteroItemDetail;
+use types::ZoteroItemParams;
+use types::ZoteroNotesResult;
 use types::ZoteroSearchParams;
 use types::ZoteroSearchResult;
+use types::ZoteroTagSearchParams;
 
 #[derive(Debug)]
 pub struct ResearchToolkit {
@@ -84,16 +93,38 @@ impl ResearchToolkit {
         true
     }
 
+    #[cfg(feature = "paper_search")]
+    pub async fn paper_search(&self, params: PaperSearchParams) -> Result<SearchResult> {
+        tools::paper_search::paper_search(self, params).await
+    }
+
+    #[cfg(not(feature = "paper_search"))]
     pub async fn paper_search(&self, _params: PaperSearchParams) -> Result<SearchResult> {
         Err(ResearchError::NotImplemented {
             tool: "paper_search",
         })
     }
 
+    #[cfg(feature = "paper_search")]
+    pub async fn paper_get(&self, id: &str) -> Result<PaperDetail> {
+        tools::paper_search::paper_get(self, id).await
+    }
+
+    #[cfg(not(feature = "paper_search"))]
     pub async fn paper_get(&self, _id: &str) -> Result<PaperDetail> {
         Err(ResearchError::NotImplemented { tool: "paper_get" })
     }
 
+    #[cfg(feature = "paper_search")]
+    pub async fn paper_citations(
+        &self,
+        id: &str,
+        params: PaginationParams,
+    ) -> Result<CitationResult> {
+        tools::paper_search::paper_citations(self, id, params).await
+    }
+
+    #[cfg(not(feature = "paper_search"))]
     pub async fn paper_citations(
         &self,
         _id: &str,
@@ -104,6 +135,16 @@ impl ResearchToolkit {
         })
     }
 
+    #[cfg(feature = "paper_search")]
+    pub async fn paper_references(
+        &self,
+        id: &str,
+        params: PaginationParams,
+    ) -> Result<CitationResult> {
+        tools::paper_search::paper_references(self, id, params).await
+    }
+
+    #[cfg(not(feature = "paper_search"))]
     pub async fn paper_references(
         &self,
         _id: &str,
@@ -114,27 +155,153 @@ impl ResearchToolkit {
         })
     }
 
+    #[cfg(feature = "paper_search")]
+    pub async fn paper_search_sota(&self, params: SotaSearchParams) -> Result<SotaResult> {
+        tools::sota::paper_search_sota(self, params).await
+    }
+
+    #[cfg(not(feature = "paper_search"))]
     pub async fn paper_search_sota(&self, _params: SotaSearchParams) -> Result<SotaResult> {
         Err(ResearchError::NotImplemented {
             tool: "paper_search_sota",
         })
     }
 
+    #[cfg(feature = "paper_search")]
+    pub async fn paper_find_repos(&self, paper_id: &str) -> Result<RepoListResult> {
+        tools::sota::paper_find_repos(self, paper_id).await
+    }
+
+    #[cfg(not(feature = "paper_search"))]
     pub async fn paper_find_repos(&self, _paper_id: &str) -> Result<RepoListResult> {
         Err(ResearchError::NotImplemented {
             tool: "paper_find_repos",
         })
     }
 
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_search(&self, params: ZoteroSearchParams) -> Result<ZoteroSearchResult> {
+        tools::zotero::zotero_search(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
     pub async fn zotero_search(&self, _params: ZoteroSearchParams) -> Result<ZoteroSearchResult> {
         Err(ResearchError::NotImplemented {
             tool: "zotero_search",
         })
     }
 
-    pub async fn zotero_get_item(&self, _item_key: &str) -> Result<ZoteroItemDetail> {
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_get_item(&self, params: ZoteroItemParams) -> Result<ZoteroItemDetail> {
+        tools::zotero::zotero_get_item(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_get_item(&self, _params: ZoteroItemParams) -> Result<ZoteroItemDetail> {
         Err(ResearchError::NotImplemented {
             tool: "zotero_get_item",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_get_fulltext(
+        &self,
+        params: ZoteroItemParams,
+    ) -> Result<ZoteroFullTextResult> {
+        tools::zotero::zotero_get_fulltext(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_get_fulltext(
+        &self,
+        _params: ZoteroItemParams,
+    ) -> Result<ZoteroFullTextResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_get_fulltext",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_get_notes(&self, params: ZoteroItemParams) -> Result<ZoteroNotesResult> {
+        tools::zotero::zotero_get_notes(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_get_notes(&self, _params: ZoteroItemParams) -> Result<ZoteroNotesResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_get_notes",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_get_attachments(
+        &self,
+        params: ZoteroItemParams,
+    ) -> Result<ZoteroAttachmentsResult> {
+        tools::zotero::zotero_get_attachments(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_get_attachments(
+        &self,
+        _params: ZoteroItemParams,
+    ) -> Result<ZoteroAttachmentsResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_get_attachments",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_search_by_tag(
+        &self,
+        params: ZoteroTagSearchParams,
+    ) -> Result<ZoteroSearchResult> {
+        tools::zotero::zotero_search_by_tag(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_search_by_tag(
+        &self,
+        _params: ZoteroTagSearchParams,
+    ) -> Result<ZoteroSearchResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_search_by_tag",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_get_collections(
+        &self,
+        params: ZoteroCollectionsParams,
+    ) -> Result<ZoteroCollectionsResult> {
+        tools::zotero::zotero_get_collections(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_get_collections(
+        &self,
+        _params: ZoteroCollectionsParams,
+    ) -> Result<ZoteroCollectionsResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_get_collections",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_get_collection_items(
+        &self,
+        params: ZoteroCollectionItemsParams,
+    ) -> Result<ZoteroSearchResult> {
+        tools::zotero::zotero_get_collection_items(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_get_collection_items(
+        &self,
+        _params: ZoteroCollectionItemsParams,
+    ) -> Result<ZoteroSearchResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_get_collection_items",
         })
     }
 }

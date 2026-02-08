@@ -10,6 +10,7 @@ use crate::file_watcher::FileWatcher;
 use crate::hooks::Hooks;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
+use crate::research::SharedResearchToolkit;
 use crate::skills::SkillsManager;
 use crate::state_db::StateDbHandle;
 use crate::tools::sandboxing::ApprovalStore;
@@ -31,6 +32,7 @@ pub(crate) struct SessionServices {
     pub(crate) exec_policy: ExecPolicyManager,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
+    pub(crate) research_toolkit: Option<Arc<SharedResearchToolkit>>,
     pub(crate) otel_manager: OtelManager,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
     pub(crate) skills_manager: Arc<SkillsManager>,

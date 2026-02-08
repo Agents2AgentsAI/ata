@@ -115,6 +115,8 @@ pub enum Feature {
     Collab,
     /// Enable apps.
     Apps,
+    /// Enable research tools and research workflow integration.
+    Research,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Prompt for missing skill env var dependencies.
@@ -532,6 +534,16 @@ pub const FEATURES: &[FeatureSpec] = &[
             name: "Apps",
             menu_description: "Use a connected ChatGPT App using \"$\". Install Apps via /apps command. Restart Codex after enabling.",
             announcement: "NEW: Use ChatGPT Apps (Connectors) in Codex via $ mentions. Enable in /experimental and restart Codex!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Research,
+        key: "research",
+        stage: Stage::Experimental {
+            name: "Research Agent",
+            menu_description: "Multi-agent research workflow with paper search, Zotero integration, and proposal synthesis.",
+            announcement: "Research agent support is available as an experimental feature.",
         },
         default_enabled: false,
     },

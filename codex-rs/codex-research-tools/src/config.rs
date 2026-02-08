@@ -14,6 +14,11 @@ pub struct ResearchConfig {
     pub github_token: Option<String>,
     pub zotero_library_type: Option<String>,
     pub zotero_group_id: Option<String>,
+    pub semantic_scholar_base_url: String,
+    pub arxiv_base_url: String,
+    pub openalex_base_url: String,
+    pub papers_with_code_base_url: String,
+    pub zotero_base_url: String,
 
     pub connect_timeout: Duration,
     pub request_timeout: Duration,
@@ -85,6 +90,11 @@ impl Default for ResearchConfig {
             github_token: None,
             zotero_library_type: None,
             zotero_group_id: None,
+            semantic_scholar_base_url: "https://api.semanticscholar.org/graph/v1".to_string(),
+            arxiv_base_url: "https://export.arxiv.org".to_string(),
+            openalex_base_url: "https://api.openalex.org".to_string(),
+            papers_with_code_base_url: "https://paperswithcode.com/api/v1".to_string(),
+            zotero_base_url: "https://api.zotero.org".to_string(),
             connect_timeout: Duration::from_secs(10),
             request_timeout: Duration::from_secs(30),
             tool_timeout: Duration::from_secs(60),
@@ -107,6 +117,16 @@ impl ResearchConfig {
             github_token: std::env::var("GITHUB_TOKEN").ok(),
             zotero_library_type: std::env::var("ZOTERO_LIBRARY_TYPE").ok(),
             zotero_group_id: std::env::var("ZOTERO_GROUP_ID").ok(),
+            semantic_scholar_base_url: std::env::var("SEMANTIC_SCHOLAR_BASE_URL")
+                .unwrap_or_else(|_| "https://api.semanticscholar.org/graph/v1".to_string()),
+            arxiv_base_url: std::env::var("ARXIV_BASE_URL")
+                .unwrap_or_else(|_| "https://export.arxiv.org".to_string()),
+            openalex_base_url: std::env::var("OPENALEX_BASE_URL")
+                .unwrap_or_else(|_| "https://api.openalex.org".to_string()),
+            papers_with_code_base_url: std::env::var("PAPERS_WITH_CODE_BASE_URL")
+                .unwrap_or_else(|_| "https://paperswithcode.com/api/v1".to_string()),
+            zotero_base_url: std::env::var("ZOTERO_BASE_URL")
+                .unwrap_or_else(|_| "https://api.zotero.org".to_string()),
             ..Self::default()
         };
 
@@ -192,6 +212,11 @@ impl fmt::Debug for ResearchConfig {
             .field("github_token", &redact(&self.github_token))
             .field("zotero_library_type", &self.zotero_library_type)
             .field("zotero_group_id", &self.zotero_group_id)
+            .field("semantic_scholar_base_url", &self.semantic_scholar_base_url)
+            .field("arxiv_base_url", &self.arxiv_base_url)
+            .field("openalex_base_url", &self.openalex_base_url)
+            .field("papers_with_code_base_url", &self.papers_with_code_base_url)
+            .field("zotero_base_url", &self.zotero_base_url)
             .field("connect_timeout", &self.connect_timeout)
             .field("request_timeout", &self.request_timeout)
             .field("tool_timeout", &self.tool_timeout)
