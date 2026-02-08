@@ -402,6 +402,7 @@ mod tests {
             Arc::new(RateLimiter::new(HashMap::new())),
             RetryConfig::default(),
             Duration::from_secs(30),
+            Duration::from_secs(60),
         );
 
         let page = search(

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use chrono::Utc;
@@ -209,23 +210,18 @@ fn extract_arxiv_id(value: &str) -> Option<String> {
 }
 
 fn reconstruct_abstract(index: &HashMap<String, Vec<usize>>) -> Option<String> {
-    let max_position = index
-        .values()
-        .flat_map(|positions| positions.iter().copied())
-        .max()?;
-
-    let mut words = vec![String::new(); max_position + 1];
+    let mut words_by_position = BTreeMap::new();
     for (word, positions) in index {
-        for position in positions {
-            if let Some(slot) = words.get_mut(*position) {
-                *slot = word.clone();
-            }
+        for &position in positions {
+            words_by_position.insert(position, word.as_str());
         }
     }
 
-    let abstract_text = words
-        .into_iter()
-        .filter(|word| !word.is_empty())
+    if words_by_position.is_empty() {
+        return None;
+    }
+
+    let abstract_text = words_by_position.into_values()
         .collect::<Vec<_>>()
         .join(" ");
 
@@ -233,6 +229,39 @@ fn reconstruct_abstract(index: &HashMap<String, Vec<usize>>) -> Option<String> {
         None
     } else {
         Some(abstract_text)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use pretty_assertions::assert_eq;
+
+    use super::reconstruct_abstract;
+
+    #[test]
+    fn reconstruct_abstract_orders_words_by_position() {
+        let mut index = HashMap::new();
+        index.insert("world".to_string(), vec![1]);
+        index.insert("hello".to_string(), vec![0]);
+
+        assert_eq!(
+            reconstruct_abstract(&index),
+            Some("hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn reconstruct_abstract_handles_sparse_large_positions_without_dense_buffer() {
+        let mut index = HashMap::new();
+        index.insert("sparse".to_string(), vec![999_999]);
+        index.insert("index".to_string(), vec![1_000_000]);
+
+        assert_eq!(
+            reconstruct_abstract(&index),
+            Some("sparse index".to_string())
+        );
     }
 }
 

@@ -280,10 +280,23 @@ impl ResponseCache {
                 fetch_result
             }
             Role::Follower(request) => {
-                request.notify.notified().await;
+                // Register the waiter first, then check state to avoid missing a notification
+                // that arrives between deciding "Follower" and awaiting.
+                let notified = request.notify.notified();
+                tokio::pin!(notified);
 
-                if let Some(outcome) = request.outcome.lock().await.as_ref() {
-                    return outcome.clone().map_err(SharedError::into_research_error);
+                if let Some(outcome) = request.outcome.lock().await.clone() {
+                    return outcome.map_err(SharedError::into_research_error);
+                }
+
+                if let Some(cached) = self.get_with_meta(&key).await {
+                    return Ok(cached);
+                }
+
+                notified.await;
+
+                if let Some(outcome) = request.outcome.lock().await.clone() {
+                    return outcome.map_err(SharedError::into_research_error);
                 }
 
                 if let Some(cached) = self.get_with_meta(&key).await {

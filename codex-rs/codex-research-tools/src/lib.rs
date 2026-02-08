@@ -57,6 +57,7 @@ impl ResearchToolkit {
             rate_limiter,
             config.retry,
             config.request_timeout,
+            config.tool_timeout,
         );
 
         Self {

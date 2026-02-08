@@ -57,6 +57,11 @@ See `codex-rs/tui/styles.md`.
 
 ## Tests
 
+### Run tests in parallel:
+
+- Use `cargo nextest` instead of `cargo test` if possible to run tests in parallel.
+- If you don't have the tool: `cargo install --locked cargo-nextest`
+
 ### Snapshot tests
 
 This repo uses snapshot tests (via `insta`), especially in `codex-rs/tui`, to validate rendered output. When UI or text output changes intentionally, update the snapshots as follows:
@@ -112,10 +117,6 @@ If you don’t have the tool:
   let request = mock.single_request();
   // assert using request.function_call_output(call_id) or request.json_body() or other helpers.
   ```
-
-### Run tests in parallel:
-
-- Use `cargo nextest` instead of `cargo test` if possible to run tests in parallel.
 
 ## App-server API Development Best Practices
 

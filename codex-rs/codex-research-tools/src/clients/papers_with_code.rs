@@ -236,22 +236,33 @@ pub(crate) async fn find_repos_by_identifier(
 }
 
 fn select_task(tasks: Vec<PwcTask>, requested_task: &str) -> Option<PwcTask> {
-    let requested = requested_task.to_ascii_lowercase();
+    let requested = requested_task.trim().to_ascii_lowercase();
+    if requested.is_empty() {
+        return None;
+    }
 
-    tasks.into_iter().max_by_key(|task| {
-        let name = task
-            .name
-            .as_deref()
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if name == requested {
-            3
-        } else if name.contains(&requested) || requested.contains(&name) {
-            2
-        } else {
-            1
-        }
-    })
+    tasks
+        .into_iter()
+        .filter_map(|task| {
+            let name = task
+                .name
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase();
+            let is_partial_match =
+                !name.is_empty() && (name.contains(&requested) || requested.contains(&name));
+            let score = if name == requested {
+                3
+            } else if is_partial_match {
+                2
+            } else {
+                0
+            };
+            (score > 0).then_some((task, score))
+        })
+        .max_by_key(|(_, score)| *score)
+        .map(|(task, _)| task)
 }
 
 fn value_to_string(value: &Value) -> Option<String> {
@@ -402,5 +413,51 @@ impl PwcRepository {
             .or(self.repository_url.clone())
             .or(self.repo_url.clone())
             .or(self.github_url.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::PwcTask;
+    use super::select_task;
+
+    #[test]
+    fn select_task_returns_none_when_no_match_exists() {
+        let selected = select_task(
+            vec![
+                PwcTask {
+                    id: "task-1".to_string(),
+                    name: Some("Machine Translation".to_string()),
+                },
+                PwcTask {
+                    id: "task-2".to_string(),
+                    name: Some("Image Classification".to_string()),
+                },
+            ],
+            "Object Detection",
+        );
+
+        assert_eq!(selected.map(|task| task.id), None);
+    }
+
+    #[test]
+    fn select_task_prefers_exact_match() {
+        let selected = select_task(
+            vec![
+                PwcTask {
+                    id: "task-1".to_string(),
+                    name: Some("Object".to_string()),
+                },
+                PwcTask {
+                    id: "task-2".to_string(),
+                    name: Some("Object Detection".to_string()),
+                },
+            ],
+            "Object Detection",
+        );
+
+        assert_eq!(selected.map(|task| task.id), Some("task-2".to_string()));
     }
 }

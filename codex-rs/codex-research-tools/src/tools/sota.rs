@@ -1,10 +1,6 @@
 use std::collections::HashSet;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::Hash;
-use std::hash::Hasher;
 
 use serde::Serialize;
-use serde::de::DeserializeOwned;
 
 use crate::ResearchToolkit;
 use crate::cache::CacheKey;
@@ -17,6 +13,8 @@ use crate::clients::semantic_scholar::SemanticScholarConfig;
 use crate::error::ResearchError;
 use crate::error::Result;
 use crate::paper_id::PaperId;
+use crate::tools::cache_helpers::get_or_fetch_typed;
+use crate::tools::cache_helpers::hash_cache_payload;
 use crate::types::CodeRepo;
 use crate::types::Paper;
 use crate::types::RepoListResult;
@@ -186,44 +184,8 @@ fn dedup_repos(repos: &mut Vec<CodeRepo>) {
     repos.retain(|repo| seen.insert(repo.url.to_ascii_lowercase()));
 }
 
-async fn get_or_fetch_typed<T, F, Fut>(
-    toolkit: &ResearchToolkit,
-    key: CacheKey,
-    ttl: std::time::Duration,
-    fetch: F,
-) -> Result<T>
-where
-    T: Serialize + DeserializeOwned,
-    F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = Result<T>>,
-{
-    let value = toolkit
-        .cache()
-        .get_or_fetch(key, ttl, || async {
-            let output = fetch().await?;
-            serde_json::to_value(output).map_err(|err| {
-                ResearchError::Internal(format!("failed to serialize cached value: {err}"))
-            })
-        })
-        .await?;
-
-    serde_json::from_value(value).map_err(|err| {
-        ResearchError::Internal(format!("failed to deserialize cached value: {err}"))
-    })
-}
-
-fn hash_cache_payload<T: Serialize>(payload: &T) -> Result<u64> {
-    let serialized = serde_json::to_string(payload)
-        .map_err(|err| ResearchError::Internal(format!("failed to serialize cache key: {err}")))?;
-    let mut hasher = DefaultHasher::new();
-    serialized.hash(&mut hasher);
-    Ok(hasher.finish())
-}
-
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use pretty_assertions::assert_eq;
     use wiremock::Mock;
     use wiremock::MockServer;
@@ -232,9 +194,8 @@ mod tests {
     use wiremock::matchers::path;
 
     use crate::ResearchToolkit;
-    use crate::config::RateLimitOverrides;
     use crate::config::ResearchConfig;
-    use crate::rate_limiter::ApiRateLimit;
+    use crate::tools::test_helpers::build_test_toolkit_with_config;
     use crate::types::SotaSearchParams;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -358,26 +319,10 @@ mod tests {
         semantic_scholar_base_url: String,
         papers_with_code_base_url: String,
     ) -> ResearchToolkit {
-        let config = ResearchConfig {
+        build_test_toolkit_with_config(ResearchConfig {
             semantic_scholar_base_url,
             papers_with_code_base_url,
-            rate_limit_overrides: RateLimitOverrides {
-                semantic_scholar: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
-                arxiv: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
-                openalex: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
-                papers_with_code: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
-                zotero: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
-                github: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
-            },
             ..ResearchConfig::default()
-        };
-
-        let http_client = reqwest::Client::builder()
-            .connect_timeout(config.connect_timeout)
-            .timeout(config.request_timeout)
-            .build()
-            .expect("test http client should build");
-
-        ResearchToolkit::new(http_client, config)
+        })
     }
 }

@@ -1,11 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::Hash;
-use std::hash::Hasher;
 
 use serde::Serialize;
-use serde::de::DeserializeOwned;
 
 use crate::ResearchToolkit;
 use crate::cache::CacheKey;
@@ -18,6 +14,8 @@ use crate::clients::zotero::ZoteroLibraryScope;
 use crate::clients::zotero::ZoteroSearchRequest;
 use crate::error::ResearchError;
 use crate::error::Result;
+use crate::tools::cache_helpers::get_or_fetch_typed;
+use crate::tools::cache_helpers::hash_cache_payload;
 use crate::types::ZoteroAttachment;
 use crate::types::ZoteroAttachmentsResult;
 use crate::types::ZoteroCollectionItemsParams;
@@ -776,44 +774,8 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
     truncated
 }
 
-async fn get_or_fetch_typed<T, F, Fut>(
-    toolkit: &ResearchToolkit,
-    key: CacheKey,
-    ttl: std::time::Duration,
-    fetch: F,
-) -> Result<T>
-where
-    T: Serialize + DeserializeOwned,
-    F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = Result<T>>,
-{
-    let value = toolkit
-        .cache()
-        .get_or_fetch(key, ttl, || async {
-            let output = fetch().await?;
-            serde_json::to_value(output).map_err(|err| {
-                ResearchError::Internal(format!("failed to serialize cached value: {err}"))
-            })
-        })
-        .await?;
-
-    serde_json::from_value(value).map_err(|err| {
-        ResearchError::Internal(format!("failed to deserialize cached value: {err}"))
-    })
-}
-
-fn hash_cache_payload<T: Serialize>(payload: &T) -> Result<u64> {
-    let serialized = serde_json::to_string(payload)
-        .map_err(|err| ResearchError::Internal(format!("failed to serialize cache key: {err}")))?;
-    let mut hasher = DefaultHasher::new();
-    serialized.hash(&mut hasher);
-    Ok(hasher.finish())
-}
-
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use pretty_assertions::assert_eq;
     use wiremock::Mock;
     use wiremock::MockServer;
@@ -823,9 +785,8 @@ mod tests {
     use wiremock::matchers::query_param;
 
     use crate::ResearchToolkit;
-    use crate::config::RateLimitOverrides;
     use crate::config::ResearchConfig;
-    use crate::rate_limiter::ApiRateLimit;
+    use crate::tools::test_helpers::build_test_toolkit_with_config;
     use crate::types::ZoteroCollectionItemsParams;
     use crate::types::ZoteroCollectionsParams;
     use crate::types::ZoteroItemParams;
@@ -1126,28 +1087,12 @@ mod tests {
     }
 
     fn build_test_toolkit(zotero_base_url: String) -> ResearchToolkit {
-        let config = ResearchConfig {
+        build_test_toolkit_with_config(ResearchConfig {
             zotero_api_key: Some("test-key".to_string()),
             zotero_user_id: Some("123".to_string()),
             zotero_group_id: Some("456".to_string()),
             zotero_base_url,
-            rate_limit_overrides: RateLimitOverrides {
-                semantic_scholar: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
-                arxiv: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
-                openalex: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
-                papers_with_code: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
-                zotero: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
-                github: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
-            },
             ..ResearchConfig::default()
-        };
-
-        let http_client = reqwest::Client::builder()
-            .connect_timeout(config.connect_timeout)
-            .timeout(config.request_timeout)
-            .build()
-            .expect("test http client should build");
-
-        ResearchToolkit::new(http_client, config)
+        })
     }
 }
