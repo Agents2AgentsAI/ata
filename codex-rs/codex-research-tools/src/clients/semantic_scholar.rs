@@ -9,6 +9,12 @@ use crate::rate_limiter::ResearchApi;
 use crate::types::Paper;
 use crate::types::SourceMeta;
 
+const SOURCE_SEMANTIC_SCHOLAR: &str = "semantic_scholar";
+const PAPER_FIELDS_WITH_ABSTRACT: &str =
+    "paperId,title,abstract,year,citationCount,url,externalIds,openAccessPdf,authors,venue";
+const PAPER_FIELDS_NO_ABSTRACT: &str =
+    "paperId,title,year,citationCount,url,externalIds,openAccessPdf,authors,venue";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PaperRelation {
     Citations,
@@ -46,11 +52,7 @@ pub(crate) async fn search(
     config: SemanticScholarConfig<'_>,
     request: &SemanticScholarSearchRequest<'_>,
 ) -> Result<SearchPage> {
-    let fields = if request.include_abstract {
-        "paperId,title,abstract,year,citationCount,url,externalIds,openAccessPdf,authors,venue"
-    } else {
-        "paperId,title,year,citationCount,url,externalIds,openAccessPdf,authors,venue"
-    };
+    let fields = paper_fields(request.include_abstract);
 
     let mut url = format!(
         "{base_url}/paper/search?query={query}&offset={offset}&limit={limit}&fields={fields}",
@@ -91,7 +93,7 @@ pub(crate) async fn search(
     let papers = response
         .data
         .into_iter()
-        .map(|paper| map_paper(paper, &url, "semantic_scholar"))
+        .map(|paper| map_paper(paper, &url, SOURCE_SEMANTIC_SCHOLAR))
         .collect();
 
     let has_more = response.next.is_some()
@@ -112,11 +114,7 @@ pub(crate) async fn get_paper(
     paper_id: &str,
     include_abstract: bool,
 ) -> Result<Paper> {
-    let fields = if include_abstract {
-        "paperId,title,abstract,year,citationCount,url,externalIds,openAccessPdf,authors,venue"
-    } else {
-        "paperId,title,year,citationCount,url,externalIds,openAccessPdf,authors,venue"
-    };
+    let fields = paper_fields(include_abstract);
 
     let url = format!(
         "{base_url}/paper/{paper_id}?fields={fields}",
@@ -135,7 +133,7 @@ pub(crate) async fn get_paper(
         })
         .await?;
 
-    Ok(map_paper(response, &url, "semantic_scholar"))
+    Ok(map_paper(response, &url, SOURCE_SEMANTIC_SCHOLAR))
 }
 
 pub(crate) async fn get_relations(
@@ -148,11 +146,7 @@ pub(crate) async fn get_relations(
         PaperRelation::References => "references",
     };
 
-    let fields = if request.include_abstract {
-        "paperId,title,abstract,year,citationCount,url,externalIds,openAccessPdf,authors,venue"
-    } else {
-        "paperId,title,year,citationCount,url,externalIds,openAccessPdf,authors,venue"
-    };
+    let fields = paper_fields(request.include_abstract);
 
     let url = format!(
         "{base_url}/paper/{paper_id}/{relation_path}?offset={offset}&limit={limit}&fields={fields}",
@@ -181,7 +175,7 @@ pub(crate) async fn get_relations(
                 .or(item.cited_paper)
                 .or_else(|| item.direct.into_paper())
         })
-        .map(|paper| map_paper(paper, &url, "semantic_scholar"))
+        .map(|paper| map_paper(paper, &url, SOURCE_SEMANTIC_SCHOLAR))
         .collect::<Vec<_>>();
 
     let has_more = response.next.is_some()
@@ -194,6 +188,14 @@ pub(crate) async fn get_relations(
         total_available: response.total,
         has_more,
     })
+}
+
+fn paper_fields(include_abstract: bool) -> &'static str {
+    if include_abstract {
+        PAPER_FIELDS_WITH_ABSTRACT
+    } else {
+        PAPER_FIELDS_NO_ABSTRACT
+    }
 }
 
 fn map_paper(paper: SemanticScholarPaper, api_url: &str, source: &str) -> Paper {
