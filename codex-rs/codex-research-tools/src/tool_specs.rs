@@ -30,10 +30,12 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                         "year_to": { "type": "integer" },
                         "fields_of_study": { "type": "array", "items": { "type": "string" } },
                         "source": { "type": "string" },
+                        "sort_by": { "type": "string" },
                         "offset": { "type": "integer" },
                         "limit": { "type": "integer" },
                         "include_abstract": { "type": "boolean" },
-                        "fields": { "type": "array", "items": { "type": "string" } }
+                        "fields": { "type": "array", "items": { "type": "string" } },
+                        "max_chars_per_item": { "type": "integer" }
                     },
                     "required": ["query"],
                     "additionalProperties": false
@@ -61,7 +63,9 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                     "properties": {
                         "paper_id": { "type": "string" },
                         "offset": { "type": "integer" },
-                        "limit": { "type": "integer" }
+                        "limit": { "type": "integer" },
+                        "fields": { "type": "array", "items": { "type": "string" } },
+                        "max_chars_per_item": { "type": "integer" }
                     },
                     "required": ["paper_id"],
                     "additionalProperties": false
@@ -77,7 +81,9 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                     "properties": {
                         "paper_id": { "type": "string" },
                         "offset": { "type": "integer" },
-                        "limit": { "type": "integer" }
+                        "limit": { "type": "integer" },
+                        "fields": { "type": "array", "items": { "type": "string" } },
+                        "max_chars_per_item": { "type": "integer" }
                     },
                     "required": ["paper_id"],
                     "additionalProperties": false
@@ -130,7 +136,9 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                         "library_id": { "type": "string" },
                         "offset": { "type": "integer" },
                         "limit": { "type": "integer" },
-                        "item_type": { "type": "string" }
+                        "item_type": { "type": "string" },
+                        "fields": { "type": "array", "items": { "type": "string" } },
+                        "max_chars_per_item": { "type": "integer" }
                     },
                     "required": ["query"],
                     "additionalProperties": false
@@ -393,4 +401,57 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
     }
 
     defs
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::all_tool_defs;
+
+    fn assert_schema_has_field(tool_id: &str, field: &str) {
+        let defs = all_tool_defs();
+        let def = defs
+            .iter()
+            .find(|tool| tool.id == tool_id)
+            .unwrap_or_else(|| panic!("missing tool definition for {tool_id}"));
+        let properties = def
+            .input_schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .unwrap_or_else(|| panic!("tool schema missing properties object for {tool_id}"));
+        assert!(
+            properties.contains_key(field),
+            "tool schema for {tool_id} is missing field `{field}`",
+        );
+    }
+
+    #[test]
+    fn paper_search_schema_exposes_all_supported_params() {
+        assert_schema_has_field("paper_search", "sort_by");
+        assert_schema_has_field("paper_search", "max_chars_per_item");
+    }
+
+    #[test]
+    fn paper_relation_schemas_expose_output_budget_and_field_filters() {
+        for tool_id in ["paper_citations", "paper_references"] {
+            assert_schema_has_field(tool_id, "fields");
+            assert_schema_has_field(tool_id, "max_chars_per_item");
+        }
+    }
+
+    #[test]
+    fn zotero_search_schema_exposes_optional_field_projection_and_budget() {
+        assert_schema_has_field("zotero_search", "fields");
+        assert_schema_has_field("zotero_search", "max_chars_per_item");
+    }
+
+    #[test]
+    fn tool_ids_are_unique() {
+        let defs = all_tool_defs();
+        let mut ids = defs.iter().map(|def| def.id).collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), defs.len());
+    }
 }

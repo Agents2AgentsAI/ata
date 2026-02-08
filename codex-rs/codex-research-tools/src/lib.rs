@@ -52,7 +52,12 @@ impl ResearchToolkit {
     #[must_use]
     pub fn new(http_client: reqwest::Client, config: ResearchConfig) -> Self {
         let rate_limiter = Arc::new(RateLimiter::new(config.rate_limits()));
-        let http = HttpClient::new(http_client, rate_limiter, config.retry);
+        let http = HttpClient::new(
+            http_client,
+            rate_limiter,
+            config.retry,
+            config.request_timeout,
+        );
 
         Self {
             http,

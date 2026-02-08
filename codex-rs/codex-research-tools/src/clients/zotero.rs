@@ -473,13 +473,46 @@ fn year_from_date(date: Option<&str>) -> Option<String> {
         return None;
     }
 
-    let digits = raw.chars().filter(char::is_ascii_digit).collect::<String>();
+    if raw.len() >= 4 {
+        let prefix = &raw[..4];
+        if prefix.chars().all(|char| char.is_ascii_digit())
+            && let Ok(year) = prefix.parse::<u32>()
+            && (1900..=2099).contains(&year)
+        {
+            return Some(year.to_string());
+        }
+    }
 
-    if digits.len() < 4 {
+    let mut run = String::new();
+    for char in raw.chars() {
+        if char.is_ascii_digit() {
+            run.push(char);
+            continue;
+        }
+
+        if let Some(year) = parse_year_run(&run) {
+            return Some(year);
+        }
+        run.clear();
+    }
+
+    parse_year_run(&run)
+}
+
+fn parse_year_run(run: &str) -> Option<String> {
+    if run.len() < 4 {
         return None;
     }
 
-    Some(digits.chars().take(4).collect())
+    for idx in 0..=run.len().saturating_sub(4) {
+        let candidate = run.get(idx..idx + 4)?;
+        let year = candidate.parse::<u32>().ok()?;
+        if (1900..=2099).contains(&year) {
+            return Some(year.to_string());
+        }
+    }
+
+    None
 }
 
 fn truncate_chars(value: &str, max_chars: usize) -> String {
@@ -539,6 +572,36 @@ struct ZoteroApiCreator {
 #[derive(Debug, Deserialize)]
 struct ZoteroApiTag {
     tag: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::year_from_date;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn year_from_date_prefers_prefix_year_when_present() {
+        assert_eq!(year_from_date(Some("2023-06-01")), Some("2023".to_string()));
+    }
+
+    #[test]
+    fn year_from_date_finds_four_digit_year_tokens() {
+        assert_eq!(
+            year_from_date(Some("v1.2.3 2023 revision")),
+            Some("2023".to_string())
+        );
+        assert_eq!(
+            year_from_date(Some("Project 2021: Ancient History")),
+            Some("2021".to_string())
+        );
+    }
+
+    #[test]
+    fn year_from_date_rejects_out_of_range_runs() {
+        assert_eq!(year_from_date(Some("v1.2.3 1234 build")), None);
+        assert_eq!(year_from_date(Some("")), None);
+        assert_eq!(year_from_date(None), None);
+    }
 }
 
 #[derive(Debug, Deserialize)]
