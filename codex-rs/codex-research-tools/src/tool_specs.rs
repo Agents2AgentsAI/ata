@@ -89,34 +89,6 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                     "additionalProperties": false
                 }),
             },
-            ToolDef {
-                id: "paper_search_sota",
-                native_name: "paper_search_sota",
-                mcp_name: "search_sota",
-                description: "Search state-of-the-art benchmark results via Papers With Code.",
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "task": { "type": "string" },
-                        "dataset": { "type": "string" },
-                        "limit": { "type": "integer" }
-                    },
-                    "required": ["task"],
-                    "additionalProperties": false
-                }),
-            },
-            ToolDef {
-                id: "paper_find_repos",
-                native_name: "paper_find_repos",
-                mcp_name: "find_code_repos",
-                description: "Find code repositories associated with a paper.",
-                input_schema: json!({
-                    "type": "object",
-                    "properties": { "paper_id": { "type": "string" } },
-                    "required": ["paper_id"],
-                    "additionalProperties": false
-                }),
-            },
         ]);
     }
 

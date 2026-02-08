@@ -221,7 +221,8 @@ fn reconstruct_abstract(index: &HashMap<String, Vec<usize>>) -> Option<String> {
         return None;
     }
 
-    let abstract_text = words_by_position.into_values()
+    let abstract_text = words_by_position
+        .into_values()
         .collect::<Vec<_>>()
         .join(" ");
 

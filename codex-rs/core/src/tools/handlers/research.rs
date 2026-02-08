@@ -116,24 +116,6 @@ impl ResearchBridgeHandler {
                     .map_err(map_research_error)?;
                 serialize_tool_output(&output)
             }
-            "paper_search_sota" => {
-                let params = parse_arguments(arguments)?;
-                let output = self
-                    .toolkit
-                    .paper_search_sota(params)
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
-            }
-            "paper_find_repos" => {
-                let params: PaperIdArgs = parse_arguments(arguments)?;
-                let output = self
-                    .toolkit
-                    .paper_find_repos(params.paper_id.as_str())
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
-            }
             "zotero_search" => {
                 let params: ZoteroSearchParams = parse_arguments(arguments)?;
                 let output = self

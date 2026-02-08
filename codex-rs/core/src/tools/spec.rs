@@ -1710,7 +1710,6 @@ mod tests {
         config.semantic_scholar_base_url = "http://127.0.0.1:9".to_string();
         config.arxiv_base_url = "http://127.0.0.1:9".to_string();
         config.openalex_base_url = "http://127.0.0.1:9".to_string();
-        config.papers_with_code_base_url = "http://127.0.0.1:9".to_string();
         config.zotero_base_url = "http://127.0.0.1:9".to_string();
         Arc::new(codex_research_tools::ResearchToolkit::new(
             reqwest::Client::new(),
