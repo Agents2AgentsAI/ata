@@ -104,6 +104,7 @@ pub struct ZoteroItem {
     pub item_type: String,
     pub doi: Option<String>,
     pub abstract_snippet: Option<String>,
+    pub tags: Vec<String>,
     pub source_meta: Option<SourceMeta>,
 }
 
@@ -126,6 +127,65 @@ pub struct ZoteroItemDetail {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroSearchResult {
     pub items: Vec<ZoteroItem>,
+    pub total_available: Option<u64>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroFullTextResult {
+    pub item_key: String,
+    pub content: String,
+    pub source_meta: Option<SourceMeta>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroNote {
+    pub key: String,
+    pub title: Option<String>,
+    pub note: Option<String>,
+    pub parent_item: Option<String>,
+    pub source_meta: Option<SourceMeta>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroNotesResult {
+    pub item_key: String,
+    pub notes: Vec<ZoteroNote>,
+    pub total_available: Option<u64>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroAttachment {
+    pub key: String,
+    pub title: Option<String>,
+    pub filename: Option<String>,
+    pub content_type: Option<String>,
+    pub link_mode: Option<String>,
+    pub url: Option<String>,
+    pub parent_item: Option<String>,
+    pub source_meta: Option<SourceMeta>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroAttachmentsResult {
+    pub item_key: String,
+    pub attachments: Vec<ZoteroAttachment>,
+    pub total_available: Option<u64>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroCollection {
+    pub key: String,
+    pub name: String,
+    pub parent_collection: Option<String>,
+    pub source_meta: Option<SourceMeta>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroCollectionsResult {
+    pub collections: Vec<ZoteroCollection>,
     pub total_available: Option<u64>,
     pub has_more: bool,
 }
@@ -163,6 +223,45 @@ pub struct SotaSearchParams {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroSearchParams {
     pub query: String,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+    pub item_type: Option<String>,
+    pub fields: Option<Vec<String>>,
+    pub max_chars_per_item: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroItemParams {
+    pub item_key: String,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub max_chars_per_item: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroTagSearchParams {
+    pub tags: Vec<String>,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+    pub item_type: Option<String>,
+    pub max_chars_per_item: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroCollectionsParams {
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroCollectionItemsParams {
+    pub collection_key: String,
     pub library_type: Option<String>,
     pub library_id: Option<String>,
     pub offset: Option<u32>,

@@ -98,9 +98,9 @@ use tracing::debug;
 use tracing::warn;
 
 use crate::AuthManager;
+use crate::auth::AuthCredentialsStoreMode;
 use crate::auth::CodexAuth;
 use crate::auth::RefreshTokenError;
-use crate::auth::AuthCredentialsStoreMode;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;

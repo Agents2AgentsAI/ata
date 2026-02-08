@@ -91,6 +91,7 @@ pub use auth::AuthManager;
 pub use auth::CodexAuth;
 pub mod default_client;
 pub mod project_doc;
+pub mod research;
 mod rollout;
 pub(crate) mod safety;
 pub mod seatbelt;

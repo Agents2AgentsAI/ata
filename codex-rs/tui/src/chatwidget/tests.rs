@@ -1254,7 +1254,9 @@ async fn make_chatwidget_with_provider(
         current_rollout_path: None,
         external_editor_state: ExternalEditorState::Closed,
         current_cwd: None,
-        status_line_invalid_items_warned: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        status_line_invalid_items_warned: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+            false,
+        )),
         status_line_branch: None,
         status_line_branch_cwd: None,
         status_line_branch_pending: false,

@@ -143,7 +143,12 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 description: "Get full Zotero metadata for an item.",
                 input_schema: json!({
                     "type": "object",
-                    "properties": { "item_key": { "type": "string" } },
+                    "properties": {
+                        "item_key": { "type": "string" },
+                        "library_type": { "type": "string" },
+                        "library_id": { "type": "string" },
+                        "max_chars_per_item": { "type": "integer" }
+                    },
                     "required": ["item_key"],
                     "additionalProperties": false
                 }),
@@ -155,7 +160,12 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 description: "Get indexed fulltext for a Zotero item.",
                 input_schema: json!({
                     "type": "object",
-                    "properties": { "item_key": { "type": "string" } },
+                    "properties": {
+                        "item_key": { "type": "string" },
+                        "library_type": { "type": "string" },
+                        "library_id": { "type": "string" },
+                        "max_chars_per_item": { "type": "integer" }
+                    },
                     "required": ["item_key"],
                     "additionalProperties": false
                 }),
@@ -167,7 +177,12 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 description: "Get notes attached to a Zotero item.",
                 input_schema: json!({
                     "type": "object",
-                    "properties": { "item_key": { "type": "string" } },
+                    "properties": {
+                        "item_key": { "type": "string" },
+                        "library_type": { "type": "string" },
+                        "library_id": { "type": "string" },
+                        "max_chars_per_item": { "type": "integer" }
+                    },
                     "required": ["item_key"],
                     "additionalProperties": false
                 }),
@@ -179,7 +194,12 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 description: "Get attachment metadata for a Zotero item.",
                 input_schema: json!({
                     "type": "object",
-                    "properties": { "item_key": { "type": "string" } },
+                    "properties": {
+                        "item_key": { "type": "string" },
+                        "library_type": { "type": "string" },
+                        "library_id": { "type": "string" },
+                        "max_chars_per_item": { "type": "integer" }
+                    },
                     "required": ["item_key"],
                     "additionalProperties": false
                 }),
@@ -191,7 +211,15 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 description: "Search Zotero items by tag.",
                 input_schema: json!({
                     "type": "object",
-                    "properties": { "tags": { "type": "array", "items": { "type": "string" } } },
+                    "properties": {
+                        "tags": { "type": "array", "items": { "type": "string" } },
+                        "library_type": { "type": "string" },
+                        "library_id": { "type": "string" },
+                        "offset": { "type": "integer" },
+                        "limit": { "type": "integer" },
+                        "item_type": { "type": "string" },
+                        "max_chars_per_item": { "type": "integer" }
+                    },
                     "required": ["tags"],
                     "additionalProperties": false
                 }),
@@ -203,7 +231,12 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 description: "List Zotero collections.",
                 input_schema: json!({
                     "type": "object",
-                    "properties": {},
+                    "properties": {
+                        "library_type": { "type": "string" },
+                        "library_id": { "type": "string" },
+                        "offset": { "type": "integer" },
+                        "limit": { "type": "integer" }
+                    },
                     "additionalProperties": false
                 }),
             },
@@ -216,8 +249,12 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                     "type": "object",
                     "properties": {
                         "collection_key": { "type": "string" },
+                        "library_type": { "type": "string" },
+                        "library_id": { "type": "string" },
                         "offset": { "type": "integer" },
-                        "limit": { "type": "integer" }
+                        "limit": { "type": "integer" },
+                        "item_type": { "type": "string" },
+                        "max_chars_per_item": { "type": "integer" }
                     },
                     "required": ["collection_key"],
                     "additionalProperties": false

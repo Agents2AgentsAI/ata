@@ -9,6 +9,8 @@ mod mcp_resource;
 mod plan;
 mod read_file;
 mod request_user_input;
+#[cfg(feature = "research")]
+pub(crate) mod research;
 mod shell;
 mod test_sync;
 mod unified_exec;
@@ -30,6 +32,8 @@ pub use plan::PlanHandler;
 pub use read_file::ReadFileHandler;
 pub use request_user_input::RequestUserInputHandler;
 pub(crate) use request_user_input::request_user_input_tool_description;
+#[cfg(feature = "research")]
+pub(crate) use research::ResearchBridgeHandler;
 pub use shell::ShellCommandHandler;
 pub use shell::ShellHandler;
 pub use test_sync::TestSyncHandler;

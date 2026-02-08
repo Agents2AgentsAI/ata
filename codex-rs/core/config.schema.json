@@ -236,6 +236,9 @@
             "request_rule": {
               "type": "boolean"
             },
+            "research": {
+              "type": "boolean"
+            },
             "responses_websockets": {
               "type": "boolean"
             },
@@ -891,6 +894,24 @@
         }
       ]
     },
+    "ResearchToolsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "openalex_email": {
+          "type": "string"
+        },
+        "zotero_group_id": {
+          "type": "string"
+        },
+        "zotero_library_type": {
+          "type": "string"
+        },
+        "zotero_user_id": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -1294,6 +1315,9 @@
         "request_rule": {
           "type": "boolean"
         },
+        "research": {
+          "type": "boolean"
+        },
         "responses_websockets": {
           "type": "boolean"
         },
@@ -1555,6 +1579,15 @@
         "$ref": "#/definitions/ProjectConfig"
       },
       "type": "object"
+    },
+    "research": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ResearchToolsToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional non-secret research tool settings."
     },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",

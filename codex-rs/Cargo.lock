@@ -1541,6 +1541,7 @@ dependencies = [
  "codex-keyring-store",
  "codex-otel",
  "codex-protocol",
+ "codex-research-tools",
  "codex-rmcp-client",
  "codex-state",
  "codex-utils-absolute-path",
@@ -2000,6 +2001,7 @@ dependencies = [
  "tracing",
  "urlencoding",
  "walkdir",
+ "wiremock",
 ]
 
 [[package]]

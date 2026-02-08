@@ -178,6 +178,7 @@ use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WarningEvent;
+use crate::research::SharedResearchToolkit;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
@@ -269,6 +270,7 @@ impl Codex {
         session_source: SessionSource,
         agent_control: AgentControl,
         dynamic_tools: Vec<DynamicToolSpec>,
+        research_toolkit: Option<Arc<SharedResearchToolkit>>,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -405,6 +407,7 @@ impl Codex {
             skills_manager,
             file_watcher,
             agent_control,
+            research_toolkit,
         )
         .instrument(session_init_span)
         .await
@@ -869,6 +872,7 @@ impl Session {
         skills_manager: Arc<SkillsManager>,
         file_watcher: Arc<FileWatcher>,
         agent_control: AgentControl,
+        research_toolkit: Option<Arc<SharedResearchToolkit>>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -1075,6 +1079,7 @@ impl Session {
             auth_manager: Arc::clone(&auth_manager),
             otel_manager,
             models_manager: Arc::clone(&models_manager),
+            research_toolkit,
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             file_watcher,
@@ -4106,7 +4111,7 @@ async fn run_sampling_request(
     if let Some(connectors) = connectors_for_tools.as_ref() {
         mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, connectors);
     }
-    let router = Arc::new(ToolRouter::from_config(
+    let router = Arc::new(ToolRouter::from_config_with_research(
         &turn_context.tools_config,
         Some(
             mcp_tools
@@ -4115,6 +4120,7 @@ async fn run_sampling_request(
                 .collect(),
         ),
         turn_context.dynamic_tools.as_slice(),
+        sess.services.research_toolkit.as_ref(),
     ));
 
     let model_supports_parallel = turn_context.model_info.supports_parallel_tool_calls;
@@ -5921,6 +5927,7 @@ mod tests {
             auth_manager: auth_manager.clone(),
             otel_manager: otel_manager.clone(),
             models_manager: Arc::clone(&models_manager),
+            research_toolkit: None,
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             file_watcher,
@@ -6055,6 +6062,7 @@ mod tests {
             auth_manager: Arc::clone(&auth_manager),
             otel_manager: otel_manager.clone(),
             models_manager: Arc::clone(&models_manager),
+            research_toolkit: None,
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             file_watcher,
