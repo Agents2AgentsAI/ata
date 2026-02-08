@@ -2061,7 +2061,6 @@ mod tests {
         assert_eq!(args.max_agents, 7);
         assert_eq!(args.framework, "jax");
         assert!(args.generate_code);
-        assert_eq!(args.max_agents, 4);
         assert_eq!(args.output_path, PathBuf::from("./results"));
         assert_eq!(args.codebase_path, Some(PathBuf::from("./repo")));
         assert_eq!(args.iteration_number, 2);
@@ -2081,6 +2080,7 @@ mod tests {
         };
 
         assert!(args.generate_code);
+        assert_eq!(args.max_agents, 4);
     }
 
     #[test]
