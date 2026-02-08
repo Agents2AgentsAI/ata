@@ -347,7 +347,14 @@ impl ResponseCache {
 
     pub async fn is_negative(&self, key: &CacheKey) -> Option<bool> {
         let mut cache = self.inner.lock().await;
-        cache.get(key).map(|entry| entry.is_negative)
+        if let Some(entry) = cache.get(key)
+            && entry.inserted_at.elapsed() < entry.ttl
+        {
+            return Some(entry.is_negative);
+        }
+
+        cache.pop(key);
+        None
     }
 }
 
@@ -624,6 +631,29 @@ mod tests {
             .await;
 
         assert_eq!(cache.is_negative(&key).await, Some(true));
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn expired_negative_entries_are_not_reported_as_negative() -> Result<()> {
+        let cache = ResponseCache::new(8);
+        let key = CacheKey {
+            tool_name: "paper_get",
+            params_hash: 100,
+        };
+
+        cache
+            .insert(
+                key.clone(),
+                json!({"error": "not_found"}),
+                Duration::from_millis(20),
+                true,
+            )
+            .await;
+
+        assert_eq!(cache.is_negative(&key).await, Some(true));
+        tokio::time::sleep(Duration::from_millis(35)).await;
+        assert_eq!(cache.is_negative(&key).await, None);
         Ok(())
     }
 

@@ -198,17 +198,23 @@ fn parse_retry_after(headers: &header::HeaderMap) -> Option<Duration> {
     parse_retry_after_value(raw)
 }
 
+const MIN_RETRY_AFTER_DELAY: Duration = Duration::from_millis(100);
+
 fn parse_retry_after_value(raw: &str) -> Option<Duration> {
     if let Ok(seconds) = raw.parse::<u64>() {
-        return Some(Duration::from_secs(seconds));
+        let delay = Duration::from_secs(seconds);
+        return Some(delay.max(MIN_RETRY_AFTER_DELAY));
     }
 
     let retry_at = DateTime::parse_from_rfc2822(raw).ok()?.with_timezone(&Utc);
     let delay = retry_at.signed_duration_since(Utc::now());
     if delay <= chrono::Duration::zero() {
-        Some(Duration::from_secs(0))
+        Some(MIN_RETRY_AFTER_DELAY)
     } else {
-        delay.to_std().ok()
+        delay
+            .to_std()
+            .ok()
+            .map(|value| value.max(MIN_RETRY_AFTER_DELAY))
     }
 }
 
@@ -261,12 +267,31 @@ mod tests {
     }
 
     #[test]
+    fn parse_retry_after_value_enforces_floor_for_zero_seconds() {
+        assert_eq!(
+            parse_retry_after_value("0"),
+            Some(Duration::from_millis(100))
+        );
+    }
+
+    #[test]
     fn parse_retry_after_value_accepts_http_date() {
         let header_value = (Utc::now() + chrono::Duration::seconds(2))
             .format("%a, %d %b %Y %H:%M:%S GMT")
             .to_string();
         let delay = parse_retry_after_value(&header_value).expect("valid retry-after date");
         assert!(delay <= Duration::from_secs(3));
+    }
+
+    #[test]
+    fn parse_retry_after_value_enforces_floor_for_past_http_date() {
+        let header_value = (Utc::now() - chrono::Duration::seconds(5))
+            .format("%a, %d %b %Y %H:%M:%S GMT")
+            .to_string();
+        assert_eq!(
+            parse_retry_after_value(&header_value),
+            Some(Duration::from_millis(100))
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

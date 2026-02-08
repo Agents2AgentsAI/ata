@@ -121,55 +121,26 @@ fn looks_like_openalex(value: &str) -> bool {
     (first == 'W' || first == 'w') && chars.all(|ch| ch.is_ascii_digit())
 }
 
-fn normalize_optional_doi(value: &mut Option<String>) {
-    if let Some(doi) = value {
-        let normalized = normalize_doi(doi);
-        if normalized.is_empty() {
-            *value = None;
-        } else {
-            *value = Some(normalized);
-        }
-    }
+fn normalize_trimmed(value: &str) -> String {
+    value.trim().to_string()
 }
 
-fn normalize_optional_arxiv(value: &mut Option<String>) {
-    if let Some(arxiv_id) = value {
-        let normalized = normalize_arxiv(arxiv_id);
-        if normalized.trim().is_empty() {
-            *value = None;
-        } else {
-            *value = Some(normalized);
-        }
-    }
-}
-
-fn normalize_optional_openalex(value: &mut Option<String>) {
-    if let Some(openalex_id) = value {
-        let normalized = normalize_openalex(openalex_id);
-        if normalized.trim().is_empty() {
-            *value = None;
-        } else {
-            *value = Some(normalized);
-        }
-    }
-}
-
-fn normalize_optional_trimmed(value: &mut Option<String>) {
+fn normalize_optional(value: &mut Option<String>, normalizer: fn(&str) -> String) {
     if let Some(raw) = value {
-        let trimmed = raw.trim().to_string();
-        if trimmed.is_empty() {
+        let normalized = normalizer(raw);
+        if normalized.trim().is_empty() {
             *value = None;
         } else {
-            *value = Some(trimmed);
+            *value = Some(normalized);
         }
     }
 }
 
 pub(crate) fn normalize_paper_identifiers(paper: &mut Paper) {
-    normalize_optional_doi(&mut paper.doi);
-    normalize_optional_arxiv(&mut paper.arxiv_id);
-    normalize_optional_trimmed(&mut paper.s2_paper_id);
-    normalize_optional_openalex(&mut paper.openalex_id);
+    normalize_optional(&mut paper.doi, normalize_doi);
+    normalize_optional(&mut paper.arxiv_id, normalize_arxiv);
+    normalize_optional(&mut paper.s2_paper_id, normalize_trimmed);
+    normalize_optional(&mut paper.openalex_id, normalize_openalex);
 }
 
 #[derive(Debug, Default, Clone)]
@@ -214,11 +185,19 @@ impl PaperIdResolver {
         let mut key_to_index: HashMap<String, usize> = HashMap::new();
         let mut deduped: Vec<Paper> = Vec::new();
 
-        for mut paper in papers {
+        for (paper_index, mut paper) in papers.into_iter().enumerate() {
             normalize_paper_identifiers(&mut paper);
-            let key = self
-                .canonical_id_for_paper(&paper)
-                .map_or_else(|| paper.title.to_lowercase(), |id| id.to_string());
+            let key = self.canonical_id_for_paper(&paper).map_or_else(
+                || {
+                    let title_key = paper.title.trim().to_ascii_lowercase();
+                    if title_key.is_empty() {
+                        format!("untitled:{paper_index}")
+                    } else {
+                        title_key
+                    }
+                },
+                |id| id.to_string(),
+            );
 
             if let Some(existing_index) = key_to_index.get(&key).copied() {
                 if let Some(existing) = deduped.get_mut(existing_index) {
@@ -415,6 +394,18 @@ mod tests {
             .map(|paper| paper.title.as_str())
             .collect::<Vec<_>>();
         assert_eq!(titles, vec!["First", "Second"]);
+    }
+
+    #[test]
+    fn dedup_does_not_collapse_distinct_records_without_id_or_title() {
+        let resolver = PaperIdResolver;
+        let papers = vec![
+            make_paper("", None, None, None, None, Some(1)),
+            make_paper(" ", None, None, None, None, Some(2)),
+        ];
+
+        let deduped = resolver.dedup_papers(papers);
+        assert_eq!(deduped.len(), 2);
     }
 
     fn make_paper(

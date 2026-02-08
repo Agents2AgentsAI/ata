@@ -8,6 +8,7 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_research_tools::config::ResearchConfig;
 use codex_research_tools::error::ResearchError;
 use codex_research_tools::types::PaginationParams;
+use codex_research_tools::types::PaperSearchParams;
 use codex_research_tools::types::ZoteroCollectionItemsParams;
 use codex_research_tools::types::ZoteroCollectionsParams;
 use codex_research_tools::types::ZoteroItemParams;
@@ -69,223 +70,118 @@ impl ResearchBridgeHandler {
         tool_name: &str,
         arguments: &str,
     ) -> Result<ToolOutput, FunctionCallError> {
+        macro_rules! dispatch_with_params {
+            ($params_ty:ty, |$params:ident| $tool_call:expr) => {{
+                let $params: $params_ty = parse_arguments(arguments)?;
+                let output = $tool_call.await.map_err(map_research_error)?;
+                serialize_tool_output(&output)
+            }};
+        }
+
         match tool_name {
-            "paper_search" => {
-                let params = parse_arguments(arguments)?;
-                let output = self
-                    .toolkit
-                    .paper_search(params)
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
-            }
-            "paper_get" => {
-                let params: PaperIdArgs = parse_arguments(arguments)?;
-                let output = self
-                    .toolkit
-                    .paper_get(params.paper_id.as_str())
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
-            }
+            "paper_search" => dispatch_with_params!(PaperSearchParams, |params| self
+                .toolkit
+                .paper_search(params)),
+            "paper_get" => dispatch_with_params!(PaperIdArgs, |params| self
+                .toolkit
+                .paper_get(params.paper_id.as_str())),
             "paper_citations" => {
-                let params: PaperPaginationArgs = parse_arguments(arguments)?;
-                let output = self
-                    .toolkit
-                    .paper_citations(
-                        params.paper_id.as_str(),
-                        PaginationParams {
-                            offset: params.offset,
-                            limit: params.limit,
-                            fields: params.fields,
-                            max_chars_per_item: params.max_chars_per_item,
-                        },
-                    )
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
+                dispatch_with_params!(PaperPaginationArgs, |params| self.toolkit.paper_citations(
+                    params.paper_id.as_str(),
+                    PaginationParams {
+                        offset: params.offset,
+                        limit: params.limit,
+                        fields: params.fields,
+                        max_chars_per_item: params.max_chars_per_item,
+                    },
+                ))
             }
             "paper_references" => {
-                let params: PaperPaginationArgs = parse_arguments(arguments)?;
-                let output = self
-                    .toolkit
-                    .paper_references(
-                        params.paper_id.as_str(),
-                        PaginationParams {
-                            offset: params.offset,
-                            limit: params.limit,
-                            fields: params.fields,
-                            max_chars_per_item: params.max_chars_per_item,
-                        },
-                    )
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
+                dispatch_with_params!(PaperPaginationArgs, |params| self.toolkit.paper_references(
+                    params.paper_id.as_str(),
+                    PaginationParams {
+                        offset: params.offset,
+                        limit: params.limit,
+                        fields: params.fields,
+                        max_chars_per_item: params.max_chars_per_item,
+                    },
+                ))
             }
-            "zotero_search" => {
-                let params: ZoteroSearchParams = parse_arguments(arguments)?;
-                let output = self
-                    .toolkit
-                    .zotero_search(params)
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
-            }
-            "zotero_get_item" => {
-                let params: ZoteroItemParams = parse_arguments(arguments)?;
-                let output = self
-                    .toolkit
-                    .zotero_get_item(params)
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
-            }
-            "zotero_get_fulltext" => {
-                let params: ZoteroItemParams = parse_arguments(arguments)?;
-                let output = self
-                    .toolkit
-                    .zotero_get_fulltext(params)
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
-            }
-            "zotero_get_notes" => {
-                let params: ZoteroItemParams = parse_arguments(arguments)?;
-                let output = self
-                    .toolkit
-                    .zotero_get_notes(params)
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
-            }
-            "zotero_get_attachments" => {
-                let params: ZoteroItemParams = parse_arguments(arguments)?;
-                let output = self
-                    .toolkit
-                    .zotero_get_attachments(params)
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
-            }
-            "zotero_search_by_tag" => {
-                let params: ZoteroTagSearchParams = parse_arguments(arguments)?;
-                let output = self
-                    .toolkit
-                    .zotero_search_by_tag(params)
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
-            }
+            "zotero_search" => dispatch_with_params!(ZoteroSearchParams, |params| self
+                .toolkit
+                .zotero_search(params)),
+            "zotero_get_item" => dispatch_with_params!(ZoteroItemParams, |params| self
+                .toolkit
+                .zotero_get_item(params)),
+            "zotero_get_fulltext" => dispatch_with_params!(ZoteroItemParams, |params| self
+                .toolkit
+                .zotero_get_fulltext(params)),
+            "zotero_get_notes" => dispatch_with_params!(ZoteroItemParams, |params| self
+                .toolkit
+                .zotero_get_notes(params)),
+            "zotero_get_attachments" => dispatch_with_params!(ZoteroItemParams, |params| self
+                .toolkit
+                .zotero_get_attachments(params)),
+            "zotero_search_by_tag" => dispatch_with_params!(ZoteroTagSearchParams, |params| self
+                .toolkit
+                .zotero_search_by_tag(params)),
             "zotero_get_collections" => {
-                let params: ZoteroCollectionsParams = parse_arguments(arguments)?;
-                let output = self
+                dispatch_with_params!(ZoteroCollectionsParams, |params| self
                     .toolkit
-                    .zotero_get_collections(params)
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
+                    .zotero_get_collections(params))
             }
             "zotero_get_collection_items" => {
-                let params: ZoteroCollectionItemsParams = parse_arguments(arguments)?;
-                let output = self
+                dispatch_with_params!(ZoteroCollectionItemsParams, |params| self
                     .toolkit
-                    .zotero_get_collection_items(params)
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
+                    .zotero_get_collection_items(params))
             }
             #[cfg(feature = "research-repo")]
-            "repo_clone_and_summarize" => {
-                let params: RepoCloneArgs = parse_arguments(arguments)?;
-                let output = self
-                    .toolkit
-                    .repo_clone_and_summarize(params.repo_url.as_str(), params.branch.as_deref())
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
-            }
+            "repo_clone_and_summarize" => dispatch_with_params!(RepoCloneArgs, |params| self
+                .toolkit
+                .repo_clone_and_summarize(params.repo_url.as_str(), params.branch.as_deref())),
             #[cfg(feature = "research-repo")]
-            "repo_find_models" => {
-                let params: RepoFindModelsArgs = parse_arguments(arguments)?;
-                let output = self
-                    .toolkit
-                    .repo_find_models(params.repo_url.as_str(), params.framework.as_deref())
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
-            }
+            "repo_find_models" => dispatch_with_params!(RepoFindModelsArgs, |params| self
+                .toolkit
+                .repo_find_models(params.repo_url.as_str(), params.framework.as_deref())),
             #[cfg(feature = "research-repo")]
-            "repo_extract_requirements" => {
-                let params: RepoUrlArgs = parse_arguments(arguments)?;
-                let output = self
-                    .toolkit
-                    .repo_extract_requirements(params.repo_url.as_str())
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
-            }
+            "repo_extract_requirements" => dispatch_with_params!(RepoUrlArgs, |params| self
+                .toolkit
+                .repo_extract_requirements(params.repo_url.as_str())),
             #[cfg(feature = "research-repo")]
             "repo_find_entrypoints" => {
-                let params: RepoFindEntrypointsArgs = parse_arguments(arguments)?;
-                let output = self
+                dispatch_with_params!(RepoFindEntrypointsArgs, |params| self
                     .toolkit
-                    .repo_find_entrypoints(params.repo_url.as_str(), params.task_hint.as_deref())
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
+                    .repo_find_entrypoints(params.repo_url.as_str(), params.task_hint.as_deref()))
             }
             #[cfg(feature = "research-repo")]
             "repo_extract_io_shapes" => {
-                let params: RepoExtractIoShapesArgs = parse_arguments(arguments)?;
-                let output = self
+                dispatch_with_params!(RepoExtractIoShapesArgs, |params| self
                     .toolkit
-                    .repo_extract_io_shapes(params.repo_url.as_str(), params.model_class.as_deref())
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
+                    .repo_extract_io_shapes(
+                        params.repo_url.as_str(),
+                        params.model_class.as_deref()
+                    ))
             }
             #[cfg(feature = "research-repo")]
-            "repo_get_health" => {
-                let params: RepoUrlArgs = parse_arguments(arguments)?;
-                let output = self
-                    .toolkit
-                    .repo_get_health(params.repo_url.as_str())
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
-            }
+            "repo_get_health" => dispatch_with_params!(RepoUrlArgs, |params| self
+                .toolkit
+                .repo_get_health(params.repo_url.as_str())),
             #[cfg(feature = "research-repo")]
-            "repo_find_export_paths" => {
-                let params: RepoUrlArgs = parse_arguments(arguments)?;
-                let output = self
-                    .toolkit
-                    .repo_find_export_paths(params.repo_url.as_str())
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
-            }
+            "repo_find_export_paths" => dispatch_with_params!(RepoUrlArgs, |params| self
+                .toolkit
+                .repo_find_export_paths(params.repo_url.as_str())),
             #[cfg(feature = "research-repo")]
-            "repo_extract_config_schema" => {
-                let params: RepoUrlArgs = parse_arguments(arguments)?;
-                let output = self
-                    .toolkit
-                    .repo_extract_config_schema(params.repo_url.as_str())
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
-            }
+            "repo_extract_config_schema" => dispatch_with_params!(RepoUrlArgs, |params| self
+                .toolkit
+                .repo_extract_config_schema(params.repo_url.as_str())),
             #[cfg(feature = "research-repo")]
             "repo_diff_requirements" => {
-                let params: RepoDiffRequirementsArgs = parse_arguments(arguments)?;
-                let output = self
+                dispatch_with_params!(RepoDiffRequirementsArgs, |params| self
                     .toolkit
                     .repo_diff_requirements(
                         params.repo_url.as_str(),
                         params.local_requirements_path.as_str(),
-                    )
-                    .await
-                    .map_err(map_research_error)?;
-                serialize_tool_output(&output)
+                    ))
             }
             _ => Err(FunctionCallError::RespondToModel(format!(
                 "unknown research tool: {tool_name}"
