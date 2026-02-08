@@ -1,3 +1,7 @@
+use std::path::Path;
+
+use crate::config::ResearchToolsToml;
+
 #[cfg(feature = "research")]
 use rmcp::model::Tool;
 #[cfg(feature = "research")]
@@ -8,6 +12,12 @@ pub struct ResearchToolAvailability {
     pub has_paper_search: bool,
     pub has_zotero: bool,
     pub has_repo_analysis: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResearchToolContext {
+    pub names: ResearchToolNames,
+    pub availability: ResearchToolAvailability,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,6 +164,54 @@ pub fn native_tool_availability() -> ResearchToolAvailability {
     #[cfg(not(feature = "research"))]
     {
         ResearchToolAvailability::default()
+    }
+}
+
+#[must_use]
+pub fn configured_native_tool_context(
+    research_toml: Option<&ResearchToolsToml>,
+    codex_home: &Path,
+    cwd: &Path,
+) -> ResearchToolContext {
+    #[cfg(feature = "research")]
+    {
+        let defs = codex_research_tools::tool_specs::all_tool_defs();
+        let research_config =
+            crate::tools::handlers::research::build_research_config(research_toml, codex_home, cwd);
+        let toolkit =
+            codex_research_tools::ResearchToolkit::new(reqwest::Client::new(), research_config);
+
+        let mut names = ResearchToolNames::default();
+        let mut availability = ResearchToolAvailability::default();
+
+        for def in defs {
+            if !toolkit.is_tool_configured(def.id) {
+                continue;
+            }
+
+            names.set_name_for_id(def.id, def.native_name.to_string());
+            match def.id {
+                "paper_search" => availability.has_paper_search = true,
+                "zotero_search" => availability.has_zotero = true,
+                "repo_find_entrypoints" => availability.has_repo_analysis = true,
+                _ => {}
+            }
+        }
+
+        ResearchToolContext {
+            names,
+            availability,
+        }
+    }
+    #[cfg(not(feature = "research"))]
+    {
+        let _ = research_toml;
+        let _ = codex_home;
+        let _ = cwd;
+        ResearchToolContext {
+            names: ResearchToolNames::from_available_native(),
+            availability: native_tool_availability(),
+        }
     }
 }
 
