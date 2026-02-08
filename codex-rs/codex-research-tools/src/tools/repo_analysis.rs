@@ -30,6 +30,7 @@ use crate::error::ResearchError;
 use crate::error::Result;
 use crate::rate_limiter::ResearchApi;
 use crate::text_utils::truncate_chars;
+use crate::tools::cache_helpers::get_or_fetch_typed;
 use crate::tools::cache_helpers::hash_cache_payload;
 use crate::types::ConfigParam;
 use crate::types::ConfigSchema;
@@ -187,15 +188,35 @@ fn repo_cache_dir() -> PathBuf {
 }
 
 pub(crate) async fn repo_clone_and_summarize(
-    _toolkit: &ResearchToolkit,
+    toolkit: &ResearchToolkit,
     repo_url: &str,
     branch: Option<&str>,
 ) -> Result<RepoSummary> {
     let repo_ref = parse_repo_ref(repo_url, branch)?;
-    let checkout = ensure_cloned(&repo_ref).await?;
-    let repo_url = repo_url.to_string();
+    let cache_key = repo_tool_cache_key(
+        "repo_clone_and_summarize",
+        &repo_ref.normalized_id(),
+        &repo_ref.branch,
+    )?;
+    let requested_repo_url = repo_url.to_string();
+    let summary_repo_url = requested_repo_url.clone();
 
-    run_blocking(move || build_repo_summary(repo_url, checkout.path, checkout.commit_sha)).await
+    let mut summary = get_or_fetch_typed(
+        toolkit,
+        cache_key,
+        toolkit.config().cache_ttls.repo_analysis,
+        || async move {
+            let checkout = ensure_cloned(&repo_ref).await?;
+            run_blocking(move || {
+                build_repo_summary(summary_repo_url, checkout.path, checkout.commit_sha)
+            })
+            .await
+        },
+    )
+    .await?;
+
+    summary.url = requested_repo_url;
+    Ok(summary)
 }
 
 pub(crate) async fn repo_find_models(
@@ -213,59 +234,62 @@ pub(crate) async fn repo_find_models(
         },
     )?;
 
-    toolkit
-        .cache()
-        .get_or_fetch(
-            cache_key,
-            toolkit.config().cache_ttls.repo_health,
-            || async move {
-                let checkout = ensure_cloned(&repo_ref).await?;
-                let models = run_blocking(move || {
-                    find_model_definitions(checkout.path.as_path(), framework.as_deref())
-                })
-                .await?;
-                serde_json::to_value(models).map_err(|err| {
-                    ResearchError::Internal(format!("failed to serialize model definitions: {err}"))
-                })
-            },
-        )
-        .await
-        .and_then(|value| {
-            serde_json::from_value(value).map_err(|err| {
-                ResearchError::Internal(format!(
-                    "failed to deserialize cached model definitions: {err}"
-                ))
+    get_or_fetch_typed(
+        toolkit,
+        cache_key,
+        toolkit.config().cache_ttls.repo_analysis,
+        || async move {
+            let checkout = ensure_cloned(&repo_ref).await?;
+            run_blocking(move || {
+                find_model_definitions(checkout.path.as_path(), framework.as_deref())
             })
-        })
+            .await
+        },
+    )
+    .await
 }
 
 pub(crate) async fn repo_extract_requirements(
-    _toolkit: &ResearchToolkit,
+    toolkit: &ResearchToolkit,
     repo_url: &str,
 ) -> Result<RepoRequirements> {
     let repo_ref = parse_repo_ref(repo_url, None)?;
-    let checkout = ensure_cloned(&repo_ref).await?;
-    let repo_url = repo_url.to_string();
+    let cache_key =
+        repo_tool_cache_key("repo_extract_requirements", &repo_ref.normalized_id(), &())?;
+    let requested_repo_url = repo_url.to_string();
+    let requirements_repo_url = requested_repo_url.clone();
 
-    run_blocking(move || {
-        let dependencies = extract_requirements_map(checkout.path.as_path())?;
-        let mut rendered_dependencies = dependencies
-            .iter()
-            .map(|(name, constraint)| format_dependency(name, constraint))
-            .collect::<Vec<_>>();
-        rendered_dependencies.sort();
-        rendered_dependencies.truncate(MAX_REQUIREMENTS_RETURNED);
+    let mut requirements = get_or_fetch_typed(
+        toolkit,
+        cache_key,
+        toolkit.config().cache_ttls.repo_analysis,
+        || async move {
+            let checkout = ensure_cloned(&repo_ref).await?;
+            run_blocking(move || {
+                let dependencies = extract_requirements_map(checkout.path.as_path())?;
+                let mut rendered_dependencies = dependencies
+                    .iter()
+                    .map(|(name, constraint)| format_dependency(name, constraint))
+                    .collect::<Vec<_>>();
+                rendered_dependencies.sort();
+                rendered_dependencies.truncate(MAX_REQUIREMENTS_RETURNED);
 
-        let mut source_files = collect_requirement_source_files(checkout.path.as_path())?;
-        source_files.sort();
+                let mut source_files = collect_requirement_source_files(checkout.path.as_path())?;
+                source_files.sort();
 
-        Ok(RepoRequirements {
-            repo_url,
-            dependencies: rendered_dependencies,
-            source_files,
-        })
-    })
-    .await
+                Ok(RepoRequirements {
+                    repo_url: requirements_repo_url,
+                    dependencies: rendered_dependencies,
+                    source_files,
+                })
+            })
+            .await
+        },
+    )
+    .await?;
+
+    requirements.repo_url = requested_repo_url;
+    Ok(requirements)
 }
 
 pub(crate) async fn repo_find_entrypoints(
@@ -283,28 +307,16 @@ pub(crate) async fn repo_find_entrypoints(
         },
     )?;
 
-    toolkit
-        .cache()
-        .get_or_fetch(
-            cache_key,
-            toolkit.config().cache_ttls.repo_health,
-            || async move {
-                let checkout = ensure_cloned(&repo_ref).await?;
-                let entrypoints = run_blocking(move || {
-                    find_entrypoints(checkout.path.as_path(), hint.as_deref())
-                })
-                .await?;
-                serde_json::to_value(entrypoints).map_err(|err| {
-                    ResearchError::Internal(format!("failed to serialize entrypoints: {err}"))
-                })
-            },
-        )
-        .await
-        .and_then(|value| {
-            serde_json::from_value(value).map_err(|err| {
-                ResearchError::Internal(format!("failed to deserialize cached entrypoints: {err}"))
-            })
-        })
+    get_or_fetch_typed(
+        toolkit,
+        cache_key,
+        toolkit.config().cache_ttls.repo_analysis,
+        || async move {
+            let checkout = ensure_cloned(&repo_ref).await?;
+            run_blocking(move || find_entrypoints(checkout.path.as_path(), hint.as_deref())).await
+        },
+    )
+    .await
 }
 
 pub(crate) async fn repo_extract_io_shapes(
@@ -325,30 +337,17 @@ pub(crate) async fn repo_extract_io_shapes(
         },
     )?;
 
-    toolkit
-        .cache()
-        .get_or_fetch(
-            cache_key,
-            toolkit.config().cache_ttls.repo_health,
-            || async move {
-                let checkout = ensure_cloned(&repo_ref).await?;
-                let io_shapes = run_blocking(move || {
-                    find_io_shapes(checkout.path.as_path(), model_class.as_deref())
-                })
-                .await?;
-                serde_json::to_value(io_shapes).map_err(|err| {
-                    ResearchError::Internal(format!("failed to serialize io shape data: {err}"))
-                })
-            },
-        )
-        .await
-        .and_then(|value| {
-            serde_json::from_value(value).map_err(|err| {
-                ResearchError::Internal(format!(
-                    "failed to deserialize cached io shape data: {err}"
-                ))
-            })
-        })
+    get_or_fetch_typed(
+        toolkit,
+        cache_key,
+        toolkit.config().cache_ttls.repo_analysis,
+        || async move {
+            let checkout = ensure_cloned(&repo_ref).await?;
+            run_blocking(move || find_io_shapes(checkout.path.as_path(), model_class.as_deref()))
+                .await
+        },
+    )
+    .await
 }
 
 pub(crate) async fn repo_get_health(
@@ -395,26 +394,16 @@ pub(crate) async fn repo_find_export_paths(
     let repo_ref = parse_repo_ref(repo_url, None)?;
     let cache_key = repo_tool_cache_key("repo_find_export_paths", &repo_ref.normalized_id(), &())?;
 
-    toolkit
-        .cache()
-        .get_or_fetch(
-            cache_key,
-            toolkit.config().cache_ttls.repo_health,
-            || async move {
-                let checkout = ensure_cloned(&repo_ref).await?;
-                let exports =
-                    run_blocking(move || find_export_paths(checkout.path.as_path())).await?;
-                serde_json::to_value(exports).map_err(|err| {
-                    ResearchError::Internal(format!("failed to serialize export paths: {err}"))
-                })
-            },
-        )
-        .await
-        .and_then(|value| {
-            serde_json::from_value(value).map_err(|err| {
-                ResearchError::Internal(format!("failed to deserialize cached export paths: {err}"))
-            })
-        })
+    get_or_fetch_typed(
+        toolkit,
+        cache_key,
+        toolkit.config().cache_ttls.repo_analysis,
+        || async move {
+            let checkout = ensure_cloned(&repo_ref).await?;
+            run_blocking(move || find_export_paths(checkout.path.as_path())).await
+        },
+    )
+    .await
 }
 
 pub(crate) async fn repo_extract_config_schema(
@@ -425,30 +414,16 @@ pub(crate) async fn repo_extract_config_schema(
     let cache_key =
         repo_tool_cache_key("repo_extract_config_schema", &repo_ref.normalized_id(), &())?;
 
-    toolkit
-        .cache()
-        .get_or_fetch(
-            cache_key,
-            toolkit.config().cache_ttls.repo_health,
-            || async move {
-                let checkout = ensure_cloned(&repo_ref).await?;
-                let schemas =
-                    run_blocking(move || extract_config_schemas(checkout.path.as_path())).await?;
-                serde_json::to_value(schemas).map_err(|err| {
-                    ResearchError::Internal(format!(
-                        "failed to serialize config schema output: {err}"
-                    ))
-                })
-            },
-        )
-        .await
-        .and_then(|value| {
-            serde_json::from_value(value).map_err(|err| {
-                ResearchError::Internal(format!(
-                    "failed to deserialize cached config schema output: {err}"
-                ))
-            })
-        })
+    get_or_fetch_typed(
+        toolkit,
+        cache_key,
+        toolkit.config().cache_ttls.repo_analysis,
+        || async move {
+            let checkout = ensure_cloned(&repo_ref).await?;
+            run_blocking(move || extract_config_schemas(checkout.path.as_path())).await
+        },
+    )
+    .await
 }
 
 pub(crate) async fn repo_diff_requirements(
@@ -1015,6 +990,10 @@ fn find_model_definitions(
         r"class\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*(?:tf\.keras\.Model|keras\.Model)[^)]*\)",
     )
     .map_err(|err| ResearchError::Internal(format!("failed to compile tensorflow regex: {err}")))?;
+    let jax_re = Regex::new(
+        r"class\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*(?:flax\.linen\.Module|flax\.nnx\.Module|equinox\.Module|eqx\.Module)[^)]*\)",
+    )
+    .map_err(|err| ResearchError::Internal(format!("failed to compile jax regex: {err}")))?;
 
     let mut definitions = Vec::new();
     for file in files {
@@ -1023,10 +1002,11 @@ fn find_model_definitions(
             let captures = match framework {
                 Some("pytorch") => pytorch_re.captures(line),
                 Some("tensorflow") => tensorflow_re.captures(line),
-                Some("jax") => pytorch_re.captures(line),
+                Some("jax") => jax_re.captures(line),
                 None => pytorch_re
                     .captures(line)
-                    .or_else(|| tensorflow_re.captures(line)),
+                    .or_else(|| tensorflow_re.captures(line))
+                    .or_else(|| jax_re.captures(line)),
                 Some(other) => {
                     return Err(ResearchError::InvalidInput(format!(
                         "unsupported framework '{other}'; expected one of pytorch|tensorflow|jax"
@@ -2286,6 +2266,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::time::Duration;
 
     use pretty_assertions::assert_eq;
@@ -2303,6 +2284,7 @@ mod tests {
     use crate::error::ResearchError;
     use crate::tools::test_helpers::build_test_toolkit_with_config;
 
+    use super::find_model_definitions;
     use super::parse_repo_ref;
     use super::parse_requirements_txt;
     use super::versions_compatible;
@@ -2369,6 +2351,33 @@ mod tests {
         assert!(!versions_compatible("==1.2.3", "==1.2.4"));
         assert!(versions_compatible(">=1.2.3", "==1.5.0"));
         assert!(!versions_compatible(">=2.0.0", "==1.9.9"));
+    }
+
+    #[test]
+    fn find_model_definitions_supports_jax_framework() {
+        let repo_dir = std::env::temp_dir().join(format!(
+            "codex-research-tools-jax-{}",
+            rand::random::<u64>()
+        ));
+        fs::create_dir_all(&repo_dir).expect("create repo dir");
+        fs::write(
+            repo_dir.join("jax_model.py"),
+            "import flax\n\nclass FlaxModel(flax.linen.Module):\n    pass\n",
+        )
+        .expect("write jax model file");
+        fs::write(
+            repo_dir.join("torch_model.py"),
+            "import torch.nn as nn\n\nclass TorchModel(nn.Module):\n    pass\n",
+        )
+        .expect("write torch model file");
+
+        let models = find_model_definitions(repo_dir.as_path(), Some("jax"))
+            .expect("jax model detection should succeed");
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].class_name, "FlaxModel".to_string());
+
+        let _ = fs::remove_dir_all(&repo_dir);
     }
 
     #[tokio::test(flavor = "multi_thread")]

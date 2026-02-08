@@ -1543,6 +1543,7 @@ dependencies = [
  "codex-protocol",
  "codex-research-tools",
  "codex-rmcp-client",
+ "codex-secrets",
  "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",

@@ -475,7 +475,11 @@ impl ThreadManagerState {
                 Some(
                     self.research_toolkit
                         .get_or_init(|| async {
-                            let research_config = build_research_config(config.research.as_ref());
+                            let research_config = build_research_config(
+                                config.research.as_ref(),
+                                config.codex_home.as_path(),
+                                config.cwd.as_path(),
+                            );
                             Arc::new(codex_research_tools::ResearchToolkit::new(
                                 build_reqwest_client(),
                                 research_config,

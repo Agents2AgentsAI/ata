@@ -127,20 +127,20 @@ pub(crate) async fn paper_search(
     let mut deduped = toolkit.paper_ids().dedup_papers(aggregation.all_papers);
     sort_papers(&mut deduped, normalized.sort_by);
 
-    apply_output_budget(
-        &mut deduped,
-        normalized.include_abstract,
-        normalized.max_chars_per_item,
-    );
-
     let offset = normalized.offset as usize;
     let limit = normalized.limit as usize;
     let total_deduped = deduped.len();
-    let papers = deduped
+    let mut papers = deduped
         .into_iter()
         .skip(offset)
         .take(limit)
         .collect::<Vec<_>>();
+
+    apply_output_budget(
+        &mut papers,
+        normalized.include_abstract,
+        normalized.max_chars_per_item,
+    );
 
     if offset + papers.len() < total_deduped {
         aggregation.has_more = true;
