@@ -327,11 +327,8 @@ pub(crate) fn build_research_config(
     let mut config = ResearchConfig::from_env();
     let secret_resolver = ResearchSecretResolver::new(codex_home, cwd);
 
-    apply_secret_overrides(&mut config, |name| {
-        std::env::var(name)
-            .ok()
-            .or_else(|| secret_resolver.resolve(name))
-    });
+    // `from_env()` already loaded environment values, so secret lookup only fills missing keys.
+    apply_secret_overrides(&mut config, |name| secret_resolver.resolve(name));
 
     if let Some(toml) = toml {
         if config.zotero_user_id.is_none() {
