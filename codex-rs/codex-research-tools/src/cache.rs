@@ -120,6 +120,10 @@ impl SharedError {
                 api: *api,
                 message: source.to_string(),
             },
+            ResearchError::HttpMessage { api, message } => Self::Http {
+                api: *api,
+                message: message.clone(),
+            },
             ResearchError::Upstream {
                 api,
                 status,
@@ -145,9 +149,7 @@ impl SharedError {
             Self::InvalidInput(message) => ResearchError::InvalidInput(message),
             Self::RateLimiterClosed { api } => ResearchError::RateLimiterClosed { api },
             Self::Timeout { api, timeout_ms } => ResearchError::Timeout { api, timeout_ms },
-            Self::Http { api, message } => {
-                ResearchError::Internal(format!("http request to {api} failed: {message}"))
-            }
+            Self::Http { api, message } => ResearchError::HttpMessage { api, message },
             Self::Upstream {
                 api,
                 status,
@@ -547,6 +549,59 @@ mod tests {
         }
 
         assert_eq!(cache.is_negative(&key).await, Some(true));
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn singleflight_followers_preserve_http_error_retryability() -> Result<()> {
+        let cache = Arc::new(ResponseCache::new(8));
+        let key = CacheKey {
+            tool_name: "paper_search",
+            params_hash: 212,
+        };
+        let fetch_count = Arc::new(AtomicUsize::new(0));
+
+        let handles = (0..6)
+            .map(|_| {
+                let cache = Arc::clone(&cache);
+                let key = key.clone();
+                let fetch_count = Arc::clone(&fetch_count);
+                tokio::spawn(async move {
+                    cache
+                        .get_or_fetch_with_meta(key, Duration::from_secs(60), || async move {
+                            fetch_count.fetch_add(1, Ordering::SeqCst);
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+
+                            let source = reqwest::Client::new()
+                                .get("http://127.0.0.1:9/singleflight-http-error")
+                                .send()
+                                .await
+                                .expect_err("request should fail");
+
+                            Err::<FetchOutput, ResearchError>(ResearchError::Http {
+                                api: ResearchApi::OpenAlex,
+                                source,
+                            })
+                        })
+                        .await
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for handle in handles {
+            match handle.await.map_err(|err| {
+                crate::error::ResearchError::Internal(format!("join error: {err}"))
+            })? {
+                Ok(output) => panic!("expected error, got output: {:?}", output.data),
+                Err(ResearchError::Http { api, .. })
+                | Err(ResearchError::HttpMessage { api, .. }) => {
+                    assert_eq!(api, ResearchApi::OpenAlex);
+                }
+                Err(other) => panic!("unexpected error variant: {other}"),
+            }
+        }
+
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
         Ok(())
     }

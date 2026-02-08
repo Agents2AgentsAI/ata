@@ -42,7 +42,6 @@ struct NormalizedPaperSearchParams {
     offset: u32,
     limit: u32,
     include_abstract: bool,
-    fields: Option<Vec<String>>,
     max_chars_per_item: Option<u32>,
 }
 
@@ -59,7 +58,6 @@ struct NormalizedPaginationParams {
     offset: u32,
     limit: u32,
     include_abstract: bool,
-    fields: Option<Vec<String>>,
     max_chars_per_item: Option<u32>,
 }
 
@@ -127,7 +125,11 @@ pub(crate) async fn paper_search(
     let mut deduped = toolkit.paper_ids().dedup_papers(aggregation.all_papers);
     sort_papers(&mut deduped, normalized.sort_by);
 
-    let offset = normalized.offset as usize;
+    let offset = if selected_sources.enabled_count() <= 1 {
+        0
+    } else {
+        normalized.offset as usize
+    };
     let limit = normalized.limit as usize;
     let total_deduped = deduped.len();
     let mut papers = deduped
@@ -195,7 +197,6 @@ pub(crate) async fn paper_get(toolkit: &ResearchToolkit, paper_id: &str) -> Resu
             offset: 0,
             limit: 5,
             include_abstract: false,
-            fields: None,
             max_chars_per_item: None,
         },
     )
@@ -255,12 +256,7 @@ fn normalize_paper_search_params(params: PaperSearchParams) -> Result<Normalized
         )));
     }
 
-    let mut fields = params.fields;
-    if let Some(fields_vec) = fields.as_mut() {
-        fields_vec.sort();
-    }
-
-    let include_abstract = should_include_abstract(params.include_abstract, fields.as_ref());
+    let include_abstract = should_include_abstract(params.include_abstract, params.fields.as_ref());
 
     Ok(NormalizedPaperSearchParams {
         query,
@@ -272,7 +268,6 @@ fn normalize_paper_search_params(params: PaperSearchParams) -> Result<Normalized
         offset: params.offset.unwrap_or(0),
         limit: params.limit.unwrap_or(20).clamp(1, 50),
         include_abstract,
-        fields,
         max_chars_per_item: params.max_chars_per_item,
     })
 }
@@ -328,18 +323,12 @@ fn normalize_pagination(
     params: PaginationParams,
     default_limit: u32,
 ) -> NormalizedPaginationParams {
-    let mut fields = params.fields;
-    if let Some(fields_vec) = fields.as_mut() {
-        fields_vec.sort();
-    }
-
-    let include_abstract = should_include_abstract(Some(false), fields.as_ref());
+    let include_abstract = should_include_abstract(Some(false), params.fields.as_ref());
 
     NormalizedPaginationParams {
         offset: params.offset.unwrap_or(0),
         limit: params.limit.unwrap_or(default_limit).clamp(1, 100),
         include_abstract,
-        fields,
         max_chars_per_item: params.max_chars_per_item,
     }
 }
@@ -1011,6 +1000,60 @@ mod tests {
             .map(|paper| paper.title.as_str())
             .collect::<Vec<_>>();
         assert_eq!(titles, vec!["Newer Paper", "Older Paper"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn paper_search_single_source_offset_is_not_double_applied() {
+        let semantic_server = MockServer::start().await;
+        let arxiv_server = MockServer::start().await;
+        let openalex_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/paper/search"))
+            .and(query_param("offset", "20"))
+            .and(query_param("limit", "10"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "total": 200,
+                "next": 30,
+                "data": [
+                    {
+                        "paperId": "s2-21",
+                        "title": "Paged Paper",
+                        "year": 2024,
+                        "citationCount": 3,
+                        "authors": [{"name": "Alice"}]
+                    }
+                ]
+            })))
+            .mount(&semantic_server)
+            .await;
+
+        let toolkit = build_test_toolkit(
+            semantic_server.uri(),
+            arxiv_server.uri(),
+            openalex_server.uri(),
+        );
+
+        let result = toolkit
+            .paper_search(PaperSearchParams {
+                query: "pagination".to_string(),
+                year_from: None,
+                year_to: None,
+                fields_of_study: None,
+                source: Some("semantic_scholar".to_string()),
+                sort_by: None,
+                offset: Some(20),
+                limit: Some(10),
+                include_abstract: Some(false),
+                fields: None,
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("paper_search should succeed");
+
+        assert_eq!(result.papers.len(), 1);
+        assert_eq!(result.papers[0].title, "Paged Paper");
+        assert_eq!(result.has_more, true);
     }
 
     #[tokio::test(flavor = "multi_thread")]

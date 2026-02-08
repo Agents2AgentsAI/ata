@@ -27,6 +27,9 @@ pub enum ResearchError {
         source: reqwest::Error,
     },
 
+    #[error("http request to {api} failed: {message}")]
+    HttpMessage { api: ResearchApi, message: String },
+
     #[error("upstream API {api} returned {status}: {message}")]
     Upstream {
         api: ResearchApi,
@@ -58,7 +61,10 @@ impl ResearchError {
     #[must_use]
     pub fn is_retryable(&self) -> bool {
         match self {
-            Self::RateLimiterClosed { .. } | Self::Timeout { .. } | Self::Http { .. } => true,
+            Self::RateLimiterClosed { .. }
+            | Self::Timeout { .. }
+            | Self::Http { .. }
+            | Self::HttpMessage { .. } => true,
             Self::Upstream { status, .. } => is_retryable_upstream_status(*status),
             Self::NotConfigured { .. }
             | Self::NotImplemented { .. }

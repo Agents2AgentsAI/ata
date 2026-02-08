@@ -607,4 +607,48 @@ mod tests {
         assert_eq!(config.zotero_api_key, Some("secret-zotero".to_string()));
         assert_eq!(config.github_token, Some("secret-gh".to_string()));
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn paper_get_handler_applies_research_request_timeout_with_core_client() {
+        let semantic_server = MockServer::start().await;
+        let arxiv_server = MockServer::start().await;
+        let openalex_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/graph/v1/paper/s2id123"))
+            .respond_with(
+                ResponseTemplate::new(200).set_delay(std::time::Duration::from_millis(100)),
+            )
+            .mount(&semantic_server)
+            .await;
+
+        let config = ResearchConfig {
+            semantic_scholar_base_url: format!("{}/graph/v1", semantic_server.uri()),
+            arxiv_base_url: arxiv_server.uri(),
+            openalex_base_url: openalex_server.uri(),
+            request_timeout: std::time::Duration::from_millis(25),
+            tool_timeout: std::time::Duration::from_secs(2),
+            ..ResearchConfig::default()
+        };
+
+        let handler = ResearchBridgeHandler::new(Arc::new(
+            codex_research_tools::ResearchToolkit::new(build_reqwest_client(), config),
+        ));
+
+        let err = match handler
+            .execute_native_tool("paper_get", r#"{"paper_id":"s2:s2id123"}"#)
+            .await
+        {
+            Ok(_) => panic!("paper_get should time out"),
+            Err(err) => err,
+        };
+
+        let FunctionCallError::RespondToModel(message) = err else {
+            panic!("unexpected error variant");
+        };
+        assert!(
+            message.contains("timed out after 25ms"),
+            "unexpected message: {message}"
+        );
+    }
 }

@@ -95,9 +95,18 @@ impl HttpClient {
             let Some(remaining) = self.remaining_tool_time(started_at) else {
                 return Err(tool_timeout_error(api, self.tool_timeout));
             };
-            let response = match tokio::time::timeout(remaining, request.send()).await {
+            let send_timeout = self.request_timeout.min(remaining);
+            let response = match tokio::time::timeout(send_timeout, request.send()).await {
                 Ok(response) => response,
-                Err(_) => return Err(tool_timeout_error(api, self.tool_timeout)),
+                Err(_) => {
+                    if send_timeout < remaining {
+                        return Err(ResearchError::Timeout {
+                            api,
+                            timeout_ms: self.request_timeout_ms(),
+                        });
+                    }
+                    return Err(tool_timeout_error(api, self.tool_timeout));
+                }
             };
 
             match response {
@@ -141,7 +150,7 @@ impl HttpClient {
                     if err.is_timeout() {
                         return Err(ResearchError::Timeout {
                             api,
-                            timeout_ms: self.request_timeout.as_millis() as u64,
+                            timeout_ms: self.request_timeout_ms(),
                         });
                     }
 
@@ -157,6 +166,10 @@ impl HttpClient {
 
     fn remaining_tool_time(&self, started_at: tokio::time::Instant) -> Option<Duration> {
         self.tool_timeout.checked_sub(started_at.elapsed())
+    }
+
+    fn request_timeout_ms(&self) -> u64 {
+        u64::try_from(self.request_timeout.as_millis()).unwrap_or(u64::MAX)
     }
 
     fn retry_delay(&self, attempt: u32, retry_after: Option<Duration>) -> Duration {
@@ -254,6 +267,46 @@ mod tests {
             .to_string();
         let delay = parse_retry_after_value(&header_value).expect("valid retry-after date");
         assert!(delay <= Duration::from_secs(3));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn request_timeout_applies_even_without_reqwest_timeout() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/slow"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(100)))
+            .mount(&server)
+            .await;
+
+        let request_timeout = Duration::from_millis(25);
+        let client = reqwest::Client::builder().build().expect("reqwest client");
+        let rate_limiter = Arc::new(RateLimiter::new(HashMap::new()));
+        let http = HttpClient::new(
+            client,
+            rate_limiter,
+            RetryConfig {
+                max_retries: 0,
+                base_delay: Duration::from_millis(1),
+                max_delay: Duration::from_secs(30),
+            },
+            request_timeout,
+            Duration::from_secs(2),
+        );
+
+        let err = http
+            .execute_text(ResearchApi::OpenAlex, || {
+                http.client().get(format!("{}/slow", server.uri()))
+            })
+            .await
+            .expect_err("request should time out");
+
+        match err {
+            ResearchError::Timeout { api, timeout_ms } => {
+                assert_eq!(api, ResearchApi::OpenAlex);
+                assert_eq!(timeout_ms, 25);
+            }
+            other => panic!("unexpected error: {other}"),
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
