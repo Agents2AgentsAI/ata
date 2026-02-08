@@ -34,9 +34,10 @@ pub(crate) async fn repo_get_health(
 
     let cached = toolkit
         .cache()
-        .get_or_fetch_with_meta(
+        .get_or_fetch_with_meta_ttls(
             cache_key,
             toolkit.config().cache_ttls.repo_health,
+            toolkit.config().cache_ttls.negative,
             || async move {
                 match github::get_repo_health(
                     toolkit.http(),
@@ -145,6 +146,8 @@ fn deserialize_cache_entry(output: FetchOutput) -> Result<RepoHealth> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use pretty_assertions::assert_eq;
     use wiremock::Mock;
     use wiremock::MockServer;
@@ -155,6 +158,7 @@ mod tests {
     use wiremock::matchers::query_param;
 
     use crate::ResearchToolkit;
+    use crate::config::CacheTtls;
     use crate::config::ResearchConfig;
     use crate::error::ResearchError;
     use crate::tools::test_helpers::build_test_toolkit_with_config;
@@ -261,6 +265,57 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn repo_get_health_surfaces_forbidden_check_runs() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/openai/codex"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "license": null,
+                "pushed_at": "2026-02-01T01:02:03Z",
+                "stargazers_count": 100,
+                "open_issues_count": 9,
+                "default_branch": "main"
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/openai/codex/releases"))
+            .and(query_param("per_page", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/openai/codex/commits/main/check-runs"))
+            .and(query_param("per_page", "1"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "message": "Resource not accessible by integration"
+            })))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri(), None);
+        let error = toolkit
+            .repo_get_health("https://github.com/openai/codex")
+            .await
+            .expect_err("forbidden check-runs should fail");
+
+        assert!(
+            matches!(
+                error,
+                ResearchError::Upstream {
+                    api: crate::rate_limiter::ResearchApi::GitHub,
+                    status,
+                    ..
+                } if status == reqwest::StatusCode::FORBIDDEN
+            ),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn repo_get_health_rejects_non_github_urls() {
         let toolkit = build_test_toolkit("https://api.github.com".to_string(), None);
         let error = toolkit
@@ -315,6 +370,61 @@ mod tests {
             .filter(|request| request.url.path() == "/repos/openai/missing")
             .count();
         assert_eq!(metadata_calls, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn repo_get_health_negative_cache_respects_negative_ttl() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/openai/missing"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "message": "Not Found"
+            })))
+            .mount(&server)
+            .await;
+
+        let mut config = ResearchConfig {
+            github_api_base_url: server.uri(),
+            ..ResearchConfig::default()
+        };
+        config.cache_ttls = CacheTtls {
+            repo_health: Duration::from_secs(60),
+            negative: Duration::from_millis(20),
+            ..config.cache_ttls
+        };
+
+        let toolkit = build_test_toolkit_with_config(config);
+
+        let first = toolkit
+            .repo_get_health("https://github.com/openai/missing")
+            .await
+            .expect_err("first missing repo request should fail");
+        assert!(
+            matches!(first, ResearchError::Upstream { status, .. } if status == reqwest::StatusCode::NOT_FOUND),
+            "unexpected error: {first}"
+        );
+
+        tokio::time::sleep(Duration::from_millis(35)).await;
+
+        let second = toolkit
+            .repo_get_health("https://github.com/openai/missing")
+            .await
+            .expect_err("second missing repo request should fail");
+        assert!(
+            matches!(second, ResearchError::Upstream { status, .. } if status == reqwest::StatusCode::NOT_FOUND),
+            "unexpected error: {second}"
+        );
+
+        let requests = server
+            .received_requests()
+            .await
+            .expect("request history should be available");
+        let metadata_calls = requests
+            .iter()
+            .filter(|request| request.url.path() == "/repos/openai/missing")
+            .count();
+        assert_eq!(metadata_calls, 2);
     }
 
     #[tokio::test(flavor = "multi_thread")]

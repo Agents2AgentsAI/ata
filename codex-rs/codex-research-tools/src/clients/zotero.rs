@@ -4,6 +4,7 @@ use serde::Deserialize;
 use crate::error::Result;
 use crate::http_client::HttpClient;
 use crate::rate_limiter::ResearchApi;
+use crate::text_utils::truncate_chars;
 use crate::types::SourceMeta;
 use crate::types::ZoteroAttachment;
 use crate::types::ZoteroAttachmentsResult;
@@ -513,16 +514,6 @@ fn parse_year_run(run: &str) -> Option<String> {
     }
 
     None
-}
-
-fn truncate_chars(value: &str, max_chars: usize) -> String {
-    if value.chars().count() <= max_chars {
-        return value.to_string();
-    }
-
-    let mut truncated = value.chars().take(max_chars).collect::<String>();
-    truncated.push_str("...");
-    truncated
 }
 
 #[derive(Debug, Deserialize)]

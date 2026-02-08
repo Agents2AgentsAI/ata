@@ -116,7 +116,8 @@ pub(crate) async fn get_repo_health(
         .await?;
 
     let releases_count = fetch_releases_count(http, config, &repo_api_url).await?;
-    let ci_passing = fetch_ci_passing(http, config, &repo_api_url, &metadata.default_branch).await;
+    let ci_passing =
+        fetch_ci_passing(http, config, &repo_api_url, &metadata.default_branch).await?;
 
     Ok(RepoHealth {
         license: map_license(metadata.license),
@@ -206,10 +207,13 @@ async fn fetch_ci_passing(
     config: GitHubConfig<'_>,
     repo_api_url: &str,
     default_branch: &Option<String>,
-) -> Option<bool> {
+) -> Result<Option<bool>> {
     let branch = default_branch
         .as_deref()
-        .filter(|branch| !branch.is_empty())?;
+        .filter(|branch| !branch.is_empty());
+    let Some(branch) = branch else {
+        return Ok(None);
+    };
     let url = format!(
         "{repo_api_url}/commits/{branch}/check-runs?per_page=1",
         branch = urlencoding::encode(branch),
@@ -220,17 +224,17 @@ async fn fetch_ci_passing(
         .await
     {
         Ok(checks) => checks,
+        Err(ResearchError::Upstream {
+            status: reqwest::StatusCode::NOT_FOUND,
+            ..
+        }) => return Ok(None),
         Err(err) => {
-            tracing::debug!(
-                repo_api_url,
-                error = %err,
-                "github check-runs unavailable; returning ci_passing = null"
-            );
-            return None;
+            tracing::debug!(repo_api_url, error = %err, "github check-runs request failed");
+            return Err(err);
         }
     };
 
-    checks.check_runs.first().and_then(classify_ci_check_run)
+    Ok(checks.check_runs.first().and_then(classify_ci_check_run))
 }
 
 fn classify_ci_check_run(run: &GitHubCheckRun) -> Option<bool> {

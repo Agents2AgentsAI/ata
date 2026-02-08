@@ -38,12 +38,20 @@ struct NormalizedPaperSearchParams {
     year_to: Option<u32>,
     fields_of_study: Option<Vec<String>>,
     source: Option<String>,
-    sort_by: String,
+    sort_by: PaperSortBy,
     offset: u32,
     limit: u32,
     include_abstract: bool,
     fields: Option<Vec<String>>,
     max_chars_per_item: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum PaperSortBy {
+    Relevance,
+    CitationCount,
+    Year,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -117,14 +125,7 @@ pub(crate) async fn paper_search(
     aggregation.record_source_result(SOURCE_OPENALEX, openalex_result);
 
     let mut deduped = toolkit.paper_ids().dedup_papers(aggregation.all_papers);
-    deduped.sort_by(|left, right| {
-        right
-            .citation_count
-            .unwrap_or(0)
-            .cmp(&left.citation_count.unwrap_or(0))
-            .then_with(|| right.year.unwrap_or(0).cmp(&left.year.unwrap_or(0)))
-            .then_with(|| left.title.cmp(&right.title))
-    });
+    sort_papers(&mut deduped, normalized.sort_by);
 
     apply_output_budget(
         &mut deduped,
@@ -267,13 +268,60 @@ fn normalize_paper_search_params(params: PaperSearchParams) -> Result<Normalized
         year_to: params.year_to,
         fields_of_study: params.fields_of_study,
         source: params.source.map(|source| source.to_ascii_lowercase()),
-        sort_by: params.sort_by.unwrap_or_else(|| "relevance".to_string()),
+        sort_by: normalize_sort_by(params.sort_by)?,
         offset: params.offset.unwrap_or(0),
         limit: params.limit.unwrap_or(20).clamp(1, 50),
         include_abstract,
         fields,
         max_chars_per_item: params.max_chars_per_item,
     })
+}
+
+fn normalize_sort_by(sort_by: Option<String>) -> Result<PaperSortBy> {
+    let Some(raw) = sort_by else {
+        return Ok(PaperSortBy::Relevance);
+    };
+
+    let normalized = raw.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "" | "relevance" => Ok(PaperSortBy::Relevance),
+        "citation_count" | "citations" => Ok(PaperSortBy::CitationCount),
+        "year" | "publication_year" | "newest" => Ok(PaperSortBy::Year),
+        other => Err(ResearchError::InvalidInput(format!(
+            "unsupported sort_by '{other}' (expected one of: relevance, citation_count, year)"
+        ))),
+    }
+}
+
+fn sort_papers(papers: &mut [Paper], sort_by: PaperSortBy) {
+    match sort_by {
+        PaperSortBy::Relevance => {}
+        PaperSortBy::CitationCount => {
+            papers.sort_by(|left, right| {
+                right
+                    .citation_count
+                    .unwrap_or(0)
+                    .cmp(&left.citation_count.unwrap_or(0))
+                    .then_with(|| right.year.unwrap_or(0).cmp(&left.year.unwrap_or(0)))
+                    .then_with(|| left.title.cmp(&right.title))
+            });
+        }
+        PaperSortBy::Year => {
+            papers.sort_by(|left, right| {
+                right
+                    .year
+                    .unwrap_or(0)
+                    .cmp(&left.year.unwrap_or(0))
+                    .then_with(|| {
+                        right
+                            .citation_count
+                            .unwrap_or(0)
+                            .cmp(&left.citation_count.unwrap_or(0))
+                    })
+                    .then_with(|| left.title.cmp(&right.title))
+            });
+        }
+    }
 }
 
 fn normalize_pagination(
@@ -408,15 +456,7 @@ impl AggregationState {
 }
 
 fn is_retryable_error(err: &ResearchError) -> bool {
-    match err {
-        ResearchError::RateLimiterClosed { .. }
-        | ResearchError::Timeout { .. }
-        | ResearchError::Http { .. } => true,
-        ResearchError::Upstream { status, .. } => {
-            *status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
-        }
-        _ => false,
-    }
+    err.is_retryable()
 }
 
 fn apply_output_budget(
@@ -909,6 +949,102 @@ mod tests {
             .await;
 
         assert!(citations.is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn paper_search_honors_sort_by_year() {
+        let semantic_server = MockServer::start().await;
+        let arxiv_server = MockServer::start().await;
+        let openalex_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/paper/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "total": 2,
+                "next": null,
+                "data": [
+                    {
+                        "paperId": "s2-older",
+                        "title": "Older Paper",
+                        "year": 2020,
+                        "citationCount": 500,
+                        "authors": [{"name": "Alice"}]
+                    },
+                    {
+                        "paperId": "s2-newer",
+                        "title": "Newer Paper",
+                        "year": 2024,
+                        "citationCount": 5,
+                        "authors": [{"name": "Bob"}]
+                    }
+                ]
+            })))
+            .mount(&semantic_server)
+            .await;
+
+        let toolkit = build_test_toolkit(
+            semantic_server.uri(),
+            arxiv_server.uri(),
+            openalex_server.uri(),
+        );
+
+        let result = toolkit
+            .paper_search(PaperSearchParams {
+                query: "sorting".to_string(),
+                year_from: None,
+                year_to: None,
+                fields_of_study: None,
+                source: Some("semantic_scholar".to_string()),
+                sort_by: Some("year".to_string()),
+                offset: Some(0),
+                limit: Some(10),
+                include_abstract: Some(false),
+                fields: None,
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("paper_search should succeed");
+
+        let titles = result
+            .papers
+            .iter()
+            .map(|paper| paper.title.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(titles, vec!["Newer Paper", "Older Paper"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn paper_search_rejects_unknown_sort_by_value() {
+        let semantic_server = MockServer::start().await;
+        let arxiv_server = MockServer::start().await;
+        let openalex_server = MockServer::start().await;
+        let toolkit = build_test_toolkit(
+            semantic_server.uri(),
+            arxiv_server.uri(),
+            openalex_server.uri(),
+        );
+
+        let error = toolkit
+            .paper_search(PaperSearchParams {
+                query: "sorting".to_string(),
+                year_from: None,
+                year_to: None,
+                fields_of_study: None,
+                source: Some("semantic_scholar".to_string()),
+                sort_by: Some("randomness".to_string()),
+                offset: Some(0),
+                limit: Some(10),
+                include_abstract: Some(false),
+                fields: None,
+                max_chars_per_item: None,
+            })
+            .await
+            .expect_err("unknown sort_by should fail");
+
+        assert!(
+            matches!(error, crate::error::ResearchError::InvalidInput(_)),
+            "unexpected error: {error}"
+        );
     }
 
     fn build_test_toolkit(

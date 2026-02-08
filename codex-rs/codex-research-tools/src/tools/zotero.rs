@@ -14,6 +14,7 @@ use crate::clients::zotero::ZoteroLibraryScope;
 use crate::clients::zotero::ZoteroSearchRequest;
 use crate::error::ResearchError;
 use crate::error::Result;
+use crate::text_utils::truncate_chars;
 use crate::tools::cache_helpers::get_or_fetch_typed;
 use crate::tools::cache_helpers::hash_cache_payload;
 use crate::types::ZoteroAttachment;
@@ -35,6 +36,7 @@ const DEFAULT_SEARCH_LIMIT: u32 = 25;
 const DEFAULT_COLLECTIONS_LIMIT: u32 = 100;
 const DEFAULT_CHILDREN_LIMIT: u32 = 50;
 const DEFAULT_FULLTEXT_MAX_CHARS: u32 = 10_000;
+const ZOTERO_MAX_PAGE_SIZE: u32 = 100;
 
 #[derive(Debug, Clone, Serialize)]
 struct NormalizedScope {
@@ -321,29 +323,40 @@ pub(crate) async fn zotero_search_by_tag(
 
                 // Fetch each tag independently and keep only items that appear for all tags.
                 for tag in &normalized.tags {
-                    let page = zotero::search_items(
-                        toolkit.http(),
-                        ZoteroConfig {
-                            base_url: &toolkit.config().zotero_base_url,
-                            api_key: &api_key,
-                        },
-                        &scope,
-                        &ZoteroSearchRequest {
-                            query: None,
-                            tag: Some(tag),
-                            offset: 0,
-                            limit: normalized.limit.clamp(1, 100),
-                            item_type: normalized.item_type.as_deref(),
-                        },
-                    )
-                    .await?;
-
                     let tag_key = tag.to_ascii_lowercase();
-                    for item in page.items {
-                        let entry = by_key
-                            .entry(item.key.clone())
-                            .or_insert_with(|| (item, HashSet::new()));
-                        entry.1.insert(tag_key.clone());
+                    let mut offset = 0;
+
+                    loop {
+                        let page = zotero::search_items(
+                            toolkit.http(),
+                            ZoteroConfig {
+                                base_url: &toolkit.config().zotero_base_url,
+                                api_key: &api_key,
+                            },
+                            &scope,
+                            &ZoteroSearchRequest {
+                                query: None,
+                                tag: Some(tag),
+                                offset,
+                                limit: ZOTERO_MAX_PAGE_SIZE,
+                                item_type: normalized.item_type.as_deref(),
+                            },
+                        )
+                        .await?;
+
+                        let fetched = u32::try_from(page.items.len()).unwrap_or(0);
+                        for item in page.items {
+                            let entry = by_key
+                                .entry(item.key.clone())
+                                .or_insert_with(|| (item, HashSet::new()));
+                            entry.1.insert(tag_key.clone());
+                        }
+
+                        if !page.has_more || fetched == 0 {
+                            break;
+                        }
+
+                        offset = offset.saturating_add(fetched);
                     }
                 }
 
@@ -753,27 +766,6 @@ fn truncate_optional_string(value: &mut Option<String>, max_chars: usize) {
     }
 }
 
-fn truncate_chars(value: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-
-    if value.chars().count() <= max_chars {
-        return value.to_string();
-    }
-
-    if max_chars <= 3 {
-        return value.chars().take(max_chars).collect::<String>();
-    }
-
-    let mut truncated = value
-        .chars()
-        .take(max_chars.saturating_sub(3))
-        .collect::<String>();
-    truncated.push_str("...");
-    truncated
-}
-
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -845,7 +837,6 @@ mod tests {
                 offset: Some(0),
                 limit: Some(20),
                 item_type: None,
-                fields: None,
                 max_chars_per_item: None,
             })
             .await
@@ -1024,6 +1015,90 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_search_by_tag_paginates_each_tag_before_intersection() {
+        let server = MockServer::start().await;
+
+        let first_ml_page = (0..100)
+            .map(|idx| {
+                serde_json::json!({
+                    "key": format!("ML{idx:03}"),
+                    "data": {
+                        "itemType": "journalArticle",
+                        "title": format!("ML Item {idx}"),
+                        "creators": [],
+                        "tags": [{"tag": "ml"}]
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("tag", "ml"))
+            .and(query_param("start", "0"))
+            .and(query_param("limit", "100"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(first_ml_page))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("tag", "ml"))
+            .and(query_param("start", "100"))
+            .and(query_param("limit", "100"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "TARGET",
+                    "data": {
+                        "itemType": "journalArticle",
+                        "title": "Target Item",
+                        "creators": [],
+                        "tags": [{"tag": "ml"}, {"tag": "vision"}]
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("tag", "vision"))
+            .and(query_param("start", "0"))
+            .and(query_param("limit", "100"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "TARGET",
+                    "data": {
+                        "itemType": "journalArticle",
+                        "title": "Target Item",
+                        "creators": [],
+                        "tags": [{"tag": "ml"}, {"tag": "vision"}]
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+
+        let result = toolkit
+            .zotero_search_by_tag(ZoteroTagSearchParams {
+                tags: vec!["ml".to_string(), "vision".to_string()],
+                library_type: None,
+                library_id: None,
+                offset: Some(0),
+                limit: Some(10),
+                item_type: None,
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_search_by_tag should succeed");
+
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].key, "TARGET");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn zotero_collections_support_group_scope_override() {
         let server = MockServer::start().await;
 
@@ -1076,7 +1151,6 @@ mod tests {
                 offset: Some(0),
                 limit: Some(10),
                 item_type: None,
-                fields: None,
                 max_chars_per_item: None,
             })
             .await
