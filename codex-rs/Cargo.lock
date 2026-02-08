@@ -2005,6 +2005,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-research-tools-mcp"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-research-tools",
+ "reqwest",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "codex-responses-api-proxy"
 version = "0.0.0"
 dependencies = [

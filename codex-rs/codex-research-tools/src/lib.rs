@@ -22,10 +22,18 @@ use http_client::HttpClient;
 use paper_id::PaperIdResolver;
 use rate_limiter::RateLimiter;
 use types::CitationResult;
+use types::ConfigSchema;
+use types::ModelDefinition;
 use types::PaginationParams;
 use types::PaperDetail;
 use types::PaperSearchParams;
+use types::RepoEntrypoint;
+use types::RepoExportPath;
 use types::RepoHealth;
+use types::RepoIoShape;
+use types::RepoRequirements;
+use types::RepoSummary;
+use types::RequirementsDiff;
 use types::SearchResult;
 use types::ZoteroAttachmentsResult;
 use types::ZoteroCollectionItemsParams;
@@ -287,6 +295,98 @@ impl ResearchToolkit {
     }
 
     #[cfg(feature = "repo_analysis")]
+    pub async fn repo_clone_and_summarize(
+        &self,
+        repo_url: &str,
+        branch: Option<&str>,
+    ) -> Result<RepoSummary> {
+        tools::repo_analysis::repo_clone_and_summarize(self, repo_url, branch).await
+    }
+
+    #[cfg(not(feature = "repo_analysis"))]
+    pub async fn repo_clone_and_summarize(
+        &self,
+        _repo_url: &str,
+        _branch: Option<&str>,
+    ) -> Result<RepoSummary> {
+        Err(ResearchError::NotImplemented {
+            tool: "repo_clone_and_summarize",
+        })
+    }
+
+    #[cfg(feature = "repo_analysis")]
+    pub async fn repo_find_models(
+        &self,
+        repo_url: &str,
+        framework: Option<&str>,
+    ) -> Result<Vec<ModelDefinition>> {
+        tools::repo_analysis::repo_find_models(self, repo_url, framework).await
+    }
+
+    #[cfg(not(feature = "repo_analysis"))]
+    pub async fn repo_find_models(
+        &self,
+        _repo_url: &str,
+        _framework: Option<&str>,
+    ) -> Result<Vec<ModelDefinition>> {
+        Err(ResearchError::NotImplemented {
+            tool: "repo_find_models",
+        })
+    }
+
+    #[cfg(feature = "repo_analysis")]
+    pub async fn repo_extract_requirements(&self, repo_url: &str) -> Result<RepoRequirements> {
+        tools::repo_analysis::repo_extract_requirements(self, repo_url).await
+    }
+
+    #[cfg(not(feature = "repo_analysis"))]
+    pub async fn repo_extract_requirements(&self, _repo_url: &str) -> Result<RepoRequirements> {
+        Err(ResearchError::NotImplemented {
+            tool: "repo_extract_requirements",
+        })
+    }
+
+    #[cfg(feature = "repo_analysis")]
+    pub async fn repo_find_entrypoints(
+        &self,
+        repo_url: &str,
+        task_hint: Option<&str>,
+    ) -> Result<Vec<RepoEntrypoint>> {
+        tools::repo_analysis::repo_find_entrypoints(self, repo_url, task_hint).await
+    }
+
+    #[cfg(not(feature = "repo_analysis"))]
+    pub async fn repo_find_entrypoints(
+        &self,
+        _repo_url: &str,
+        _task_hint: Option<&str>,
+    ) -> Result<Vec<RepoEntrypoint>> {
+        Err(ResearchError::NotImplemented {
+            tool: "repo_find_entrypoints",
+        })
+    }
+
+    #[cfg(feature = "repo_analysis")]
+    pub async fn repo_extract_io_shapes(
+        &self,
+        repo_url: &str,
+        model_class: Option<&str>,
+    ) -> Result<Vec<RepoIoShape>> {
+        tools::repo_analysis::repo_extract_io_shapes(self, repo_url, model_class).await
+    }
+
+    #[cfg(not(feature = "repo_analysis"))]
+    pub async fn repo_extract_io_shapes(
+        &self,
+        _repo_url: &str,
+        _model_class: Option<&str>,
+    ) -> Result<Vec<RepoIoShape>> {
+        Err(ResearchError::NotImplemented {
+            tool: "repo_extract_io_shapes",
+        })
+    }
+
+    #[cfg(feature = "repo_analysis")]
     pub async fn repo_get_health(&self, repo_url: &str) -> Result<RepoHealth> {
         tools::repo_analysis::repo_get_health(self, repo_url).await
     }
@@ -295,6 +395,50 @@ impl ResearchToolkit {
     pub async fn repo_get_health(&self, _repo_url: &str) -> Result<RepoHealth> {
         Err(ResearchError::NotImplemented {
             tool: "repo_get_health",
+        })
+    }
+
+    #[cfg(feature = "repo_analysis")]
+    pub async fn repo_find_export_paths(&self, repo_url: &str) -> Result<Vec<RepoExportPath>> {
+        tools::repo_analysis::repo_find_export_paths(self, repo_url).await
+    }
+
+    #[cfg(not(feature = "repo_analysis"))]
+    pub async fn repo_find_export_paths(&self, _repo_url: &str) -> Result<Vec<RepoExportPath>> {
+        Err(ResearchError::NotImplemented {
+            tool: "repo_find_export_paths",
+        })
+    }
+
+    #[cfg(feature = "repo_analysis")]
+    pub async fn repo_extract_config_schema(&self, repo_url: &str) -> Result<Vec<ConfigSchema>> {
+        tools::repo_analysis::repo_extract_config_schema(self, repo_url).await
+    }
+
+    #[cfg(not(feature = "repo_analysis"))]
+    pub async fn repo_extract_config_schema(&self, _repo_url: &str) -> Result<Vec<ConfigSchema>> {
+        Err(ResearchError::NotImplemented {
+            tool: "repo_extract_config_schema",
+        })
+    }
+
+    #[cfg(feature = "repo_analysis")]
+    pub async fn repo_diff_requirements(
+        &self,
+        repo_url: &str,
+        local_requirements_path: &str,
+    ) -> Result<RequirementsDiff> {
+        tools::repo_analysis::repo_diff_requirements(self, repo_url, local_requirements_path).await
+    }
+
+    #[cfg(not(feature = "repo_analysis"))]
+    pub async fn repo_diff_requirements(
+        &self,
+        _repo_url: &str,
+        _local_requirements_path: &str,
+    ) -> Result<RequirementsDiff> {
+        Err(ResearchError::NotImplemented {
+            tool: "repo_diff_requirements",
         })
     }
 }

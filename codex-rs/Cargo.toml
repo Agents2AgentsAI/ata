@@ -50,6 +50,7 @@ members = [
     "codex-client",
     "codex-api",
     "codex-research-tools",
+    "codex-research-tools-mcp",
     "state",
     "codex-experimental-api-macros",
 ]

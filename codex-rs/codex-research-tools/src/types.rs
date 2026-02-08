@@ -168,6 +168,79 @@ pub struct RepoHealth {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RepoSummary {
+    pub url: String,
+    pub commit_sha: Option<String>,
+    pub directory_tree: String,
+    pub readme_snippet: Option<String>,
+    pub key_files: Vec<String>,
+    pub total_files: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ModelDefinition {
+    pub file_path: String,
+    pub class_name: String,
+    pub line_number: usize,
+    pub context: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RepoRequirements {
+    pub repo_url: String,
+    pub dependencies: Vec<String>,
+    pub source_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RepoEntrypoint {
+    pub file_path: String,
+    pub kind: String,
+    pub cli_args_summary: Option<String>,
+    pub config_file: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RepoIoShape {
+    pub input_shapes: Option<String>,
+    pub output_shapes: Option<String>,
+    pub dtype: Option<String>,
+    pub source_file: String,
+    pub source_line: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RepoExportPath {
+    pub file_path: String,
+    pub target_format: String,
+    pub framework_version: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ConfigParam {
+    pub name: String,
+    pub default: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ConfigSchema {
+    pub config_file: String,
+    pub format: String,
+    pub key_params: Vec<ConfigParam>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RequirementsDiff {
+    pub repo_url: String,
+    pub conflicts: Vec<String>,
+    pub missing_locally: Vec<String>,
+    pub compatible: Vec<String>,
+    pub repo_total_deps: usize,
+    pub local_total_deps: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct PaperSearchParams {
     pub query: String,
     pub year_from: Option<u32>,

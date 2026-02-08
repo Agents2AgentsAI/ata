@@ -189,11 +189,94 @@ impl ResearchBridgeHandler {
                 serialize_tool_output(&output)
             }
             #[cfg(feature = "research-repo")]
+            "repo_clone_and_summarize" => {
+                let params: RepoCloneArgs = parse_arguments(arguments)?;
+                let output = self
+                    .toolkit
+                    .repo_clone_and_summarize(params.repo_url.as_str(), params.branch.as_deref())
+                    .await
+                    .map_err(map_research_error)?;
+                serialize_tool_output(&output)
+            }
+            #[cfg(feature = "research-repo")]
+            "repo_find_models" => {
+                let params: RepoFindModelsArgs = parse_arguments(arguments)?;
+                let output = self
+                    .toolkit
+                    .repo_find_models(params.repo_url.as_str(), params.framework.as_deref())
+                    .await
+                    .map_err(map_research_error)?;
+                serialize_tool_output(&output)
+            }
+            #[cfg(feature = "research-repo")]
+            "repo_extract_requirements" => {
+                let params: RepoUrlArgs = parse_arguments(arguments)?;
+                let output = self
+                    .toolkit
+                    .repo_extract_requirements(params.repo_url.as_str())
+                    .await
+                    .map_err(map_research_error)?;
+                serialize_tool_output(&output)
+            }
+            #[cfg(feature = "research-repo")]
+            "repo_find_entrypoints" => {
+                let params: RepoFindEntrypointsArgs = parse_arguments(arguments)?;
+                let output = self
+                    .toolkit
+                    .repo_find_entrypoints(params.repo_url.as_str(), params.task_hint.as_deref())
+                    .await
+                    .map_err(map_research_error)?;
+                serialize_tool_output(&output)
+            }
+            #[cfg(feature = "research-repo")]
+            "repo_extract_io_shapes" => {
+                let params: RepoExtractIoShapesArgs = parse_arguments(arguments)?;
+                let output = self
+                    .toolkit
+                    .repo_extract_io_shapes(params.repo_url.as_str(), params.model_class.as_deref())
+                    .await
+                    .map_err(map_research_error)?;
+                serialize_tool_output(&output)
+            }
+            #[cfg(feature = "research-repo")]
             "repo_get_health" => {
                 let params: RepoUrlArgs = parse_arguments(arguments)?;
                 let output = self
                     .toolkit
                     .repo_get_health(params.repo_url.as_str())
+                    .await
+                    .map_err(map_research_error)?;
+                serialize_tool_output(&output)
+            }
+            #[cfg(feature = "research-repo")]
+            "repo_find_export_paths" => {
+                let params: RepoUrlArgs = parse_arguments(arguments)?;
+                let output = self
+                    .toolkit
+                    .repo_find_export_paths(params.repo_url.as_str())
+                    .await
+                    .map_err(map_research_error)?;
+                serialize_tool_output(&output)
+            }
+            #[cfg(feature = "research-repo")]
+            "repo_extract_config_schema" => {
+                let params: RepoUrlArgs = parse_arguments(arguments)?;
+                let output = self
+                    .toolkit
+                    .repo_extract_config_schema(params.repo_url.as_str())
+                    .await
+                    .map_err(map_research_error)?;
+                serialize_tool_output(&output)
+            }
+            #[cfg(feature = "research-repo")]
+            "repo_diff_requirements" => {
+                let params: RepoDiffRequirementsArgs = parse_arguments(arguments)?;
+                let output = self
+                    .toolkit
+                    .repo_diff_requirements(
+                        params.repo_url.as_str(),
+                        params.local_requirements_path.as_str(),
+                    )
                     .await
                     .map_err(map_research_error)?;
                 serialize_tool_output(&output)
@@ -299,6 +382,41 @@ struct PaperPaginationArgs {
 #[derive(Deserialize)]
 struct RepoUrlArgs {
     repo_url: String,
+}
+
+#[cfg(feature = "research-repo")]
+#[derive(Deserialize)]
+struct RepoCloneArgs {
+    repo_url: String,
+    branch: Option<String>,
+}
+
+#[cfg(feature = "research-repo")]
+#[derive(Deserialize)]
+struct RepoFindModelsArgs {
+    repo_url: String,
+    framework: Option<String>,
+}
+
+#[cfg(feature = "research-repo")]
+#[derive(Deserialize)]
+struct RepoFindEntrypointsArgs {
+    repo_url: String,
+    task_hint: Option<String>,
+}
+
+#[cfg(feature = "research-repo")]
+#[derive(Deserialize)]
+struct RepoExtractIoShapesArgs {
+    repo_url: String,
+    model_class: Option<String>,
+}
+
+#[cfg(feature = "research-repo")]
+#[derive(Deserialize)]
+struct RepoDiffRequirementsArgs {
+    repo_url: String,
+    local_requirements_path: String,
 }
 
 #[cfg(test)]
