@@ -49,6 +49,7 @@ members = [
     "utils/string",
     "codex-client",
     "codex-api",
+    "codex-research-tools",
     "state",
     "codex-experimental-api-macros",
 ]
@@ -97,6 +98,7 @@ codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
+codex-research-tools = { path = "codex-research-tools" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-state = { path = "state" }
