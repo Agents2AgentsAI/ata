@@ -69,7 +69,11 @@ impl HttpClient {
         })
     }
 
-    async fn execute_response<F>(&self, api: ResearchApi, build_request: F) -> Result<Response>
+    pub(crate) async fn execute_response<F>(
+        &self,
+        api: ResearchApi,
+        build_request: F,
+    ) -> Result<Response>
     where
         F: Fn() -> reqwest::RequestBuilder,
     {

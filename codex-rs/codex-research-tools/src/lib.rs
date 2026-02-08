@@ -24,6 +24,7 @@ use types::CitationResult;
 use types::PaginationParams;
 use types::PaperDetail;
 use types::PaperSearchParams;
+use types::RepoHealth;
 use types::SearchResult;
 use types::ZoteroAttachmentsResult;
 use types::ZoteroCollectionItemsParams;
@@ -281,6 +282,18 @@ impl ResearchToolkit {
     ) -> Result<ZoteroSearchResult> {
         Err(ResearchError::NotImplemented {
             tool: "zotero_get_collection_items",
+        })
+    }
+
+    #[cfg(feature = "repo_analysis")]
+    pub async fn repo_get_health(&self, repo_url: &str) -> Result<RepoHealth> {
+        tools::repo_analysis::repo_get_health(self, repo_url).await
+    }
+
+    #[cfg(not(feature = "repo_analysis"))]
+    pub async fn repo_get_health(&self, _repo_url: &str) -> Result<RepoHealth> {
+        Err(ResearchError::NotImplemented {
+            tool: "repo_get_health",
         })
     }
 }

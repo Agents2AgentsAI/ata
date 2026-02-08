@@ -43,3 +43,21 @@ pub enum ResearchError {
     #[error("internal error: {0}")]
     Internal(String),
 }
+
+impl ResearchError {
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::RateLimiterClosed { .. } | Self::Timeout { .. } | Self::Http { .. } => true,
+            Self::Upstream { status, .. } => {
+                *status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
+            }
+            Self::NotConfigured { .. }
+            | Self::NotImplemented { .. }
+            | Self::InvalidInput(_)
+            | Self::Parse { .. }
+            | Self::InternalPanic
+            | Self::Internal(_) => false,
+        }
+    }
+}

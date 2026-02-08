@@ -158,6 +158,16 @@ pub struct ZoteroCollectionsResult {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RepoHealth {
+    pub license: Option<String>,
+    pub last_commit_date: Option<String>,
+    pub stars: u32,
+    pub open_issues: u32,
+    pub releases_count: u32,
+    pub ci_passing: Option<bool>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct PaperSearchParams {
     pub query: String,
     pub year_from: Option<u32>,
