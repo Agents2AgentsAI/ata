@@ -103,6 +103,13 @@ impl ResearchToolkit {
             return self.config.zotero_api_key.is_some() && has_library_id;
         }
 
+        if tool_id == "repo_get_health" {
+            // Unauthenticated GitHub access is still viable; a token only raises
+            // the rate limit tier for better throughput.
+            return true;
+        }
+
+        // Paper + repo analysis tools intentionally remain available without API keys.
         true
     }
 

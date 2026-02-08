@@ -1,6 +1,8 @@
 use chrono::Utc;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
+use crate::error::ResearchError;
 use crate::error::Result;
 use crate::http_client::HttpClient;
 use crate::rate_limiter::ResearchApi;
@@ -113,9 +115,8 @@ pub(crate) async fn search_items(
         url.push_str(&format!("&itemType={}", urlencoding::encode(item_type)));
     }
 
-    let response: Vec<ZoteroApiItem> = http
-        .execute_json(ResearchApi::Zotero, || zotero_request(http, config, &url))
-        .await?;
+    let (response, total_available): (Vec<ZoteroApiItem>, Option<u64>) =
+        execute_json_with_total_results(http, config, &url).await?;
 
     let items = response
         .into_iter()
@@ -123,8 +124,8 @@ pub(crate) async fn search_items(
         .collect::<Vec<_>>();
 
     Ok(ZoteroSearchResult {
-        has_more: u32::try_from(items.len()).unwrap_or(0) == request.limit,
-        total_available: None,
+        has_more: compute_has_more(request.offset, items.len(), request.limit, total_available),
+        total_available,
         items,
     })
 }
@@ -190,9 +191,8 @@ pub(crate) async fn get_notes(
         limit = request.limit,
     );
 
-    let response: Vec<ZoteroApiItem> = http
-        .execute_json(ResearchApi::Zotero, || zotero_request(http, config, &url))
-        .await?;
+    let (response, total_available): (Vec<ZoteroApiItem>, Option<u64>) =
+        execute_json_with_total_results(http, config, &url).await?;
 
     let notes = response
         .into_iter()
@@ -201,8 +201,8 @@ pub(crate) async fn get_notes(
 
     Ok(ZoteroNotesResult {
         item_key: request.item_key.to_string(),
-        has_more: u32::try_from(notes.len()).unwrap_or(0) == request.limit,
-        total_available: None,
+        has_more: compute_has_more(request.offset, notes.len(), request.limit, total_available),
+        total_available,
         notes,
     })
 }
@@ -221,9 +221,8 @@ pub(crate) async fn get_attachments(
         limit = request.limit,
     );
 
-    let response: Vec<ZoteroApiItem> = http
-        .execute_json(ResearchApi::Zotero, || zotero_request(http, config, &url))
-        .await?;
+    let (response, total_available): (Vec<ZoteroApiItem>, Option<u64>) =
+        execute_json_with_total_results(http, config, &url).await?;
 
     let attachments = response
         .into_iter()
@@ -232,8 +231,13 @@ pub(crate) async fn get_attachments(
 
     Ok(ZoteroAttachmentsResult {
         item_key: request.item_key.to_string(),
-        has_more: u32::try_from(attachments.len()).unwrap_or(0) == request.limit,
-        total_available: None,
+        has_more: compute_has_more(
+            request.offset,
+            attachments.len(),
+            request.limit,
+            total_available,
+        ),
+        total_available,
         attachments,
     })
 }
@@ -251,9 +255,8 @@ pub(crate) async fn get_collections(
         limit = request.limit,
     );
 
-    let response: Vec<ZoteroApiCollection> = http
-        .execute_json(ResearchApi::Zotero, || zotero_request(http, config, &url))
-        .await?;
+    let (response, total_available): (Vec<ZoteroApiCollection>, Option<u64>) =
+        execute_json_with_total_results(http, config, &url).await?;
 
     let collections = response
         .into_iter()
@@ -261,8 +264,13 @@ pub(crate) async fn get_collections(
         .collect::<Vec<_>>();
 
     Ok(ZoteroCollectionsResult {
-        has_more: u32::try_from(collections.len()).unwrap_or(0) == request.limit,
-        total_available: None,
+        has_more: compute_has_more(
+            request.offset,
+            collections.len(),
+            request.limit,
+            total_available,
+        ),
+        total_available,
         collections,
     })
 }
@@ -285,9 +293,8 @@ pub(crate) async fn get_collection_items(
         url.push_str(&format!("&itemType={}", urlencoding::encode(item_type)));
     }
 
-    let response: Vec<ZoteroApiItem> = http
-        .execute_json(ResearchApi::Zotero, || zotero_request(http, config, &url))
-        .await?;
+    let (response, total_available): (Vec<ZoteroApiItem>, Option<u64>) =
+        execute_json_with_total_results(http, config, &url).await?;
 
     let items = response
         .into_iter()
@@ -295,8 +302,8 @@ pub(crate) async fn get_collection_items(
         .collect::<Vec<_>>();
 
     Ok(ZoteroSearchResult {
-        has_more: u32::try_from(items.len()).unwrap_or(0) == request.limit,
-        total_available: None,
+        has_more: compute_has_more(request.offset, items.len(), request.limit, total_available),
+        total_available,
         items,
     })
 }
@@ -310,6 +317,48 @@ fn zotero_request(
         .get(url)
         .header("Zotero-API-Key", config.api_key)
         .header("Zotero-API-Version", "3")
+}
+
+async fn execute_json_with_total_results<T>(
+    http: &HttpClient,
+    config: ZoteroConfig<'_>,
+    url: &str,
+) -> Result<(T, Option<u64>)>
+where
+    T: DeserializeOwned,
+{
+    let response = http
+        .execute_response(ResearchApi::Zotero, || zotero_request(http, config, url))
+        .await?;
+    let total_available = response
+        .headers()
+        .get("Total-Results")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|raw| raw.parse::<u64>().ok());
+
+    let payload = response
+        .json::<T>()
+        .await
+        .map_err(|err| ResearchError::Parse {
+            api: ResearchApi::Zotero,
+            message: err.to_string(),
+        })?;
+    Ok((payload, total_available))
+}
+
+fn compute_has_more(
+    offset: u32,
+    page_len: usize,
+    limit: u32,
+    total_available: Option<u64>,
+) -> bool {
+    if let Some(total) = total_available {
+        let offset = u64::from(offset);
+        let page_len = u64::try_from(page_len).unwrap_or(u64::MAX);
+        return offset.saturating_add(page_len) < total;
+    }
+
+    u32::try_from(page_len).unwrap_or(0) == limit
 }
 
 fn map_item_summary(item: ZoteroApiItem, api_url: &str, scope: &ZoteroLibraryScope) -> ZoteroItem {

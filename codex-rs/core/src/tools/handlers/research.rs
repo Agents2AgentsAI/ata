@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::panic::AssertUnwindSafe;
+use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -12,6 +13,11 @@ use codex_research_tools::types::ZoteroCollectionsParams;
 use codex_research_tools::types::ZoteroItemParams;
 use codex_research_tools::types::ZoteroSearchParams;
 use codex_research_tools::types::ZoteroTagSearchParams;
+use codex_secrets::SecretName;
+use codex_secrets::SecretScope;
+use codex_secrets::SecretsBackendKind;
+use codex_secrets::SecretsManager;
+use codex_secrets::environment_id_from_cwd;
 use futures::FutureExt;
 use serde::Deserialize;
 use serde::Serialize;
@@ -313,8 +319,19 @@ impl ToolHandler for ResearchBridgeHandler {
     }
 }
 
-pub(crate) fn build_research_config(toml: Option<&ResearchToolsToml>) -> ResearchConfig {
+pub(crate) fn build_research_config(
+    toml: Option<&ResearchToolsToml>,
+    codex_home: &Path,
+    cwd: &Path,
+) -> ResearchConfig {
     let mut config = ResearchConfig::from_env();
+    let secret_resolver = ResearchSecretResolver::new(codex_home, cwd);
+
+    apply_secret_overrides(&mut config, |name| {
+        std::env::var(name)
+            .ok()
+            .or_else(|| secret_resolver.resolve(name))
+    });
 
     if let Some(toml) = toml {
         if config.zotero_user_id.is_none() {
@@ -332,6 +349,63 @@ pub(crate) fn build_research_config(toml: Option<&ResearchToolsToml>) -> Researc
     }
 
     config
+}
+
+fn apply_secret_overrides<F>(config: &mut ResearchConfig, mut resolve_secret: F)
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    if config.semantic_scholar_api_key.is_none() {
+        config.semantic_scholar_api_key = resolve_secret("SEMANTIC_SCHOLAR_API_KEY");
+    }
+    if config.zotero_api_key.is_none() {
+        config.zotero_api_key = resolve_secret("ZOTERO_API_KEY");
+    }
+    if config.github_token.is_none() {
+        config.github_token = resolve_secret("GITHUB_TOKEN");
+    }
+}
+
+struct ResearchSecretResolver {
+    manager: SecretsManager,
+    environment_scope: Option<SecretScope>,
+}
+
+impl ResearchSecretResolver {
+    fn new(codex_home: &Path, cwd: &Path) -> Self {
+        let environment_scope = SecretScope::environment(environment_id_from_cwd(cwd)).ok();
+        Self {
+            manager: SecretsManager::new(codex_home.to_path_buf(), SecretsBackendKind::Local),
+            environment_scope,
+        }
+    }
+
+    fn resolve(&self, secret_name: &str) -> Option<String> {
+        let secret_name = SecretName::new(secret_name).ok()?;
+
+        if let Some(scope) = self.environment_scope.as_ref()
+            && let Some(value) = self.get(scope, &secret_name)
+        {
+            return Some(value);
+        }
+
+        self.get(&SecretScope::Global, &secret_name)
+    }
+
+    fn get(&self, scope: &SecretScope, name: &SecretName) -> Option<String> {
+        match self.manager.get(scope, name) {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::debug!(
+                    error = %err,
+                    scope = ?scope,
+                    secret_name = %name,
+                    "failed to load research secret; falling back"
+                );
+                None
+            }
+        }
+    }
 }
 
 fn map_research_error(err: ResearchError) -> FunctionCallError {
@@ -513,5 +587,24 @@ mod tests {
             panic_payload_to_message(other_payload.as_ref()),
             "non-string panic payload"
         );
+    }
+
+    #[test]
+    fn apply_secret_overrides_fills_missing_keys_only() {
+        let mut config = ResearchConfig {
+            semantic_scholar_api_key: Some("env-s2".to_string()),
+            ..ResearchConfig::default()
+        };
+
+        apply_secret_overrides(&mut config, |name| match name {
+            "SEMANTIC_SCHOLAR_API_KEY" => Some("secret-s2".to_string()),
+            "ZOTERO_API_KEY" => Some("secret-zotero".to_string()),
+            "GITHUB_TOKEN" => Some("secret-gh".to_string()),
+            _ => None,
+        });
+
+        assert_eq!(config.semantic_scholar_api_key, Some("env-s2".to_string()));
+        assert_eq!(config.zotero_api_key, Some("secret-zotero".to_string()));
+        assert_eq!(config.github_token, Some("secret-gh".to_string()));
     }
 }
