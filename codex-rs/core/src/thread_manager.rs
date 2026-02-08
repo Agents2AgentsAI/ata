@@ -10,7 +10,7 @@ use crate::codex::INITIAL_SUBMIT_ID;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
 #[cfg(feature = "research")]
-use crate::default_client::build_reqwest_client;
+use crate::default_client::build_reqwest_client_with_timeouts;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
@@ -481,7 +481,10 @@ impl ThreadManagerState {
                                 config.cwd.as_path(),
                             );
                             Arc::new(codex_research_tools::ResearchToolkit::new(
-                                build_reqwest_client(),
+                                build_reqwest_client_with_timeouts(
+                                    Some(research_config.connect_timeout),
+                                    Some(research_config.request_timeout),
+                                ),
                                 research_config,
                             ))
                         })

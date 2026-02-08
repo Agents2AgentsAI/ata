@@ -14,6 +14,7 @@ use crate::clients::zotero::ZoteroLibraryScope;
 use crate::clients::zotero::ZoteroSearchRequest;
 use crate::error::ResearchError;
 use crate::error::Result;
+use crate::rate_limiter::ResearchApi;
 use crate::text_utils::truncate_chars;
 use crate::tools::cache_helpers::get_or_fetch_typed;
 use crate::tools::cache_helpers::hash_cache_payload;
@@ -312,90 +313,99 @@ pub(crate) async fn zotero_search_by_tag(
         params_hash: hash_cache_payload(&normalized)?,
     };
 
-    let mut result = get_or_fetch_typed(
-        toolkit,
-        key,
-        toolkit.config().cache_ttls.zotero_items,
-        || {
-            let scope = to_scope(&normalized.scope);
-            async move {
-                let mut by_key: HashMap<String, (ZoteroItem, HashSet<String>)> = HashMap::new();
+    let tool_timeout = toolkit.config().tool_timeout;
+    let timeout_ms = u64::try_from(tool_timeout.as_millis()).unwrap_or(u64::MAX);
+    let mut result = tokio::time::timeout(
+        tool_timeout,
+        get_or_fetch_typed(
+            toolkit,
+            key,
+            toolkit.config().cache_ttls.zotero_items,
+            || {
+                let scope = to_scope(&normalized.scope);
+                async move {
+                    let mut by_key: HashMap<String, (ZoteroItem, HashSet<String>)> = HashMap::new();
 
-                // Fetch each tag independently and keep only items that appear for all tags.
-                for tag in &normalized.tags {
-                    let tag_key = tag.to_ascii_lowercase();
-                    let mut offset = 0;
+                    // Fetch each tag independently and keep only items that appear for all tags.
+                    for tag in &normalized.tags {
+                        let tag_key = tag.to_ascii_lowercase();
+                        let mut offset = 0;
 
-                    loop {
-                        let page = zotero::search_items(
-                            toolkit.http(),
-                            ZoteroConfig {
-                                base_url: &toolkit.config().zotero_base_url,
-                                api_key: &api_key,
-                            },
-                            &scope,
-                            &ZoteroSearchRequest {
-                                query: None,
-                                tag: Some(tag),
-                                offset,
-                                limit: ZOTERO_MAX_PAGE_SIZE,
-                                item_type: normalized.item_type.as_deref(),
-                            },
-                        )
-                        .await?;
+                        loop {
+                            let page = zotero::search_items(
+                                toolkit.http(),
+                                ZoteroConfig {
+                                    base_url: &toolkit.config().zotero_base_url,
+                                    api_key: &api_key,
+                                },
+                                &scope,
+                                &ZoteroSearchRequest {
+                                    query: None,
+                                    tag: Some(tag),
+                                    offset,
+                                    limit: ZOTERO_MAX_PAGE_SIZE,
+                                    item_type: normalized.item_type.as_deref(),
+                                },
+                            )
+                            .await?;
 
-                        let fetched = u32::try_from(page.items.len()).unwrap_or(0);
-                        for item in page.items {
-                            let entry = by_key
-                                .entry(item.key.clone())
-                                .or_insert_with(|| (item, HashSet::new()));
-                            entry.1.insert(tag_key.clone());
+                            let fetched = u32::try_from(page.items.len()).unwrap_or(0);
+                            for item in page.items {
+                                let entry = by_key
+                                    .entry(item.key.clone())
+                                    .or_insert_with(|| (item, HashSet::new()));
+                                entry.1.insert(tag_key.clone());
+                            }
+
+                            if !page.has_more || fetched == 0 {
+                                break;
+                            }
+
+                            offset = offset.saturating_add(fetched);
                         }
-
-                        if !page.has_more || fetched == 0 {
-                            break;
-                        }
-
-                        offset = offset.saturating_add(fetched);
                     }
-                }
 
-                let required = normalized.tags.len();
-                let mut matched = by_key
-                    .into_values()
-                    .filter_map(|(item, seen_tags)| {
-                        if seen_tags.len() == required {
-                            Some(item)
-                        } else {
-                            None
-                        }
+                    let required = normalized.tags.len();
+                    let mut matched = by_key
+                        .into_values()
+                        .filter_map(|(item, seen_tags)| {
+                            if seen_tags.len() == required {
+                                Some(item)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
+                    matched.sort_by(|left, right| {
+                        left.title
+                            .cmp(&right.title)
+                            .then_with(|| left.key.cmp(&right.key))
+                    });
+
+                    let total = matched.len();
+                    let offset = normalized.offset as usize;
+                    let limit = normalized.limit as usize;
+                    let items = matched
+                        .into_iter()
+                        .skip(offset)
+                        .take(limit)
+                        .collect::<Vec<_>>();
+
+                    Ok(ZoteroSearchResult {
+                        has_more: offset + items.len() < total,
+                        total_available: Some(u64::try_from(total).unwrap_or(u64::MAX)),
+                        items,
                     })
-                    .collect::<Vec<_>>();
-
-                matched.sort_by(|left, right| {
-                    left.title
-                        .cmp(&right.title)
-                        .then_with(|| left.key.cmp(&right.key))
-                });
-
-                let total = matched.len();
-                let offset = normalized.offset as usize;
-                let limit = normalized.limit as usize;
-                let items = matched
-                    .into_iter()
-                    .skip(offset)
-                    .take(limit)
-                    .collect::<Vec<_>>();
-
-                Ok(ZoteroSearchResult {
-                    has_more: offset + items.len() < total,
-                    total_available: Some(u64::try_from(total).unwrap_or(u64::MAX)),
-                    items,
-                })
-            }
-        },
+                }
+            },
+        ),
     )
-    .await?;
+    .await
+    .map_err(|_| ResearchError::Timeout {
+        api: ResearchApi::Zotero,
+        timeout_ms,
+    })??;
 
     apply_items_budget(&mut result.items, normalized.max_chars_per_item);
     Ok(result)
@@ -542,7 +552,7 @@ fn normalize_tag_search_params(
     let mut tags = params
         .tags
         .into_iter()
-        .map(|tag| tag.trim().to_string())
+        .map(|tag| tag.trim().to_ascii_lowercase())
         .filter(|tag| !tag.is_empty())
         .collect::<Vec<_>>();
 
@@ -1000,6 +1010,55 @@ mod tests {
         let result = toolkit
             .zotero_search_by_tag(ZoteroTagSearchParams {
                 tags: vec!["ml".to_string(), "vision".to_string()],
+                library_type: None,
+                library_id: None,
+                offset: Some(0),
+                limit: Some(10),
+                item_type: None,
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_search_by_tag should succeed");
+
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].key, "ITEM1");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_search_by_tag_dedups_tags_case_insensitively() {
+        let server = MockServer::start().await;
+
+        let tag_result = serde_json::json!([
+            {
+                "key": "ITEM1",
+                "data": {
+                    "itemType": "journalArticle",
+                    "title": "Item One",
+                    "creators": [],
+                    "tags": [{"tag": "ml"}]
+                }
+            }
+        ]);
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("tag", "ML"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(tag_result.clone()))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("tag", "ml"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(tag_result))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+
+        let result = toolkit
+            .zotero_search_by_tag(ZoteroTagSearchParams {
+                tags: vec!["ML".to_string(), "ml".to_string()],
                 library_type: None,
                 library_id: None,
                 offset: Some(0),
