@@ -387,7 +387,16 @@ pub fn research_output_schema() -> Value {
                     "items": { "$ref": "#/$defs/proposal_repo_assessment" }
                 }
             },
-            "required": ["name", "summary"]
+            "required": [
+                "rank",
+                "name",
+                "summary",
+                "key_papers",
+                "technical_approach",
+                "justification",
+                "strengths",
+                "weaknesses"
+            ]
         }),
     );
 
@@ -641,6 +650,30 @@ mod tests {
         assert_eq!(
             schema["$defs"]["proposal_repo_assessment"]["required"],
             json!(["repo_url"])
+        );
+    }
+
+    #[test]
+    fn proposal_required_fields_match_design_contract() {
+        let schema = research_output_schema();
+        let required = schema["$defs"]["proposal"]["required"]
+            .as_array()
+            .expect("array")
+            .iter()
+            .map(|value| value.as_str().expect("string"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            required,
+            vec![
+                "rank",
+                "name",
+                "summary",
+                "key_papers",
+                "technical_approach",
+                "justification",
+                "strengths",
+                "weaknesses"
+            ]
         );
     }
 }

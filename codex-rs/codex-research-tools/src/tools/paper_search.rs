@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use serde::Serialize;
 
 use crate::ResearchToolkit;
@@ -490,8 +492,40 @@ async fn search_semantic_scholar(
     toolkit: &ResearchToolkit,
     params: &NormalizedPaperSearchParams,
 ) -> Result<SearchPage> {
+    search_with_cache(toolkit, "paper_search_semantic_scholar", params, || async {
+        semantic_scholar::search(
+            toolkit.http(),
+            SemanticScholarConfig {
+                base_url: &toolkit.config().semantic_scholar_base_url,
+                api_key: toolkit.config().semantic_scholar_api_key.as_deref(),
+            },
+            &SemanticScholarSearchRequest {
+                query: &params.query,
+                year_from: params.year_from,
+                year_to: params.year_to,
+                fields_of_study: params.fields_of_study.as_deref(),
+                offset: params.offset,
+                limit: params.limit,
+                include_abstract: params.include_abstract,
+            },
+        )
+        .await
+    })
+    .await
+}
+
+async fn search_with_cache<F, Fut>(
+    toolkit: &ResearchToolkit,
+    tool_name: &'static str,
+    params: &NormalizedPaperSearchParams,
+    fetch: F,
+) -> Result<SearchPage>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<SearchPage>>,
+{
     let key = CacheKey {
-        tool_name: "paper_search_semantic_scholar",
+        tool_name,
         params_hash: hash_cache_payload(params)?,
     };
 
@@ -499,25 +533,7 @@ async fn search_semantic_scholar(
         toolkit,
         key,
         toolkit.config().cache_ttls.paper_search,
-        || async {
-            semantic_scholar::search(
-                toolkit.http(),
-                SemanticScholarConfig {
-                    base_url: &toolkit.config().semantic_scholar_base_url,
-                    api_key: toolkit.config().semantic_scholar_api_key.as_deref(),
-                },
-                &SemanticScholarSearchRequest {
-                    query: &params.query,
-                    year_from: params.year_from,
-                    year_to: params.year_to,
-                    fields_of_study: params.fields_of_study.as_deref(),
-                    offset: params.offset,
-                    limit: params.limit,
-                    include_abstract: params.include_abstract,
-                },
-            )
-            .await
-        },
+        fetch,
     )
     .await
 }
@@ -526,31 +542,21 @@ async fn search_arxiv(
     toolkit: &ResearchToolkit,
     params: &NormalizedPaperSearchParams,
 ) -> Result<SearchPage> {
-    let key = CacheKey {
-        tool_name: "paper_search_arxiv",
-        params_hash: hash_cache_payload(params)?,
-    };
-
-    get_or_fetch_typed(
-        toolkit,
-        key,
-        toolkit.config().cache_ttls.paper_search,
-        || async {
-            arxiv::search(
-                toolkit.http(),
-                &toolkit.config().arxiv_base_url,
-                &ArxivSearchRequest {
-                    query: &params.query,
-                    year_from: params.year_from,
-                    year_to: params.year_to,
-                    offset: params.offset,
-                    limit: params.limit,
-                    include_abstract: params.include_abstract,
-                },
-            )
-            .await
-        },
-    )
+    search_with_cache(toolkit, "paper_search_arxiv", params, || async {
+        arxiv::search(
+            toolkit.http(),
+            &toolkit.config().arxiv_base_url,
+            &ArxivSearchRequest {
+                query: &params.query,
+                year_from: params.year_from,
+                year_to: params.year_to,
+                offset: params.offset,
+                limit: params.limit,
+                include_abstract: params.include_abstract,
+            },
+        )
+        .await
+    })
     .await
 }
 
@@ -558,32 +564,22 @@ async fn search_openalex(
     toolkit: &ResearchToolkit,
     params: &NormalizedPaperSearchParams,
 ) -> Result<SearchPage> {
-    let key = CacheKey {
-        tool_name: "paper_search_openalex",
-        params_hash: hash_cache_payload(params)?,
-    };
-
-    get_or_fetch_typed(
-        toolkit,
-        key,
-        toolkit.config().cache_ttls.paper_search,
-        || async {
-            openalex::search(
-                toolkit.http(),
-                &toolkit.config().openalex_base_url,
-                &OpenAlexSearchRequest {
-                    polite_email: toolkit.config().openalex_email.as_deref(),
-                    query: &params.query,
-                    year_from: params.year_from,
-                    year_to: params.year_to,
-                    offset: params.offset,
-                    limit: params.limit,
-                    include_abstract: params.include_abstract,
-                },
-            )
-            .await
-        },
-    )
+    search_with_cache(toolkit, "paper_search_openalex", params, || async {
+        openalex::search(
+            toolkit.http(),
+            &toolkit.config().openalex_base_url,
+            &OpenAlexSearchRequest {
+                polite_email: toolkit.config().openalex_email.as_deref(),
+                query: &params.query,
+                year_from: params.year_from,
+                year_to: params.year_to,
+                offset: params.offset,
+                limit: params.limit,
+                include_abstract: params.include_abstract,
+            },
+        )
+        .await
+    })
     .await
 }
 

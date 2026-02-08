@@ -7,6 +7,36 @@ use rmcp::model::Tool;
 #[cfg(feature = "research")]
 use std::collections::BTreeMap;
 
+#[cfg(feature = "research")]
+macro_rules! set_tool_name_for_id {
+    ($self:ident, $id:ident, $resolved_name:ident) => {
+        match $id {
+            "paper_search" => $self.paper_search = $resolved_name,
+            "paper_get" => $self.paper_get = $resolved_name,
+            "paper_citations" => $self.paper_citations = $resolved_name,
+            "paper_references" => $self.paper_references = $resolved_name,
+            "zotero_search" => $self.zotero_search = $resolved_name,
+            "zotero_get_item" => $self.zotero_get_item = $resolved_name,
+            "zotero_get_fulltext" => $self.zotero_get_fulltext = $resolved_name,
+            "zotero_get_notes" => $self.zotero_get_notes = $resolved_name,
+            "zotero_get_attachments" => $self.zotero_get_attachments = $resolved_name,
+            "zotero_search_by_tag" => $self.zotero_search_by_tag = $resolved_name,
+            "zotero_get_collections" => $self.zotero_get_collections = $resolved_name,
+            "zotero_get_collection_items" => $self.zotero_get_collection_items = $resolved_name,
+            "repo_clone_and_summarize" => $self.repo_clone_and_summarize = $resolved_name,
+            "repo_find_models" => $self.repo_find_models = $resolved_name,
+            "repo_extract_requirements" => $self.repo_extract_requirements = $resolved_name,
+            "repo_find_entrypoints" => $self.repo_find_entrypoints = $resolved_name,
+            "repo_extract_io_shapes" => $self.repo_extract_io_shapes = $resolved_name,
+            "repo_get_health" => $self.repo_get_health = $resolved_name,
+            "repo_find_export_paths" => $self.repo_find_export_paths = $resolved_name,
+            "repo_extract_config_schema" => $self.repo_extract_config_schema = $resolved_name,
+            "repo_diff_requirements" => $self.repo_diff_requirements = $resolved_name,
+            _ => {}
+        }
+    };
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ResearchToolAvailability {
     pub has_paper_search: bool,
@@ -120,30 +150,7 @@ impl ResearchToolNames {
 
     #[cfg(feature = "research")]
     fn set_name_for_id(&mut self, id: &str, resolved_name: String) {
-        match id {
-            "paper_search" => self.paper_search = resolved_name,
-            "paper_get" => self.paper_get = resolved_name,
-            "paper_citations" => self.paper_citations = resolved_name,
-            "paper_references" => self.paper_references = resolved_name,
-            "zotero_search" => self.zotero_search = resolved_name,
-            "zotero_get_item" => self.zotero_get_item = resolved_name,
-            "zotero_get_fulltext" => self.zotero_get_fulltext = resolved_name,
-            "zotero_get_notes" => self.zotero_get_notes = resolved_name,
-            "zotero_get_attachments" => self.zotero_get_attachments = resolved_name,
-            "zotero_search_by_tag" => self.zotero_search_by_tag = resolved_name,
-            "zotero_get_collections" => self.zotero_get_collections = resolved_name,
-            "zotero_get_collection_items" => self.zotero_get_collection_items = resolved_name,
-            "repo_clone_and_summarize" => self.repo_clone_and_summarize = resolved_name,
-            "repo_find_models" => self.repo_find_models = resolved_name,
-            "repo_extract_requirements" => self.repo_extract_requirements = resolved_name,
-            "repo_find_entrypoints" => self.repo_find_entrypoints = resolved_name,
-            "repo_extract_io_shapes" => self.repo_extract_io_shapes = resolved_name,
-            "repo_get_health" => self.repo_get_health = resolved_name,
-            "repo_find_export_paths" => self.repo_find_export_paths = resolved_name,
-            "repo_extract_config_schema" => self.repo_extract_config_schema = resolved_name,
-            "repo_diff_requirements" => self.repo_diff_requirements = resolved_name,
-            _ => {}
-        }
+        set_tool_name_for_id!(self, id, resolved_name);
     }
 }
 
