@@ -3,21 +3,11 @@ use rmcp::model::Tool;
 #[cfg(feature = "research")]
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ResearchToolAvailability {
     pub has_paper_search: bool,
     pub has_zotero: bool,
     pub has_repo_analysis: bool,
-}
-
-impl Default for ResearchToolAvailability {
-    fn default() -> Self {
-        Self {
-            has_paper_search: false,
-            has_zotero: false,
-            has_repo_analysis: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

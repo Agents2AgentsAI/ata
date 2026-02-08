@@ -686,13 +686,12 @@ impl SessionConfiguration {
             next_configuration.cwd = cwd;
         }
         // Switch provider if model_provider is specified
-        if let Some(provider_id) = &updates.model_provider {
-            if let Some(provider) = crate::model_provider_info::built_in_model_providers()
+        if let Some(provider_id) = &updates.model_provider
+            && let Some(provider) = crate::model_provider_info::built_in_model_providers()
                 .get(provider_id)
                 .cloned()
-            {
-                next_configuration.provider = provider;
-            }
+        {
+            next_configuration.provider = provider;
         }
         Ok(next_configuration)
     }

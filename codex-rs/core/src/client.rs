@@ -1271,8 +1271,7 @@ impl ModelClientSession {
                         let body = response.text().await.unwrap_or_default();
                         let _ = tx_event
                             .send(Err(CodexErr::Api(format!(
-                                "Anthropic API error {}: {}",
-                                status, body
+                                "Anthropic API error {status}: {body}"
                             ))))
                             .await;
                         return;
@@ -1363,7 +1362,7 @@ impl ModelClientSession {
                             }
                             Ok(Some(Err(e))) => {
                                 let _ = tx_event
-                                    .send(Err(CodexErr::Api(format!("Stream error: {}", e))))
+                                    .send(Err(CodexErr::Api(format!("Stream error: {e}"))))
                                     .await;
                                 return;
                             }
@@ -1388,7 +1387,7 @@ impl ModelClientSession {
                 }
                 Err(e) => {
                     let _ = tx_event
-                        .send(Err(CodexErr::Api(format!("Request failed: {}", e))))
+                        .send(Err(CodexErr::Api(format!("Request failed: {e}"))))
                         .await;
                 }
             }
@@ -1467,7 +1466,7 @@ impl ModelClientSession {
             .as_deref()
             .unwrap_or("https://generativelanguage.googleapis.com/v1beta");
         let endpoint = adapter.streaming_endpoint(&model_info.slug);
-        let url = format!("{}{}?alt=sse", base_url, endpoint);
+        let url = format!("{base_url}{endpoint}?alt=sse");
 
         // Build request with API key in header (not URL) to prevent leakage in error messages
         let client = build_reqwest_client();
@@ -1492,8 +1491,7 @@ impl ModelClientSession {
                         let body = response.text().await.unwrap_or_default();
                         let _ = tx_event
                             .send(Err(CodexErr::Api(format!(
-                                "Gemini API error {}: {}",
-                                status, body
+                                "Gemini API error {status}: {body}"
                             ))))
                             .await;
                         return;
@@ -1598,30 +1596,27 @@ impl ModelClientSession {
                             }
                             Ok(Some(Err(e))) => {
                                 let _ = tx_event
-                                    .send(Err(CodexErr::Api(format!("Stream error: {}", e))))
+                                    .send(Err(CodexErr::Api(format!("Stream error: {e}"))))
                                     .await;
                                 return;
                             }
                             Ok(None) => {
                                 // Stream ended - process any remaining buffer
-                                if !buffer.trim().is_empty() {
-                                    if let Some(data_line) =
+                                if !buffer.trim().is_empty()
+                                    && let Some(data_line) =
                                         buffer.lines().find(|line| line.starts_with("data: "))
+                                {
+                                    let data = &data_line[6..];
+                                    if data.trim() != "[DONE]"
+                                        && let Ok(evts) = codex_api::sse::gemini::parse_gemini_chunk(
+                                            data, &mut state,
+                                        )
                                     {
-                                        let data = &data_line[6..];
-                                        if data.trim() != "[DONE]" {
-                                            if let Ok(evts) =
-                                                codex_api::sse::gemini::parse_gemini_chunk(
-                                                    data, &mut state,
-                                                )
-                                            {
-                                                for evt in evts {
-                                                    if matches!(evt, ResponseEvent::Created) {
-                                                        continue;
-                                                    }
-                                                    let _ = tx_event.send(Ok(evt)).await;
-                                                }
+                                        for evt in evts {
+                                            if matches!(evt, ResponseEvent::Created) {
+                                                continue;
                                             }
+                                            let _ = tx_event.send(Ok(evt)).await;
                                         }
                                     }
                                 }
@@ -1645,7 +1640,7 @@ impl ModelClientSession {
                 }
                 Err(e) => {
                     let _ = tx_event
-                        .send(Err(CodexErr::Api(format!("Request failed: {}", e))))
+                        .send(Err(CodexErr::Api(format!("Request failed: {e}"))))
                         .await;
                 }
             }

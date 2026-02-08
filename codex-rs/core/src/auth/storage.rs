@@ -113,15 +113,15 @@ impl AuthDotJson {
         }
 
         // Migrate legacy OPENAI_API_KEY to providers map
-        if let Some(ref api_key) = self.openai_api_key {
-            if !self.providers.contains_key(PROVIDER_OPENAI) {
-                self.providers.insert(
-                    PROVIDER_OPENAI.to_string(),
-                    ProviderCredential::Api {
-                        key: api_key.clone(),
-                    },
-                );
-            }
+        if let Some(ref api_key) = self.openai_api_key
+            && !self.providers.contains_key(PROVIDER_OPENAI)
+        {
+            self.providers.insert(
+                PROVIDER_OPENAI.to_string(),
+                ProviderCredential::Api {
+                    key: api_key.clone(),
+                },
+            );
         }
 
         // Update version to v2
@@ -1055,7 +1055,7 @@ mod tests {
             providers,
         };
 
-        let result = v2.clone().migrate_if_needed();
+        let result = v2.migrate_if_needed();
 
         // Should not add openai provider if it wasn't there
         assert!(!result.providers.contains_key(PROVIDER_OPENAI));

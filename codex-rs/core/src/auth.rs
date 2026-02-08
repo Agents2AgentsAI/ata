@@ -171,7 +171,7 @@ impl CodexAuth {
             // Try to get an API key - first from providers map, then from legacy field
             let api_key = auth_dot_json
                 .get_provider_api_key(PROVIDER_OPENAI)
-                .or_else(|| auth_dot_json.openai_api_key.as_deref())
+                .or(auth_dot_json.openai_api_key.as_deref())
                 .or_else(|| {
                     // If no OpenAI key, check for any configured provider key
                     // This allows users to use codex with just Anthropic/Gemini
@@ -487,7 +487,7 @@ pub fn get_provider_api_key(
     match storage.load() {
         Ok(Some(auth)) => auth
             .get_provider_api_key(provider_id)
-            .map(|s| s.to_string()),
+            .map(std::string::ToString::to_string),
         Ok(None) => None,
         Err(err) => {
             tracing::warn!(
@@ -522,13 +522,14 @@ pub fn list_configured_providers(
     match storage.load() {
         Ok(Some(auth)) => {
             // Check for ChatGPT OAuth authentication (includes OpenAI as configured)
-            if auth.auth_mode == Some(ApiAuthMode::Chatgpt) && auth.tokens.is_some() {
-                if !result.iter().any(|p| p.provider_id == PROVIDER_OPENAI) {
-                    result.push(ProviderAuthStatus {
-                        provider_id: PROVIDER_OPENAI.to_string(),
-                        source: ProviderAuthSource::Stored,
-                    });
-                }
+            if auth.auth_mode == Some(ApiAuthMode::Chatgpt)
+                && auth.tokens.is_some()
+                && !result.iter().any(|p| p.provider_id == PROVIDER_OPENAI)
+            {
+                result.push(ProviderAuthStatus {
+                    provider_id: PROVIDER_OPENAI.to_string(),
+                    source: ProviderAuthSource::Stored,
+                });
             }
 
             for provider_id in auth.configured_providers() {
