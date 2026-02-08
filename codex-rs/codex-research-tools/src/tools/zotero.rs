@@ -764,7 +764,14 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
         return value.to_string();
     }
 
-    let mut truncated = value.chars().take(max_chars).collect::<String>();
+    if max_chars <= 3 {
+        return value.chars().take(max_chars).collect::<String>();
+    }
+
+    let mut truncated = value
+        .chars()
+        .take(max_chars.saturating_sub(3))
+        .collect::<String>();
     truncated.push_str("...");
     truncated
 }
@@ -962,7 +969,7 @@ mod tests {
             })
             .await
             .expect("zotero_get_fulltext should succeed");
-        assert_eq!(fulltext.content, "abcde...");
+        assert_eq!(fulltext.content, "ab...");
 
         let notes = toolkit
             .zotero_get_notes(ZoteroItemParams {
@@ -974,7 +981,7 @@ mod tests {
             .await
             .expect("zotero_get_notes should succeed");
         assert_eq!(notes.notes.len(), 1);
-        assert_eq!(notes.notes[0].title, Some("note...".to_string()));
+        assert_eq!(notes.notes[0].title, Some("n...".to_string()));
 
         let attachments = toolkit
             .zotero_get_attachments(ZoteroItemParams {
@@ -986,10 +993,7 @@ mod tests {
             .await
             .expect("zotero_get_attachments should succeed");
         assert_eq!(attachments.attachments.len(), 1);
-        assert_eq!(
-            attachments.attachments[0].title,
-            Some("paper...".to_string())
-        );
+        assert_eq!(attachments.attachments[0].title, Some("pa...".to_string()));
     }
 
     #[tokio::test(flavor = "multi_thread")]

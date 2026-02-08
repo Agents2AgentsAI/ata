@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
@@ -42,9 +43,18 @@ impl ResearchBridgeHandler {
         let guarded = AssertUnwindSafe(fut).catch_unwind().await;
         match guarded {
             Ok(result) => result,
-            Err(_) => Err(FunctionCallError::RespondToModel(
-                ResearchError::InternalPanic.to_string(),
-            )),
+            Err(payload) => {
+                let panic_message = panic_payload_to_message(payload.as_ref());
+                tracing::error!(
+                    tool_name,
+                    panic_message = %panic_message,
+                    "research tool panicked"
+                );
+                Err(FunctionCallError::RespondToModel(format!(
+                    "{}: {panic_message}",
+                    ResearchError::InternalPanic
+                )))
+            }
         }
     }
 
@@ -253,6 +263,16 @@ fn map_research_error(err: ResearchError) -> FunctionCallError {
     FunctionCallError::RespondToModel(err.to_string())
 }
 
+fn panic_payload_to_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return (*message).to_string();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    "non-string panic payload".to_string()
+}
+
 fn serialize_tool_output<T>(value: &T) -> Result<ToolOutput, FunctionCallError>
 where
     T: Serialize,
@@ -260,7 +280,7 @@ where
     let body = serde_json::to_string(value)
         .map(FunctionCallOutputBody::Text)
         .map_err(|err| {
-            FunctionCallError::Fatal(format!("failed to serialize research output: {err}"))
+            FunctionCallError::RespondToModel(format!("failed to serialize research output: {err}"))
         })?;
 
     Ok(ToolOutput::Function {
@@ -362,5 +382,20 @@ mod tests {
         assert_eq!(parsed.paper.title, "Main Paper");
         assert_eq!(parsed.references.len(), 1);
         assert_eq!(parsed.references[0].title, "Reference Paper");
+    }
+
+    #[test]
+    fn panic_payload_to_message_extracts_string_payloads() {
+        let string_payload: Box<dyn Any + Send> = Box::new("boom".to_string());
+        assert_eq!(panic_payload_to_message(string_payload.as_ref()), "boom");
+
+        let str_payload: Box<dyn Any + Send> = Box::new("kaboom");
+        assert_eq!(panic_payload_to_message(str_payload.as_ref()), "kaboom");
+
+        let other_payload: Box<dyn Any + Send> = Box::new(42_u32);
+        assert_eq!(
+            panic_payload_to_message(other_payload.as_ref()),
+            "non-string panic payload"
+        );
     }
 }

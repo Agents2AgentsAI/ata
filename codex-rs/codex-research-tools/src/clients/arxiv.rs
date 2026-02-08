@@ -28,6 +28,9 @@ pub(crate) async fn search(
         .await?;
 
     let parsed = parse_feed(&xml, &url, request.include_abstract)?;
+    let total_before_filter = parsed.total_available;
+    let page_len_before_filter = parsed.papers.len();
+    let has_year_filter = request.year_from.is_some() || request.year_to.is_some();
     let papers = parsed
         .papers
         .into_iter()
@@ -41,13 +44,20 @@ pub(crate) async fn search(
         })
         .collect::<Vec<_>>();
 
-    let has_more = parsed.total_available.is_some_and(|total| {
-        total > u64::from(request.offset) + u64::try_from(papers.len()).unwrap_or(0)
+    // arXiv totalResults is computed before local year filtering. Use the raw page
+    // length for paging math and treat total_available as unknown when year filters
+    // are active to avoid implying an exact filtered total.
+    let has_more = total_before_filter.is_some_and(|total| {
+        total > u64::from(request.offset) + u64::try_from(page_len_before_filter).unwrap_or(0)
     });
 
     Ok(SearchPage {
         papers,
-        total_available: parsed.total_available,
+        total_available: if has_year_filter {
+            None
+        } else {
+            total_before_filter
+        },
         has_more,
     })
 }
@@ -338,4 +348,79 @@ fn clean_text(value: &str) -> String {
 
 fn normalize_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use pretty_assertions::assert_eq;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    use super::ArxivSearchRequest;
+    use super::search;
+    use crate::config::RetryConfig;
+    use crate::http_client::HttpClient;
+    use crate::rate_limiter::RateLimiter;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn year_filtered_search_marks_total_available_unknown() {
+        let server = MockServer::start().await;
+        let feed = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <opensearch:totalResults>3</opensearch:totalResults>
+  <entry>
+    <id>http://arxiv.org/abs/2301.12345v1</id>
+    <title>Recent Paper</title>
+    <summary>Recent summary</summary>
+    <published>2023-01-01T00:00:00Z</published>
+    <author><name>Alice</name></author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1901.12345v1</id>
+    <title>Old Paper</title>
+    <summary>Old summary</summary>
+    <published>2019-01-01T00:00:00Z</published>
+    <author><name>Bob</name></author>
+  </entry>
+</feed>"#;
+
+        Mock::given(method("GET"))
+            .and(path("/api/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(feed, "application/atom+xml"))
+            .mount(&server)
+            .await;
+
+        let http = HttpClient::new(
+            reqwest::Client::new(),
+            Arc::new(RateLimiter::new(HashMap::new())),
+            RetryConfig::default(),
+            Duration::from_secs(30),
+        );
+
+        let page = search(
+            &http,
+            &server.uri(),
+            &ArxivSearchRequest {
+                query: "vision",
+                year_from: Some(2022),
+                year_to: None,
+                offset: 0,
+                limit: 2,
+                include_abstract: true,
+            },
+        )
+        .await
+        .expect("search should succeed");
+
+        assert_eq!(page.papers.len(), 1);
+        assert_eq!(page.total_available, None);
+        assert!(page.has_more);
+    }
 }

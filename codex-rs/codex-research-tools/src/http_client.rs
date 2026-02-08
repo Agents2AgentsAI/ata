@@ -17,6 +17,7 @@ pub struct HttpClient {
     inner: reqwest::Client,
     rate_limiter: Arc<RateLimiter>,
     retry_config: RetryConfig,
+    request_timeout: Duration,
 }
 
 impl HttpClient {
@@ -25,11 +26,13 @@ impl HttpClient {
         inner: reqwest::Client,
         rate_limiter: Arc<RateLimiter>,
         retry_config: RetryConfig,
+        request_timeout: Duration,
     ) -> Self {
         Self {
             inner,
             rate_limiter,
             retry_config,
+            request_timeout,
         }
     }
 
@@ -102,7 +105,7 @@ impl HttpClient {
                     if err.is_timeout() {
                         return Err(ResearchError::Timeout {
                             api,
-                            timeout_ms: self.retry_config.max_delay.as_millis() as u64,
+                            timeout_ms: self.request_timeout.as_millis() as u64,
                         });
                     }
 
@@ -157,5 +160,77 @@ fn truncate_error_body(body: &str) -> String {
         return body.to_string();
     }
 
-    format!("{}...", &body[..MAX])
+    let mut end = MAX;
+    while !body.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+
+    format!("{}...", &body[..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use pretty_assertions::assert_eq;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    use super::*;
+    use crate::rate_limiter::ResearchApi;
+
+    #[test]
+    fn truncate_error_body_respects_utf8_boundaries() {
+        let body = format!("{}étrès long", "a".repeat(511));
+        let truncated = truncate_error_body(&body);
+        assert!(truncated.ends_with("..."));
+        assert_eq!(truncated.as_bytes()[510], b'a');
+        assert_eq!(truncated.as_bytes()[511], b'.');
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn timeout_error_uses_request_timeout_not_retry_delay_cap() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/slow"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(100)))
+            .mount(&server)
+            .await;
+
+        let request_timeout = Duration::from_millis(25);
+        let client = reqwest::Client::builder()
+            .timeout(request_timeout)
+            .build()
+            .expect("reqwest client");
+        let rate_limiter = Arc::new(RateLimiter::new(HashMap::new()));
+        let http = HttpClient::new(
+            client,
+            rate_limiter,
+            RetryConfig {
+                max_retries: 0,
+                base_delay: Duration::from_millis(1),
+                max_delay: Duration::from_secs(30),
+            },
+            request_timeout,
+        );
+
+        let err = http
+            .execute_text(ResearchApi::OpenAlex, || {
+                http.client().get(format!("{}/slow", server.uri()))
+            })
+            .await
+            .expect_err("request should time out");
+
+        match err {
+            ResearchError::Timeout { api, timeout_ms } => {
+                assert_eq!(api, ResearchApi::OpenAlex);
+                assert_eq!(timeout_ms, 25);
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
 }
