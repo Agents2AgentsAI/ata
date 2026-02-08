@@ -29,6 +29,7 @@ use crate::types::SourceStatus;
 const SOURCE_SEMANTIC_SCHOLAR: &str = "semantic_scholar";
 const SOURCE_ARXIV: &str = "arxiv";
 const SOURCE_OPENALEX: &str = "openalex";
+const MAX_MULTI_SOURCE_FETCH_LIMIT: u32 = 200;
 
 #[derive(Debug, Clone, Serialize)]
 struct NormalizedPaperSearchParams {
@@ -77,10 +78,12 @@ pub(crate) async fn paper_search(
 ) -> Result<SearchResult> {
     let normalized = normalize_paper_search_params(params)?;
     let selected_sources = resolve_sources(normalized.source.as_deref())?;
+    let (source_fetch_params, pagination_warning) =
+        source_fetch_params(&normalized, selected_sources);
 
     let semantic_future = async {
         if selected_sources.semantic_scholar {
-            Some(search_semantic_scholar(toolkit, &normalized).await)
+            Some(search_semantic_scholar(toolkit, &source_fetch_params).await)
         } else {
             None
         }
@@ -88,7 +91,7 @@ pub(crate) async fn paper_search(
 
     let arxiv_future = async {
         if selected_sources.arxiv {
-            Some(search_arxiv(toolkit, &normalized).await)
+            Some(search_arxiv(toolkit, &source_fetch_params).await)
         } else {
             None
         }
@@ -96,7 +99,7 @@ pub(crate) async fn paper_search(
 
     let openalex_future = async {
         if selected_sources.openalex {
-            Some(search_openalex(toolkit, &normalized).await)
+            Some(search_openalex(toolkit, &source_fetch_params).await)
         } else {
             None
         }
@@ -106,6 +109,9 @@ pub(crate) async fn paper_search(
         tokio::join!(semantic_future, arxiv_future, openalex_future);
 
     let mut aggregation = AggregationState::default();
+    if let Some(warning) = pagination_warning {
+        aggregation.warnings.push(warning);
+    }
     aggregation.record_source_result(SOURCE_SEMANTIC_SCHOLAR, semantic_result);
     aggregation.record_source_result(SOURCE_ARXIV, arxiv_result);
     aggregation.record_source_result(SOURCE_OPENALEX, openalex_result);
@@ -332,6 +338,37 @@ fn resolve_sources(source: Option<&str>) -> Result<SelectedSources> {
         Some(other) => Err(ResearchError::InvalidInput(format!(
             "unknown source '{other}' (expected one of: all, semantic_scholar, arxiv, openalex)"
         ))),
+    }
+}
+
+fn source_fetch_params(
+    params: &NormalizedPaperSearchParams,
+    selected_sources: SelectedSources,
+) -> (NormalizedPaperSearchParams, Option<String>) {
+    if selected_sources.enabled_count() <= 1 {
+        return (params.clone(), None);
+    }
+
+    let requested_window = params.offset.saturating_add(params.limit);
+    let effective_limit = requested_window.min(MAX_MULTI_SOURCE_FETCH_LIMIT);
+    let mut normalized = params.clone();
+    normalized.offset = 0;
+    normalized.limit = effective_limit;
+
+    let warning = if effective_limit < requested_window {
+        Some(format!(
+            "multi-source pagination window capped at {MAX_MULTI_SOURCE_FETCH_LIMIT}; large offsets may return incomplete results"
+        ))
+    } else {
+        None
+    };
+
+    (normalized, warning)
+}
+
+impl SelectedSources {
+    fn enabled_count(self) -> u32 {
+        u32::from(self.semantic_scholar) + u32::from(self.arxiv) + u32::from(self.openalex)
     }
 }
 
@@ -578,12 +615,14 @@ mod tests {
     use wiremock::ResponseTemplate;
     use wiremock::matchers::method;
     use wiremock::matchers::path;
+    use wiremock::matchers::query_param;
 
     use crate::ResearchToolkit;
     use crate::config::ResearchConfig;
     use crate::tools::test_helpers::build_test_toolkit_with_config;
     use crate::types::PaginationParams;
     use crate::types::PaperSearchParams;
+    use crate::types::SourceResult;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn paper_search_aggregates_sources_and_reports_partial_failure() {
@@ -704,6 +743,97 @@ mod tests {
                 .iter()
                 .any(|paper| paper.title == "A Distinct OpenAlex Paper")
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn paper_search_multi_source_fetches_zero_based_window_for_global_pagination() {
+        let semantic_server = MockServer::start().await;
+        let arxiv_server = MockServer::start().await;
+        let openalex_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/paper/search"))
+            .and(query_param("offset", "0"))
+            .and(query_param("limit", "30"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "total": 1,
+                "next": null,
+                "data": [{
+                    "paperId": "s2-paper-1",
+                    "title": "A Semantic Paper",
+                    "year": 2021,
+                    "citationCount": 10,
+                    "venue": "ICLR",
+                    "url": "https://example.org/s2-1",
+                    "externalIds": { "DOI": "10.1000/shared" },
+                    "authors": [{"name": "Alice"}]
+                }]
+            })))
+            .mount(&semantic_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+                <feed xmlns="http://www.w3.org/2005/Atom">
+                  <entry>
+                    <id>http://arxiv.org/abs/2301.12345v1</id>
+                    <title>arxiv result</title>
+                    <summary>summary</summary>
+                    <published>2023-01-01T00:00:00Z</published>
+                    <author><name>Alice</name></author>
+                  </entry>
+                </feed>"#,
+                "application/atom+xml",
+            ))
+            .mount(&arxiv_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/works"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "meta": {"count": 0},
+                "results": []
+            })))
+            .mount(&openalex_server)
+            .await;
+
+        let toolkit = build_test_toolkit(
+            semantic_server.uri(),
+            arxiv_server.uri(),
+            openalex_server.uri(),
+        );
+
+        let result = toolkit
+            .paper_search(PaperSearchParams {
+                query: "grasp detection".to_string(),
+                year_from: None,
+                year_to: None,
+                fields_of_study: None,
+                source: Some("all".to_string()),
+                sort_by: None,
+                offset: Some(20),
+                limit: Some(10),
+                include_abstract: Some(false),
+                fields: None,
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("paper_search should succeed");
+
+        assert!(
+            !result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("semantic_scholar search failed")),
+            "warnings: {:?}",
+            result.warnings
+        );
+        assert!(result.per_source_status.iter().any(|status| {
+            status.source == "semantic_scholar"
+                && matches!(&status.status, SourceResult::Ok { count: 1 })
+        }));
     }
 
     #[tokio::test(flavor = "multi_thread")]
