@@ -1229,6 +1229,7 @@ async fn make_chatwidget_with_provider(
         full_reasoning_buffer: String::new(),
         current_status_header: String::from("Working"),
         retry_status_header: None,
+        pending_status_indicator_restore: false,
         thread_id: None,
         thread_name: None,
         forked_from: None,
