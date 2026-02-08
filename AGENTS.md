@@ -113,6 +113,10 @@ If you don’t have the tool:
   // assert using request.function_call_output(call_id) or request.json_body() or other helpers.
   ```
 
+### Run tests in parallel:
+
+- Use `cargo nextest` instead of `cargo test` if possible to run tests in parallel.
+
 ## App-server API Development Best Practices
 
 These guidelines apply to app-server protocol work in `codex-rs`, especially:
