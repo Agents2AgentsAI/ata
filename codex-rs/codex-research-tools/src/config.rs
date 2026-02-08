@@ -18,6 +18,7 @@ pub struct ResearchConfig {
     pub arxiv_base_url: String,
     pub openalex_base_url: String,
     pub zotero_base_url: String,
+    pub github_api_base_url: String,
 
     pub connect_timeout: Duration,
     pub request_timeout: Duration,
@@ -90,6 +91,7 @@ impl Default for ResearchConfig {
             arxiv_base_url: "https://export.arxiv.org".to_string(),
             openalex_base_url: "https://api.openalex.org".to_string(),
             zotero_base_url: "https://api.zotero.org".to_string(),
+            github_api_base_url: "https://api.github.com".to_string(),
             connect_timeout: Duration::from_secs(10),
             request_timeout: Duration::from_secs(30),
             tool_timeout: Duration::from_secs(60),
@@ -120,6 +122,8 @@ impl ResearchConfig {
                 .unwrap_or_else(|_| "https://api.openalex.org".to_string()),
             zotero_base_url: std::env::var("ZOTERO_BASE_URL")
                 .unwrap_or_else(|_| "https://api.zotero.org".to_string()),
+            github_api_base_url: std::env::var("GITHUB_API_BASE_URL")
+                .unwrap_or_else(|_| "https://api.github.com".to_string()),
             ..Self::default()
         };
 
@@ -201,6 +205,7 @@ impl fmt::Debug for ResearchConfig {
             .field("arxiv_base_url", &self.arxiv_base_url)
             .field("openalex_base_url", &self.openalex_base_url)
             .field("zotero_base_url", &self.zotero_base_url)
+            .field("github_api_base_url", &self.github_api_base_url)
             .field("connect_timeout", &self.connect_timeout)
             .field("request_timeout", &self.request_timeout)
             .field("tool_timeout", &self.tool_timeout)

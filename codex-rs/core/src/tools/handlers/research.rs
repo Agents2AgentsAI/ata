@@ -188,6 +188,16 @@ impl ResearchBridgeHandler {
                     .map_err(map_research_error)?;
                 serialize_tool_output(&output)
             }
+            #[cfg(feature = "research-repo")]
+            "repo_get_health" => {
+                let params: RepoUrlArgs = parse_arguments(arguments)?;
+                let output = self
+                    .toolkit
+                    .repo_get_health(params.repo_url.as_str())
+                    .await
+                    .map_err(map_research_error)?;
+                serialize_tool_output(&output)
+            }
             _ => Err(FunctionCallError::RespondToModel(format!(
                 "unknown research tool: {tool_name}"
             ))),
@@ -283,6 +293,12 @@ struct PaperPaginationArgs {
     limit: Option<u32>,
     fields: Option<Vec<String>>,
     max_chars_per_item: Option<u32>,
+}
+
+#[cfg(feature = "research-repo")]
+#[derive(Deserialize)]
+struct RepoUrlArgs {
+    repo_url: String,
 }
 
 #[cfg(test)]
