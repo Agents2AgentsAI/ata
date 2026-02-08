@@ -11,6 +11,8 @@ use serde::de::DeserializeOwned;
 use crate::config::RetryConfig;
 use crate::error::ResearchError;
 use crate::error::Result;
+use crate::error::is_retryable_http_error;
+use crate::error::is_retryable_upstream_status;
 use crate::rate_limiter::RateLimiter;
 use crate::rate_limiter::ResearchApi;
 
@@ -105,7 +107,9 @@ impl HttpClient {
                     }
 
                     let status = resp.status();
-                    if should_retry_status(status) && attempt < self.retry_config.max_retries {
+                    if is_retryable_upstream_status(status)
+                        && attempt < self.retry_config.max_retries
+                    {
                         let retry_after = parse_retry_after(resp.headers());
                         let Some(remaining) = self.remaining_tool_time(started_at) else {
                             return Err(tool_timeout_error(api, self.tool_timeout));
@@ -126,7 +130,7 @@ impl HttpClient {
                     });
                 }
                 Err(err) => {
-                    if should_retry_error(&err) && attempt < self.retry_config.max_retries {
+                    if is_retryable_http_error(&err) && attempt < self.retry_config.max_retries {
                         let Some(remaining) = self.remaining_tool_time(started_at) else {
                             return Err(tool_timeout_error(api, self.tool_timeout));
                         };
@@ -173,14 +177,6 @@ impl HttpClient {
         let jitter_ms = rng.random_range(0..=max_jitter_ms);
         base + Duration::from_millis(jitter_ms)
     }
-}
-
-fn should_retry_status(status: reqwest::StatusCode) -> bool {
-    status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
-}
-
-fn should_retry_error(error: &reqwest::Error) -> bool {
-    error.is_timeout() || error.is_connect()
 }
 
 fn parse_retry_after(headers: &header::HeaderMap) -> Option<Duration> {

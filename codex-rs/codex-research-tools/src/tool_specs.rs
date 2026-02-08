@@ -109,7 +109,6 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                         "offset": { "type": "integer" },
                         "limit": { "type": "integer" },
                         "item_type": { "type": "string" },
-                        "fields": { "type": "array", "items": { "type": "string" } },
                         "max_chars_per_item": { "type": "integer" }
                     },
                     "required": ["query"],
@@ -413,8 +412,7 @@ mod tests {
     }
 
     #[test]
-    fn zotero_search_schema_exposes_optional_field_projection_and_budget() {
-        assert_schema_has_field("zotero_search", "fields");
+    fn zotero_search_schema_exposes_output_budget() {
         assert_schema_has_field("zotero_search", "max_chars_per_item");
     }
 

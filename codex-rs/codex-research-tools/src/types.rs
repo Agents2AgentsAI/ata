@@ -198,7 +198,6 @@ pub struct ZoteroSearchParams {
     pub offset: Option<u32>,
     pub limit: Option<u32>,
     pub item_type: Option<String>,
-    pub fields: Option<Vec<String>>,
     pub max_chars_per_item: Option<u32>,
 }
 
@@ -237,6 +236,5 @@ pub struct ZoteroCollectionItemsParams {
     pub offset: Option<u32>,
     pub limit: Option<u32>,
     pub item_type: Option<String>,
-    pub fields: Option<Vec<String>>,
     pub max_chars_per_item: Option<u32>,
 }

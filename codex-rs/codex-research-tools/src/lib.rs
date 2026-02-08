@@ -8,6 +8,7 @@ pub mod tool_specs;
 pub mod types;
 
 mod clients;
+mod text_utils;
 mod tools;
 
 use std::sync::Arc;

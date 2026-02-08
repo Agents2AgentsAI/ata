@@ -242,6 +242,20 @@ impl ResponseCache {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<FetchOutput>>,
     {
+        self.get_or_fetch_with_meta_ttls(key, ttl, ttl, fetch).await
+    }
+
+    pub async fn get_or_fetch_with_meta_ttls<F, Fut>(
+        &self,
+        key: CacheKey,
+        ttl: Duration,
+        negative_ttl: Duration,
+        fetch: F,
+    ) -> Result<FetchOutput>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<FetchOutput>>,
+    {
         if let Some(cached) = self.get_with_meta(&key).await {
             return Ok(cached);
         }
@@ -267,8 +281,18 @@ impl ResponseCache {
             Role::Leader(request) => {
                 let fetch_result = fetch().await;
                 if let Ok(output) = &fetch_result {
-                    self.insert(key.clone(), output.data.clone(), ttl, output.is_negative)
-                        .await;
+                    let entry_ttl = if output.is_negative {
+                        negative_ttl
+                    } else {
+                        ttl
+                    };
+                    self.insert(
+                        key.clone(),
+                        output.data.clone(),
+                        entry_ttl,
+                        output.is_negative,
+                    )
+                    .await;
                 }
                 {
                     let mut outcome = request.outcome.lock().await;
@@ -545,6 +569,33 @@ mod tests {
             .await;
 
         assert_eq!(cache.is_negative(&key).await, Some(true));
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dual_ttls_expire_negative_entries_earlier_than_positive_entries() -> Result<()> {
+        let cache = ResponseCache::new(8);
+        let key = CacheKey {
+            tool_name: "repo_get_health",
+            params_hash: 501,
+        };
+
+        let output = cache
+            .get_or_fetch_with_meta_ttls(
+                key.clone(),
+                Duration::from_secs(60),
+                Duration::from_millis(20),
+                || async move {
+                    Ok::<FetchOutput, ResearchError>(FetchOutput::negative(
+                        json!({"error": "missing"}),
+                    ))
+                },
+            )
+            .await?;
+        assert!(output.is_negative);
+
+        tokio::time::sleep(Duration::from_millis(35)).await;
+        assert_eq!(cache.get(&key).await, None);
         Ok(())
     }
 }
