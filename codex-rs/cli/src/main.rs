@@ -29,6 +29,7 @@ use codex_tui::ExitReason;
 use codex_tui::update_action::UpdateAction;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
+use std::io::Read;
 use std::path::PathBuf;
 use supports_color::Stream;
 
@@ -48,6 +49,11 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::features::Stage;
 use codex_core::features::is_known_feature_key;
+use codex_core::research::RESEARCHER_SYSTEM_PROMPT;
+use codex_core::research::ResearchPromptParams;
+use codex_core::research::ResearchToolNames;
+use codex_core::research::build_research_prompt;
+use codex_core::research::native_tool_availability;
 use codex_core::terminal::TerminalName;
 
 /// Codex CLI
@@ -87,6 +93,9 @@ enum Subcommand {
 
     /// Run a code review non-interactively.
     Review(ReviewArgs),
+
+    /// Run a structured multi-phase research workflow.
+    Research(ResearchArgs),
 
     /// Manage login.
     Login(LoginCommand),
@@ -151,6 +160,49 @@ struct CompletionCommand {
     /// Shell to generate completions for
     #[clap(value_enum, default_value_t = Shell::Bash)]
     shell: Shell,
+}
+
+#[derive(Debug, Parser, Clone)]
+struct ResearchArgs {
+    /// Research task description. Use `-` to read from stdin.
+    #[arg(value_name = "TASK", value_hint = clap::ValueHint::Other)]
+    task: Option<String>,
+
+    /// Number of ranked proposals to generate.
+    #[arg(long = "num-solutions", default_value_t = 3)]
+    num_solutions: usize,
+
+    /// Framework for optional scaffold generation.
+    #[arg(long = "framework", default_value = "pytorch")]
+    framework: String,
+
+    /// Enable Phase 4 code scaffolding.
+    #[arg(long = "generate-code", default_value_t = false)]
+    generate_code: bool,
+
+    /// Output directory for research artifacts.
+    #[arg(
+        long = "output",
+        value_name = "DIR",
+        default_value = "./research-output"
+    )]
+    output_path: PathBuf,
+
+    /// Optional codebase root for Phase 2b fit analysis.
+    #[arg(long = "codebase", value_name = "DIR")]
+    codebase_path: Option<PathBuf>,
+
+    /// Optional prior `research_results.json` for iteration mode.
+    #[arg(long = "prior-results", value_name = "FILE")]
+    prior_results_path: Option<PathBuf>,
+
+    /// Optional downstream feedback artifact for iteration mode.
+    #[arg(long = "feedback", value_name = "FILE")]
+    feedback_path: Option<PathBuf>,
+
+    /// Iteration index. `0` is the first run.
+    #[arg(long = "iteration", default_value_t = 0)]
+    iteration_number: u32,
 }
 
 #[derive(Debug, Parser)]
@@ -553,6 +605,69 @@ fn stage_str(stage: codex_core::features::Stage) -> &'static str {
     }
 }
 
+fn resolve_research_task(task_arg: Option<String>) -> anyhow::Result<String> {
+    match task_arg {
+        Some(task) if task == "-" => {
+            let mut task_from_stdin = String::new();
+            std::io::stdin().read_to_string(&mut task_from_stdin)?;
+            let trimmed = task_from_stdin.trim();
+            if trimmed.is_empty() {
+                anyhow::bail!("Research task read from stdin is empty");
+            }
+            Ok(trimmed.to_string())
+        }
+        Some(task) => {
+            let trimmed = task.trim();
+            if trimmed.is_empty() {
+                anyhow::bail!("Research task cannot be empty");
+            }
+            Ok(trimmed.to_string())
+        }
+        None => anyhow::bail!(
+            "Research task is required. Pass it as an argument or use '-' to read from stdin."
+        ),
+    }
+}
+
+fn build_research_command_prompt(
+    args: &ResearchArgs,
+    has_web_search: bool,
+) -> anyhow::Result<String> {
+    let task_description = resolve_research_task(args.task.clone())?;
+    let availability = native_tool_availability();
+    let params = ResearchPromptParams {
+        task_description,
+        num_solutions: args.num_solutions,
+        framework: args.framework.clone(),
+        generate_code: args.generate_code,
+        output_path: args.output_path.display().to_string(),
+        tool_names: ResearchToolNames::from_available_native(),
+        has_zotero: availability.has_zotero,
+        has_paper_search: availability.has_paper_search,
+        has_repo_analysis: availability.has_repo_analysis,
+        has_web_search,
+        has_user_codebase: args.codebase_path.is_some(),
+        codebase_path: args
+            .codebase_path
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        prior_results_path: args
+            .prior_results_path
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        feedback_path: args
+            .feedback_path
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        iteration_number: args.iteration_number,
+    };
+
+    let orchestrated_prompt = build_research_prompt(&params);
+    Ok(format!(
+        "{RESEARCHER_SYSTEM_PROMPT}\n\n{orchestrated_prompt}"
+    ))
+}
+
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
         cli_main(codex_linux_sandbox_exe).await?;
@@ -595,6 +710,41 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
             );
+            codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
+        }
+        Some(Subcommand::Research(research_args)) => {
+            let research_prompt =
+                build_research_command_prompt(&research_args, interactive.web_search)?;
+            let mut exec_cli = ExecCli::try_parse_from(["codex", "exec"])?;
+            exec_cli.prompt = Some(research_prompt);
+            exec_cli.model = interactive.model.clone();
+            exec_cli.oss = interactive.oss;
+            exec_cli.oss_provider = interactive.oss_provider.clone();
+            exec_cli.config_profile = interactive.config_profile.clone();
+            exec_cli.sandbox_mode = interactive.sandbox_mode;
+            exec_cli.full_auto = interactive.full_auto;
+            exec_cli.dangerously_bypass_approvals_and_sandbox =
+                interactive.dangerously_bypass_approvals_and_sandbox;
+            exec_cli.cwd = interactive.cwd.clone();
+            exec_cli.add_dir = interactive.add_dir.clone();
+            prepend_config_flags(
+                &mut exec_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            exec_cli
+                .config_overrides
+                .raw_overrides
+                .push("features.research=true".to_string());
+            exec_cli
+                .config_overrides
+                .raw_overrides
+                .push("features.collab=true".to_string());
+            if interactive.web_search {
+                exec_cli
+                    .config_overrides
+                    .raw_overrides
+                    .push("web_search=live".to_string());
+            }
             codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::McpServer) => {
@@ -1453,5 +1603,71 @@ mod tests {
             .to_overrides()
             .expect_err("feature should be rejected");
         assert_eq!(err.to_string(), "Unknown feature flag: does_not_exist");
+    }
+
+    #[test]
+    fn research_subcommand_parses_arguments() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "research",
+            "Investigate robust offline RL for robot pick-and-place",
+            "--num-solutions",
+            "4",
+            "--framework",
+            "jax",
+            "--generate-code",
+            "--output",
+            "./results",
+            "--codebase",
+            "./repo",
+            "--iteration",
+            "2",
+        ])
+        .expect("parse should succeed");
+
+        let Some(Subcommand::Research(args)) = cli.subcommand else {
+            panic!("expected research subcommand");
+        };
+
+        assert_eq!(
+            args.task.as_deref(),
+            Some("Investigate robust offline RL for robot pick-and-place")
+        );
+        assert_eq!(args.num_solutions, 4);
+        assert_eq!(args.framework, "jax");
+        assert!(args.generate_code);
+        assert_eq!(args.output_path, PathBuf::from("./results"));
+        assert_eq!(args.codebase_path, Some(PathBuf::from("./repo")));
+        assert_eq!(args.iteration_number, 2);
+    }
+
+    #[test]
+    fn research_prompt_builder_wraps_persona_and_task_prompt() {
+        let args = ResearchArgs {
+            task: Some("Find production-ready visual tracking approaches".to_string()),
+            num_solutions: 3,
+            framework: "pytorch".to_string(),
+            generate_code: false,
+            output_path: PathBuf::from("./research-output"),
+            codebase_path: None,
+            prior_results_path: None,
+            feedback_path: None,
+            iteration_number: 0,
+        };
+
+        let prompt = build_research_command_prompt(&args, true).expect("prompt should build");
+        assert!(prompt.starts_with(RESEARCHER_SYSTEM_PROMPT));
+        assert!(prompt.contains("Find production-ready visual tracking approaches"));
+        assert!(prompt.contains("### Phase 1: Problem Decomposition"));
+    }
+
+    #[test]
+    fn resolve_research_task_requires_non_empty_input() {
+        let err = resolve_research_task(None).expect_err("task should be required");
+        assert!(err.to_string().contains("Research task is required"));
+
+        let err = resolve_research_task(Some("   ".to_string()))
+            .expect_err("blank task should be rejected");
+        assert!(err.to_string().contains("cannot be empty"));
     }
 }

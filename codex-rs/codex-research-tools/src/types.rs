@@ -63,39 +63,6 @@ pub struct CitationResult {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct SotaEntry {
-    pub task: String,
-    pub dataset: String,
-    pub metric: String,
-    pub best_method: String,
-    pub best_score: Option<f64>,
-    pub paper_title: Option<String>,
-    pub paper_url: Option<String>,
-    pub code_url: Option<String>,
-    pub source_meta: Option<SourceMeta>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct SotaResult {
-    pub entries: Vec<SotaEntry>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct CodeRepo {
-    pub url: String,
-    pub framework: Option<String>,
-    pub stars: Option<u32>,
-    pub is_official: Option<bool>,
-    pub description: Option<String>,
-    pub source_meta: Option<SourceMeta>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct RepoListResult {
-    pub repos: Vec<CodeRepo>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroItem {
     pub key: String,
     pub title: String,
@@ -211,13 +178,6 @@ pub struct PaginationParams {
     pub limit: Option<u32>,
     pub fields: Option<Vec<String>>,
     pub max_chars_per_item: Option<u32>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct SotaSearchParams {
-    pub task: String,
-    pub dataset: Option<String>,
-    pub limit: Option<u32>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]

@@ -74,18 +74,12 @@ For each sub-problem, gather evidence and summarize key findings.\n\n",
     if params.has_paper_search {
         phase.push_str(&format!(
             "2. Run academic search via `{}`.\n\
-3. Track benchmark leaders via `{}`.\n\
-4. Expand graph via `{}` and `{}`.\n\
-5. Find implementations via `{}`.\n",
-            tool.paper_search,
-            tool.paper_search_sota,
-            tool.paper_citations,
-            tool.paper_references,
-            tool.paper_find_repos,
+3. Expand graph via `{}` and `{}`.\n",
+            tool.paper_search, tool.paper_citations, tool.paper_references,
         ));
     }
     if params.has_web_search {
-        phase.push_str("6. Use web search for recent practical deployments and tutorials.\n");
+        phase.push_str("4. Use web search for recent practical deployments and tutorials.\n");
     }
 
     phase.push_str(
@@ -215,7 +209,6 @@ mod tests {
         let rendered = build_research_prompt(&params());
         assert!(rendered.contains("`zotero_search`"));
         assert!(rendered.contains("`paper_search`"));
-        assert!(rendered.contains("`paper_search_sota`"));
         assert!(rendered.contains("`repo_find_entrypoints`"));
         assert!(rendered.contains("### Phase 4: Reproducible Pipeline Scaffolding"));
     }

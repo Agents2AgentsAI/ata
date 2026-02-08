@@ -24,10 +24,7 @@ use types::CitationResult;
 use types::PaginationParams;
 use types::PaperDetail;
 use types::PaperSearchParams;
-use types::RepoListResult;
 use types::SearchResult;
-use types::SotaResult;
-use types::SotaSearchParams;
 use types::ZoteroAttachmentsResult;
 use types::ZoteroCollectionItemsParams;
 use types::ZoteroCollectionsParams;
@@ -158,30 +155,6 @@ impl ResearchToolkit {
     ) -> Result<CitationResult> {
         Err(ResearchError::NotImplemented {
             tool: "paper_references",
-        })
-    }
-
-    #[cfg(feature = "paper_search")]
-    pub async fn paper_search_sota(&self, params: SotaSearchParams) -> Result<SotaResult> {
-        tools::sota::paper_search_sota(self, params).await
-    }
-
-    #[cfg(not(feature = "paper_search"))]
-    pub async fn paper_search_sota(&self, _params: SotaSearchParams) -> Result<SotaResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "paper_search_sota",
-        })
-    }
-
-    #[cfg(feature = "paper_search")]
-    pub async fn paper_find_repos(&self, paper_id: &str) -> Result<RepoListResult> {
-        tools::sota::paper_find_repos(self, paper_id).await
-    }
-
-    #[cfg(not(feature = "paper_search"))]
-    pub async fn paper_find_repos(&self, _paper_id: &str) -> Result<RepoListResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "paper_find_repos",
         })
     }
 

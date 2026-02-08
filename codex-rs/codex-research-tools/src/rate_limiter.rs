@@ -18,7 +18,6 @@ pub enum ResearchApi {
     SemanticScholar,
     Arxiv,
     OpenAlex,
-    PapersWithCode,
     Zotero,
     GitHub,
 }
@@ -29,7 +28,6 @@ impl fmt::Display for ResearchApi {
             Self::SemanticScholar => write!(f, "semantic_scholar"),
             Self::Arxiv => write!(f, "arxiv"),
             Self::OpenAlex => write!(f, "openalex"),
-            Self::PapersWithCode => write!(f, "papers_with_code"),
             Self::Zotero => write!(f, "zotero"),
             Self::GitHub => write!(f, "github"),
         }
