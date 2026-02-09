@@ -116,6 +116,12 @@ pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 
+struct PreconnectedWebSocket {
+    connection: ApiWebSocketConnection,
+    turn_state: Option<String>,
+}
+
+type PreconnectTask = JoinHandle<Option<PreconnectedWebSocket>>;
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///
 /// This is intentionally kept minimal so `ModelClient` does not need to hold a full `Config`. Most
@@ -181,17 +187,6 @@ struct CurrentClientSetup {
     api_auth: CoreAuthProvider,
 }
 
-/// One-shot preconnected websocket slot consumed by the next turn.
-///
-/// This bundles the socket with optional sticky-routing state captured during
-/// handshake so they are taken and cleared atomically.
-struct PreconnectedWebSocket {
-    connection: ApiWebSocketConnection,
-    turn_state: Option<String>,
-}
-
-type PreconnectTask = JoinHandle<Option<PreconnectedWebSocket>>;
-
 /// A session-scoped client for model-provider API calls.
 ///
 /// This holds configuration and state that should be shared across turns within a Codex session
@@ -204,8 +199,6 @@ type PreconnectTask = JoinHandle<Option<PreconnectedWebSocket>>;
 /// Turn-scoped settings (model selection, reasoning controls, telemetry context, and turn
 /// metadata) are passed explicitly to the relevant methods to keep turn lifetime visible at the
 /// call site.
-///
-/// This type is cheap to clone.
 #[derive(Debug, Clone)]
 pub struct ModelClient {
     state: Arc<ModelClientState>,
@@ -325,6 +318,7 @@ impl ModelClient {
         let model_client = self.clone();
         let handle = tokio::spawn(async move {
             let turn_metadata_header = turn_metadata_header.await;
+
             model_client
                 .preconnect(&otel_manager, turn_metadata_header.as_deref())
                 .await
@@ -360,8 +354,8 @@ impl ModelClient {
                 ))
             })
             .ok()?;
-        let turn_state = Arc::new(OnceLock::new());
 
+        let turn_state = Arc::new(OnceLock::new());
         let connection = self
             .connect_websocket(
                 otel_manager,

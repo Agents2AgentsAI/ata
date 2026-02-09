@@ -98,10 +98,9 @@ async fn responses_websocket_preconnect_reuses_connection() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    harness.client.pre_establish_connection(
-        harness.otel_manager.clone(),
-        futures::future::ready(None).boxed(),
-    );
+    harness
+        .client
+        .pre_establish_connection(harness.otel_manager.clone(), async { None }.boxed());
     assert!(server.wait_for_handshakes(1, Duration::from_secs(1)).await);
 
     let mut client_session = harness.client.new_session();
@@ -125,10 +124,9 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    harness.client.pre_establish_connection(
-        harness.otel_manager.clone(),
-        futures::future::ready(None).boxed(),
-    );
+    harness
+        .client
+        .pre_establish_connection(harness.otel_manager.clone(), async { None }.boxed());
     assert!(server.wait_for_handshakes(1, Duration::from_secs(1)).await);
 
     let mut client_session = harness.client.new_session();
