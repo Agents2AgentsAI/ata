@@ -640,7 +640,7 @@ mod tests {
     #[test]
     fn research_subcommand_parses_arguments() {
         let cli = MultitoolCli::try_parse_from([
-            "codex",
+            "ata",
             "research",
             "Investigate robust offline RL for robot pick-and-place",
             "--num-solutions",
@@ -680,7 +680,7 @@ mod tests {
     #[test]
     fn research_subcommand_generate_code_defaults_to_true() {
         let cli = MultitoolCli::try_parse_from([
-            "codex",
+            "ata",
             "research",
             "Investigate robust offline RL for robot pick-and-place",
         ])
@@ -698,7 +698,7 @@ mod tests {
     #[test]
     fn research_subcommand_allows_disabling_code_generation() {
         let cli = MultitoolCli::try_parse_from([
-            "codex",
+            "ata",
             "research",
             "Investigate robust offline RL for robot pick-and-place",
             "--no-generate-code",

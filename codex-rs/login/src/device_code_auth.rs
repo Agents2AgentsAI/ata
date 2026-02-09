@@ -83,7 +83,7 @@ async fn request_user_code(
         if status == StatusCode::NOT_FOUND {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
-                "device code login is not enabled for this Codex server. Use the browser login or verify the server URL.",
+                "device code login is not enabled for this Ata server. Use the browser login or verify the server URL.",
             ));
         }
 
@@ -149,7 +149,7 @@ async fn poll_for_token(
 fn print_device_code_prompt(verification_url: &str, code: &str) {
     let version = env!("CARGO_PKG_VERSION");
     println!(
-        "\nWelcome to Codex [v{ANSI_GRAY}{version}{ANSI_RESET}]\n{ANSI_GRAY}OpenAI's command-line coding agent{ANSI_RESET}\n\
+        "\nWelcome to Ata [v{ANSI_GRAY}{version}{ANSI_RESET}]\n{ANSI_GRAY}Agents2Agents's command-line agentic system{ANSI_RESET}\n\
 \nFollow these steps to sign in with ChatGPT using device code authorization:\n\
 \n1. Open this link in your browser and sign in to your account\n   {ANSI_BLUE}{verification_url}{ANSI_RESET}\n\
 \n2. Enter this one-time code {ANSI_GRAY}(expires in 15 minutes){ANSI_RESET}\n   {ANSI_BLUE}{code}{ANSI_RESET}\n\

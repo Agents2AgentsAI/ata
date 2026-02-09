@@ -31,7 +31,7 @@ jobs:
 
           client_version="99.99.99"
           terminal_info="github-actions"
-          user_agent="codex_cli_rs/99.99.99 (Linux $(uname -r); $(uname -m)) ${terminal_info}"
+          user_agent="ata_cli_rs/99.99.99 (Linux $(uname -r); $(uname -m)) ${terminal_info}"
           base_url="${OPENAI_BASE_URL:-https://chatgpt.com/backend-api/codex}"
 
           headers=(

@@ -68,10 +68,10 @@ use uuid::Uuid;
 
 /// Minimal launcher that initializes the Codex app-server and logs the handshake.
 #[derive(Parser)]
-#[command(author = "Codex", version, about = "Bootstrap Codex app-server", long_about = None)]
+#[command(author = "Ata", version, about = "Bootstrap Codex app-server", long_about = None)]
 struct Cli {
     /// Path to the `codex` CLI binary.
-    #[arg(long, env = "CODEX_BIN", default_value = "codex")]
+    #[arg(long, env = "CODEX_BIN", default_value = "ata")]
     codex_bin: PathBuf,
 
     /// Forwarded to the `codex` CLI as `--config key=value`. Repeatable.
@@ -506,7 +506,7 @@ impl CodexClient {
             params: InitializeParams {
                 client_info: ClientInfo {
                     name: "codex-toy-app-server".to_string(),
-                    title: Some("Codex Toy App Server".to_string()),
+                    title: Some("Ata Toy App Server".to_string()),
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
                 capabilities: Some(InitializeCapabilities {

@@ -16,7 +16,7 @@ pointer file), the resolved `gitdir:` target, and `.codex` read-only.
 
 ### Linux
 
-Expects the binary containing `codex-core` to run the equivalent of `codex sandbox linux` (legacy alias: `codex debug landlock`) when `arg0` is `codex-linux-sandbox`. See the `codex-arg0` crate for details.
+Expects the binary containing `codex-core` to run the equivalent of `ata sandbox linux` (legacy alias: `codex debug landlock`) when `arg0` is `codex-linux-sandbox`. See the `codex-arg0` crate for details.
 
 ### All Platforms
 

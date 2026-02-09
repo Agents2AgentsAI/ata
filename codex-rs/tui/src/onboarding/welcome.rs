@@ -86,8 +86,8 @@ impl WidgetRef for &WelcomeWidget {
         lines.push(Line::from(vec![
             "  ".into(),
             "Welcome to ".into(),
-            "Codex".bold(),
-            ", OpenAI's command-line coding agent".into(),
+            "Ata".bold(),
+            ", Agents2Agents's command-line agentic system".into(),
         ]));
 
         Paragraph::new(lines)

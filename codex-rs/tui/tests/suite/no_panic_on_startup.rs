@@ -35,7 +35,7 @@ model_provider = "ollama"
     std::fs::write(codex_home.join("config.toml"), config_contents)?;
 
     let CodexCliOutput { exit_code, output } = run_codex_cli(codex_home, cwd).await?;
-    assert_ne!(0, exit_code, "Codex CLI should exit nonzero.");
+    assert_ne!(0, exit_code, "Ata CLI should exit nonzero.");
     assert!(
         output.contains("ERROR: Failed to initialize codex:"),
         "expected startup error in output, got: {output}"
@@ -56,7 +56,7 @@ async fn run_codex_cli(
     codex_home: impl AsRef<Path>,
     cwd: impl AsRef<Path>,
 ) -> anyhow::Result<CodexCliOutput> {
-    let codex_cli = codex_utils_cargo_bin::cargo_bin("codex")?;
+    let codex_cli = codex_utils_cargo_bin::cargo_bin("ata")?;
     let mut env = HashMap::new();
     env.insert(
         "CODEX_HOME".to_string(),

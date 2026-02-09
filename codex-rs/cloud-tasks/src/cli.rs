@@ -14,25 +14,25 @@ pub struct Cli {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum Command {
-    /// Submit a new Codex Cloud task without launching the TUI.
+    /// Submit a new Ata Cloud task without launching the TUI.
     Exec(ExecCommand),
-    /// Show the status of a Codex Cloud task.
+    /// Show the status of an Ata Cloud task.
     Status(StatusCommand),
-    /// List Codex Cloud tasks.
+    /// List Ata Cloud tasks.
     List(ListCommand),
-    /// Apply the diff for a Codex Cloud task locally.
+    /// Apply the diff for an Ata Cloud task locally.
     Apply(ApplyCommand),
-    /// Show the unified diff for a Codex Cloud task.
+    /// Show the unified diff for an Ata Cloud task.
     Diff(DiffCommand),
 }
 
 #[derive(Debug, Args)]
 pub struct ExecCommand {
-    /// Task prompt to run in Codex Cloud.
+    /// Task prompt to run in Ata Cloud.
     #[arg(value_name = "QUERY")]
     pub query: Option<String>,
 
-    /// Target environment identifier (see `codex cloud` to browse).
+    /// Target environment identifier (see `ata cloud` to browse).
     #[arg(long = "env", value_name = "ENV_ID")]
     pub environment: String,
 
@@ -44,7 +44,7 @@ pub struct ExecCommand {
     )]
     pub attempts: usize,
 
-    /// Git branch to run in Codex Cloud (defaults to current branch).
+    /// Git branch to run in Ata Cloud (defaults to current branch).
     #[arg(long = "branch", value_name = "BRANCH")]
     pub branch: Option<String>,
 }
@@ -73,7 +73,7 @@ fn parse_limit(input: &str) -> Result<i64, String> {
 
 #[derive(Debug, Args)]
 pub struct StatusCommand {
-    /// Codex Cloud task identifier to inspect.
+    /// Ata Cloud task identifier to inspect.
     #[arg(value_name = "TASK_ID")]
     pub task_id: String,
 }
@@ -99,7 +99,7 @@ pub struct ListCommand {
 
 #[derive(Debug, Args)]
 pub struct ApplyCommand {
-    /// Codex Cloud task identifier to apply.
+    /// Ata Cloud task identifier to apply.
     #[arg(value_name = "TASK_ID")]
     pub task_id: String,
 
@@ -110,7 +110,7 @@ pub struct ApplyCommand {
 
 #[derive(Debug, Args)]
 pub struct DiffCommand {
-    /// Codex Cloud task identifier to display.
+    /// Ata Cloud task identifier to display.
     #[arg(value_name = "TASK_ID")]
     pub task_id: String,
 

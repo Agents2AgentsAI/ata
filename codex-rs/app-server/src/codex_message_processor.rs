@@ -1513,7 +1513,7 @@ impl CodexMessageProcessor {
         let Some(auth) = self.auth_manager.auth().await else {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
-                message: "codex account authentication required to read rate limits".to_string(),
+                message: "ata account authentication required to read rate limits".to_string(),
                 data: None,
             });
         };
@@ -1538,7 +1538,7 @@ impl CodexMessageProcessor {
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
-                message: format!("failed to fetch codex rate limits: {err}"),
+                message: format!("failed to fetch ata rate limits: {err}"),
                 data: None,
             })
     }
@@ -6012,7 +6012,7 @@ mod tests {
                 "id": conversation_id.to_string(),
                 "timestamp": timestamp,
                 "cwd": "/",
-                "originator": "codex",
+                "originator": "ata",
                 "cli_version": "0.0.0",
                 "model_provider": "test-provider"
             }),

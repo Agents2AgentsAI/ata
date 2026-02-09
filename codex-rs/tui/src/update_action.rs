@@ -82,7 +82,7 @@ mod tests {
         assert_eq!(
             detect_update_action(
                 true,
-                std::path::Path::new("/opt/homebrew/bin/codex"),
+                std::path::Path::new("/opt/homebrew/bin/ata"),
                 false,
                 false
             ),
@@ -91,7 +91,7 @@ mod tests {
         assert_eq!(
             detect_update_action(
                 true,
-                std::path::Path::new("/usr/local/bin/codex"),
+                std::path::Path::new("/usr/local/bin/ata"),
                 false,
                 false
             ),
