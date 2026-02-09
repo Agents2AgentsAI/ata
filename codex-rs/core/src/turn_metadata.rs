@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -57,7 +57,8 @@ struct TurnMetadata {
     workspaces: BTreeMap<String, TurnMetadataWorkspace>,
 }
 
-pub async fn build_turn_metadata_header(cwd: &Path) -> Option<String> {
+pub async fn build_turn_metadata_header(cwd: PathBuf) -> Option<String> {
+    let cwd = cwd.as_path();
     let repo_root = get_git_repo_root(cwd)?;
 
     let (latest_git_commit_hash, associated_remote_urls) = tokio::join!(
