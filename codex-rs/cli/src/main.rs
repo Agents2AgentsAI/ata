@@ -37,10 +37,12 @@ mod app_cmd;
 #[cfg(target_os = "macos")]
 mod desktop_app;
 mod mcp_cmd;
+mod research;
 #[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
+use crate::research::ResearchArgs;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -87,6 +89,9 @@ enum Subcommand {
 
     /// Run a code review non-interactively.
     Review(ReviewArgs),
+
+    /// Run a structured multi-phase research workflow.
+    Research(ResearchArgs),
 
     /// Manage login.
     Login(LoginCommand),
@@ -596,6 +601,15 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
             );
             codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
+        }
+        Some(Subcommand::Research(research_args)) => {
+            research::run(
+                research_args,
+                interactive,
+                &root_config_overrides,
+                codex_linux_sandbox_exe,
+            )
+            .await?;
         }
         Some(Subcommand::McpServer) => {
             codex_mcp_server::run_main(codex_linux_sandbox_exe, root_config_overrides).await?;

@@ -19,6 +19,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tracing::warn;
 
+#[cfg(test)]
+use super::providers::PROVIDER_OPENAI;
+use super::providers::ProviderCredential;
 use crate::token_data::TokenData;
 use codex_app_server_protocol::AuthMode;
 use codex_keyring_store::DefaultKeyringStore;
@@ -27,26 +30,6 @@ use once_cell::sync::Lazy;
 
 /// Current version of the auth.json format.
 pub const AUTH_JSON_VERSION: u32 = 2;
-
-/// Provider ID constants for well-known providers.
-pub const PROVIDER_OPENAI: &str = "openai";
-pub const PROVIDER_ANTHROPIC: &str = "anthropic";
-pub const PROVIDER_GEMINI: &str = "gemini";
-
-/// Credential types that can be stored for a provider.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ProviderCredential {
-    /// API key-based authentication.
-    Api { key: String },
-    /// OAuth-based authentication (for future use).
-    Oauth {
-        access: String,
-        refresh: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        expires: Option<DateTime<Utc>>,
-    },
-}
 
 /// Determine where Codex should store CLI auth credentials.
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -57,6 +40,8 @@ pub enum AuthCredentialsStoreMode {
     /// Persist credentials in the keyring. Fail if unavailable.
     Keyring,
     #[default]
+    /// NOTE: default changed from `File` to `Auto`.
+    /// Keep this comment so upstream merges can spot semantic conflicts quickly.
     /// Use keyring when available; otherwise, fall back to a file in CODEX_HOME.
     /// More secure - stores credentials in OS keyring. If keyring access fails once,
     /// it automatically falls back to file storage for the session to avoid repeated prompts.
@@ -100,83 +85,6 @@ impl Default for AuthDotJson {
             last_refresh: None,
             providers: HashMap::new(),
         }
-    }
-}
-
-impl AuthDotJson {
-    /// Migrate legacy auth.json format to v2 if needed.
-    /// This performs in-memory migration without modifying the file.
-    pub fn migrate_if_needed(mut self) -> Self {
-        // If already v2 or later, no migration needed
-        if self.version.unwrap_or(1) >= AUTH_JSON_VERSION {
-            return self;
-        }
-
-        // Migrate legacy OPENAI_API_KEY to providers map
-        if let Some(ref api_key) = self.openai_api_key {
-            if !self.providers.contains_key(PROVIDER_OPENAI) {
-                self.providers.insert(
-                    PROVIDER_OPENAI.to_string(),
-                    ProviderCredential::Api {
-                        key: api_key.clone(),
-                    },
-                );
-            }
-        }
-
-        // Update version to v2
-        self.version = Some(AUTH_JSON_VERSION);
-        self
-    }
-
-    /// Get API key for a specific provider from the providers map.
-    pub fn get_provider_api_key(&self, provider_id: &str) -> Option<&str> {
-        self.providers.get(provider_id).and_then(|cred| match cred {
-            ProviderCredential::Api { key } => Some(key.as_str()),
-            ProviderCredential::Oauth { .. } => None,
-        })
-    }
-
-    /// Check if there are any provider API keys configured.
-    pub fn has_any_provider_api_key(&self) -> bool {
-        self.providers
-            .values()
-            .any(|cred| matches!(cred, ProviderCredential::Api { .. }))
-    }
-
-    /// Set API key for a specific provider in the providers map.
-    pub fn set_provider_api_key(&mut self, provider_id: &str, api_key: &str) {
-        self.providers.insert(
-            provider_id.to_string(),
-            ProviderCredential::Api {
-                key: api_key.to_string(),
-            },
-        );
-
-        // For backward compatibility, also set the legacy field for OpenAI
-        if provider_id == PROVIDER_OPENAI {
-            self.openai_api_key = Some(api_key.to_string());
-        }
-
-        // Ensure version is set to v2
-        self.version = Some(AUTH_JSON_VERSION);
-    }
-
-    /// Remove credentials for a specific provider.
-    pub fn remove_provider(&mut self, provider_id: &str) -> bool {
-        let removed = self.providers.remove(provider_id).is_some();
-
-        // For backward compatibility, also clear the legacy field for OpenAI
-        if provider_id == PROVIDER_OPENAI {
-            self.openai_api_key = None;
-        }
-
-        removed
-    }
-
-    /// Get list of configured provider IDs.
-    pub fn configured_providers(&self) -> Vec<String> {
-        self.providers.keys().cloned().collect()
     }
 }
 
@@ -355,6 +263,8 @@ impl AuthStorageBackend for KeyringAuthStorage {
 /// This is set when:
 /// 1. Keyring access fails (unavailable or denied)
 /// 2. Keyring has no data but file does (to avoid repeated prompts for migration)
+///
+/// This fallback behavior is separate from provider-auth extraction logic.
 static USE_FILE_STORAGE: Lazy<Mutex<std::collections::HashSet<String>>> =
     Lazy::new(|| Mutex::new(std::collections::HashSet::new()));
 
@@ -970,207 +880,6 @@ mod tests {
         assert!(
             !auth_file.exists(),
             "fallback auth.json should be removed after delete"
-        );
-        Ok(())
-    }
-
-    // Multi-provider tests
-
-    #[test]
-    fn provider_credential_api_serialization() {
-        let cred = ProviderCredential::Api {
-            key: "sk-test".to_string(),
-        };
-        let json = serde_json::to_string(&cred).unwrap();
-        assert!(json.contains("\"type\":\"api\""));
-        assert!(json.contains("\"key\":\"sk-test\""));
-
-        let deserialized: ProviderCredential = serde_json::from_str(&json).unwrap();
-        assert_eq!(cred, deserialized);
-    }
-
-    #[test]
-    fn provider_credential_oauth_serialization() {
-        let cred = ProviderCredential::Oauth {
-            access: "access-token".to_string(),
-            refresh: "refresh-token".to_string(),
-            expires: Some(Utc::now()),
-        };
-        let json = serde_json::to_string(&cred).unwrap();
-        assert!(json.contains("\"type\":\"oauth\""));
-        assert!(json.contains("\"access\":\"access-token\""));
-
-        let deserialized: ProviderCredential = serde_json::from_str(&json).unwrap();
-        match deserialized {
-            ProviderCredential::Oauth {
-                access, refresh, ..
-            } => {
-                assert_eq!(access, "access-token");
-                assert_eq!(refresh, "refresh-token");
-            }
-            _ => panic!("Expected Oauth variant"),
-        }
-    }
-
-    #[test]
-    fn auth_dot_json_migrate_legacy_format() {
-        // Simulate a legacy v1 auth.json without version or providers
-        let legacy = AuthDotJson {
-            version: None,
-            auth_mode: Some(AuthMode::ApiKey),
-            openai_api_key: Some("sk-legacy".to_string()),
-            tokens: None,
-            last_refresh: None,
-            providers: HashMap::new(),
-        };
-
-        let migrated = legacy.migrate_if_needed();
-
-        assert_eq!(migrated.version, Some(AUTH_JSON_VERSION));
-        assert!(migrated.providers.contains_key(PROVIDER_OPENAI));
-        assert_eq!(
-            migrated.get_provider_api_key(PROVIDER_OPENAI),
-            Some("sk-legacy")
-        );
-        // Legacy field should remain unchanged
-        assert_eq!(migrated.openai_api_key, Some("sk-legacy".to_string()));
-    }
-
-    #[test]
-    fn auth_dot_json_no_migration_for_v2() {
-        let mut providers = HashMap::new();
-        providers.insert(
-            PROVIDER_ANTHROPIC.to_string(),
-            ProviderCredential::Api {
-                key: "sk-ant-test".to_string(),
-            },
-        );
-
-        let v2 = AuthDotJson {
-            version: Some(AUTH_JSON_VERSION),
-            auth_mode: Some(AuthMode::ApiKey),
-            openai_api_key: None,
-            tokens: None,
-            last_refresh: None,
-            providers,
-        };
-
-        let result = v2.clone().migrate_if_needed();
-
-        // Should not add openai provider if it wasn't there
-        assert!(!result.providers.contains_key(PROVIDER_OPENAI));
-        assert_eq!(
-            result.get_provider_api_key(PROVIDER_ANTHROPIC),
-            Some("sk-ant-test")
-        );
-    }
-
-    #[test]
-    fn auth_dot_json_set_provider_api_key() {
-        let mut auth = AuthDotJson::default();
-
-        auth.set_provider_api_key(PROVIDER_ANTHROPIC, "sk-ant-new");
-
-        assert_eq!(
-            auth.get_provider_api_key(PROVIDER_ANTHROPIC),
-            Some("sk-ant-new")
-        );
-        assert_eq!(auth.version, Some(AUTH_JSON_VERSION));
-        // Legacy field should not be set for non-OpenAI providers
-        assert!(auth.openai_api_key.is_none());
-    }
-
-    #[test]
-    fn auth_dot_json_set_openai_api_key_updates_legacy_field() {
-        let mut auth = AuthDotJson::default();
-
-        auth.set_provider_api_key(PROVIDER_OPENAI, "sk-openai-new");
-
-        assert_eq!(
-            auth.get_provider_api_key(PROVIDER_OPENAI),
-            Some("sk-openai-new")
-        );
-        // Legacy field should also be set for OpenAI
-        assert_eq!(auth.openai_api_key, Some("sk-openai-new".to_string()));
-    }
-
-    #[test]
-    fn auth_dot_json_remove_provider() {
-        let mut auth = AuthDotJson::default();
-        auth.set_provider_api_key(PROVIDER_ANTHROPIC, "sk-ant-test");
-        auth.set_provider_api_key(PROVIDER_OPENAI, "sk-openai-test");
-
-        let removed = auth.remove_provider(PROVIDER_ANTHROPIC);
-        assert!(removed);
-        assert!(auth.get_provider_api_key(PROVIDER_ANTHROPIC).is_none());
-        // OpenAI should still be there
-        assert!(auth.get_provider_api_key(PROVIDER_OPENAI).is_some());
-
-        let removed = auth.remove_provider(PROVIDER_OPENAI);
-        assert!(removed);
-        assert!(auth.get_provider_api_key(PROVIDER_OPENAI).is_none());
-        // Legacy field should also be cleared
-        assert!(auth.openai_api_key.is_none());
-    }
-
-    #[test]
-    fn auth_dot_json_configured_providers() {
-        let mut auth = AuthDotJson::default();
-        auth.set_provider_api_key(PROVIDER_OPENAI, "sk-openai");
-        auth.set_provider_api_key(PROVIDER_ANTHROPIC, "sk-ant");
-        auth.set_provider_api_key(PROVIDER_GEMINI, "AIza");
-
-        let providers = auth.configured_providers();
-        assert_eq!(providers.len(), 3);
-        assert!(providers.contains(&PROVIDER_OPENAI.to_string()));
-        assert!(providers.contains(&PROVIDER_ANTHROPIC.to_string()));
-        assert!(providers.contains(&PROVIDER_GEMINI.to_string()));
-    }
-
-    #[test]
-    fn file_storage_loads_and_migrates_legacy_format() -> anyhow::Result<()> {
-        let codex_home = tempdir()?;
-        let auth_file = get_auth_file(codex_home.path());
-
-        // Write a legacy v1 format directly
-        // Note: auth_mode uses "apikey" (lowercase) per serde(rename_all = "lowercase")
-        let legacy_json = json!({
-            "auth_mode": "apikey",
-            "OPENAI_API_KEY": "sk-legacy-file"
-        });
-        std::fs::write(&auth_file, serde_json::to_string_pretty(&legacy_json)?)?;
-
-        let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
-        let loaded = storage.load()?.expect("should load auth");
-
-        // Should be migrated
-        assert_eq!(loaded.version, Some(AUTH_JSON_VERSION));
-        assert_eq!(
-            loaded.get_provider_api_key(PROVIDER_OPENAI),
-            Some("sk-legacy-file")
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn auth_dot_json_v2_serialization_roundtrip() -> anyhow::Result<()> {
-        let mut auth = AuthDotJson::default();
-        auth.set_provider_api_key(PROVIDER_OPENAI, "sk-openai");
-        auth.set_provider_api_key(PROVIDER_ANTHROPIC, "sk-ant");
-        auth.auth_mode = Some(AuthMode::ApiKey);
-
-        let json = serde_json::to_string_pretty(&auth)?;
-        let deserialized: AuthDotJson = serde_json::from_str(&json)?;
-
-        assert_eq!(auth.version, deserialized.version);
-        assert_eq!(auth.openai_api_key, deserialized.openai_api_key);
-        assert_eq!(
-            auth.get_provider_api_key(PROVIDER_OPENAI),
-            deserialized.get_provider_api_key(PROVIDER_OPENAI)
-        );
-        assert_eq!(
-            auth.get_provider_api_key(PROVIDER_ANTHROPIC),
-            deserialized.get_provider_api_key(PROVIDER_ANTHROPIC)
         );
         Ok(())
     }

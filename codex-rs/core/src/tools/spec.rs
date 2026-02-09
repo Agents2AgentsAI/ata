@@ -3,6 +3,9 @@ use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::features::Feature;
 use crate::features::Features;
+use crate::research::SharedResearchToolkit;
+#[cfg(feature = "research")]
+use crate::research::tool_names::find_mcp_tool_matches;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
@@ -16,19 +19,24 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
+#[cfg(feature = "research")]
+use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
+    pub supports_image_input: bool,
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
     pub memory_tools: bool,
@@ -84,6 +92,7 @@ impl ToolsConfig {
             shell_type,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
+            supports_image_input: model_info.input_modalities.contains(&InputModality::Image),
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
             memory_tools: include_memory_tools,
@@ -1156,6 +1165,19 @@ pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, s
     serde_json::from_value::<JsonSchema>(input_schema)
 }
 
+#[cfg(feature = "research")]
+fn research_tool_to_openai_tool(
+    tool: &codex_research_tools::tool_specs::ToolDef,
+) -> Result<ResponsesApiTool, serde_json::Error> {
+    let input_schema = parse_tool_input_schema(&tool.input_schema)?;
+    Ok(ResponsesApiTool {
+        name: tool.native_name.to_string(),
+        description: tool.description.to_string(),
+        strict: false,
+        parameters: input_schema,
+    })
+}
+
 /// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
 /// JsonSchema enum. This function:
 /// - Ensures every schema object has a "type". If missing, infers it from
@@ -1273,6 +1295,18 @@ pub(crate) fn build_specs(
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
+    build_specs_with_research(config, mcp_tools, dynamic_tools, None)
+}
+
+pub(crate) fn build_specs_with_research(
+    config: &ToolsConfig,
+    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
+    dynamic_tools: &[DynamicToolSpec],
+    research_toolkit: Option<&Arc<SharedResearchToolkit>>,
+) -> ToolRegistryBuilder {
+    #[cfg(not(feature = "research"))]
+    let _ = research_toolkit;
+
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::CollabHandler;
     use crate::tools::handlers::DynamicToolHandler;
@@ -1284,12 +1318,13 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::RequestUserInputHandler;
+    #[cfg(feature = "research")]
+    use crate::tools::handlers::ResearchBridgeHandler;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
     use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
-    use std::sync::Arc;
 
     let mut builder = ToolRegistryBuilder::new();
 
@@ -1426,8 +1461,10 @@ pub(crate) fn build_specs(
         Some(WebSearchMode::Disabled) | None => {}
     }
 
-    builder.push_spec_with_parallel_support(create_view_image_tool(), true);
-    builder.register_handler("view_image", view_image_handler);
+    if config.supports_image_input {
+        builder.push_spec_with_parallel_support(create_view_image_tool(), true);
+        builder.register_handler("view_image", view_image_handler);
+    }
 
     if config.collab_tools {
         let collab_handler = Arc::new(CollabHandler);
@@ -1443,11 +1480,53 @@ pub(crate) fn build_specs(
         builder.register_handler("close_agent", collab_handler);
     }
 
+    #[cfg(feature = "research")]
+    let mut suppressed_mcp_research_tool_names: BTreeSet<String> = BTreeSet::new();
+
+    #[cfg(feature = "research")]
+    if let Some(toolkit) = research_toolkit {
+        let research_handler = Arc::new(ResearchBridgeHandler::new(Arc::clone(toolkit)));
+        let discovered_mcp_tools: BTreeMap<String, rmcp::model::Tool> = mcp_tools
+            .as_ref()
+            .map(|tools| {
+                tools
+                    .iter()
+                    .map(|(name, tool)| (name.clone(), tool.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        for def in codex_research_tools::tool_specs::all_tool_defs() {
+            if !toolkit.is_tool_configured(def.id) {
+                continue;
+            }
+
+            let matching_mcp_tools = find_mcp_tool_matches(def.mcp_name, &discovered_mcp_tools);
+            match research_tool_to_openai_tool(&def) {
+                Ok(converted_tool) => {
+                    builder.push_spec(ToolSpec::Function(converted_tool));
+                    builder.register_handler(def.native_name, research_handler.clone());
+                    suppressed_mcp_research_tool_names.extend(matching_mcp_tools);
+                }
+                Err(err) => {
+                    tracing::error!(
+                        tool_name = def.native_name,
+                        "failed to convert native research tool schema: {err}"
+                    );
+                }
+            }
+        }
+    }
+
     if let Some(mcp_tools) = mcp_tools {
         let mut entries: Vec<(String, rmcp::model::Tool)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
         for (name, tool) in entries.into_iter() {
+            #[cfg(feature = "research")]
+            if suppressed_mcp_research_tool_names.contains(&name) {
+                continue;
+            }
             match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {
                 Ok(converted_tool) => {
                     builder.push_spec(ToolSpec::Function(converted_tool));
@@ -1614,6 +1693,85 @@ mod tests {
             }
             ToolSpec::Freeform(_) | ToolSpec::LocalShell {} | ToolSpec::WebSearch { .. } => {}
         }
+    }
+
+    #[cfg(feature = "research")]
+    fn default_tools_config() -> ToolsConfig {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let features = Features::with_defaults();
+        ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: None,
+        })
+    }
+
+    #[cfg(feature = "research")]
+    fn make_research_toolkit(
+        mut config: codex_research_tools::config::ResearchConfig,
+    ) -> Arc<SharedResearchToolkit> {
+        // Keep external I/O disabled in tests.
+        config.semantic_scholar_base_url = "http://127.0.0.1:9".to_string();
+        config.arxiv_base_url = "http://127.0.0.1:9".to_string();
+        config.openalex_base_url = "http://127.0.0.1:9".to_string();
+        config.zotero_base_url = "http://127.0.0.1:9".to_string();
+        Arc::new(codex_research_tools::ResearchToolkit::new(
+            reqwest::Client::new(),
+            config,
+        ))
+    }
+
+    #[cfg(feature = "research")]
+    #[test]
+    fn native_paper_tools_preempt_matching_mcp_tools() {
+        let tools_config = default_tools_config();
+        let toolkit =
+            make_research_toolkit(codex_research_tools::config::ResearchConfig::default());
+        let mcp_tools = HashMap::from([(
+            "mcp__paper_search__search_papers".to_string(),
+            mcp_tool(
+                "search_papers",
+                "search papers",
+                serde_json::json!({"type": "object", "properties": {}}),
+            ),
+        )]);
+
+        let (tools, _) =
+            build_specs_with_research(&tools_config, Some(mcp_tools), &[], Some(&toolkit)).build();
+        assert_contains_tool_names(&tools, &["paper_search"]);
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == "mcp__paper_search__search_papers"),
+            "matched MCP tool should be suppressed when native paper_search is configured"
+        );
+    }
+
+    #[cfg(feature = "research")]
+    #[test]
+    fn zotero_mcp_fallback_is_kept_when_native_zotero_is_not_configured() {
+        let tools_config = default_tools_config();
+        let toolkit =
+            make_research_toolkit(codex_research_tools::config::ResearchConfig::default());
+        let mcp_tools = HashMap::from([(
+            "mcp__zotero__search_library".to_string(),
+            mcp_tool(
+                "search_library",
+                "search zotero",
+                serde_json::json!({"type": "object", "properties": {}}),
+            ),
+        )]);
+
+        let (tools, _) =
+            build_specs_with_research(&tools_config, Some(mcp_tools), &[], Some(&toolkit)).build();
+        assert_contains_tool_names(&tools, &["mcp__zotero__search_library"]);
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == "zotero_search"),
+            "native zotero tool should not register without API credentials"
+        );
     }
 
     #[test]
@@ -2012,6 +2170,29 @@ mod tests {
                 "web_search",
                 "view_image",
             ],
+        );
+    }
+
+    #[test]
+    fn test_non_multimodal_models_exclude_view_image() {
+        let config = test_config();
+        let mut model_info = ModelsManager::construct_model_info_offline("gpt-5.1", &config);
+        model_info.input_modalities = vec![InputModality::Text];
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CollaborationModes);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
+
+        assert!(
+            !tools
+                .iter()
+                .map(|t| t.spec.name())
+                .any(|name| name == VIEW_IMAGE_TOOL_NAME),
+            "view_image should be excluded for non-multimodal models"
         );
     }
 

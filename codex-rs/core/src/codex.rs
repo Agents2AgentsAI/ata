@@ -77,8 +77,8 @@ use futures::prelude::*;
 use futures::stream::FuturesOrdered;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
-use rmcp::model::PaginatedRequestParam;
-use rmcp::model::ReadResourceRequestParam;
+use rmcp::model::PaginatedRequestParams;
+use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use serde_json;
@@ -178,6 +178,7 @@ use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WarningEvent;
+use crate::research::SharedResearchToolkit;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
@@ -269,6 +270,7 @@ impl Codex {
         session_source: SessionSource,
         agent_control: AgentControl,
         dynamic_tools: Vec<DynamicToolSpec>,
+        research_toolkit: Option<Arc<SharedResearchToolkit>>,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -314,7 +316,7 @@ impl Codex {
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
         // 2. conversation history => session_meta.base_instructions
-        // 3. base_intructions for current model
+        // 3. base_instructions for current model
         let model_info = models_manager.get_model_info(model.as_str(), &config).await;
         let base_instructions = config
             .base_instructions
@@ -405,6 +407,7 @@ impl Codex {
             skills_manager,
             file_watcher,
             agent_control,
+            research_toolkit,
         )
         .instrument(session_init_span)
         .await
@@ -561,7 +564,7 @@ impl TurnContext {
 
     async fn build_turn_metadata_header(&self) -> Option<String> {
         self.turn_metadata_header
-            .get_or_init(|| async { build_turn_metadata_header(self.cwd.as_path()).await })
+            .get_or_init(|| async { build_turn_metadata_header(self.cwd.clone()).await })
             .await
             .clone()
     }
@@ -683,13 +686,12 @@ impl SessionConfiguration {
             next_configuration.cwd = cwd;
         }
         // Switch provider if model_provider is specified
-        if let Some(provider_id) = &updates.model_provider {
-            if let Some(provider) = crate::model_provider_info::built_in_model_providers()
+        if let Some(provider_id) = &updates.model_provider
+            && let Some(provider) = crate::model_provider_info::built_in_model_providers()
                 .get(provider_id)
                 .cloned()
-            {
-                next_configuration.provider = provider;
-            }
+        {
+            next_configuration.provider = provider;
         }
         Ok(next_configuration)
     }
@@ -869,6 +871,7 @@ impl Session {
         skills_manager: Arc<SkillsManager>,
         file_watcher: Arc<FileWatcher>,
         agent_control: AgentControl,
+        research_toolkit: Option<Arc<SharedResearchToolkit>>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -1075,6 +1078,7 @@ impl Session {
             auth_manager: Arc::clone(&auth_manager),
             otel_manager,
             models_manager: Arc::clone(&models_manager),
+            research_toolkit,
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             file_watcher,
@@ -1112,10 +1116,14 @@ impl Session {
         // Warm a websocket in the background so the first turn can reuse it.
         // This performs only connection setup; user input is still sent later via response.create
         // when submit_turn() runs.
-        sess.services.model_client.pre_establish_connection(
-            sess.services.otel_manager.clone(),
-            session_configuration.cwd.clone(),
-        );
+        let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
+            build_turn_metadata_header(session_configuration.cwd.clone()),
+            None,
+        )
+        .boxed();
+        sess.services
+            .model_client
+            .pre_establish_connection(sess.services.otel_manager.clone(), turn_metadata_header);
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
@@ -1219,6 +1227,18 @@ impl Session {
             && let Err(e) = rec.flush().await
         {
             warn!("failed to flush rollout recorder: {e}");
+        }
+    }
+
+    pub(crate) async fn ensure_rollout_materialized(&self) {
+        let recorder = {
+            let guard = self.services.rollout.lock().await;
+            guard.clone()
+        };
+        if let Some(rec) = recorder
+            && let Err(e) = rec.persist().await
+        {
+            warn!("failed to materialize rollout recorder: {e}");
         }
     }
 
@@ -1337,6 +1357,10 @@ impl Session {
                     let mut state = self.state.lock().await;
                     state.initial_context_seeded = true;
                 }
+
+                // Forked threads should remain file-backed immediately after startup.
+                self.ensure_rollout_materialized().await;
+
                 // Flush after seeding history and any persisted rollout copy.
                 self.flush_rollout().await;
             }
@@ -2199,9 +2223,9 @@ impl Session {
                 .into(),
             );
         }
-        items.push(ResponseItem::from(EnvironmentContext::new(
-            Some(turn_context.cwd.clone()),
-            shell.as_ref().clone(),
+        items.push(ResponseItem::from(EnvironmentContext::from_turn_context(
+            turn_context,
+            shell.as_ref(),
         )));
         items
     }
@@ -2358,6 +2382,7 @@ impl Session {
         let turn_item = TurnItem::UserMessage(UserMessageItem::new(input));
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
+        self.ensure_rollout_materialized().await;
     }
 
     pub(crate) async fn notify_background_event(
@@ -2495,7 +2520,7 @@ impl Session {
     pub async fn list_resources(
         &self,
         server: &str,
-        params: Option<PaginatedRequestParam>,
+        params: Option<PaginatedRequestParams>,
     ) -> anyhow::Result<ListResourcesResult> {
         self.services
             .mcp_connection_manager
@@ -2508,7 +2533,7 @@ impl Session {
     pub async fn list_resource_templates(
         &self,
         server: &str,
-        params: Option<PaginatedRequestParam>,
+        params: Option<PaginatedRequestParams>,
     ) -> anyhow::Result<ListResourceTemplatesResult> {
         self.services
             .mcp_connection_manager
@@ -2521,7 +2546,7 @@ impl Session {
     pub async fn read_resource(
         &self,
         server: &str,
-        params: ReadResourceRequestParam,
+        params: ReadResourceRequestParams,
     ) -> anyhow::Result<ReadResourceResult> {
         self.services
             .mcp_connection_manager
@@ -4106,7 +4131,7 @@ async fn run_sampling_request(
     if let Some(connectors) = connectors_for_tools.as_ref() {
         mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, connectors);
     }
-    let router = Arc::new(ToolRouter::from_config(
+    let router = Arc::new(ToolRouter::from_config_with_research(
         &turn_context.tools_config,
         Some(
             mcp_tools
@@ -4115,6 +4140,7 @@ async fn run_sampling_request(
                 .collect(),
         ),
         turn_context.dynamic_tools.as_slice(),
+        sess.services.research_toolkit.as_ref(),
     ));
 
     let model_supports_parallel = turn_context.model_info.supports_parallel_tool_calls;
@@ -5921,6 +5947,7 @@ mod tests {
             auth_manager: auth_manager.clone(),
             otel_manager: otel_manager.clone(),
             models_manager: Arc::clone(&models_manager),
+            research_toolkit: None,
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             file_watcher,
@@ -6055,6 +6082,7 @@ mod tests {
             auth_manager: Arc::clone(&auth_manager),
             otel_manager: otel_manager.clone(),
             models_manager: Arc::clone(&models_manager),
+            research_toolkit: None,
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             file_watcher,
