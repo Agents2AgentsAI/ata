@@ -291,7 +291,7 @@ impl OauthLoginFlow {
         let mut oauth_state = OAuthState::new(server_url, Some(http_client)).await?;
         let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
         oauth_state
-            .start_authorization(&scope_refs, &redirect_uri, Some("Codex"))
+            .start_authorization(&scope_refs, &redirect_uri, Some("Ata"))
             .await?;
         let auth_url = oauth_state.get_authorization_url().await?;
         let timeout_secs = timeout_secs.unwrap_or(DEFAULT_OAUTH_TIMEOUT_SECS).max(1);

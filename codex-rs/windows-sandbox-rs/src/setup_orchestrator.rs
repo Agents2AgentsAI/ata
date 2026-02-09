@@ -308,13 +308,13 @@ fn quote_arg(arg: &str) -> String {
 fn find_setup_exe() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let candidate = dir.join("codex-windows-sandbox-setup.exe");
+            let candidate = dir.join("ata-windows-sandbox-setup.exe");
             if candidate.exists() {
                 return candidate;
             }
         }
     }
-    PathBuf::from("codex-windows-sandbox-setup.exe")
+    PathBuf::from("ata-windows-sandbox-setup.exe")
 }
 
 fn report_helper_failure(

@@ -435,7 +435,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Experimental {
             name: "Shell snapshot",
             menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
-            announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
+            announcement: "NEW! Try shell snapshotting to make your Ata faster. Enable in /experimental!",
         },
         default_enabled: false,
     },
@@ -522,8 +522,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "collab",
         stage: Stage::Experimental {
             name: "Sub-agents",
-            menu_description: "Ask Codex to spawn multiple agents to parallelize the work and win in efficiency.",
-            announcement: "NEW: Sub-agents can now be spawned by Codex. Enable in /experimental and restart Codex!",
+            menu_description: "Ask Ata to spawn multiple agents to parallelize the work and win in efficiency.",
+            announcement: "NEW: Sub-agents can now be spawned by Ata. Enable in /experimental and restart Ata!",
         },
         default_enabled: false,
     },
@@ -532,8 +532,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "apps",
         stage: Stage::Experimental {
             name: "Apps",
-            menu_description: "Use a connected ChatGPT App using \"$\". Install Apps via /apps command. Restart Codex after enabling.",
-            announcement: "NEW: Use ChatGPT Apps (Connectors) in Codex via $ mentions. Enable in /experimental and restart Codex!",
+            menu_description: "Use a connected ChatGPT App using \"$\". Install Apps via /apps command. Restart Ata after enabling.",
+            announcement: "NEW: Use ChatGPT Apps (Connectors) in Ata via $ mentions. Enable in /experimental and restart Ata!",
         },
         default_enabled: false,
     },

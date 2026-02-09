@@ -300,7 +300,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 ts_msg!(
                     self,
                     "{}\n{}",
-                    "codex".style(self.italic).style(self.magenta),
+                    "ata".style(self.italic).style(self.magenta),
                     message,
                 );
             }

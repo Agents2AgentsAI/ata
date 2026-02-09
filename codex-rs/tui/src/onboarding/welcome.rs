@@ -5,7 +5,6 @@ use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
-use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
@@ -85,9 +84,11 @@ impl WidgetRef for &WelcomeWidget {
         }
         lines.push(Line::from(vec![
             "  ".into(),
-            "Welcome to ".into(),
-            "Codex".bold(),
-            ", OpenAI's command-line coding agent".into(),
+            "Welcome to Agents2Agents's command-line agentic system".into(),
+        ]));
+        lines.push(Line::from(vec![
+            "  ".into(),
+            "(built on OpenAI's Codex)".into(),
         ]));
 
         Paragraph::new(lines)
