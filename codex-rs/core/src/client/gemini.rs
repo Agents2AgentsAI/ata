@@ -87,12 +87,13 @@ pub(super) async fn stream_gemini_api(
         stream_state,
         vec![ResponseEvent::Created],
         |event_str, state| {
-            let data = if let Some(data_line) =
-                event_str.lines().find(|line| line.starts_with("data: "))
+            let data = if let Some(data_line) = event_str
+                .lines()
+                .find_map(|line| line.strip_prefix("data: "))
             {
-                &data_line[6..]
-            } else if event_str.starts_with("data:") {
-                event_str[5..].trim()
+                data_line
+            } else if let Some(data_line) = event_str.strip_prefix("data:") {
+                data_line.trim()
             } else {
                 return ParseSseEventResult::Continue;
             };
