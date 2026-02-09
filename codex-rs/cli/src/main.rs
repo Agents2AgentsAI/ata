@@ -1387,9 +1387,8 @@ mod tests {
 
     #[test]
     fn app_server_listen_websocket_url_parses() {
-        let app_server = app_server_from_args(
-            ["ata", "app-server", "--listen", "ws://127.0.0.1:4500"].as_ref(),
-        );
+        let app_server =
+            app_server_from_args(["ata", "app-server", "--listen", "ws://127.0.0.1:4500"].as_ref());
         assert_eq!(
             app_server.listen,
             codex_app_server::AppServerTransport::WebSocket {

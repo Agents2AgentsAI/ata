@@ -61,6 +61,7 @@ pub(crate) enum SignInState {
     ChatGptSuccessMessage,
     ChatGptSuccess,
     ApiKeyEntry(ApiKeyInputState),
+    ApiKeySuccessMessage,
     ApiKeyConfigured,
     PickProvider, // Select which provider to configure
     ProviderList, // Show all configured providers
@@ -70,6 +71,7 @@ pub(crate) enum SignInState {
 pub(crate) enum SignInOption {
     ChatGpt,
     DeviceCode,
+    #[allow(dead_code)]
     ApiKey,
     ConfigureProviders,
 }
@@ -128,6 +130,10 @@ impl KeyboardHandler for AuthModeWidget {
         let sign_in_state = { (*self.sign_in_state.read().unwrap()).clone() };
 
         if self.handle_provider_picker_key_event(&key_event, &sign_in_state) {
+            return;
+        }
+
+        if self.handle_api_key_success_key_event(&key_event, &sign_in_state) {
             return;
         }
 
@@ -219,7 +225,6 @@ impl AuthModeWidget {
             options.push(SignInOption::DeviceCode);
         }
         if self.is_api_login_allowed() {
-            options.push(SignInOption::ApiKey);
             options.push(SignInOption::ConfigureProviders);
         }
         options
@@ -232,7 +237,6 @@ impl AuthModeWidget {
             options.push(SignInOption::DeviceCode);
         }
         if self.is_api_login_allowed() {
-            options.push(SignInOption::ApiKey);
             options.push(SignInOption::ConfigureProviders);
         }
         options
@@ -300,11 +304,11 @@ impl AuthModeWidget {
         let mut lines: Vec<Line> = vec![
             Line::from(vec![
                 "  ".into(),
-                "Sign in with ChatGPT to use Ata as part of your paid plan".into(),
+                "Sign in to use Ata as part of your paid plan or connect ".into(),
             ]),
             Line::from(vec![
                 "  ".into(),
-                "or connect an API key for usage-based billing".into(),
+                "an API key for usage-based billing".into(),
             ]),
             "".into(),
         ];
@@ -376,7 +380,7 @@ impl AuthModeWidget {
                         idx,
                         option,
                         "Configure providers",
-                        "Set up API keys for multiple providers",
+                        "Set up API keys for providers (OpenAI, Anthropic, Gemini)",
                     ));
                 }
             }
@@ -479,6 +483,36 @@ impl AuthModeWidget {
             "✓ Signed in with your ChatGPT account"
                 .fg(Color::Green)
                 .into(),
+        ];
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+
+    fn render_api_key_success_message(&self, area: Rect, buf: &mut Buffer) {
+        let lines = vec![
+            "✓ API key configured".fg(Color::Green).into(),
+            "".into(),
+            "  Before you start:".into(),
+            "".into(),
+            "  Decide how much autonomy you want to grant Ata".into(),
+            Line::from(vec![
+                "  For more details see the ".into(),
+                "\u{1b}]8;;https://github.com/openai/codex\u{7}Ata docs\u{1b}]8;;\u{7}"
+                    .underlined(),
+            ])
+            .dim(),
+            "".into(),
+            "  Ata can make mistakes".into(),
+            "  Review the code it writes and commands it runs"
+                .dim()
+                .into(),
+            "".into(),
+            "  Powered by your API key".into(),
+            "  Usage-based billing applies".dim().into(),
+            "".into(),
+            "  Press Enter to continue".fg(Color::Cyan).into(),
         ];
 
         Paragraph::new(lines)
@@ -622,6 +656,21 @@ impl AuthModeWidget {
         true
     }
 
+    fn handle_api_key_success_key_event(
+        &mut self,
+        key_event: &KeyEvent,
+        sign_in_state: &SignInState,
+    ) -> bool {
+        if matches!(sign_in_state, SignInState::ApiKeySuccessMessage)
+            && key_event.code == KeyCode::Enter
+        {
+            *self.sign_in_state.write().unwrap() = SignInState::ApiKeyConfigured;
+            self.request_frame.schedule_frame();
+            return true;
+        }
+        false
+    }
+
     fn handle_api_key_entry_paste(&mut self, pasted: String) -> bool {
         let trimmed = pasted.trim();
         if trimmed.is_empty() {
@@ -709,7 +758,7 @@ impl AuthModeWidget {
 
                 // Update login status and go to configured screen for all providers
                 self.login_status = LoginStatus::AuthMode(AuthMode::ApiKey);
-                *self.sign_in_state.write().unwrap() = SignInState::ApiKeyConfigured;
+                *self.sign_in_state.write().unwrap() = SignInState::ApiKeySuccessMessage;
             }
             Err(err) => {
                 self.error = Some(format!("Failed to save API key: {err}"));
@@ -829,6 +878,7 @@ impl StepStateProvider for AuthModeWidget {
             | SignInState::ChatGptContinueInBrowser(_)
             | SignInState::ChatGptDeviceCode(_)
             | SignInState::ChatGptSuccessMessage
+            | SignInState::ApiKeySuccessMessage
             | SignInState::PickProvider
             | SignInState::ProviderList => StepState::InProgress,
             SignInState::ChatGptSuccess | SignInState::ApiKeyConfigured => StepState::Complete,
@@ -857,6 +907,9 @@ impl WidgetRef for AuthModeWidget {
             }
             SignInState::ApiKeyEntry(state) => {
                 self.render_api_key_entry(area, buf, state);
+            }
+            SignInState::ApiKeySuccessMessage => {
+                self.render_api_key_success_message(area, buf);
             }
             SignInState::ApiKeyConfigured => {
                 self.render_api_key_configured(area, buf);

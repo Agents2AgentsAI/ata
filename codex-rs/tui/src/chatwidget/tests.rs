@@ -1225,6 +1225,7 @@ async fn make_chatwidget_with_provider(
         agent_turn_running: false,
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),
+        connectors_prefetch_in_flight: false,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
