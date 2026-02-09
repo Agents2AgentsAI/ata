@@ -172,10 +172,7 @@ mod tests {
     #[test]
     fn resume_command_quotes_thread_name_when_needed() {
         let command = resume_command(Some("-starts-with-dash"), None);
-        assert_eq!(
-            command,
-            Some("ata resume -- -starts-with-dash".to_string())
-        );
+        assert_eq!(command, Some("ata resume -- -starts-with-dash".to_string()));
 
         let command = resume_command(Some("two words"), None);
         assert_eq!(command, Some("ata resume 'two words'".to_string()));

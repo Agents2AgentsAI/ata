@@ -23,6 +23,8 @@ Run `just fmt` (in `codex-rs` directory) automatically after you have finished m
 
 Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates.
 
+The repo will not be merge with upstream repo. However, upstream repo will be merged frequently to this repo. When design new features or perform new implementations or bug fixes, try your best to minimize potental merge conflicts. If needed, compare the current branch with upstream branch in `upstream/main` before making decision.
+
 ## TUI style conventions
 
 See `codex-rs/tui/styles.md`.

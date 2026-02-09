@@ -93,7 +93,7 @@ impl OnboardingScreen {
         )));
         if show_login_screen {
             let highlighted_mode = match forced_login_method {
-                Some(ForcedLoginMethod::Api) => SignInOption::ApiKey,
+                Some(ForcedLoginMethod::Api) => SignInOption::ConfigureProviders,
                 _ => SignInOption::ChatGpt,
             };
             steps.push(Step::Auth(AuthModeWidget {
