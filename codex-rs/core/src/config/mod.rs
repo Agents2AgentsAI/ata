@@ -1698,6 +1698,7 @@ impl Config {
             mcp_servers,
             exec_policy: _,
             enforce_residency,
+            network: _network_requirements,
         } = requirements;
 
         apply_requirement_constrained_value(
@@ -4430,6 +4431,7 @@ model_verbosity = "high"
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
+            network: None,
         };
         let requirement_source = crate::config_loader::RequirementSource::Unknown;
         let requirement_source_for_error = requirement_source.clone();
@@ -4987,6 +4989,7 @@ mcp_oauth_callback_port = 5678
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
+            network: None,
         };
 
         let config = ConfigBuilder::default()

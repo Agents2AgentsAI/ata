@@ -16,7 +16,6 @@ use crate::git_info::get_git_remote_urls_assume_git_repo;
 use crate::git_info::get_git_repo_root;
 use crate::git_info::get_head_commit_hash;
 
-/// Timeout used when resolving the optional turn-metadata header.
 pub(crate) const TURN_METADATA_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Resolves turn metadata with a shared timeout policy.
