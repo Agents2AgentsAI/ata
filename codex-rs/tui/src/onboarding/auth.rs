@@ -3,14 +3,8 @@
 use codex_core::AuthManager;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CLIENT_ID;
-use codex_core::auth::PROVIDER_ANTHROPIC;
-use codex_core::auth::PROVIDER_GEMINI;
 use codex_core::auth::PROVIDER_OPENAI;
-use codex_core::auth::ProviderAuthSource;
-use codex_core::auth::list_configured_providers;
 use codex_core::auth::login_with_provider_api_key;
-use codex_core::auth::provider_env_var;
-use codex_core::auth::read_api_key_from_env;
 use codex_core::auth::read_openai_api_key_from_env;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::edit::default_model_for_provider;
@@ -53,6 +47,9 @@ use std::sync::Arc;
 use tokio::sync::Notify;
 
 use super::onboarding_screen::StepState;
+pub(crate) use super::provider_picker::ProviderOption;
+use super::provider_picker::api_key_entry_provider_details;
+use super::provider_picker::api_key_entry_return_state;
 
 mod headless_chatgpt_login;
 
@@ -77,36 +74,6 @@ pub(crate) enum SignInOption {
     ConfigureProviders,
 }
 
-/// Provider options for the multi-provider configuration screen.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ProviderOption {
-    OpenAI,
-    Anthropic,
-    Gemini,
-}
-
-impl ProviderOption {
-    fn provider_id(&self) -> &'static str {
-        match self {
-            Self::OpenAI => PROVIDER_OPENAI,
-            Self::Anthropic => PROVIDER_ANTHROPIC,
-            Self::Gemini => PROVIDER_GEMINI,
-        }
-    }
-
-    fn display_name(&self) -> &'static str {
-        match self {
-            Self::OpenAI => "OpenAI",
-            Self::Anthropic => "Anthropic",
-            Self::Gemini => "Google Gemini",
-        }
-    }
-
-    fn env_var_name(&self) -> Option<&'static str> {
-        provider_env_var(self.provider_id())
-    }
-}
-
 const API_KEY_DISABLED_MESSAGE: &str = "API key login is disabled.";
 
 #[derive(Clone, Default)]
@@ -115,6 +82,20 @@ pub(crate) struct ApiKeyInputState {
     prepopulated_from_env: bool,
     /// The provider being configured. None means legacy OpenAI-only flow.
     provider: Option<ProviderOption>,
+}
+
+impl ApiKeyInputState {
+    pub(super) fn new(
+        value: String,
+        prepopulated_from_env: bool,
+        provider: Option<ProviderOption>,
+    ) -> Self {
+        Self {
+            value,
+            prepopulated_from_env,
+            provider,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -146,46 +127,7 @@ impl KeyboardHandler for AuthModeWidget {
 
         let sign_in_state = { (*self.sign_in_state.read().unwrap()).clone() };
 
-        // Handle PickProvider state
-        if matches!(sign_in_state, SignInState::PickProvider) {
-            match key_event.code {
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.move_provider_highlight(-1);
-                    self.request_frame.schedule_frame();
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    self.move_provider_highlight(1);
-                    self.request_frame.schedule_frame();
-                }
-                KeyCode::Char('1') => {
-                    self.start_provider_api_key_entry(ProviderOption::OpenAI);
-                }
-                KeyCode::Char('2') => {
-                    self.start_provider_api_key_entry(ProviderOption::Anthropic);
-                }
-                KeyCode::Char('3') => {
-                    self.start_provider_api_key_entry(ProviderOption::Gemini);
-                }
-                KeyCode::Char('l') | KeyCode::Char('L') => {
-                    self.show_provider_list();
-                }
-                KeyCode::Enter => {
-                    self.start_provider_api_key_entry(self.highlighted_provider);
-                }
-                KeyCode::Esc => {
-                    *self.sign_in_state.write().unwrap() = SignInState::PickMode;
-                    self.request_frame.schedule_frame();
-                }
-                _ => {}
-            }
-            return;
-        }
-
-        // Handle ProviderList state
-        if matches!(sign_in_state, SignInState::ProviderList) {
-            // Any key goes back to provider selection
-            *self.sign_in_state.write().unwrap() = SignInState::PickProvider;
-            self.request_frame.schedule_frame();
+        if self.handle_provider_picker_key_event(&key_event, &sign_in_state) {
             return;
         }
 
@@ -296,29 +238,6 @@ impl AuthModeWidget {
         options
     }
 
-    fn provider_options(&self) -> Vec<ProviderOption> {
-        vec![
-            ProviderOption::OpenAI,
-            ProviderOption::Anthropic,
-            ProviderOption::Gemini,
-        ]
-    }
-
-    fn move_provider_highlight(&mut self, delta: isize) {
-        let options = self.provider_options();
-        if options.is_empty() {
-            return;
-        }
-
-        let current_index = options
-            .iter()
-            .position(|option| *option == self.highlighted_provider)
-            .unwrap_or(0);
-        let next_index =
-            (current_index as isize + delta).rem_euclid(options.len() as isize) as usize;
-        self.highlighted_provider = options[next_index];
-    }
-
     fn move_highlight(&mut self, delta: isize) {
         let options = self.selectable_sign_in_options();
         if options.is_empty() {
@@ -368,30 +287,6 @@ impl AuthModeWidget {
                 }
             }
         }
-    }
-
-    fn start_provider_selection(&mut self) {
-        self.error = None;
-        self.highlighted_provider = ProviderOption::OpenAI;
-        *self.sign_in_state.write().unwrap() = SignInState::PickProvider;
-        self.request_frame.schedule_frame();
-    }
-
-    fn start_provider_api_key_entry(&mut self, provider: ProviderOption) {
-        self.error = None;
-        let prefill_from_env = read_api_key_from_env(provider.provider_id());
-        *self.sign_in_state.write().unwrap() = SignInState::ApiKeyEntry(ApiKeyInputState {
-            value: prefill_from_env.clone().unwrap_or_default(),
-            prepopulated_from_env: prefill_from_env.is_some(),
-            provider: Some(provider),
-        });
-        self.request_frame.schedule_frame();
-    }
-
-    fn show_provider_list(&mut self) {
-        self.error = None;
-        *self.sign_in_state.write().unwrap() = SignInState::ProviderList;
-        self.request_frame.schedule_frame();
     }
 
     fn disallow_api_login(&mut self) {
@@ -611,11 +506,7 @@ impl AuthModeWidget {
         ])
         .areas(area);
 
-        // Get provider-specific text
-        let (provider_name, env_var_name) = match &state.provider {
-            Some(provider) => (provider.display_name(), provider.env_var_name()),
-            None => ("OpenAI", Some("OPENAI_API_KEY")),
-        };
+        let (provider_name, env_var_name) = api_key_entry_provider_details(state.provider);
 
         let title = format!("Use your own {provider_name} API key for usage-based billing");
         let mut intro_lines: Vec<Line> = vec![
@@ -669,95 +560,6 @@ impl AuthModeWidget {
             .render(footer_area, buf);
     }
 
-    fn render_pick_provider(&self, area: Rect, buf: &mut Buffer) {
-        let providers =
-            list_configured_providers(&self.codex_home, self.cli_auth_credentials_store_mode);
-
-        let mut lines: Vec<Line> = vec![
-            Line::from(vec!["> ".into(), "Configure API keys for providers".bold()]),
-            "".into(),
-            "  Select a provider to configure:".into(),
-            "".into(),
-        ];
-
-        for (idx, option) in self.provider_options().into_iter().enumerate() {
-            let is_selected = self.highlighted_provider == option;
-            let caret = if is_selected { ">" } else { " " };
-
-            // Check if this provider is configured
-            let status = providers
-                .iter()
-                .find(|p| p.provider_id == option.provider_id())
-                .map(|p| match p.source {
-                    ProviderAuthSource::Stored => " [stored]",
-                    ProviderAuthSource::Environment => " [env]",
-                })
-                .unwrap_or("");
-
-            let name = option.display_name();
-            let line = if is_selected {
-                Line::from(vec![
-                    format!("{caret} {index}. ", index = idx + 1).cyan().dim(),
-                    name.to_string().cyan(),
-                    status.to_string().dim(),
-                ])
-            } else {
-                Line::from(vec![
-                    format!("  {index}. {name}", index = idx + 1).into(),
-                    status.to_string().dim(),
-                ])
-            };
-            lines.push(line);
-        }
-
-        lines.push("".into());
-        lines.push("  Press Enter to configure selected provider".dim().into());
-        lines.push("  Press L to list all configured providers".dim().into());
-        lines.push("  Press Esc to go back".dim().into());
-
-        if let Some(error) = &self.error {
-            lines.push("".into());
-            lines.push(error.as_str().red().into());
-        }
-
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .render(area, buf);
-    }
-
-    fn render_provider_list(&self, area: Rect, buf: &mut Buffer) {
-        let providers =
-            list_configured_providers(&self.codex_home, self.cli_auth_credentials_store_mode);
-
-        let mut lines: Vec<Line> = vec![
-            Line::from(vec!["> ".into(), "Configured providers".bold()]),
-            "".into(),
-        ];
-
-        if providers.is_empty() {
-            lines.push("  No providers configured yet.".dim().into());
-        } else {
-            for provider in &providers {
-                let source_text = match provider.source {
-                    ProviderAuthSource::Stored => "(stored)",
-                    ProviderAuthSource::Environment => "(env)",
-                };
-                lines.push(
-                    format!("  {} {}", provider.provider_id, source_text)
-                        .fg(Color::Green)
-                        .into(),
-                );
-            }
-        }
-
-        lines.push("".into());
-        lines.push("  Press any key to go back".dim().into());
-
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .render(area, buf);
-    }
-
     fn handle_api_key_entry_key_event(&mut self, key_event: &KeyEvent) -> bool {
         let mut should_save: Option<(String, Option<ProviderOption>)> = None;
         let mut should_request_frame = false;
@@ -767,12 +569,7 @@ impl AuthModeWidget {
             if let SignInState::ApiKeyEntry(state) = &mut *guard {
                 match key_event.code {
                     KeyCode::Esc => {
-                        // Go back to provider selection if we came from there, otherwise to main menu
-                        if state.provider.is_some() {
-                            *guard = SignInState::PickProvider;
-                        } else {
-                            *guard = SignInState::PickMode;
-                        }
+                        *guard = api_key_entry_return_state(state.provider);
                         self.error = None;
                         should_request_frame = true;
                     }
@@ -869,11 +666,11 @@ impl AuthModeWidget {
                 }
             }
             _ => {
-                *guard = SignInState::ApiKeyEntry(ApiKeyInputState {
-                    value: prefill_from_env.clone().unwrap_or_default(),
-                    prepopulated_from_env: prefill_from_env.is_some(),
-                    provider: None, // Legacy OpenAI-only flow
-                });
+                *guard = SignInState::ApiKeyEntry(ApiKeyInputState::new(
+                    prefill_from_env.clone().unwrap_or_default(),
+                    prefill_from_env.is_some(),
+                    None,
+                ));
             }
         }
         drop(guard);
@@ -923,11 +720,8 @@ impl AuthModeWidget {
                     }
                     existing.prepopulated_from_env = false;
                 } else {
-                    *guard = SignInState::ApiKeyEntry(ApiKeyInputState {
-                        value: api_key,
-                        prepopulated_from_env: false,
-                        provider,
-                    });
+                    *guard =
+                        SignInState::ApiKeyEntry(ApiKeyInputState::new(api_key, false, provider));
                 }
             }
         }
