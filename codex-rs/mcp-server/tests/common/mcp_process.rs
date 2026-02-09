@@ -172,7 +172,7 @@ impl McpProcess {
                 },
                 "serverInfo": {
                     "name": "codex-mcp-server",
-                    "title": "Codex",
+                    "title": "Ata",
                     "version": "0.0.0",
                     "user_agent": user_agent
                 },
@@ -198,7 +198,7 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let codex_tool_call_params = CallToolRequestParams {
             meta: None,
-            name: "codex".into(),
+            name: "ata".into(),
             arguments: Some(match serde_json::to_value(params)? {
                 serde_json::Value::Object(map) => map,
                 _ => unreachable!("params serialize to object"),

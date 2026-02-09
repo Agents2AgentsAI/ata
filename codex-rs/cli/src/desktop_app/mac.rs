@@ -10,18 +10,18 @@ pub async fn run_mac_app_open_or_install(
 ) -> anyhow::Result<()> {
     if let Some(app_path) = find_existing_codex_app_path() {
         eprintln!(
-            "Opening Codex Desktop at {app_path}...",
+            "Opening Ata Desktop at {app_path}...",
             app_path = app_path.display()
         );
         open_codex_app(&app_path, &workspace).await?;
         return Ok(());
     }
-    eprintln!("Codex Desktop not found; downloading installer...");
+    eprintln!("Ata Desktop not found; downloading installer...");
     let installed_app = download_and_install_codex_to_user_applications(&download_url)
         .await
-        .context("failed to download/install Codex Desktop")?;
+        .context("failed to download/install Ata Desktop")?;
     eprintln!(
-        "Launching Codex Desktop from {installed_app}...",
+        "Launching Ata Desktop from {installed_app}...",
         installed_app = installed_app.display()
     );
     open_codex_app(&installed_app, &workspace).await?;
@@ -35,9 +35,9 @@ fn find_existing_codex_app_path() -> Option<PathBuf> {
 }
 
 fn candidate_codex_app_paths() -> Vec<PathBuf> {
-    let mut paths = vec![PathBuf::from("/Applications/Codex.app")];
+    let mut paths = vec![PathBuf::from("/Applications/Ata.app")];
     if let Some(home) = std::env::var_os("HOME") {
-        paths.push(PathBuf::from(home).join("Applications").join("Codex.app"));
+        paths.push(PathBuf::from(home).join("Applications").join("Ata.app"));
     }
     paths
 }
@@ -74,10 +74,10 @@ async fn download_and_install_codex_to_user_applications(dmg_url: &str) -> anyho
     let tmp_root = temp_dir.path().to_path_buf();
     let _temp_dir = temp_dir;
 
-    let dmg_path = tmp_root.join("Codex.dmg");
+    let dmg_path = tmp_root.join("Ata.dmg");
     download_dmg(dmg_url, &dmg_path).await?;
 
-    eprintln!("Mounting Codex Desktop installer...");
+    eprintln!("Mounting Ata Desktop installer...");
     let mount_point = mount_dmg(&dmg_path).await?;
     eprintln!(
         "Installer mounted at {mount_point}.",
@@ -85,7 +85,7 @@ async fn download_and_install_codex_to_user_applications(dmg_url: &str) -> anyho
     );
     let result = async {
         let app_in_volume = find_codex_app_in_mount(&mount_point)
-            .context("failed to locate Codex.app in mounted dmg")?;
+            .context("failed to locate Ata.app in mounted dmg")?;
         install_codex_app_bundle(&app_in_volume).await
     }
     .await;
@@ -104,7 +104,7 @@ async fn download_and_install_codex_to_user_applications(dmg_url: &str) -> anyho
 async fn install_codex_app_bundle(app_in_volume: &Path) -> anyhow::Result<PathBuf> {
     for applications_dir in candidate_applications_dirs()? {
         eprintln!(
-            "Installing Codex Desktop into {applications_dir}...",
+            "Installing Ata Desktop into {applications_dir}...",
             applications_dir = applications_dir.display()
         );
         std::fs::create_dir_all(&applications_dir).with_context(|| {
@@ -114,7 +114,7 @@ async fn install_codex_app_bundle(app_in_volume: &Path) -> anyhow::Result<PathBu
             )
         })?;
 
-        let dest_app = applications_dir.join("Codex.app");
+        let dest_app = applications_dir.join("Ata.app");
         if dest_app.is_dir() {
             return Ok(dest_app);
         }
@@ -123,14 +123,14 @@ async fn install_codex_app_bundle(app_in_volume: &Path) -> anyhow::Result<PathBu
             Ok(()) => return Ok(dest_app),
             Err(err) => {
                 eprintln!(
-                    "warning: failed to install Codex.app to {applications_dir}: {err}",
+                    "warning: failed to install Ata.app to {applications_dir}: {err}",
                     applications_dir = applications_dir.display()
                 );
             }
         }
     }
 
-    anyhow::bail!("failed to install Codex.app to any applications directory");
+    anyhow::bail!("failed to install Ata.app to any applications directory");
 }
 
 fn candidate_applications_dirs() -> anyhow::Result<Vec<PathBuf>> {
@@ -199,7 +199,7 @@ async fn detach_dmg(mount_point: &Path) -> anyhow::Result<()> {
 }
 
 fn find_codex_app_in_mount(mount_point: &Path) -> anyhow::Result<PathBuf> {
-    let direct = mount_point.join("Codex.app");
+    let direct = mount_point.join("Ata.app");
     if direct.is_dir() {
         return Ok(direct);
     }

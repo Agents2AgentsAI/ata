@@ -39,7 +39,7 @@ fn init_params() -> InitializeRequestParams {
         client_info: Implementation {
             name: "codex-test".into(),
             version: "0.0.0-test".into(),
-            title: Some("Codex rmcp resource test".into()),
+            title: Some("Ata rmcp resource test".into()),
             icons: None,
             website_url: None,
         },
@@ -108,7 +108,7 @@ async fn rmcp_client_can_list_and_read_resources() -> anyhow::Result<()> {
                 rmcp::model::RawResourceTemplate {
                     uri_template: "memo://codex/{slug}".to_string(),
                     name: "codex-memo".to_string(),
-                    title: Some("Codex Memo".to_string()),
+                    title: Some("Ata Memo".to_string()),
                     description: Some(
                         "Template for memo://codex/{slug} resources used in tests.".to_string(),
                     ),

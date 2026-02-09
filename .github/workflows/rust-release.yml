@@ -195,9 +195,9 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ contains(matrix.target, 'windows') }}" == 'true' ]]; then
-            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy --bin codex-windows-sandbox-setup --bin codex-command-runner
+            cargo build --target ${{ matrix.target }} --release --bin ata --bin ata-responses-api-proxy --bin ata-windows-sandbox-setup --bin ata-command-runner
           else
-            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
+            cargo build --target ${{ matrix.target }} --release --bin ata --bin ata-responses-api-proxy
           fi
 
       - if: ${{ contains(matrix.target, 'linux') }}
@@ -240,21 +240,21 @@ jobs:
 
           target="${{ matrix.target }}"
           release_dir="target/${target}/release"
-          dmg_root="${RUNNER_TEMP}/codex-dmg-root"
-          volname="Codex (${target})"
-          dmg_path="${release_dir}/codex-${target}.dmg"
+          dmg_root="${RUNNER_TEMP}/ata-dmg-root"
+          volname="Ata (${target})"
+          dmg_path="${release_dir}/ata-${target}.dmg"
 
           # The previous "MacOS code signing (binaries)" step signs + notarizes the
           # built artifacts in `${release_dir}`. This step packages *those same*
           # signed binaries into a dmg.
-          codex_binary_path="${release_dir}/codex"
-          proxy_binary_path="${release_dir}/codex-responses-api-proxy"
+          ata_binary_path="${release_dir}/ata"
+          proxy_binary_path="${release_dir}/ata-responses-api-proxy"
 
           rm -rf "$dmg_root"
           mkdir -p "$dmg_root"
 
-          if [[ ! -f "$codex_binary_path" ]]; then
-            echo "Binary $codex_binary_path not found"
+          if [[ ! -f "$ata_binary_path" ]]; then
+            echo "Binary $ata_binary_path not found"
             exit 1
           fi
           if [[ ! -f "$proxy_binary_path" ]]; then
@@ -262,8 +262,8 @@ jobs:
             exit 1
           fi
 
-          ditto "$codex_binary_path" "${dmg_root}/codex"
-          ditto "$proxy_binary_path" "${dmg_root}/codex-responses-api-proxy"
+          ditto "$ata_binary_path" "${dmg_root}/ata"
+          ditto "$proxy_binary_path" "${dmg_root}/ata-responses-api-proxy"
 
           rm -f "$dmg_path"
           hdiutil create \
@@ -298,22 +298,22 @@ jobs:
           mkdir -p "$dest"
 
           if [[ "${{ matrix.runner }}" == windows* ]]; then
-            cp target/${{ matrix.target }}/release/codex.exe "$dest/codex-${{ matrix.target }}.exe"
-            cp target/${{ matrix.target }}/release/codex-responses-api-proxy.exe "$dest/codex-responses-api-proxy-${{ matrix.target }}.exe"
-            cp target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe "$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
-            cp target/${{ matrix.target }}/release/codex-command-runner.exe "$dest/codex-command-runner-${{ matrix.target }}.exe"
+            cp target/${{ matrix.target }}/release/ata.exe "$dest/ata-${{ matrix.target }}.exe"
+            cp target/${{ matrix.target }}/release/ata-responses-api-proxy.exe "$dest/ata-responses-api-proxy-${{ matrix.target }}.exe"
+            cp target/${{ matrix.target }}/release/ata-windows-sandbox-setup.exe "$dest/ata-windows-sandbox-setup-${{ matrix.target }}.exe"
+            cp target/${{ matrix.target }}/release/ata-command-runner.exe "$dest/ata-command-runner-${{ matrix.target }}.exe"
           else
-            cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
-            cp target/${{ matrix.target }}/release/codex-responses-api-proxy "$dest/codex-responses-api-proxy-${{ matrix.target }}"
+            cp target/${{ matrix.target }}/release/ata "$dest/ata-${{ matrix.target }}"
+            cp target/${{ matrix.target }}/release/ata-responses-api-proxy "$dest/ata-responses-api-proxy-${{ matrix.target }}"
           fi
 
           if [[ "${{ matrix.target }}" == *linux* ]]; then
-            cp target/${{ matrix.target }}/release/codex.sigstore "$dest/codex-${{ matrix.target }}.sigstore"
-            cp target/${{ matrix.target }}/release/codex-responses-api-proxy.sigstore "$dest/codex-responses-api-proxy-${{ matrix.target }}.sigstore"
+            cp target/${{ matrix.target }}/release/ata.sigstore "$dest/ata-${{ matrix.target }}.sigstore"
+            cp target/${{ matrix.target }}/release/ata-responses-api-proxy.sigstore "$dest/ata-responses-api-proxy-${{ matrix.target }}.sigstore"
           fi
 
           if [[ "${{ matrix.target }}" == *apple-darwin ]]; then
-            cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
+            cp target/${{ matrix.target }}/release/ata-${{ matrix.target }}.dmg "$dest/ata-${{ matrix.target }}.dmg"
           fi
 
       - if: ${{ matrix.runner == 'windows-11-arm' }}
@@ -367,18 +367,18 @@ jobs:
             # Must run from inside the dest dir so 7z won't
             # embed the directory path inside the zip.
             if [[ "${{ matrix.runner }}" == windows* ]]; then
-              if [[ "$base" == "codex-${{ matrix.target }}.exe" ]]; then
-                # Bundle the sandbox helper binaries into the main codex zip so
-                # WinGet installs include the required helpers next to codex.exe.
+              if [[ "$base" == "ata-${{ matrix.target }}.exe" ]]; then
+                # Bundle the sandbox helper binaries into the main ata zip so
+                # WinGet installs include the required helpers next to ata.exe.
                 # Fall back to the single-binary zip if the helpers are missing
                 # to avoid breaking releases.
                 bundle_dir="$(mktemp -d)"
-                runner_src="$dest/codex-command-runner-${{ matrix.target }}.exe"
-                setup_src="$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
+                runner_src="$dest/ata-command-runner-${{ matrix.target }}.exe"
+                setup_src="$dest/ata-windows-sandbox-setup-${{ matrix.target }}.exe"
                 if [[ -f "$runner_src" && -f "$setup_src" ]]; then
                   cp "$dest/$base" "$bundle_dir/$base"
-                  cp "$runner_src" "$bundle_dir/codex-command-runner.exe"
-                  cp "$setup_src" "$bundle_dir/codex-windows-sandbox-setup.exe"
+                  cp "$runner_src" "$bundle_dir/ata-command-runner.exe"
+                  cp "$setup_src" "$bundle_dir/ata-windows-sandbox-setup.exe"
                   # Use an absolute path so bundle zips land in the real dist
                   # dir even when 7z runs from a temp directory.
                   (cd "$bundle_dir" && 7z a "$repo_root/$dest/${base}.zip" .)

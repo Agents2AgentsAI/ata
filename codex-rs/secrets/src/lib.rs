@@ -16,7 +16,7 @@ mod local;
 
 pub use local::LocalSecretsBackend;
 
-const KEYRING_SERVICE: &str = "codex";
+const KEYRING_SERVICE: &str = "ata";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SecretName(String);
