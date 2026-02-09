@@ -4,13 +4,13 @@ use codex_api::ProviderAdapter;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use futures::StreamExt;
-use tokio::sync::mpsc;
 use tracing::debug;
 
 use super::ModelClientSession;
+use super::provider_streaming::ParseSseEventResult;
 use super::provider_streaming::build_reasoning_value;
 use super::provider_streaming::serialize_input_items;
+use super::provider_streaming::spawn_provider_sse_stream;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
@@ -76,150 +76,72 @@ pub(super) async fn stream_gemini_api(
         )
         .json(&body);
 
-    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
-
     let idle_timeout = session.client.state.provider.stream_idle_timeout();
+    let mut stream_state = GeminiStreamState::new();
+    stream_state.created_sent = true;
 
-    tokio::spawn(async move {
-        match request.send().await {
-            Ok(response) => {
-                if !response.status().is_success() {
-                    let status = response.status();
-                    let body = response.text().await.unwrap_or_default();
-                    let _ = tx_event
-                        .send(Err(CodexErr::Api(format!(
-                            "Gemini API error {status}: {body}"
-                        ))))
-                        .await;
-                    return;
+    Ok(spawn_provider_sse_stream(
+        request,
+        idle_timeout,
+        "Gemini",
+        stream_state,
+        vec![ResponseEvent::Created],
+        |event_str, state| {
+            let data = if let Some(data_line) =
+                event_str.lines().find(|line| line.starts_with("data: "))
+            {
+                &data_line[6..]
+            } else if event_str.starts_with("data:") {
+                event_str[5..].trim()
+            } else {
+                return ParseSseEventResult::Continue;
+            };
+
+            if data.trim() == "[DONE]" {
+                return ParseSseEventResult::Emit(vec![ResponseEvent::Completed {
+                    response_id: String::new(),
+                    token_usage: None,
+                }]);
+            }
+
+            match codex_api::sse::gemini::parse_gemini_chunk(data, state) {
+                Ok(events) => {
+                    let events = filter_out_created(events);
+                    if events.is_empty() {
+                        ParseSseEventResult::Continue
+                    } else {
+                        ParseSseEventResult::Emit(events)
+                    }
+                }
+                Err(err) => {
+                    debug!("Gemini parse error (continuing): {err}");
+                    ParseSseEventResult::Continue
+                }
+            }
+        },
+        |buffer, state| {
+            if let Some(data_line) = buffer.lines().find(|line| line.starts_with("data: ")) {
+                let data = &data_line[6..];
+                if data.trim() == "[DONE]" {
+                    return ParseSseEventResult::Continue;
                 }
 
-                if tx_event.send(Ok(ResponseEvent::Created)).await.is_err() {
-                    return;
-                }
-
-                let mut state = GeminiStreamState::new();
-                state.created_sent = true;
-
-                let mut stream = response.bytes_stream();
-                let mut buffer = String::new();
-
-                loop {
-                    let chunk_result = tokio::time::timeout(idle_timeout, stream.next()).await;
-
-                    match chunk_result {
-                        Ok(Some(Ok(chunk))) => {
-                            if let Ok(text) = std::str::from_utf8(&chunk) {
-                                buffer.push_str(text);
-                            }
-
-                            while let Some(end_pos) =
-                                buffer.find("\n\n").or_else(|| buffer.find("\r\n\r\n"))
-                            {
-                                let event_end = if buffer[end_pos..].starts_with("\r\n\r\n") {
-                                    end_pos + 4
-                                } else {
-                                    end_pos + 2
-                                };
-
-                                let event_str = buffer[..end_pos].to_string();
-                                buffer = buffer[event_end..].to_string();
-
-                                if event_str.trim().is_empty() {
-                                    continue;
-                                }
-
-                                let data = if let Some(data_line) =
-                                    event_str.lines().find(|line| line.starts_with("data: "))
-                                {
-                                    &data_line[6..]
-                                } else if event_str.starts_with("data:") {
-                                    event_str[5..].trim()
-                                } else {
-                                    continue;
-                                };
-
-                                if data.trim() == "[DONE]" {
-                                    let _ = tx_event
-                                        .send(Ok(ResponseEvent::Completed {
-                                            response_id: String::new(),
-                                            token_usage: None,
-                                        }))
-                                        .await;
-                                    return;
-                                }
-
-                                match codex_api::sse::gemini::parse_gemini_chunk(data, &mut state) {
-                                    Ok(evts) => {
-                                        for evt in evts {
-                                            if matches!(evt, ResponseEvent::Created) {
-                                                continue;
-                                            }
-                                            let is_completed =
-                                                matches!(evt, ResponseEvent::Completed { .. });
-                                            if tx_event.send(Ok(evt)).await.is_err() {
-                                                return;
-                                            }
-                                            if is_completed {
-                                                return;
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        debug!("Gemini parse error (continuing): {e}");
-                                    }
-                                }
-                            }
-                        }
-                        Ok(Some(Err(e))) => {
-                            let _ = tx_event
-                                .send(Err(CodexErr::Api(format!("Stream error: {e}"))))
-                                .await;
-                            return;
-                        }
-                        Ok(None) => {
-                            if !buffer.trim().is_empty()
-                                && let Some(data_line) =
-                                    buffer.lines().find(|line| line.starts_with("data: "))
-                            {
-                                let data = &data_line[6..];
-                                if data.trim() != "[DONE]"
-                                    && let Ok(evts) =
-                                        codex_api::sse::gemini::parse_gemini_chunk(data, &mut state)
-                                {
-                                    for evt in evts {
-                                        if matches!(evt, ResponseEvent::Created) {
-                                            continue;
-                                        }
-                                        let _ = tx_event.send(Ok(evt)).await;
-                                    }
-                                }
-                            }
-
-                            let _ = tx_event
-                                .send(Ok(ResponseEvent::Completed {
-                                    response_id: String::new(),
-                                    token_usage: None,
-                                }))
-                                .await;
-                            return;
-                        }
-                        Err(_) => {
-                            let _ = tx_event
-                                .send(Err(CodexErr::Api("Stream timeout".to_string())))
-                                .await;
-                            return;
-                        }
+                if let Ok(events) = codex_api::sse::gemini::parse_gemini_chunk(data, state) {
+                    let events = filter_out_created(events);
+                    if !events.is_empty() {
+                        return ParseSseEventResult::Emit(events);
                     }
                 }
             }
-            Err(e) => {
-                let _ = tx_event
-                    .send(Err(CodexErr::Api(format!("Request failed: {e}"))))
-                    .await;
-            }
-        }
-    });
 
-    Ok(ResponseStream { rx_event })
+            ParseSseEventResult::Continue
+        },
+    ))
+}
+
+fn filter_out_created(events: Vec<ResponseEvent>) -> Vec<ResponseEvent> {
+    events
+        .into_iter()
+        .filter(|event| !matches!(event, ResponseEvent::Created))
+        .collect()
 }

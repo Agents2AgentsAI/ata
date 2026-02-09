@@ -4,14 +4,13 @@ use codex_api::ProviderAdapter;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use futures::StreamExt;
-use tokio::sync::mpsc;
 
 use super::ModelClientSession;
+use super::provider_streaming::ParseSseEventResult;
 use super::provider_streaming::build_reasoning_value;
 use super::provider_streaming::serialize_input_items;
+use super::provider_streaming::spawn_provider_sse_stream;
 use crate::client_common::Prompt;
-use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
@@ -80,128 +79,39 @@ pub(super) async fn stream_anthropic_api(
         }
     }
 
-    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
-
     let idle_timeout = session.client.state.provider.stream_idle_timeout();
 
-    tokio::spawn(async move {
-        match request.send().await {
-            Ok(response) => {
-                if !response.status().is_success() {
-                    let status = response.status();
-                    let body = response.text().await.unwrap_or_default();
-                    let _ = tx_event
-                        .send(Err(CodexErr::Api(format!(
-                            "Anthropic API error {status}: {body}"
-                        ))))
-                        .await;
-                    return;
-                }
+    Ok(spawn_provider_sse_stream(
+        request,
+        idle_timeout,
+        "Anthropic",
+        AnthropicStreamState::new(),
+        Vec::new(),
+        |event_str, state| {
+            let mut event_type = String::new();
+            let mut data = String::new();
 
-                let mut state = AnthropicStreamState::new();
-                let mut stream = response.bytes_stream();
-                let mut buffer = String::new();
-
-                loop {
-                    let chunk_result = tokio::time::timeout(idle_timeout, stream.next()).await;
-
-                    match chunk_result {
-                        Ok(Some(Ok(chunk))) => {
-                            if let Ok(text) = std::str::from_utf8(&chunk) {
-                                buffer.push_str(text);
-                            }
-
-                            while let Some(end_pos) =
-                                buffer.find("\n\n").or_else(|| buffer.find("\r\n\r\n"))
-                            {
-                                let event_end = if buffer[end_pos..].starts_with("\r\n\r\n") {
-                                    end_pos + 4
-                                } else {
-                                    end_pos + 2
-                                };
-
-                                let event_str = buffer[..end_pos].to_string();
-                                buffer = buffer[event_end..].to_string();
-
-                                if event_str.trim().is_empty() {
-                                    continue;
-                                }
-
-                                let mut event_type = String::new();
-                                let mut data = String::new();
-
-                                for line in event_str.lines() {
-                                    if let Some(stripped) = line.strip_prefix("event: ") {
-                                        event_type = stripped.to_string();
-                                    } else if let Some(stripped) = line.strip_prefix("event:") {
-                                        event_type = stripped.trim().to_string();
-                                    } else if let Some(stripped) = line.strip_prefix("data: ") {
-                                        data = stripped.to_string();
-                                    } else if let Some(stripped) = line.strip_prefix("data:") {
-                                        data = stripped.trim().to_string();
-                                    }
-                                }
-
-                                if event_type.is_empty() || data.is_empty() {
-                                    continue;
-                                }
-
-                                match codex_api::sse::anthropic::parse_anthropic_event(
-                                    &event_type,
-                                    &data,
-                                    &mut state,
-                                ) {
-                                    Ok(evts) => {
-                                        for evt in evts {
-                                            let is_completed =
-                                                matches!(evt, ResponseEvent::Completed { .. });
-                                            if tx_event.send(Ok(evt)).await.is_err() {
-                                                return;
-                                            }
-                                            if is_completed {
-                                                return;
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        let _ =
-                                            tx_event.send(Err(CodexErr::Api(e.to_string()))).await;
-                                        return;
-                                    }
-                                }
-                            }
-                        }
-                        Ok(Some(Err(e))) => {
-                            let _ = tx_event
-                                .send(Err(CodexErr::Api(format!("Stream error: {e}"))))
-                                .await;
-                            return;
-                        }
-                        Ok(None) => {
-                            let _ = tx_event
-                                .send(Ok(ResponseEvent::Completed {
-                                    response_id: String::new(),
-                                    token_usage: None,
-                                }))
-                                .await;
-                            return;
-                        }
-                        Err(_) => {
-                            let _ = tx_event
-                                .send(Err(CodexErr::Api("Stream timeout".to_string())))
-                                .await;
-                            return;
-                        }
-                    }
+            for line in event_str.lines() {
+                if let Some(stripped) = line.strip_prefix("event: ") {
+                    event_type = stripped.to_string();
+                } else if let Some(stripped) = line.strip_prefix("event:") {
+                    event_type = stripped.trim().to_string();
+                } else if let Some(stripped) = line.strip_prefix("data: ") {
+                    data = stripped.to_string();
+                } else if let Some(stripped) = line.strip_prefix("data:") {
+                    data = stripped.trim().to_string();
                 }
             }
-            Err(e) => {
-                let _ = tx_event
-                    .send(Err(CodexErr::Api(format!("Request failed: {e}"))))
-                    .await;
-            }
-        }
-    });
 
-    Ok(ResponseStream { rx_event })
+            if event_type.is_empty() || data.is_empty() {
+                return ParseSseEventResult::Continue;
+            }
+
+            match codex_api::sse::anthropic::parse_anthropic_event(&event_type, &data, state) {
+                Ok(events) => ParseSseEventResult::Emit(events),
+                Err(err) => ParseSseEventResult::Fatal(CodexErr::Api(err.to_string())),
+            }
+        },
+        |_buffer, _state| ParseSseEventResult::Continue,
+    ))
 }
