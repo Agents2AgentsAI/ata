@@ -140,7 +140,7 @@
           "type": "string"
         },
         {
-          "description": "Use keyring when available; otherwise, fall back to a file in CODEX_HOME. More secure - stores credentials in OS keyring. If keyring access fails once, it automatically falls back to file storage for the session to avoid repeated prompts.",
+          "description": "NOTE: default changed from `File` to `Auto`. Keep this comment so upstream merges can spot semantic conflicts quickly. Use keyring when available; otherwise, fall back to a file in CODEX_HOME. More secure - stores credentials in OS keyring. If keyring access fails once, it automatically falls back to file storage for the session to avoid repeated prompts.",
           "enum": [
             "auto"
           ],
