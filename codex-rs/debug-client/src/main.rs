@@ -24,10 +24,10 @@ use crate::output::Output;
 use crate::state::ReaderEvent;
 
 #[derive(Parser)]
-#[command(author = "Codex", version, about = "Minimal app-server client")]
+#[command(author = "Ata", version, about = "Minimal app-server client")]
 struct Cli {
     /// Path to the `codex` CLI binary.
-    #[arg(long, default_value = "codex")]
+    #[arg(long, default_value = "ata")]
     codex_bin: String,
 
     /// Forwarded to the `codex` CLI as `--config key=value`. Repeatable.

@@ -65,7 +65,7 @@ fn init_git_repo(path: &Path) -> Result<()> {
     // CI variance (default-branch hints, line ending differences, etc.).
     git(path, &["init", "--initial-branch=main"])?;
     git(path, &["config", "core.autocrlf", "false"])?;
-    git(path, &["config", "user.name", "Codex Tests"])?;
+    git(path, &["config", "user.name", "Ata Tests"])?;
     git(path, &["config", "user.email", "codex-tests@example.com"])?;
 
     // Create README.txt

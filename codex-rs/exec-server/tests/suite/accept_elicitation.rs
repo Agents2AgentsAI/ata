@@ -146,7 +146,7 @@ prefix_rule(
 }
 
 fn ensure_codex_cli() -> Result<PathBuf> {
-    let codex_cli = codex_utils_cargo_bin::cargo_bin("codex")?;
+    let codex_cli = codex_utils_cargo_bin::cargo_bin("ata")?;
 
     let metadata = codex_cli.metadata().with_context(|| {
         format!(

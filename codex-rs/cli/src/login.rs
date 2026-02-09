@@ -150,7 +150,7 @@ pub fn read_api_key_from_stdin() -> String {
 
     if stdin.is_terminal() {
         eprintln!(
-            "--with-api-key expects the API key on stdin. Try piping it, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`."
+            "--with-api-key expects the API key on stdin. Try piping it, e.g. `printenv OPENAI_API_KEY | ata login --with-api-key`."
         );
         std::process::exit(1);
     }
@@ -327,7 +327,7 @@ pub async fn run_list_providers(cli_config_overrides: CliConfigOverrides) -> ! {
         eprintln!("No providers configured");
         eprintln!();
         eprintln!("To configure a provider, run:");
-        eprintln!("  codex auth login --provider <provider>");
+        eprintln!("  ata auth login --provider <provider>");
         eprintln!();
         eprintln!("Available providers: openai, anthropic, gemini");
         std::process::exit(0);

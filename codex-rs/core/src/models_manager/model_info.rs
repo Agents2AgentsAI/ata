@@ -341,7 +341,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             default_reasoning_level: Some(ReasoningEffort::Medium),
         )
     } else {
-        warn!("Unknown model {slug} is used. This will degrade the performance of Codex.");
+        warn!("Unknown model {slug} is used. This will degrade the performance of Ata.");
         model_info!(
             slug,
             context_window: None,

@@ -207,7 +207,7 @@ impl MessageProcessor {
 
         let server_info = Implementation {
             name: "codex-mcp-server".to_string(),
-            title: Some("Codex".to_string()),
+            title: Some("Ata".to_string()),
             version: env!("CARGO_PKG_VERSION").to_string(),
             icons: None,
             website_url: None,
@@ -325,8 +325,8 @@ impl MessageProcessor {
         } = params;
 
         match name.as_ref() {
-            "codex" => self.handle_tool_call_codex(id, arguments).await,
-            "codex-reply" => {
+            "ata" => self.handle_tool_call_codex(id, arguments).await,
+            "ata-reply" => {
                 self.handle_tool_call_codex_session_reply(id, arguments)
                     .await
             }
