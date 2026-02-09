@@ -263,6 +263,7 @@ impl AuthStorageBackend for KeyringAuthStorage {
 /// This is set when:
 /// 1. Keyring access fails (unavailable or denied)
 /// 2. Keyring has no data but file does (to avoid repeated prompts for migration)
+///
 /// This fallback behavior is separate from provider-auth extraction logic.
 static USE_FILE_STORAGE: Lazy<Mutex<std::collections::HashSet<String>>> =
     Lazy::new(|| Mutex::new(std::collections::HashSet::new()));

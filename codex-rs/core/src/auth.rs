@@ -331,15 +331,17 @@ impl CodexAuth {
 
     /// Consider this private to integration tests.
     pub fn create_dummy_chatgpt_auth_for_testing() -> Self {
-        let mut auth_dot_json = AuthDotJson::default();
-        auth_dot_json.auth_mode = Some(ApiAuthMode::Chatgpt);
-        auth_dot_json.tokens = Some(TokenData {
-            id_token: Default::default(),
-            access_token: "Access Token".to_string(),
-            refresh_token: "test".to_string(),
-            account_id: Some("account_id".to_string()),
-        });
-        auth_dot_json.last_refresh = Some(Utc::now());
+        let auth_dot_json = AuthDotJson {
+            auth_mode: Some(ApiAuthMode::Chatgpt),
+            tokens: Some(TokenData {
+                id_token: Default::default(),
+                access_token: "Access Token".to_string(),
+                refresh_token: "test".to_string(),
+                account_id: Some("account_id".to_string()),
+            }),
+            last_refresh: Some(Utc::now()),
+            ..AuthDotJson::default()
+        };
 
         let client = crate::default_client::create_client();
         let state = ChatgptAuthState {
@@ -769,11 +771,12 @@ impl AuthDotJson {
             account_id,
         };
 
-        let mut auth = Self::default();
-        auth.auth_mode = Some(ApiAuthMode::ChatgptAuthTokens);
-        auth.tokens = Some(tokens);
-        auth.last_refresh = Some(Utc::now());
-        auth
+        Self {
+            auth_mode: Some(ApiAuthMode::ChatgptAuthTokens),
+            tokens: Some(tokens),
+            last_refresh: Some(Utc::now()),
+            ..Self::default()
+        }
     }
 
     fn from_external_token_strings(id_token: &str, access_token: &str) -> std::io::Result<Self> {
@@ -1478,8 +1481,10 @@ mod tests {
     #[test]
     fn logout_removes_auth_file() -> Result<(), std::io::Error> {
         let dir = tempdir()?;
-        let mut auth_dot_json = AuthDotJson::default();
-        auth_dot_json.auth_mode = Some(ApiAuthMode::ApiKey);
+        let mut auth_dot_json = AuthDotJson {
+            auth_mode: Some(ApiAuthMode::ApiKey),
+            ..AuthDotJson::default()
+        };
         auth_dot_json.set_provider_api_key(PROVIDER_OPENAI, "sk-test-key");
         super::save_auth(dir.path(), &auth_dot_json, AuthCredentialsStoreMode::File)?;
         let auth_file = get_auth_file(dir.path());
