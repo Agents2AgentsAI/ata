@@ -1,4 +1,7 @@
+mod providers;
 mod storage;
+#[cfg(test)]
+mod test_utils;
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -19,13 +22,22 @@ use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 
+pub use crate::auth::providers::ANTHROPIC_API_KEY_ENV_VAR;
+pub use crate::auth::providers::GOOGLE_API_KEY_ENV_VAR;
+pub use crate::auth::providers::PROVIDER_ANTHROPIC;
+pub use crate::auth::providers::PROVIDER_GEMINI;
+pub use crate::auth::providers::PROVIDER_OPENAI;
+pub use crate::auth::providers::ProviderAuthSource;
+pub use crate::auth::providers::ProviderAuthStatus;
+pub use crate::auth::providers::ProviderCredential;
+pub use crate::auth::providers::get_provider_api_key;
+pub use crate::auth::providers::list_configured_providers;
+pub use crate::auth::providers::login_with_provider_api_key;
+pub use crate::auth::providers::provider_env_var;
+pub use crate::auth::providers::read_api_key_from_env;
 pub use crate::auth::storage::AuthCredentialsStoreMode;
 pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
-pub use crate::auth::storage::PROVIDER_ANTHROPIC;
-pub use crate::auth::storage::PROVIDER_GEMINI;
-pub use crate::auth::storage::PROVIDER_OPENAI;
-pub use crate::auth::storage::ProviderCredential;
 use crate::auth::storage::create_auth_storage;
 use crate::config::Config;
 use crate::error::RefreshTokenFailedError;
@@ -370,50 +382,9 @@ impl ChatgptAuth {
 
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
 pub const CODEX_API_KEY_ENV_VAR: &str = "CODEX_API_KEY";
-pub const ANTHROPIC_API_KEY_ENV_VAR: &str = "ANTHROPIC_API_KEY";
-pub const GOOGLE_API_KEY_ENV_VAR: &str = "GOOGLE_API_KEY";
-
-/// Status of a provider's authentication configuration.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProviderAuthSource {
-    /// API key is stored in auth.json
-    Stored,
-    /// API key is set via environment variable
-    Environment,
-}
-
-/// Information about a configured provider's auth status.
-#[derive(Debug, Clone)]
-pub struct ProviderAuthStatus {
-    pub provider_id: String,
-    pub source: ProviderAuthSource,
-}
-
-/// Get the environment variable name for a provider.
-pub fn provider_env_var(provider_id: &str) -> Option<&'static str> {
-    match provider_id {
-        PROVIDER_OPENAI => Some(OPENAI_API_KEY_ENV_VAR),
-        PROVIDER_ANTHROPIC => Some(ANTHROPIC_API_KEY_ENV_VAR),
-        PROVIDER_GEMINI => Some(GOOGLE_API_KEY_ENV_VAR),
-        _ => None,
-    }
-}
-
-/// Read API key from environment variable for a specific provider.
-pub fn read_api_key_from_env(provider_id: &str) -> Option<String> {
-    provider_env_var(provider_id).and_then(|env_var| {
-        env::var(env_var)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    })
-}
 
 pub fn read_openai_api_key_from_env() -> Option<String> {
-    env::var(OPENAI_API_KEY_ENV_VAR)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    read_api_key_from_env(PROVIDER_OPENAI)
 }
 
 pub fn read_codex_api_key_from_env() -> Option<String> {
@@ -448,112 +419,6 @@ pub fn login_with_api_key(
     )
 }
 
-/// Store an API key for a specific provider.
-/// Updates existing auth.json if present, preserving other provider credentials.
-pub fn login_with_provider_api_key(
-    codex_home: &Path,
-    provider_id: &str,
-    api_key: &str,
-    auth_credentials_store_mode: AuthCredentialsStoreMode,
-) -> std::io::Result<()> {
-    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-
-    // Load existing auth or create new
-    let mut auth_dot_json = storage.load()?.unwrap_or_default();
-
-    // Set the provider API key
-    auth_dot_json.set_provider_api_key(provider_id, api_key);
-
-    // Set auth_mode to ApiKey for any provider to indicate we have valid API key auth
-    auth_dot_json.auth_mode = Some(ApiAuthMode::ApiKey);
-
-    storage.save(&auth_dot_json)
-}
-
-/// Get the API key for a specific provider.
-/// Checks environment variable first, then stored credentials.
-pub fn get_provider_api_key(
-    codex_home: &Path,
-    provider_id: &str,
-    auth_credentials_store_mode: AuthCredentialsStoreMode,
-) -> Option<String> {
-    // Environment variable takes precedence
-    if let Some(key) = read_api_key_from_env(provider_id) {
-        return Some(key);
-    }
-
-    // Check stored credentials
-    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-    match storage.load() {
-        Ok(Some(auth)) => auth
-            .get_provider_api_key(provider_id)
-            .map(std::string::ToString::to_string),
-        Ok(None) => None,
-        Err(err) => {
-            tracing::warn!(
-                provider_id = provider_id,
-                error = %err,
-                "Failed to load auth storage for provider. Check file permissions or keyring access."
-            );
-            None
-        }
-    }
-}
-
-/// List all configured providers with their auth status.
-pub fn list_configured_providers(
-    codex_home: &Path,
-    auth_credentials_store_mode: AuthCredentialsStoreMode,
-) -> Vec<ProviderAuthStatus> {
-    let mut result = Vec::new();
-
-    // Check known providers for environment variables
-    for provider_id in [PROVIDER_OPENAI, PROVIDER_ANTHROPIC, PROVIDER_GEMINI] {
-        if read_api_key_from_env(provider_id).is_some() {
-            result.push(ProviderAuthStatus {
-                provider_id: provider_id.to_string(),
-                source: ProviderAuthSource::Environment,
-            });
-        }
-    }
-
-    // Check stored credentials
-    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-    match storage.load() {
-        Ok(Some(auth)) => {
-            // Check for ChatGPT OAuth authentication (includes OpenAI as configured)
-            if auth.auth_mode == Some(ApiAuthMode::Chatgpt)
-                && auth.tokens.is_some()
-                && !result.iter().any(|p| p.provider_id == PROVIDER_OPENAI)
-            {
-                result.push(ProviderAuthStatus {
-                    provider_id: PROVIDER_OPENAI.to_string(),
-                    source: ProviderAuthSource::Stored,
-                });
-            }
-
-            for provider_id in auth.configured_providers() {
-                // Skip if already added from environment or OAuth
-                if !result.iter().any(|p| p.provider_id == provider_id) {
-                    result.push(ProviderAuthStatus {
-                        provider_id,
-                        source: ProviderAuthSource::Stored,
-                    });
-                }
-            }
-        }
-        Ok(None) => {}
-        Err(err) => {
-            tracing::warn!(
-                error = %err,
-                "Failed to load auth storage when listing providers. Check file permissions or keyring access."
-            );
-        }
-    }
-
-    result
-}
-
 /// Remove credentials for a specific provider.
 /// Returns true if the provider was removed, false if it wasn't configured.
 pub fn logout_provider(
@@ -561,24 +426,7 @@ pub fn logout_provider(
     provider_id: &str,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<bool> {
-    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-
-    let Some(mut auth) = storage.load()? else {
-        return Ok(false);
-    };
-
-    let removed = auth.remove_provider(provider_id);
-
-    if removed {
-        // If no providers left and no tokens, delete the file
-        if auth.providers.is_empty() && auth.tokens.is_none() {
-            storage.delete()?;
-        } else {
-            storage.save(&auth)?;
-        }
-    }
-
-    Ok(removed)
+    providers::remove_provider(codex_home, provider_id, auth_credentials_store_mode)
 }
 
 /// Writes an in-memory auth payload for externally managed ChatGPT tokens.
@@ -1468,6 +1316,7 @@ mod tests {
     use super::*;
     use crate::auth::storage::FileAuthStorage;
     use crate::auth::storage::get_auth_file;
+    use crate::auth::test_utils::EnvVarGuard;
     use crate::config::Config;
     use crate::config::ConfigBuilder;
     use crate::token_data::KnownPlan as InternalKnownPlan;
@@ -1709,37 +1558,6 @@ mod tests {
         config
     }
 
-    /// Use sparingly.
-    /// TODO (gpeal): replace this with an injectable env var provider.
-    #[cfg(test)]
-    struct EnvVarGuard {
-        key: &'static str,
-        original: Option<std::ffi::OsString>,
-    }
-
-    #[cfg(test)]
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let original = env::var_os(key);
-            unsafe {
-                env::set_var(key, value);
-            }
-            Self { key, original }
-        }
-    }
-
-    #[cfg(test)]
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            unsafe {
-                match &self.original {
-                    Some(value) => env::set_var(self.key, value),
-                    None => env::remove_var(self.key),
-                }
-            }
-        }
-    }
-
     #[tokio::test]
     async fn enforce_login_restrictions_logs_out_for_method_mismatch() {
         let codex_home = tempdir().unwrap();
@@ -1875,227 +1693,5 @@ mod tests {
             .expect("auth available");
 
         pretty_assertions::assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Unknown));
-    }
-
-    // Multi-provider tests
-
-    #[test]
-    fn login_with_provider_api_key_stores_key() {
-        let dir = tempdir().unwrap();
-
-        login_with_provider_api_key(
-            dir.path(),
-            PROVIDER_ANTHROPIC,
-            "sk-ant-test",
-            AuthCredentialsStoreMode::File,
-        )
-        .expect("should store key");
-
-        let key = get_provider_api_key(
-            dir.path(),
-            PROVIDER_ANTHROPIC,
-            AuthCredentialsStoreMode::File,
-        );
-        assert_eq!(key, Some("sk-ant-test".to_string()));
-    }
-
-    #[test]
-    fn login_with_provider_api_key_preserves_existing_providers() {
-        let dir = tempdir().unwrap();
-
-        // Store OpenAI key first
-        login_with_provider_api_key(
-            dir.path(),
-            PROVIDER_OPENAI,
-            "sk-openai",
-            AuthCredentialsStoreMode::File,
-        )
-        .expect("should store openai key");
-
-        // Store Anthropic key
-        login_with_provider_api_key(
-            dir.path(),
-            PROVIDER_ANTHROPIC,
-            "sk-ant",
-            AuthCredentialsStoreMode::File,
-        )
-        .expect("should store anthropic key");
-
-        // Both should be available
-        assert_eq!(
-            get_provider_api_key(dir.path(), PROVIDER_OPENAI, AuthCredentialsStoreMode::File),
-            Some("sk-openai".to_string())
-        );
-        assert_eq!(
-            get_provider_api_key(
-                dir.path(),
-                PROVIDER_ANTHROPIC,
-                AuthCredentialsStoreMode::File
-            ),
-            Some("sk-ant".to_string())
-        );
-    }
-
-    #[test]
-    #[serial(codex_api_key)]
-    fn get_provider_api_key_env_takes_precedence() {
-        let dir = tempdir().unwrap();
-
-        // Store a key
-        login_with_provider_api_key(
-            dir.path(),
-            PROVIDER_ANTHROPIC,
-            "sk-stored",
-            AuthCredentialsStoreMode::File,
-        )
-        .expect("should store key");
-
-        // Set env var
-        let _guard = EnvVarGuard::set(ANTHROPIC_API_KEY_ENV_VAR, "sk-env");
-
-        // Env should take precedence
-        let key = get_provider_api_key(
-            dir.path(),
-            PROVIDER_ANTHROPIC,
-            AuthCredentialsStoreMode::File,
-        );
-        assert_eq!(key, Some("sk-env".to_string()));
-    }
-
-    #[test]
-    fn list_configured_providers_shows_stored() {
-        let dir = tempdir().unwrap();
-
-        login_with_provider_api_key(
-            dir.path(),
-            PROVIDER_OPENAI,
-            "sk-openai",
-            AuthCredentialsStoreMode::File,
-        )
-        .expect("store openai");
-        login_with_provider_api_key(
-            dir.path(),
-            PROVIDER_ANTHROPIC,
-            "sk-ant",
-            AuthCredentialsStoreMode::File,
-        )
-        .expect("store anthropic");
-
-        let providers = list_configured_providers(dir.path(), AuthCredentialsStoreMode::File);
-        assert_eq!(providers.len(), 2);
-
-        let openai = providers.iter().find(|p| p.provider_id == PROVIDER_OPENAI);
-        assert!(openai.is_some());
-        assert_eq!(openai.unwrap().source, ProviderAuthSource::Stored);
-
-        let anthropic = providers
-            .iter()
-            .find(|p| p.provider_id == PROVIDER_ANTHROPIC);
-        assert!(anthropic.is_some());
-        assert_eq!(anthropic.unwrap().source, ProviderAuthSource::Stored);
-    }
-
-    #[test]
-    #[serial(codex_api_key)]
-    fn list_configured_providers_shows_env() {
-        let dir = tempdir().unwrap();
-        let _guard = EnvVarGuard::set(ANTHROPIC_API_KEY_ENV_VAR, "sk-env");
-
-        let providers = list_configured_providers(dir.path(), AuthCredentialsStoreMode::File);
-
-        let anthropic = providers
-            .iter()
-            .find(|p| p.provider_id == PROVIDER_ANTHROPIC);
-        assert!(anthropic.is_some());
-        assert_eq!(anthropic.unwrap().source, ProviderAuthSource::Environment);
-    }
-
-    #[test]
-    fn logout_provider_removes_single_provider() {
-        let dir = tempdir().unwrap();
-
-        login_with_provider_api_key(
-            dir.path(),
-            PROVIDER_OPENAI,
-            "sk-openai",
-            AuthCredentialsStoreMode::File,
-        )
-        .expect("store openai");
-        login_with_provider_api_key(
-            dir.path(),
-            PROVIDER_ANTHROPIC,
-            "sk-ant",
-            AuthCredentialsStoreMode::File,
-        )
-        .expect("store anthropic");
-
-        // Remove anthropic
-        let removed = logout_provider(
-            dir.path(),
-            PROVIDER_ANTHROPIC,
-            AuthCredentialsStoreMode::File,
-        )
-        .expect("logout should succeed");
-        assert!(removed);
-
-        // Anthropic should be gone
-        assert!(
-            get_provider_api_key(
-                dir.path(),
-                PROVIDER_ANTHROPIC,
-                AuthCredentialsStoreMode::File
-            )
-            .is_none()
-        );
-
-        // OpenAI should still be there
-        assert!(
-            get_provider_api_key(dir.path(), PROVIDER_OPENAI, AuthCredentialsStoreMode::File)
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn logout_provider_deletes_file_when_empty() {
-        let dir = tempdir().unwrap();
-
-        login_with_provider_api_key(
-            dir.path(),
-            PROVIDER_ANTHROPIC,
-            "sk-ant",
-            AuthCredentialsStoreMode::File,
-        )
-        .expect("store anthropic");
-
-        let auth_file = get_auth_file(dir.path());
-        assert!(auth_file.exists());
-
-        // Remove the only provider
-        logout_provider(
-            dir.path(),
-            PROVIDER_ANTHROPIC,
-            AuthCredentialsStoreMode::File,
-        )
-        .expect("logout should succeed");
-
-        // File should be deleted since no providers remain
-        assert!(!auth_file.exists());
-    }
-
-    #[test]
-    fn provider_env_var_returns_correct_vars() {
-        assert_eq!(
-            provider_env_var(PROVIDER_OPENAI),
-            Some(OPENAI_API_KEY_ENV_VAR)
-        );
-        assert_eq!(
-            provider_env_var(PROVIDER_ANTHROPIC),
-            Some(ANTHROPIC_API_KEY_ENV_VAR)
-        );
-        assert_eq!(
-            provider_env_var(PROVIDER_GEMINI),
-            Some(GOOGLE_API_KEY_ENV_VAR)
-        );
-        assert_eq!(provider_env_var("unknown"), None);
     }
 }
