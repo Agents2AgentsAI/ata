@@ -2,6 +2,7 @@ use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::research::SharedResearchToolkit;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
@@ -10,6 +11,7 @@ use crate::tools::registry::ConfiguredToolSpec;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::ToolsConfig;
 use crate::tools::spec::build_specs;
+use crate::tools::spec::build_specs_with_research;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::LocalShellAction;
@@ -40,6 +42,22 @@ impl ToolRouter {
         dynamic_tools: &[DynamicToolSpec],
     ) -> Self {
         let builder = build_specs(config, mcp_tools, dynamic_tools);
+        let (specs, registry) = builder.build();
+
+        Self { registry, specs }
+    }
+
+    pub fn from_config_with_research(
+        config: &ToolsConfig,
+        mcp_tools: Option<HashMap<String, Tool>>,
+        dynamic_tools: &[DynamicToolSpec],
+        research_toolkit: Option<&Arc<SharedResearchToolkit>>,
+    ) -> Self {
+        if research_toolkit.is_none() {
+            return Self::from_config(config, mcp_tools, dynamic_tools);
+        }
+
+        let builder = build_specs_with_research(config, mcp_tools, dynamic_tools, research_toolkit);
         let (specs, registry) = builder.build();
 
         Self { registry, specs }

@@ -140,7 +140,7 @@
           "type": "string"
         },
         {
-          "description": "Use keyring when available; otherwise, fall back to a file in CODEX_HOME. More secure - stores credentials in OS keyring. If keyring access fails once, it automatically falls back to file storage for the session to avoid repeated prompts.",
+          "description": "NOTE: default changed from `File` to `Auto`. Keep this comment so upstream merges can spot semantic conflicts quickly. Use keyring when available; otherwise, fall back to a file in CODEX_HOME. More secure - stores credentials in OS keyring. If keyring access fails once, it automatically falls back to file storage for the session to avoid repeated prompts.",
           "enum": [
             "auto"
           ],
@@ -234,6 +234,9 @@
               "type": "boolean"
             },
             "request_rule": {
+              "type": "boolean"
+            },
+            "research": {
               "type": "boolean"
             },
             "responses_websockets": {
@@ -891,6 +894,24 @@
         }
       ]
     },
+    "ResearchToolsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "openalex_email": {
+          "type": "string"
+        },
+        "zotero_group_id": {
+          "type": "string"
+        },
+        "zotero_library_type": {
+          "type": "string"
+        },
+        "zotero_user_id": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -1294,6 +1315,9 @@
         "request_rule": {
           "type": "boolean"
         },
+        "research": {
+          "type": "boolean"
+        },
         "responses_websockets": {
           "type": "boolean"
         },
@@ -1555,6 +1579,15 @@
         "$ref": "#/definitions/ProjectConfig"
       },
       "type": "object"
+    },
+    "research": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ResearchToolsToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional non-secret research tool settings."
     },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",

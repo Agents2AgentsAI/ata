@@ -147,12 +147,14 @@ use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tracing::debug;
+use tracing::warn;
 
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
+const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
@@ -541,6 +543,7 @@ pub(crate) struct ChatWidget {
     /// currently executing.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     connectors_cache: ConnectorsCacheState,
+    connectors_prefetch_in_flight: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
     // Accumulates the current reasoning block text to extract a header
@@ -1015,7 +1018,6 @@ impl ChatWidget {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
-        self.bottom_pane.set_connectors_snapshot(None);
         self.thread_id = Some(event.session_id);
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
@@ -2629,6 +2631,7 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
+            connectors_prefetch_in_flight: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -2799,6 +2802,7 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
+            connectors_prefetch_in_flight: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -2955,6 +2959,7 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
+            connectors_prefetch_in_flight: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -4513,24 +4518,52 @@ impl ChatWidget {
     }
 
     fn prefetch_connectors(&mut self) {
-        if !self.connectors_enabled() {
-            return;
-        }
-        if matches!(self.connectors_cache, ConnectorsCacheState::Loading) {
+        if !self.connectors_enabled() || self.connectors_prefetch_in_flight {
             return;
         }
 
-        self.connectors_cache = ConnectorsCacheState::Loading;
+        self.connectors_prefetch_in_flight = true;
+        if !matches!(self.connectors_cache, ConnectorsCacheState::Ready(_)) {
+            self.connectors_cache = ConnectorsCacheState::Loading;
+        }
+
         let config = self.config.clone();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
-            let result: Result<ConnectorsSnapshot, anyhow::Error> = async {
-                let connectors = connectors::list_connectors(&config).await?;
+            let accessible_connectors =
+                match connectors::list_accessible_connectors_from_mcp_tools(&config).await {
+                    Ok(connectors) => connectors,
+                    Err(err) => {
+                        app_event_tx.send(AppEvent::ConnectorsLoaded {
+                            result: Err(format!("Failed to load apps: {err}")),
+                            is_final: true,
+                        });
+                        return;
+                    }
+                };
+
+            app_event_tx.send(AppEvent::ConnectorsLoaded {
+                result: Ok(ConnectorsSnapshot {
+                    connectors: accessible_connectors.clone(),
+                }),
+                is_final: false,
+            });
+
+            let result: Result<ConnectorsSnapshot, String> = async {
+                let all_connectors = connectors::list_all_connectors(&config).await?;
+                let connectors = connectors::merge_connectors_with_accessible(
+                    all_connectors,
+                    accessible_connectors,
+                );
                 Ok(ConnectorsSnapshot { connectors })
             }
-            .await;
-            let result = result.map_err(|err| format!("Failed to load apps: {err}"));
-            app_event_tx.send(AppEvent::ConnectorsLoaded(result));
+            .await
+            .map_err(|err: anyhow::Error| format!("Failed to load apps: {err}"));
+
+            app_event_tx.send(AppEvent::ConnectorsLoaded {
+                result,
+                is_final: true,
+            });
         });
     }
 
@@ -6436,6 +6469,11 @@ impl ChatWidget {
     }
 
     fn open_connectors_popup(&mut self, connectors: &[connectors::AppInfo]) {
+        self.bottom_pane
+            .show_selection_view(self.connectors_popup_params(connectors));
+    }
+
+    fn connectors_popup_params(&self, connectors: &[connectors::AppInfo]) -> SelectionViewParams {
         let total = connectors.len();
         let installed = connectors
             .iter()
@@ -6503,7 +6541,8 @@ impl ChatWidget {
             items.push(item);
         }
 
-        self.bottom_pane.show_selection_view(SelectionViewParams {
+        SelectionViewParams {
+            view_id: Some(CONNECTORS_SELECTION_VIEW_ID),
             header: Box::new(header),
             footer_hint: Some(Self::connectors_popup_hint_line()),
             items,
@@ -6511,7 +6550,14 @@ impl ChatWidget {
             search_placeholder: Some("Type to search apps".to_string()),
             col_width_mode: ColumnWidthMode::AutoAllRows,
             ..Default::default()
-        });
+        }
+    }
+
+    fn refresh_connectors_popup_if_open(&mut self, connectors: &[connectors::AppInfo]) {
+        let _ = self.bottom_pane.replace_selection_view_if_active(
+            CONNECTORS_SELECTION_VIEW_ID,
+            self.connectors_popup_params(connectors),
+        );
     }
 
     fn connectors_popup_hint_line() -> Line<'static> {
@@ -6750,16 +6796,30 @@ impl ChatWidget {
         self.set_skills_from_response(&ev);
     }
 
-    pub(crate) fn on_connectors_loaded(&mut self, result: Result<ConnectorsSnapshot, String>) {
-        self.connectors_cache = match result {
-            Ok(connectors) => ConnectorsCacheState::Ready(connectors),
-            Err(err) => ConnectorsCacheState::Failed(err),
-        };
-        if let ConnectorsCacheState::Ready(snapshot) = &self.connectors_cache {
-            self.bottom_pane
-                .set_connectors_snapshot(Some(snapshot.clone()));
-        } else {
-            self.bottom_pane.set_connectors_snapshot(None);
+    pub(crate) fn on_connectors_loaded(
+        &mut self,
+        result: Result<ConnectorsSnapshot, String>,
+        is_final: bool,
+    ) {
+        if is_final {
+            self.connectors_prefetch_in_flight = false;
+        }
+
+        match result {
+            Ok(snapshot) => {
+                self.refresh_connectors_popup_if_open(&snapshot.connectors);
+                self.connectors_cache = ConnectorsCacheState::Ready(snapshot.clone());
+                self.bottom_pane.set_connectors_snapshot(Some(snapshot));
+            }
+            Err(err) => {
+                if matches!(self.connectors_cache, ConnectorsCacheState::Ready(_)) {
+                    warn!("failed to refresh apps list; retaining current apps snapshot: {err}");
+                    return;
+                }
+
+                self.connectors_cache = ConnectorsCacheState::Failed(err);
+                self.bottom_pane.set_connectors_snapshot(None);
+            }
         }
     }
 
@@ -6936,6 +6996,12 @@ impl ChatWidget {
     pub(crate) fn thread_name(&self) -> Option<String> {
         self.thread_name.clone()
     }
+
+    /// Returns the current thread's precomputed rollout path.
+    ///
+    /// For fresh non-ephemeral threads this path may exist before the file is
+    /// materialized; rollout persistence is deferred until the first user
+    /// message is recorded.
     pub(crate) fn rollout_path(&self) -> Option<PathBuf> {
         self.current_rollout_path.clone()
     }
