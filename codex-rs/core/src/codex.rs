@@ -488,7 +488,7 @@ enum FileReferenceRefreshError {
 
 fn collect_referenced_upload_file_ids(
     items: &[ResponseItem],
-) -> (Vec<String>, HashMap<String, String>) {
+) -> (Vec<String>, HashMap<String, Option<String>>) {
     let mut referenced_file_ids = Vec::new();
     let mut referenced_mime_types = HashMap::new();
 
@@ -618,7 +618,7 @@ async fn refresh_uploaded_file_references(
         let is_provider_switch = candidate.provider != provider_id;
         let mime_type = referenced_mime_types
             .get(&candidate.file_id)
-            .map(String::as_str)
+            .and_then(|m| m.as_deref())
             .unwrap_or("application/pdf");
 
         match upload_service
@@ -7459,7 +7459,7 @@ mod tests {
                 content: vec![ContentItem::InputFile {
                     file_data: None,
                     file_id: Some(old_file_id.to_string()),
-                    mime_type: "application/pdf".to_string(),
+                    mime_type: Some("application/pdf".to_string()),
                     filename: Some("report.pdf".to_string()),
                 }],
                 end_turn: None,
@@ -7490,7 +7490,7 @@ mod tests {
                     content: vec![ContentItem::InputFile {
                         file_data: None,
                         file_id: Some("file-999".to_string()),
-                        mime_type: "application/pdf".to_string(),
+                        mime_type: Some("application/pdf".to_string()),
                         filename: Some("report.pdf".to_string()),
                     }],
                     end_turn: None,
