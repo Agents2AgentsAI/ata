@@ -154,6 +154,8 @@ where
     F: FnMut(u64) -> Fut,
     Fut: std::future::Future<Output = Result<T, FileUploadError>>,
 {
+    // `retry.max_attempts` is treated as max retries after the initial try.
+    // So max total executions = 1 + max_attempts.
     for attempt in 0..=retry.max_attempts {
         match op(attempt).await {
             Ok(value) => return Ok(value),

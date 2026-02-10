@@ -23,7 +23,7 @@ pub const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024;
 pub const ALWAYS_INLINE_MAX: u64 = 2 * 1024 * 1024;
 
 const PDF_MAGIC: &[u8] = b"%PDF-";
-const CACHE_MAX_ENTRY_SIZE: u64 = 10 * 1024 * 1024;
+const CACHE_MAX_ENCODED_ENTRY_SIZE: u64 = 10 * 1024 * 1024;
 const DEFAULT_FILE_CACHE_CAPACITY: usize = 8;
 const FILE_CACHE_CAPACITY_ENV_VAR: &str = "CODEX_FILE_CACHE_CAPACITY";
 
@@ -200,7 +200,7 @@ pub fn encode_inline_cached(path: &Path) -> Result<Arc<ProcessedFile>, FileProce
         filename,
         size_bytes,
     });
-    if processed.size_bytes <= CACHE_MAX_ENTRY_SIZE {
+    if processed.base64.len() as u64 <= CACHE_MAX_ENCODED_ENTRY_SIZE {
         let _ = FILE_CACHE.insert(key, Arc::clone(&processed));
     }
     Ok(processed)
@@ -236,6 +236,9 @@ fn detect_mime(bytes: &[u8], path: &Path) -> Result<String, FileProcessingError>
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::sync::Arc;
+    use std::sync::LazyLock;
+    use std::sync::Mutex;
 
     use pretty_assertions::assert_eq;
     use tempfile::NamedTempFile;
@@ -246,6 +249,12 @@ mod tests {
         let mut bytes = b"%PDF-1.4\n".to_vec();
         bytes.extend_from_slice(body);
         std::fs::write(path, bytes)
+    }
+
+    static CACHE_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    fn lock_cache_tests() -> std::sync::MutexGuard<'static, ()> {
+        CACHE_TEST_LOCK.lock().expect("cache test lock poisoned")
     }
 
     #[test]
@@ -302,6 +311,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn cache_returns_same_result_for_unchanged_file() {
+        let _lock = lock_cache_tests();
         FILE_CACHE.clear();
 
         let file = NamedTempFile::new().expect("temp file");
@@ -314,6 +324,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn cache_invalidates_on_file_change() {
+        let _lock = lock_cache_tests();
         FILE_CACHE.clear();
 
         let file = NamedTempFile::new().expect("temp file");
@@ -351,6 +362,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn cache_handles_concurrent_reads_for_same_file() {
+        let _lock = lock_cache_tests();
         FILE_CACHE.clear();
 
         let file = NamedTempFile::new().expect("temp file");
@@ -370,5 +382,22 @@ mod tests {
             let value = task.await.expect("task join");
             assert_eq!(value, expected);
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cache_skips_entries_when_encoded_payload_exceeds_limit() {
+        let _lock = lock_cache_tests();
+        FILE_CACHE.clear();
+
+        let file = NamedTempFile::new().expect("temp file");
+        let body = vec![b'x'; 8 * 1024 * 1024];
+        write_pdf(file.path(), &body).expect("write large pdf");
+
+        let first = encode_inline_cached(file.path()).expect("first encode");
+        let second = encode_inline_cached(file.path()).expect("second encode");
+        assert!(
+            !Arc::ptr_eq(&first, &second),
+            "encoded payload larger than cache limit should not be cached"
+        );
     }
 }

@@ -6750,6 +6750,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resolve_file_inputs_for_uploads_routes_multiple_files() {
+        let codex_home = tempfile::tempdir().expect("codex home");
+        login_with_provider_api_key(
+            codex_home.path(),
+            PROVIDER_OPENAI,
+            "sk-test-key",
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store api key");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/files"))
+            .and(header("authorization", "Bearer sk-test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "file-123",
+                "object": "file",
+                "filename": "uploaded.pdf",
+                "purpose": "user_data",
+                "bytes": 10
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let mut provider = ModelProviderInfo::create_openai_provider();
+        provider.base_url = Some(format!("{}/v1", server.uri()));
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let first = dir.path().join("first.pdf");
+        let second = dir.path().join("second.pdf");
+        for path in [&first, &second] {
+            std::fs::write(path, b"%PDF-1.4\n").expect("write pdf header");
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .expect("open pdf")
+                .set_len(3 * 1024 * 1024)
+                .expect("grow file");
+        }
+
+        let mut inputs = vec![
+            UserInput::LocalFile {
+                path: first.clone(),
+            },
+            UserInput::LocalFile {
+                path: second.clone(),
+            },
+        ];
+        resolve_file_inputs_for_uploads(&mut inputs, &provider, &config)
+            .await
+            .expect("resolve files");
+
+        assert_eq!(
+            inputs,
+            vec![
+                UserInput::UploadedFile {
+                    file_id: "file-123".to_string(),
+                    mime_type: "application/pdf".to_string(),
+                    filename: "first.pdf".to_string(),
+                    source_path: first,
+                },
+                UserInput::UploadedFile {
+                    file_id: "file-123".to_string(),
+                    mime_type: "application/pdf".to_string(),
+                    filename: "second.pdf".to_string(),
+                    source_path: second,
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn steer_input_requires_active_turn() {
         let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
         let input = vec![UserInput::Text {
