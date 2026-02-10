@@ -147,8 +147,8 @@ impl GeminiStreamState {
 /// - Stripping leading/trailing quotes from the entire `cmd` string (only if the entire string is quoted)
 /// - Converting patterns like `'>'` back to `>` for proper shell redirection
 fn fix_gemini_command_quoting(args: &Value) -> Value {
-    if let Some(obj) = args.as_object() {
-        if let Some(cmd) = obj
+    if let Some(obj) = args.as_object()
+        && let Some(cmd) = obj
             .get("cmd")
             .or_else(|| obj.get("command"))
             .and_then(|v| v.as_str())
@@ -187,7 +187,6 @@ fn fix_gemini_command_quoting(args: &Value) -> Value {
             }
             return Value::Object(new_obj);
         }
-    }
     args.clone()
 }
 
@@ -214,11 +213,10 @@ pub fn parse_gemini_chunk(
     }
 
     // Check for prompt feedback blocking
-    if let Some(feedback) = &chunk.prompt_feedback {
-        if let Some(reason) = &feedback.block_reason {
+    if let Some(feedback) = &chunk.prompt_feedback
+        && let Some(reason) = &feedback.block_reason {
             return Err(ApiError::Stream(format!("Prompt blocked: {reason}")));
         }
-    }
 
     // Process candidates
     if let Some(ref candidates) = chunk.candidates {
@@ -235,13 +233,13 @@ pub fn parse_gemini_chunk(
                 }
             }
 
-            if let Some(ref content) = candidate.content {
-                if let Some(ref parts) = content.parts {
+            if let Some(ref content) = candidate.content
+                && let Some(ref parts) = content.parts {
                     for part in parts {
                         // Handle thinking/reasoning content (Gemini thinking mode)
                         if part.thought {
-                            if let Some(ref text) = part.text {
-                                if !text.is_empty() {
+                            if let Some(ref text) = part.text
+                                && !text.is_empty() {
                                     // Emit OutputItemAdded for Reasoning on first thinking part
                                     if !state.reasoning_item_started {
                                         state.reasoning_item_started = true;
@@ -263,7 +261,6 @@ pub fn parse_gemini_chunk(
                                         state.in_thought_section = true;
                                     }
                                 }
-                            }
                             continue; // Don't process as regular text
                         }
 
@@ -286,8 +283,8 @@ pub fn parse_gemini_chunk(
                         }
 
                         // Handle text content
-                        if let Some(ref text) = part.text {
-                            if !text.is_empty() {
+                        if let Some(ref text) = part.text
+                            && !text.is_empty() {
                                 // Emit OutputItemAdded for the message if this is the first text
                                 if !state.message_started {
                                     state.message_started = true;
@@ -303,7 +300,6 @@ pub fn parse_gemini_chunk(
                                 }
                                 events.push(ResponseEvent::OutputTextDelta(text.clone()));
                             }
-                        }
 
                         // Handle function calls
                         if let Some(ref function_call) = part.function_call {
@@ -329,15 +325,14 @@ pub fn parse_gemini_chunk(
                         }
                     }
                 }
-            }
 
             // Check for completion
-            if let Some(finish_reason) = &candidate.finish_reason {
-                if finish_reason == "STOP"
+            if let Some(finish_reason) = &candidate.finish_reason
+                && (finish_reason == "STOP"
                     || finish_reason == "MAX_TOKENS"
                     || finish_reason == "SAFETY"
                     || finish_reason == "RECITATION"
-                    || finish_reason == "OTHER"
+                    || finish_reason == "OTHER")
                 {
                     // Flush any outstanding thinking section before completing
                     if state.in_thought_section {
@@ -371,13 +366,12 @@ pub fn parse_gemini_chunk(
                         token_usage,
                     });
                 }
-            }
         }
     }
 
     // If no candidates but we have usage metadata, this might be a final chunk
-    if chunk.candidates.is_none() {
-        if let Some(usage) = chunk.usage_metadata {
+    if chunk.candidates.is_none()
+        && let Some(usage) = chunk.usage_metadata {
             // Flush any outstanding thinking section before completing
             if state.in_thought_section {
                 events.push(ResponseEvent::ReasoningSummaryPartAdded {
@@ -409,7 +403,6 @@ pub fn parse_gemini_chunk(
                 token_usage,
             });
         }
-    }
 
     Ok(events)
 }

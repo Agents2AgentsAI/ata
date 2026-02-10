@@ -1,3 +1,6 @@
+use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::path::PathBuf;
@@ -22,11 +25,15 @@ const PDF_MAGIC: &[u8] = b"%PDF-";
 const CACHE_MAX_ENTRY_SIZE: u64 = 10 * 1024 * 1024;
 const FILE_CACHE_CAPACITY: usize = 8;
 
-type FileCacheKey = (PathBuf, u64);
+type FileCacheKey = (PathBuf, u64, u64);
 
 static FILE_CACHE: LazyLock<BlockingLruCache<FileCacheKey, ProcessedFile>> = LazyLock::new(|| {
     BlockingLruCache::new(NonZeroUsize::new(FILE_CACHE_CAPACITY).unwrap_or(NonZeroUsize::MIN))
 });
+
+pub fn bytes_to_megabytes(bytes: u64) -> f64 {
+    bytes as f64 / (1024.0 * 1024.0)
+}
 
 /// Processed file data ready for model input.
 ///
@@ -66,7 +73,6 @@ pub fn analyze_file(path: &Path) -> Result<FileMetadata, FileProcessingError> {
 
     let mut buf = [0u8; 16];
     let bytes_read = {
-        use std::io::Read;
         let mut file = std::fs::File::open(path).map_err(|source| FileProcessingError::Read {
             path: path.to_path_buf(),
             source,
@@ -109,31 +115,27 @@ pub fn encode_inline(
     })
 }
 
-/// Analyze and encode a file with cache lookup by canonical path + mtime.
+/// Analyze and encode a file with cache lookup by canonical path + mtime + file size.
 pub fn encode_inline_cached(path: &Path) -> Result<ProcessedFile, FileProcessingError> {
     // Canonical path keeps cache keys stable across equivalent path spellings/symlinks.
-    // `std::fs::canonicalize` does not expose metadata, so an explicit metadata call is still
-    // required to capture mtime for invalidation.
     let canonical = std::fs::canonicalize(path).map_err(|source| FileProcessingError::Read {
         path: path.to_path_buf(),
         source,
     })?;
-    let metadata = std::fs::metadata(&canonical).map_err(|source| FileProcessingError::Read {
+
+    // Open once and use the same handle for metadata, header probe, and full read.
+    // This avoids TOCTOU windows between independent filesystem operations.
+    let mut file = std::fs::File::open(&canonical).map_err(|source| FileProcessingError::Read {
         path: path.to_path_buf(),
         source,
     })?;
-    let mtime_ns = file_mtime_ns_from_metadata(&metadata);
-    let key = (canonical, mtime_ns);
-
-    if let Some(cached) = FILE_CACHE.get(&key) {
-        return Ok(cached);
-    }
-
-    let bytes = std::fs::read(&key.0).map_err(|source| FileProcessingError::Read {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let size_bytes = bytes.len() as u64;
+    let metadata = file
+        .metadata()
+        .map_err(|source| FileProcessingError::Read {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let size_bytes = metadata.len();
     if size_bytes > MAX_FILE_SIZE {
         return Err(FileProcessingError::TooLarge {
             path: path.to_path_buf(),
@@ -142,8 +144,34 @@ pub fn encode_inline_cached(path: &Path) -> Result<ProcessedFile, FileProcessing
         });
     }
 
-    let mime_probe_len = bytes.len().min(16);
-    let mime_type = detect_mime(&bytes[..mime_probe_len], path)?;
+    let mtime_ns = file_mtime_ns_from_metadata(&metadata);
+    let key = (canonical, mtime_ns, size_bytes);
+
+    if let Some(cached) = FILE_CACHE.get(&key) {
+        return Ok(cached);
+    }
+
+    let mut mime_probe = [0_u8; 16];
+    let bytes_read = file
+        .read(&mut mime_probe)
+        .map_err(|source| FileProcessingError::Read {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let mime_type = detect_mime(&mime_probe[..bytes_read], path)?;
+
+    file.seek(SeekFrom::Start(0))
+        .map_err(|source| FileProcessingError::Read {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let mut bytes = Vec::with_capacity(size_bytes as usize);
+    file.read_to_end(&mut bytes)
+        .map_err(|source| FileProcessingError::Read {
+            path: path.to_path_buf(),
+            source,
+        })?;
+
     let filename = path
         .file_name()
         .map(|name| name.to_string_lossy().to_string())

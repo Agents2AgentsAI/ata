@@ -132,6 +132,8 @@ pub enum SteerInputError {
 enum FileInputPreparationError {
     #[error(transparent)]
     Processing(#[from] FileProcessingError),
+    #[error("failed to prepare local file attachments: {0}")]
+    Task(String),
     #[error("provider `{provider}` does not support PDF attachments")]
     UnsupportedProvider { provider: String },
     #[error(
@@ -162,10 +164,7 @@ fn file_capabilities_for_provider(provider: &ModelProviderInfo) -> (String, File
     (provider_id.to_string(), file_capabilities_for(provider_id))
 }
 
-fn bytes_to_megabytes(bytes: u64) -> f64 {
-    bytes as f64 / (1024.0 * 1024.0)
-}
-
+/// Convert a base64 payload budget into raw-byte budget using the 4:3 base64 expansion ratio.
 fn max_raw_inline_bytes(max_inline_payload_bytes: u64) -> u64 {
     max_inline_payload_bytes.saturating_mul(3).saturating_div(4)
 }
@@ -190,6 +189,8 @@ fn prepare_file_inputs(
     let max_total_raw_bytes = max_raw_inline_bytes(capabilities.max_inline_payload_bytes);
     let mut total_raw_bytes = 0_u64;
 
+    // UploadedFile entries already reference provider-side file IDs and do not consume inline
+    // request payload budget.
     for input in inputs {
         if let UserInput::LocalFile { path } = input {
             let metadata = analyze_file(path)?;
@@ -216,6 +217,17 @@ fn prepare_file_inputs(
     }
 
     Ok(())
+}
+
+async fn prepare_file_inputs_async(
+    inputs: &[UserInput],
+    provider: &ModelProviderInfo,
+) -> std::result::Result<(), FileInputPreparationError> {
+    let inputs = inputs.to_vec();
+    let provider = provider.clone();
+    tokio::task::spawn_blocking(move || prepare_file_inputs(&inputs, &provider))
+        .await
+        .map_err(|error| FileInputPreparationError::Task(error.to_string()))?
 }
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
@@ -324,6 +336,7 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
 use codex_utils_file::FileProcessingError;
 use codex_utils_file::analyze_file;
+use codex_utils_file::bytes_to_megabytes;
 use codex_utils_file::encode_inline_cached;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
@@ -2556,7 +2569,7 @@ impl Session {
             let state = self.state.lock().await;
             state.session_configuration.provider.clone()
         };
-        if let Err(error) = prepare_file_inputs(&input, &provider) {
+        if let Err(error) = prepare_file_inputs_async(&input, &provider).await {
             return Err(SteerInputError::InvalidFileInput(error.to_string()));
         }
 
@@ -3854,7 +3867,7 @@ pub(crate) async fn run_turn(
     if input.is_empty() {
         return None;
     }
-    if let Err(error) = prepare_file_inputs(&input, &turn_context.provider) {
+    if let Err(error) = prepare_file_inputs_async(&input, &turn_context.provider).await {
         let event = EventMsg::Error(ErrorEvent {
             message: error.to_string(),
             codex_error_info: Some(CodexErrorInfo::BadRequest),

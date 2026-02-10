@@ -10,7 +10,12 @@ use super::FileUploadService;
 use super::GeminiFileMetadata;
 use super::GeminiFileResponse;
 use super::UploadedFile;
+use super::build_file_part;
+use super::default_upload_retry_config;
 use super::file_name_or_default;
+use super::map_transport_error;
+use super::read_upload_response;
+use super::run_with_upload_retry;
 use super::upload_url;
 
 const GEMINI_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -25,30 +30,23 @@ impl GeminiFileUpload {
         file_name: &str,
         api_key: &str,
         base_url: &str,
+        retry: &crate::provider::RetryConfig,
     ) -> Result<GeminiFileMetadata, FileUploadError> {
         let normalized_file_name = file_name.trim_start_matches('/');
         let url = upload_url(base_url, &format!("/v1beta/{normalized_file_name}"));
 
         for _ in 0..GEMINI_MAX_POLL_ATTEMPTS {
-            let response = client
-                .get(&url)
-                .header("x-goog-api-key", api_key)
-                .timeout(DEFAULT_UPLOAD_TIMEOUT)
-                .send()
-                .await
-                .map_err(|error| FileUploadError::Request(error.to_string()))?;
-
-            let status = response.status().as_u16();
-            let body = response
-                .text()
-                .await
-                .map_err(|error| FileUploadError::Request(error.to_string()))?;
-            if status >= 400 {
-                return Err(FileUploadError::Response { status, body });
-            }
-
-            let parsed: GeminiFileResponse = serde_json::from_str(&body)
-                .map_err(|error| FileUploadError::Request(error.to_string()))?;
+            let parsed: GeminiFileResponse = run_with_upload_retry(retry, |_| async {
+                let response = client
+                    .get(&url)
+                    .header("x-goog-api-key", api_key)
+                    .timeout(DEFAULT_UPLOAD_TIMEOUT)
+                    .send()
+                    .await
+                    .map_err(map_transport_error)?;
+                read_upload_response(response).await
+            })
+            .await?;
 
             match parsed.file.state.as_str() {
                 "ACTIVE" => return Ok(parsed.file),
@@ -77,53 +75,40 @@ impl FileUploadService for GeminiFileUpload {
     ) -> Result<UploadedFile, FileUploadError> {
         let url = upload_url(base_url, "/upload/v1beta/files");
         let filename = file_name_or_default(file_path, "file.pdf");
-        let mime_type = if mime_type.is_empty() {
-            "application/pdf"
-        } else {
-            mime_type
-        };
-
-        let file = tokio::fs::File::open(file_path).await?;
-        let stream = tokio_util::io::ReaderStream::new(file);
-        let body = reqwest::Body::wrap_stream(stream);
         let metadata_json = serde_json::json!({
             "file": {
                 "display_name": filename.clone(),
             }
         });
+        let retry = default_upload_retry_config();
 
-        let part = reqwest::multipart::Part::stream(body)
-            .file_name(filename)
-            .mime_str(mime_type)
-            .map_err(|error| FileUploadError::Request(error.to_string()))?;
-        let form = reqwest::multipart::Form::new()
-            .text("metadata", metadata_json.to_string())
-            .part("file", part);
+        let parsed: GeminiFileResponse = run_with_upload_retry(&retry, |_| {
+            let filename = filename.clone();
+            let metadata_json = metadata_json.clone();
+            let url = url.clone();
+            async move {
+                let part = build_file_part(file_path, filename, mime_type).await?;
+                let form = reqwest::multipart::Form::new()
+                    .text("metadata", metadata_json.to_string())
+                    .part("file", part);
 
-        let response = client
-            .post(url)
-            .header("x-goog-api-key", api_key)
-            .timeout(DEFAULT_UPLOAD_TIMEOUT)
-            .multipart(form)
-            .send()
-            .await
-            .map_err(|error| FileUploadError::Request(error.to_string()))?;
+                let response = client
+                    .post(url)
+                    .header("x-goog-api-key", api_key)
+                    .timeout(DEFAULT_UPLOAD_TIMEOUT)
+                    .multipart(form)
+                    .send()
+                    .await
+                    .map_err(map_transport_error)?;
 
-        let status = response.status().as_u16();
-        let body = response
-            .text()
-            .await
-            .map_err(|error| FileUploadError::Request(error.to_string()))?;
-        if status >= 400 {
-            return Err(FileUploadError::Response { status, body });
-        }
-
-        let parsed: GeminiFileResponse = serde_json::from_str(&body)
-            .map_err(|error| FileUploadError::Request(error.to_string()))?;
+                read_upload_response(response).await
+            }
+        })
+        .await?;
         let mut file_metadata = parsed.file;
         if file_metadata.state == "PROCESSING" {
             file_metadata = self
-                .poll_until_active(client, &file_metadata.name, api_key, base_url)
+                .poll_until_active(client, &file_metadata.name, api_key, base_url, &retry)
                 .await?;
         }
         if file_metadata.state != "ACTIVE" {

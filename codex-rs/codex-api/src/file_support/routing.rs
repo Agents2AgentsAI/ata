@@ -3,6 +3,7 @@ use std::path::Path;
 use codex_protocol::models::ContentItem;
 use codex_utils_file::FileProcessingError;
 use codex_utils_file::analyze_file;
+use codex_utils_file::bytes_to_megabytes;
 use codex_utils_file::encode_inline_cached;
 use thiserror::Error;
 use tracing::warn;
@@ -33,10 +34,6 @@ pub enum FileRoutingError {
         size_mb: f64,
         max_mb: f64,
     },
-}
-
-fn bytes_to_megabytes(bytes: u64) -> f64 {
-    bytes as f64 / (1024.0 * 1024.0)
 }
 
 fn inline_content_item(path: &Path) -> Result<ContentItem, FileRoutingError> {
