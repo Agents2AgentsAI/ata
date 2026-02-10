@@ -109,7 +109,7 @@ mod tests {
         cache.record(uploaded_file("file-1", "openai", None));
 
         let now = SystemTime::UNIX_EPOCH;
-        let candidates = cache.refresh_candidates(["file-1"].into_iter(), "gemini", now);
+        let candidates = cache.refresh_candidates(["file-1"], "gemini", now);
 
         assert_eq!(candidates, vec![uploaded_file("file-1", "openai", None)]);
     }
@@ -125,8 +125,7 @@ mod tests {
         cache.record(uploaded_file("file-soon", "gemini", Some(soon)));
         cache.record(uploaded_file("file-later", "gemini", Some(later)));
 
-        let candidates =
-            cache.refresh_candidates(["file-soon", "file-later"].into_iter(), "gemini", now);
+        let candidates = cache.refresh_candidates(["file-soon", "file-later"], "gemini", now);
 
         assert_eq!(
             candidates,
@@ -140,7 +139,7 @@ mod tests {
         cache.record(uploaded_file("file-1", "openai", None));
 
         let now = SystemTime::UNIX_EPOCH;
-        let candidates = cache.refresh_candidates(["file-1", "file-1"].into_iter(), "gemini", now);
+        let candidates = cache.refresh_candidates(["file-1", "file-1"], "gemini", now);
 
         assert_eq!(candidates, vec![uploaded_file("file-1", "openai", None)]);
     }

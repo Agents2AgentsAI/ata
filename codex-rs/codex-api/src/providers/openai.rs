@@ -7,7 +7,6 @@ use serde_json::Value;
 use serde_json::json;
 
 use crate::error::ApiError;
-use crate::file_support::build_data_url;
 use crate::provider_adapter::ProviderAdapter;
 use crate::provider_adapter::RequestOptions;
 
@@ -44,7 +43,6 @@ impl ProviderAdapter for OpenAiAdapter {
         tools: &[Value],
         options: &RequestOptions,
     ) -> Result<Value, ApiError> {
-        let input = wrap_input_file_data_uris(input);
         let mut body = json!({
             "model": model,
             "instructions": instructions,
@@ -77,37 +75,6 @@ impl ProviderAdapter for OpenAiAdapter {
     }
 }
 
-fn wrap_input_file_data_uris(input: &[Value]) -> Vec<Value> {
-    input.iter().map(wrap_input_file_data_uri).collect()
-}
-
-fn wrap_input_file_data_uri(item: &Value) -> Value {
-    let mut item = item.clone();
-    if let Some(content) = item.get_mut("content").and_then(Value::as_array_mut) {
-        for block in content {
-            if block.get("type").and_then(Value::as_str) != Some("input_file") {
-                continue;
-            }
-            let Some(file_data) = block.get("file_data").and_then(Value::as_str) else {
-                continue;
-            };
-            if file_data.starts_with("data:") {
-                continue;
-            }
-
-            let mime_type = block
-                .get("mime_type")
-                .and_then(Value::as_str)
-                .unwrap_or("application/octet-stream");
-            let wrapped = build_data_url(mime_type, file_data);
-            if let Some(block_obj) = block.as_object_mut() {
-                block_obj.insert("file_data".to_string(), Value::String(wrapped));
-            }
-        }
-    }
-    item
-}
-
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -115,14 +82,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wraps_inline_file_data_in_request_body() {
+    fn build_request_body_passes_input_through_unchanged() {
         let adapter = OpenAiAdapter::new();
         let input = vec![json!({
             "type": "message",
             "role": "user",
             "content": [{
                 "type": "input_file",
-                "file_data": "JVBERi0xLjQ=",
+                "file_data": "data:application/pdf;base64,JVBERi0xLjQ=",
                 "mime_type": "application/pdf"
             }]
         })];
@@ -132,24 +99,6 @@ mod tests {
 
         assert_eq!(
             body["input"][0]["content"][0]["file_data"],
-            "data:application/pdf;base64,JVBERi0xLjQ="
-        );
-    }
-
-    #[test]
-    fn leaves_existing_data_url_unchanged() {
-        let input = json!({
-            "type": "message",
-            "role": "user",
-            "content": [{
-                "type": "input_file",
-                "file_data": "data:application/pdf;base64,JVBERi0xLjQ=",
-                "mime_type": "application/pdf"
-            }]
-        });
-        let wrapped = wrap_input_file_data_uri(&input);
-        assert_eq!(
-            wrapped["content"][0]["file_data"],
             "data:application/pdf;base64,JVBERi0xLjQ="
         );
     }

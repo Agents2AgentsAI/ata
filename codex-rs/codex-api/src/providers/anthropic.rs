@@ -402,8 +402,16 @@ fn build_anthropic_messages(input: &[Value]) -> Result<Vec<Value>, ApiError> {
                                         .get("mime_type")
                                         .and_then(Value::as_str)
                                         .unwrap_or("application/pdf");
-                                    let (media_type, base64_data) = parse_data_url(data)
-                                        .unwrap_or_else(|| (mime.to_string(), data.to_string()));
+                                    let (media_type, base64_data) = if data.starts_with("data:") {
+                                        parse_data_url(data).ok_or_else(|| {
+                                            ApiError::InvalidRequest {
+                                                message: "invalid data URL in input_file block"
+                                                    .to_string(),
+                                            }
+                                        })?
+                                    } else {
+                                        (mime.to_string(), data.to_string())
+                                    };
                                     let mut document = json!({
                                         "type": "document",
                                         "source": {

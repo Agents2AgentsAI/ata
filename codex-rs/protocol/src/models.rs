@@ -793,9 +793,14 @@ pub fn local_file_content_items(path: &Path, label_number: Option<usize>) -> Vec
             tracing::warn!(
                 path = %path.display(),
                 %error,
-                "local file encoding failed; dropping attachment"
+                "local file encoding failed; inserting error placeholder"
             );
-            Vec::new()
+            vec![ContentItem::InputText {
+                text: format!(
+                    "Codex could not read the local file at `{}`: {error}",
+                    path.display()
+                ),
+            }]
         }
     }
 }
@@ -2098,17 +2103,29 @@ mod tests {
     }
 
     #[test]
-    fn local_file_read_error_drops_attachment() {
+    fn local_file_read_error_inserts_error_placeholder() {
         let dir = tempdir().expect("temp dir");
         let missing = dir.path().join("missing-report.pdf");
-        let item = ResponseInputItem::from(vec![UserInput::LocalFile { path: missing }]);
+        let item = ResponseInputItem::from(vec![UserInput::LocalFile {
+            path: missing.clone(),
+        }]);
 
         match item {
             ResponseInputItem::Message { content, .. } => {
-                assert!(
-                    content.is_empty(),
-                    "local file attachment errors should not send placeholder content to the model"
-                );
+                assert_eq!(content.len(), 1, "should have exactly one placeholder item");
+                match &content[0] {
+                    ContentItem::InputText { text } => {
+                        assert!(
+                            text.contains(&missing.display().to_string()),
+                            "placeholder should mention the file path"
+                        );
+                        assert!(
+                            text.starts_with("Codex could not read"),
+                            "placeholder should start with error prefix"
+                        );
+                    }
+                    other => panic!("expected InputText placeholder but got {other:?}"),
+                }
             }
             other => panic!("expected message response but got {other:?}"),
         }

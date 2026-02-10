@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -159,13 +158,19 @@ enum FileInputPreparationError {
     },
 }
 
-fn file_capabilities_for_provider(provider: &ModelProviderInfo) -> (String, FileCapabilityConfig) {
+fn file_capabilities_for_provider(
+    provider: &ModelProviderInfo,
+    model: Option<&str>,
+) -> (String, FileCapabilityConfig) {
     let provider_id = match provider.wire_api {
         WireApi::Responses => "openai",
         WireApi::AnthropicMessages => "anthropic",
         WireApi::GeminiGenerate => "gemini",
     };
-    (provider_id.to_string(), file_capabilities_for(provider_id))
+    (
+        provider_id.to_string(),
+        file_capabilities_for(provider_id, model),
+    )
 }
 
 /// Convert a base64 payload budget into raw-byte budget using the 4:3 base64 expansion ratio.
@@ -229,15 +234,30 @@ async fn delete_uploaded_files_best_effort(
     }
 }
 
+#[derive(Debug)]
+struct FileUploadOutcome {
+    uploaded_files: Vec<codex_api::file_support::UploadedFile>,
+    warnings: Vec<String>,
+}
+
+/// Maximum number of concurrent file uploads.
+const MAX_CONCURRENT_FILE_UPLOADS: usize = 4;
+
 async fn resolve_file_inputs_for_uploads(
     inputs: &mut [UserInput],
     provider: &ModelProviderInfo,
     config: &Config,
     http_client: &reqwest::Client,
-) -> std::result::Result<Vec<codex_api::file_support::UploadedFile>, FileInputPreparationError> {
-    let (provider_id, capabilities) = file_capabilities_for_provider(provider);
+) -> std::result::Result<FileUploadOutcome, FileInputPreparationError> {
+    let empty = Ok(FileUploadOutcome {
+        uploaded_files: Vec::new(),
+        warnings: Vec::new(),
+    });
+
+    let (provider_id, capabilities) =
+        file_capabilities_for_provider(provider, config.model.as_deref());
     if !capabilities.supports_pdf {
-        return Ok(Vec::new());
+        return empty;
     }
 
     let Some(api_key) = provider
@@ -245,64 +265,115 @@ async fn resolve_file_inputs_for_uploads(
         .ok()
         .flatten()
     else {
-        return Ok(Vec::new());
+        return empty;
     };
     let Some(upload_service) = upload_service_for_provider(&provider_id) else {
-        return Ok(Vec::new());
+        return empty;
     };
     let base_url = upload_base_url_for_provider(&provider_id, provider);
+
+    // Collect (index, path) for all LocalFile entries.
+    let file_entries: Vec<(usize, PathBuf)> = inputs
+        .iter()
+        .enumerate()
+        .filter_map(|(i, input)| match input {
+            UserInput::LocalFile { path } => Some((i, path.clone())),
+            _ => None,
+        })
+        .collect();
+
+    if file_entries.is_empty() {
+        return empty;
+    }
+
+    // Upload concurrently with bounded parallelism.
+    use futures::stream::StreamExt;
+    type UploadResult = (
+        usize,
+        PathBuf,
+        Result<codex_api::file_support::MaybeUploadResult, FileRoutingError>,
+    );
+
+    let mut results: Vec<UploadResult> = futures::stream::iter(file_entries)
+        .map(|(idx, path)| {
+            let capabilities = &capabilities;
+            let upload_service = upload_service.as_ref();
+            let api_key = &api_key;
+            let base_url = &base_url;
+            async move {
+                let result = maybe_upload_file(
+                    &path,
+                    capabilities,
+                    Some(upload_service),
+                    http_client,
+                    api_key,
+                    base_url,
+                )
+                .await;
+                (idx, path, result)
+            }
+        })
+        .buffer_unordered(MAX_CONCURRENT_FILE_UPLOADS)
+        .collect()
+        .await;
+
+    // Sort by original index so outputs are deterministic regardless of completion order.
+    results.sort_by_key(|(idx, _, _)| *idx);
+
+    // Process results: collect uploads, warnings, and check for errors.
     let mut uploaded_files = Vec::new();
+    let mut warnings = Vec::new();
+    let mut first_error: Option<FileRoutingError> = None;
 
-    for input in inputs {
-        let path = match input {
-            UserInput::LocalFile { path } => path.clone(),
-            _ => continue,
-        };
+    for (idx, path, result) in results {
+        match result {
+            Ok(upload_result) => {
+                if let Some(warning) = upload_result.warning {
+                    warnings.push(warning);
+                }
+                if let Some((uploaded, metadata)) = upload_result.uploaded {
+                    let file_id = uploaded.file_id.clone();
+                    uploaded_files.push(uploaded);
+                    inputs[idx] = UserInput::UploadedFile {
+                        file_id,
+                        mime_type: metadata.mime_type,
+                        filename: metadata.filename,
+                        source_path: path,
+                    };
+                }
+            }
+            Err(error) => {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+    }
 
-        let maybe_uploaded = match maybe_upload_file(
-            &path,
-            &capabilities,
-            Some(upload_service.as_ref()),
+    if let Some(error) = first_error {
+        delete_uploaded_files_best_effort(
+            &uploaded_files,
+            upload_service.as_ref(),
             http_client,
             &api_key,
             &base_url,
         )
-        .await
-        {
-            Ok(maybe_uploaded) => maybe_uploaded,
-            Err(error) => {
-                delete_uploaded_files_best_effort(
-                    &uploaded_files,
-                    upload_service.as_ref(),
-                    http_client,
-                    &api_key,
-                    &base_url,
-                )
-                .await;
-                return Err(error.into());
-            }
-        };
-
-        if let Some((uploaded, metadata)) = maybe_uploaded {
-            let file_id = uploaded.file_id.clone();
-            uploaded_files.push(uploaded);
-            *input = UserInput::UploadedFile {
-                file_id,
-                mime_type: metadata.mime_type,
-                filename: metadata.filename,
-                source_path: path,
-            };
-        }
+        .await;
+        return Err(error.into());
     }
 
-    Ok(uploaded_files)
+    Ok(FileUploadOutcome {
+        uploaded_files,
+        warnings,
+    })
 }
 
 fn prepare_file_inputs(
     inputs: &[UserInput],
     provider: &ModelProviderInfo,
+    model: Option<&str>,
 ) -> std::result::Result<(), FileInputPreparationError> {
-    let (provider_id, capabilities) = file_capabilities_for_provider(provider);
+    let (provider_id, capabilities) = file_capabilities_for_provider(provider, model);
     let has_file_input = inputs.iter().any(|input| {
         matches!(
             input,
@@ -351,10 +422,12 @@ fn prepare_file_inputs(
 async fn prepare_file_inputs_async(
     inputs: &[UserInput],
     provider: &ModelProviderInfo,
+    model: Option<&str>,
 ) -> std::result::Result<(), FileInputPreparationError> {
     let inputs = inputs.to_vec();
     let provider = provider.clone();
-    tokio::task::spawn_blocking(move || prepare_file_inputs(&inputs, &provider))
+    let model = model.map(str::to_string);
+    tokio::task::spawn_blocking(move || prepare_file_inputs(&inputs, &provider, model.as_deref()))
         .await
         .map_err(|error| FileInputPreparationError::Task(error.to_string()))?
 }
@@ -364,15 +437,15 @@ async fn resolve_and_prepare_file_inputs(
     provider: &ModelProviderInfo,
     config: &Config,
     http_client: &reqwest::Client,
-) -> std::result::Result<Vec<codex_api::file_support::UploadedFile>, FileInputPreparationError> {
+) -> std::result::Result<FileUploadOutcome, FileInputPreparationError> {
     // Upload-step errors are handled inside `resolve_file_inputs_for_uploads`, which already
     // performs best-effort cleanup of any earlier uploads.
-    let uploaded_files =
-        resolve_file_inputs_for_uploads(inputs, provider, config, http_client).await?;
+    let outcome = resolve_file_inputs_for_uploads(inputs, provider, config, http_client).await?;
 
-    if let Err(error) = prepare_file_inputs_async(inputs, provider).await {
-        if !uploaded_files.is_empty() {
-            let (provider_id, _capabilities) = file_capabilities_for_provider(provider);
+    if let Err(error) = prepare_file_inputs_async(inputs, provider, config.model.as_deref()).await {
+        if !outcome.uploaded_files.is_empty() {
+            let (provider_id, _capabilities) =
+                file_capabilities_for_provider(provider, config.model.as_deref());
             if let Some(api_key) = provider
                 .api_key_with_auth(&config.codex_home, config.cli_auth_credentials_store_mode)
                 .ok()
@@ -381,7 +454,7 @@ async fn resolve_and_prepare_file_inputs(
             {
                 let base_url = upload_base_url_for_provider(&provider_id, provider);
                 delete_uploaded_files_best_effort(
-                    &uploaded_files,
+                    &outcome.uploaded_files,
                     upload_service.as_ref(),
                     http_client,
                     &api_key,
@@ -394,7 +467,7 @@ async fn resolve_and_prepare_file_inputs(
         return Err(error);
     }
 
-    Ok(uploaded_files)
+    Ok(outcome)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -470,7 +543,10 @@ async fn refresh_uploaded_file_references(
     sess: &Session,
     turn_context: &TurnContext,
 ) -> Result<(), FileReferenceRefreshError> {
-    let (provider_id, _capabilities) = file_capabilities_for_provider(&turn_context.provider);
+    let (provider_id, _capabilities) = file_capabilities_for_provider(
+        &turn_context.provider,
+        turn_context.config.model.as_deref(),
+    );
 
     let (referenced_file_ids, referenced_mime_types) = {
         let state = sess.state.lock().await;
@@ -2955,7 +3031,7 @@ impl Session {
                 Arc::clone(&state.session_configuration.original_config_do_not_use),
             )
         };
-        let uploaded_files = resolve_and_prepare_file_inputs(
+        let outcome = resolve_and_prepare_file_inputs(
             &mut input,
             &provider,
             config.as_ref(),
@@ -2963,9 +3039,12 @@ impl Session {
         )
         .await
         .map_err(|error| SteerInputError::InvalidFileInput(error.to_string()))?;
-        if !uploaded_files.is_empty() {
+        for warning in &outcome.warnings {
+            tracing::warn!("{warning}");
+        }
+        if !outcome.uploaded_files.is_empty() {
             let mut cache = self.file_reference_cache.lock().await;
-            cache.record_all(uploaded_files);
+            cache.record_all(outcome.uploaded_files);
         }
 
         let mut active = self.active_turn.lock().await;
@@ -4262,7 +4341,7 @@ pub(crate) async fn run_turn(
     if input.is_empty() {
         return None;
     }
-    let uploaded_files = match resolve_and_prepare_file_inputs(
+    let outcome = match resolve_and_prepare_file_inputs(
         &mut input,
         &turn_context.provider,
         turn_context.config.as_ref(),
@@ -4270,7 +4349,7 @@ pub(crate) async fn run_turn(
     )
     .await
     {
-        Ok(uploaded_files) => uploaded_files,
+        Ok(outcome) => outcome,
         Err(error) => {
             let event = EventMsg::Error(ErrorEvent {
                 message: error.to_string(),
@@ -4280,9 +4359,16 @@ pub(crate) async fn run_turn(
             return None;
         }
     };
-    if !uploaded_files.is_empty() {
+    for warning in outcome.warnings {
+        sess.send_event(
+            &turn_context,
+            EventMsg::Warning(WarningEvent { message: warning }),
+        )
+        .await;
+    }
+    if !outcome.uploaded_files.is_empty() {
         let mut cache = sess.file_reference_cache.lock().await;
-        cache.record_all(uploaded_files);
+        cache.record_all(outcome.uploaded_files);
     }
 
     let model_info = turn_context.model_info.clone();
@@ -6951,7 +7037,7 @@ mod tests {
             .expect("grow file");
 
         let provider = ModelProviderInfo::create_gemini_provider();
-        let err = prepare_file_inputs(&[UserInput::LocalFile { path }], &provider)
+        let err = prepare_file_inputs(&[UserInput::LocalFile { path }], &provider, None)
             .expect_err("gemini inline limit should reject 21MB file");
         assert!(matches!(
             err,
@@ -6982,6 +7068,7 @@ mod tests {
                 UserInput::LocalFile { path: second },
             ],
             &provider,
+            None,
         )
         .expect_err("gemini inline payload budget should reject 16MB raw payload");
         assert!(matches!(
@@ -7036,7 +7123,7 @@ mod tests {
 
         let mut inputs = vec![UserInput::LocalFile { path: path.clone() }];
         let http_client = reqwest::Client::new();
-        let uploaded_files =
+        let outcome =
             resolve_file_inputs_for_uploads(&mut inputs, &provider, &config, &http_client)
                 .await
                 .expect("resolve files");
@@ -7051,7 +7138,7 @@ mod tests {
             }]
         );
         assert_eq!(
-            uploaded_files,
+            outcome.uploaded_files,
             vec![codex_api::file_support::UploadedFile {
                 file_id: "file-123".to_string(),
                 provider: "openai".to_string(),
@@ -7059,6 +7146,7 @@ mod tests {
                 source_path: path,
             }]
         );
+        assert!(outcome.warnings.is_empty());
     }
 
     #[tokio::test]
@@ -7117,7 +7205,7 @@ mod tests {
             },
         ];
         let http_client = reqwest::Client::new();
-        let uploaded_files =
+        let outcome =
             resolve_file_inputs_for_uploads(&mut inputs, &provider, &config, &http_client)
                 .await
                 .expect("resolve files");
@@ -7140,7 +7228,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            uploaded_files,
+            outcome.uploaded_files,
             vec![
                 codex_api::file_support::UploadedFile {
                     file_id: "file-123".to_string(),

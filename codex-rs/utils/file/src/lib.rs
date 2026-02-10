@@ -24,7 +24,8 @@ pub const ALWAYS_INLINE_MAX: u64 = 2 * 1024 * 1024;
 
 const PDF_MAGIC: &[u8] = b"%PDF-";
 const MIME_PROBE_BYTES: usize = 1024;
-const CACHE_MAX_ENCODED_ENTRY_SIZE: u64 = 10 * 1024 * 1024;
+/// Base64-encoded ceiling that covers `MAX_FILE_SIZE` (4:3 expansion + padding).
+const CACHE_MAX_ENCODED_ENTRY_SIZE: u64 = MAX_FILE_SIZE * 4 / 3 + 4;
 const DEFAULT_FILE_CACHE_CAPACITY: usize = 8;
 const FILE_CACHE_CAPACITY_ENV_VAR: &str = "CODEX_FILE_CACHE_CAPACITY";
 
@@ -469,10 +470,12 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn cache_skips_entries_when_encoded_payload_exceeds_limit() {
+    async fn cache_covers_all_processable_files() {
         let _lock = lock_cache_tests();
         FILE_CACHE.clear();
 
+        // An 8 MB file produces ~10.7 MB base64 — previously exceeded the old 10 MB cache limit.
+        // With the derived limit (MAX_FILE_SIZE * 4/3 + 4), this should now be cached.
         let file = NamedTempFile::new().expect("temp file");
         let body = vec![b'x'; 8 * 1024 * 1024];
         write_pdf(file.path(), &body).expect("write large pdf");
@@ -480,8 +483,15 @@ mod tests {
         let first = encode_inline_cached(file.path()).expect("first encode");
         let second = encode_inline_cached(file.path()).expect("second encode");
         assert!(
-            !Arc::ptr_eq(&first, &second),
-            "encoded payload larger than cache limit should not be cached"
+            Arc::ptr_eq(&first, &second),
+            "all processable files should be cached"
         );
+    }
+
+    #[test]
+    fn cache_limit_covers_max_file_size() {
+        // Verify the cache limit is large enough for the base64 encoding of MAX_FILE_SIZE.
+        let max_encoded = MAX_FILE_SIZE * 4 / 3 + 4;
+        assert!(CACHE_MAX_ENCODED_ENTRY_SIZE >= max_encoded);
     }
 }
