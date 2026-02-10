@@ -23,6 +23,8 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::is_file_close_tag_text;
+use codex_protocol::models::is_file_open_tag_text;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 use futures::prelude::*;
@@ -214,7 +216,24 @@ async fn run_compact_task_inner(
     Ok(())
 }
 
+pub(crate) fn sanitize_compaction_inline_files(items: Vec<ResponseItem>) -> Vec<ResponseItem> {
+    sanitize_compaction_items(items, FileSanitizeMode::InlineOnly)
+}
+
 fn sanitize_compaction_prompt_input(items: Vec<ResponseItem>) -> Vec<ResponseItem> {
+    sanitize_compaction_items(items, FileSanitizeMode::AllFiles)
+}
+
+#[derive(Clone, Copy)]
+enum FileSanitizeMode {
+    AllFiles,
+    InlineOnly,
+}
+
+fn sanitize_compaction_items(
+    items: Vec<ResponseItem>,
+    mode: FileSanitizeMode,
+) -> Vec<ResponseItem> {
     items
         .into_iter()
         .map(|item| match item {
@@ -227,10 +246,7 @@ fn sanitize_compaction_prompt_input(items: Vec<ResponseItem>) -> Vec<ResponseIte
             } => ResponseItem::Message {
                 id,
                 role,
-                content: content
-                    .into_iter()
-                    .map(sanitize_compaction_content_item)
-                    .collect(),
+                content: sanitize_compaction_message_content(content, mode),
                 end_turn,
                 phase,
             },
@@ -239,17 +255,82 @@ fn sanitize_compaction_prompt_input(items: Vec<ResponseItem>) -> Vec<ResponseIte
         .collect()
 }
 
-fn sanitize_compaction_content_item(item: ContentItem) -> ContentItem {
+fn sanitize_compaction_message_content(
+    content: Vec<ContentItem>,
+    mode: FileSanitizeMode,
+) -> Vec<ContentItem> {
+    let mut sanitized = Vec::with_capacity(content.len());
+    let mut iter = content.into_iter().peekable();
+    let mut prev_replaced_file = false;
+
+    while let Some(item) = iter.next() {
+        match item {
+            ContentItem::InputText { text } => {
+                if is_file_open_tag_text(&text)
+                    && iter
+                        .peek()
+                        .is_some_and(|next| should_replace_file_item(next, mode))
+                {
+                    prev_replaced_file = false;
+                    continue;
+                }
+
+                if is_file_close_tag_text(&text) && prev_replaced_file {
+                    prev_replaced_file = false;
+                    continue;
+                }
+
+                prev_replaced_file = false;
+                sanitized.push(ContentItem::InputText { text });
+            }
+            ContentItem::InputFile {
+                file_data,
+                file_id,
+                mime_type,
+                filename,
+            } => {
+                if should_replace_file_parts(file_data.as_ref(), mode) {
+                    sanitized.push(ContentItem::InputText {
+                        text: file_placeholder_text(
+                            filename.as_deref(),
+                            &mime_type,
+                            file_data.as_deref(),
+                        ),
+                    });
+                    prev_replaced_file = true;
+                } else {
+                    sanitized.push(ContentItem::InputFile {
+                        file_data,
+                        file_id,
+                        mime_type,
+                        filename,
+                    });
+                    prev_replaced_file = false;
+                }
+            }
+            other => {
+                prev_replaced_file = false;
+                sanitized.push(other);
+            }
+        }
+    }
+
+    sanitized
+}
+
+fn should_replace_file_item(item: &ContentItem, mode: FileSanitizeMode) -> bool {
     match item {
-        ContentItem::InputFile {
-            file_data,
-            file_id: _,
-            mime_type,
-            filename,
-        } => ContentItem::InputText {
-            text: file_placeholder_text(filename.as_deref(), &mime_type, file_data.as_deref()),
-        },
-        other => other,
+        ContentItem::InputFile { file_data, .. } => {
+            should_replace_file_parts(file_data.as_ref(), mode)
+        }
+        _ => false,
+    }
+}
+
+fn should_replace_file_parts(file_data: Option<&String>, mode: FileSanitizeMode) -> bool {
+    match mode {
+        FileSanitizeMode::AllFiles => true,
+        FileSanitizeMode::InlineOnly => file_data.is_some(),
     }
 }
 
@@ -357,6 +438,7 @@ pub(crate) fn process_compacted_history(
     initial_context: &[ResponseItem],
 ) -> Vec<ResponseItem> {
     compacted_history.retain(should_keep_compacted_history_item);
+    compacted_history = sanitize_compaction_inline_files(compacted_history);
 
     let initial_context = initial_context.to_vec();
 
@@ -587,6 +669,43 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_compaction_prompt_input_drops_file_tag_wrappers() {
+        use codex_protocol::models::local_file_open_tag_text_with_filename;
+
+        let input = vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: local_file_open_tag_text_with_filename(1, Some("report.pdf")),
+                },
+                ContentItem::InputFile {
+                    file_data: Some("JVBERi0xLjQ=".to_string()),
+                    file_id: None,
+                    mime_type: "application/pdf".to_string(),
+                    filename: Some("report.pdf".to_string()),
+                },
+                ContentItem::InputText {
+                    text: "<file_end></file_end>".to_string(),
+                },
+            ],
+            end_turn: None,
+            phase: None,
+        }];
+
+        let sanitized = sanitize_compaction_prompt_input(input);
+        let [ResponseItem::Message { content, .. }] = sanitized.as_slice() else {
+            panic!("expected one user message");
+        };
+        assert_eq!(
+            content,
+            &vec![ContentItem::InputText {
+                text: "[File: report.pdf, 8B, application/pdf]".to_string(),
+            }]
+        );
+    }
+
+    #[test]
     fn sanitize_compaction_prompt_input_replaces_uploaded_file_references() {
         let input = vec![ResponseItem::Message {
             id: None,
@@ -611,6 +730,88 @@ mod tests {
                 text: "[File: report.pdf, application/pdf]".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn process_compacted_history_sanitizes_inline_files_but_preserves_uploaded_refs() {
+        use codex_protocol::models::local_file_open_tag_text_with_filename;
+
+        let compacted_history = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![
+                    ContentItem::InputText {
+                        text: local_file_open_tag_text_with_filename(1, Some("inline.pdf")),
+                    },
+                    ContentItem::InputFile {
+                        file_data: Some("JVBERi0xLjQ=".to_string()),
+                        file_id: None,
+                        mime_type: "application/pdf".to_string(),
+                        filename: Some("inline.pdf".to_string()),
+                    },
+                    ContentItem::InputText {
+                        text: "<file_end></file_end>".to_string(),
+                    },
+                ],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![
+                    ContentItem::InputText {
+                        text: local_file_open_tag_text_with_filename(2, Some("uploaded.pdf")),
+                    },
+                    ContentItem::InputFile {
+                        file_data: None,
+                        file_id: Some("file-123".to_string()),
+                        mime_type: "application/pdf".to_string(),
+                        filename: Some("uploaded.pdf".to_string()),
+                    },
+                    ContentItem::InputText {
+                        text: "<file_end></file_end>".to_string(),
+                    },
+                ],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+
+        let refreshed = process_compacted_history(compacted_history, &[]);
+        let expected = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "[File: inline.pdf, 8B, application/pdf]".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![
+                    ContentItem::InputText {
+                        text: local_file_open_tag_text_with_filename(2, Some("uploaded.pdf")),
+                    },
+                    ContentItem::InputFile {
+                        file_data: None,
+                        file_id: Some("file-123".to_string()),
+                        mime_type: "application/pdf".to_string(),
+                        filename: Some("uploaded.pdf".to_string()),
+                    },
+                    ContentItem::InputText {
+                        text: "<file_end></file_end>".to_string(),
+                    },
+                ],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        assert_eq!(refreshed, expected);
     }
 
     #[test]
