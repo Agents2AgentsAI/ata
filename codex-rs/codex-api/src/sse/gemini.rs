@@ -134,6 +134,27 @@ impl GeminiStreamState {
         self.call_id_counter += 1;
         format!("call_{}", self.call_id_counter)
     }
+
+    fn flush_thinking_section(&mut self, events: &mut Vec<ResponseEvent>) {
+        if !self.in_thought_section {
+            return;
+        }
+
+        events.push(ResponseEvent::ReasoningSummaryPartAdded {
+            summary_index: self.thought_index,
+        });
+        events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
+            id: String::new(),
+            summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                text: std::mem::take(&mut self.accumulated_thought_text),
+            }],
+            content: None,
+            encrypted_content: None,
+        }));
+        self.thought_index += 1;
+        self.in_thought_section = false;
+        self.reasoning_item_started = false;
+    }
 }
 
 /// Fix Gemini's tendency to add quotes around commands and shell metacharacters.
@@ -146,6 +167,50 @@ impl GeminiStreamState {
 /// This function fixes these issues by:
 /// - Stripping leading/trailing quotes from the entire `cmd` string (only if the entire string is quoted)
 /// - Converting patterns like `'>'` back to `>` for proper shell redirection
+///   only when all single-quoted segments are standalone shell metachar tokens.
+fn is_shell_metachar_token(token: &str) -> bool {
+    matches!(
+        token,
+        "2>&1" | ">&2" | ">>" | "<<" | "2>" | ">&" | ">" | "<" | "|" | "&"
+    )
+}
+
+fn quoted_segments_are_only_shell_metachar_tokens(cmd: &str) -> bool {
+    let mut saw_quoted_segment = false;
+    let mut quote_start: Option<usize> = None;
+
+    for (idx, ch) in cmd.char_indices() {
+        if ch != '\'' {
+            continue;
+        }
+        if let Some(start) = quote_start {
+            saw_quoted_segment = true;
+            if !is_shell_metachar_token(&cmd[start..idx]) {
+                return false;
+            }
+            quote_start = None;
+        } else {
+            quote_start = Some(idx + 1);
+        }
+    }
+
+    saw_quoted_segment && quote_start.is_none()
+}
+
+fn unquote_shell_metachar_tokens(cmd: &str) -> String {
+    // Order matters: process longer/more specific patterns first to avoid partial matches.
+    cmd.replace("'2>&1'", "2>&1")
+        .replace("'>&2'", ">&2")
+        .replace("'>>'", ">>")
+        .replace("'<<'", "<<")
+        .replace("'2>'", "2>")
+        .replace("'>&'", ">&")
+        .replace("'>'", ">")
+        .replace("'<'", "<")
+        .replace("'|'", "|")
+        .replace("'&'", "&")
+}
+
 fn fix_gemini_command_quoting(args: &Value) -> Value {
     if let Some(obj) = args.as_object()
         && let Some(cmd) = obj
@@ -162,21 +227,14 @@ fn fix_gemini_command_quoting(args: &Value) -> Value {
             cmd
         };
 
-        // Fix quoted metacharacters within command.
-        // Order matters: process longer/more specific patterns first to avoid partial matches.
-        let cmd = cmd
-            // Compound redirections (most specific first)
-            .replace("'2>&1'", "2>&1")
-            .replace("'>&2'", ">&2")
-            .replace("'>>'", ">>")
-            .replace("'<<'", "<<")
-            .replace("'2>'", "2>")
-            .replace("'>&'", ">&")
-            // Simple redirections and operators
-            .replace("'>'", ">")
-            .replace("'<'", "<")
-            .replace("'|'", "|")
-            .replace("'&'", "&");
+        // Only rewrite quoted metacharacters when every single-quoted segment is one
+        // of those tokens. This avoids altering commands that intentionally use quoted
+        // literal values like `'x>y'` or `'>'`.
+        let cmd = if quoted_segments_are_only_shell_metachar_tokens(cmd) {
+            unquote_shell_metachar_tokens(cmd)
+        } else {
+            cmd.to_string()
+        };
 
         // Rebuild the object with the fixed command
         let mut new_obj = obj.clone();
@@ -269,20 +327,7 @@ pub fn parse_gemini_chunk(
 
                     // Emit section break and Reasoning item done when transitioning out of thought
                     if state.in_thought_section {
-                        events.push(ResponseEvent::ReasoningSummaryPartAdded {
-                            summary_index: state.thought_index,
-                        });
-                        events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
-                            id: String::new(),
-                            summary: vec![ReasoningItemReasoningSummary::SummaryText {
-                                text: std::mem::take(&mut state.accumulated_thought_text),
-                            }],
-                            content: None,
-                            encrypted_content: None,
-                        }));
-                        state.thought_index += 1;
-                        state.in_thought_section = false;
-                        state.reasoning_item_started = false;
+                        state.flush_thinking_section(&mut events);
                     }
 
                     // Handle text content
@@ -336,20 +381,7 @@ pub fn parse_gemini_chunk(
             {
                 // Flush any outstanding thinking section before completing
                 if state.in_thought_section {
-                    events.push(ResponseEvent::ReasoningSummaryPartAdded {
-                        summary_index: state.thought_index,
-                    });
-                    events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
-                        id: String::new(),
-                        summary: vec![ReasoningItemReasoningSummary::SummaryText {
-                            text: std::mem::take(&mut state.accumulated_thought_text),
-                        }],
-                        content: None,
-                        encrypted_content: None,
-                    }));
-                    state.thought_index += 1;
-                    state.in_thought_section = false;
-                    state.reasoning_item_started = false;
+                    state.flush_thinking_section(&mut events);
                 }
 
                 // Get usage from the chunk if available
@@ -375,20 +407,7 @@ pub fn parse_gemini_chunk(
     {
         // Flush any outstanding thinking section before completing
         if state.in_thought_section {
-            events.push(ResponseEvent::ReasoningSummaryPartAdded {
-                summary_index: state.thought_index,
-            });
-            events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
-                id: String::new(),
-                summary: vec![ReasoningItemReasoningSummary::SummaryText {
-                    text: std::mem::take(&mut state.accumulated_thought_text),
-                }],
-                content: None,
-                encrypted_content: None,
-            }));
-            state.thought_index += 1;
-            state.in_thought_section = false;
-            state.reasoning_item_started = false;
+            state.flush_thinking_section(&mut events);
         }
 
         let token_usage = Some(TokenUsage {
@@ -611,6 +630,13 @@ mod tests {
         let fixed = fix_gemini_command_quoting(&args);
         // This should be unchanged since 'file with spaces.txt' isn't a metacharacter pattern
         assert_eq!(fixed["cmd"], "cat 'file with spaces.txt'");
+    }
+
+    #[test]
+    fn test_fix_gemini_command_quoting_does_not_rewrite_literal_quoted_metachar() {
+        let args = json!({"cmd": "test 'x>y' '>' z"});
+        let fixed = fix_gemini_command_quoting(&args);
+        assert_eq!(fixed["cmd"], "test 'x>y' '>' z");
     }
 
     #[test]

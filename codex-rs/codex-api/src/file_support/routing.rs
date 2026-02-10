@@ -14,6 +14,8 @@ use super::upload::FileUploadService;
 
 #[derive(Debug, Error)]
 pub enum FileRoutingError {
+    #[error("provider does not support PDF attachments")]
+    PdfNotSupported,
     #[error(transparent)]
     Processing(#[from] FileProcessingError),
     #[error(transparent)]
@@ -53,6 +55,10 @@ pub async fn route_file_input(
     api_key: &str,
     base_url: &str,
 ) -> Result<ContentItem, FileRoutingError> {
+    if !capabilities.supports_pdf {
+        return Err(FileRoutingError::PdfNotSupported);
+    }
+
     let metadata = analyze_file(path)?;
     let path_str = path.display().to_string();
 
@@ -174,6 +180,13 @@ mod tests {
         }
     }
 
+    fn unsupported_capabilities() -> FileCapabilityConfig {
+        FileCapabilityConfig {
+            supports_pdf: false,
+            ..capabilities()
+        }
+    }
+
     fn create_pdf_file(dir: &TempDir, name: &str, size_bytes: u64) -> PathBuf {
         let path = dir.path().join(name);
         std::fs::write(&path, b"%PDF-1.4\n").expect("write pdf header");
@@ -234,6 +247,26 @@ mod tests {
 
         assert_inline(&item);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn route_rejects_provider_without_pdf_support() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = create_pdf_file(&dir, "small.pdf", 12);
+
+        let client = reqwest::Client::new();
+        let error = route_file_input(
+            &path,
+            &unsupported_capabilities(),
+            None,
+            &client,
+            "api-key",
+            "https://example.test",
+        )
+        .await
+        .expect_err("routing should fail");
+
+        assert!(matches!(error, FileRoutingError::PdfNotSupported));
     }
 
     #[tokio::test(flavor = "multi_thread")]

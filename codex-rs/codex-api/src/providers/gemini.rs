@@ -8,6 +8,7 @@ use serde_json::Value;
 use serde_json::json;
 
 use crate::error::ApiError;
+use crate::file_support::INPUT_FILE_BLOCK_MISSING_DATA_OR_ID;
 use crate::file_support::parse_data_url;
 use crate::provider_adapter::ProviderAdapter;
 use crate::provider_adapter::RequestOptions;
@@ -227,9 +228,7 @@ fn build_gemini_contents(input: &[Value]) -> Result<Vec<Value>, ApiError> {
                                     }));
                                 } else {
                                     return Err(ApiError::InvalidRequest {
-                                        message:
-                                            "input_file block must include file_data or file_id"
-                                                .to_string(),
+                                        message: INPUT_FILE_BLOCK_MISSING_DATA_OR_ID.to_string(),
                                     });
                                 }
                             }

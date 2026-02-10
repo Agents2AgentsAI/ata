@@ -19,7 +19,9 @@ use super::run_with_upload_retry;
 use super::upload_url;
 
 const GEMINI_API_VERSION: &str = "v1beta";
-const GEMINI_MAX_POLL_ATTEMPTS: usize = 60;
+// Cap processing wait to roughly 10 minutes worst-case
+// (1+2+4+8+16+30 + 18*30 = 601 seconds).
+const GEMINI_MAX_POLL_ATTEMPTS: usize = 24;
 const GEMINI_POLL_BASE_INTERVAL: Duration = Duration::from_secs(1);
 const GEMINI_POLL_MAX_INTERVAL: Duration = Duration::from_secs(30);
 

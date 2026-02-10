@@ -4,6 +4,9 @@ pub mod responses;
 pub mod routing;
 pub mod upload;
 
+pub(crate) const INPUT_FILE_BLOCK_MISSING_DATA_OR_ID: &str =
+    "input_file block must include file_data or file_id";
+
 pub use capabilities::FileCapabilityConfig;
 pub use capabilities::file_capabilities_for;
 pub use data_url::build_data_url;

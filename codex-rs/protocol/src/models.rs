@@ -125,8 +125,11 @@ impl TryFrom<UncheckedContentItem> for ContentItem {
                 mime_type,
                 filename,
             } => {
+                let file_data = file_data.filter(|value| !value.trim().is_empty());
+                let file_id = file_id.filter(|value| !value.trim().is_empty());
                 let has_file_data = file_data.is_some();
                 let has_file_id = file_id.is_some();
+                // Both present or both absent is invalid; exactly one is required.
                 if has_file_data == has_file_id {
                     return Err("input_file must include exactly one of `file_data` or `file_id`");
                 }
@@ -2011,6 +2014,40 @@ mod tests {
     fn input_file_deserialization_rejects_missing_file_data_and_file_id() {
         let err = serde_json::from_value::<ContentItem>(serde_json::json!({
             "type": "input_file",
+            "mime_type": "application/pdf",
+            "filename": "report.pdf",
+        }))
+        .expect_err("deserialization should fail");
+
+        assert!(
+            err.to_string()
+                .contains("input_file must include exactly one of `file_data` or `file_id`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn input_file_deserialization_rejects_empty_file_data() {
+        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "input_file",
+            "file_data": "",
+            "mime_type": "application/pdf",
+            "filename": "report.pdf",
+        }))
+        .expect_err("deserialization should fail");
+
+        assert!(
+            err.to_string()
+                .contains("input_file must include exactly one of `file_data` or `file_id`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn input_file_deserialization_rejects_empty_file_id() {
+        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "input_file",
+            "file_id": "",
             "mime_type": "application/pdf",
             "filename": "report.pdf",
         }))

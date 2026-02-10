@@ -11,6 +11,7 @@ use serde_json::Value;
 use serde_json::json;
 
 use crate::error::ApiError;
+use crate::file_support::INPUT_FILE_BLOCK_MISSING_DATA_OR_ID;
 use crate::file_support::parse_data_url;
 use crate::provider_adapter::ProviderAdapter;
 use crate::provider_adapter::RequestOptions;
@@ -394,15 +395,23 @@ fn build_anthropic_messages(input: &[Value]) -> Result<Vec<Value>, ApiError> {
                                 }
                             }
                             "input_file" => {
+                                let title = block
+                                    .get("filename")
+                                    .and_then(Value::as_str)
+                                    .filter(|filename| !filename.is_empty());
                                 if let Some(file_id) = block.get("file_id").and_then(Value::as_str)
                                 {
-                                    blocks.push(json!({
+                                    let mut document = json!({
                                         "type": "document",
                                         "source": {
                                             "type": "file",
                                             "file_id": file_id
                                         }
-                                    }));
+                                    });
+                                    if let Some(title) = title {
+                                        document["title"] = json!(title);
+                                    }
+                                    blocks.push(document);
                                 } else if let Some(data) =
                                     block.get("file_data").and_then(Value::as_str)
                                 {
@@ -410,19 +419,23 @@ fn build_anthropic_messages(input: &[Value]) -> Result<Vec<Value>, ApiError> {
                                         .get("mime_type")
                                         .and_then(Value::as_str)
                                         .unwrap_or("application/pdf");
-                                    blocks.push(json!({
+                                    let (media_type, base64_data) = parse_data_url(data)
+                                        .unwrap_or_else(|| (mime.to_string(), data.to_string()));
+                                    let mut document = json!({
                                         "type": "document",
                                         "source": {
                                             "type": "base64",
-                                            "media_type": mime,
-                                            "data": data
+                                            "media_type": media_type,
+                                            "data": base64_data
                                         }
-                                    }));
+                                    });
+                                    if let Some(title) = title {
+                                        document["title"] = json!(title);
+                                    }
+                                    blocks.push(document);
                                 } else {
                                     return Err(ApiError::InvalidRequest {
-                                        message:
-                                            "input_file block must include file_data or file_id"
-                                                .to_string(),
+                                        message: INPUT_FILE_BLOCK_MISSING_DATA_OR_ID.to_string(),
                                     });
                                 }
                             }
@@ -827,6 +840,33 @@ mod tests {
             "application/pdf"
         );
         assert_eq!(messages[0]["content"][0]["source"]["data"], "JVBERi0xLjQ=");
+        assert_eq!(messages[0]["content"][0]["title"], "report.pdf");
+    }
+
+    #[test]
+    fn test_build_anthropic_messages_with_inline_file_data_uri() {
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "input_file",
+                "file_data": "data:application/pdf;base64,JVBERi0xLjQ=",
+                "mime_type": "application/pdf",
+                "filename": "report.pdf"
+            }]
+        })];
+
+        let messages = build_anthropic_messages(&input).expect("build messages");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"][0]["type"], "document");
+        assert_eq!(messages[0]["content"][0]["source"]["type"], "base64");
+        assert_eq!(
+            messages[0]["content"][0]["source"]["media_type"],
+            "application/pdf"
+        );
+        assert_eq!(messages[0]["content"][0]["source"]["data"], "JVBERi0xLjQ=");
+        assert_eq!(messages[0]["content"][0]["title"], "report.pdf");
     }
 
     #[test]
@@ -836,7 +876,8 @@ mod tests {
             "role": "user",
             "content": [{
                 "type": "input_file",
-                "file_id": "file_123"
+                "file_id": "file_123",
+                "filename": "report.pdf"
             }]
         })];
 
@@ -846,6 +887,7 @@ mod tests {
         assert_eq!(messages[0]["content"][0]["type"], "document");
         assert_eq!(messages[0]["content"][0]["source"]["type"], "file");
         assert_eq!(messages[0]["content"][0]["source"]["file_id"], "file_123");
+        assert_eq!(messages[0]["content"][0]["title"], "report.pdf");
     }
 
     #[test]
