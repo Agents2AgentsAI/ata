@@ -30,8 +30,16 @@ fmt:
 fix *args:
     cargo clippy --fix --all-features --tests --allow-dirty "$@"
 
+# Lint without --all-features (avoids compiling research deps)
+fix-fast *args:
+    cargo clippy --fix --tests --allow-dirty "$@"
+
 clippy:
     cargo clippy --all-features --tests "$@"
+
+# Lint without --all-features
+clippy-fast *args:
+    cargo clippy --tests "$@"
 
 install:
     rustup show active-toolchain
@@ -43,6 +51,16 @@ install:
 # Run `cargo install cargo-nextest` if you don't have it installed.
 test:
     cargo nextest run --no-fail-fast
+
+# Test research crates + research-gated core code
+test-research:
+    cargo nextest run -p codex-research-tools --all-features --no-fail-fast
+    cargo nextest run -p codex-research-tools-mcp --no-fail-fast
+    cargo nextest run -p codex-core --features research-repo --no-fail-fast
+
+# Test all workspace members (including research)
+test-all:
+    cargo nextest run --workspace --no-fail-fast
 
 # Build and run Codex from source using Bazel.
 # Note we have to use the combination of `[no-cd]` and `--run_under="cd $PWD &&"`

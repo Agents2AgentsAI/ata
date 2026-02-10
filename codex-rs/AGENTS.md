@@ -43,10 +43,12 @@ Changes in lower tiers force recompilation of all higher tiers. Scope your test 
 
 ## 5. When to run the full test suite
 
-Only run `cargo test --all-features` (or `just test`) when **all** of these are true:
+Only run `just test` when **all** of these are true:
 - You changed a Tier 1 crate (`protocol`, `common`, `app-server-protocol`) or Tier 2 (`core`).
 - You have already verified your change compiles and passes targeted tests.
 - You have asked the user for permission (the full suite takes minutes).
+
+Use `--all-features` only when you changed research-feature-gated code. For research crate changes, use `just test-research`.
 
 For Tier 0 or Tier 3 changes, a full suite run is unnecessary.
 
@@ -57,7 +59,7 @@ Release builds use `lto = "fat"` and `codegen-units = 1`, which are extremely sl
 ## 7. Avoid triggering unnecessary recompilation
 
 - Do not run `cargo test --all-features` when your change does not touch feature-gated code. The `--all-features` flag enables optional heavy dependencies (e.g., `research`, `research-repo`) that are not needed for most changes.
-- Scope clippy the same way: `just fix -p <project>` instead of `just fix`.
+- Use `just fix-fast -p <project>` for day-to-day linting. Use `just fix -p <project>` (with `--all-features`) only when you changed research-feature-gated code or for final checks.
 - If you only changed test code (not library code), only tests need to recompile — `cargo check -p <crate>` will confirm the library is still fine without recompiling it.
 
 ## 8. Crates with especially slow compilation

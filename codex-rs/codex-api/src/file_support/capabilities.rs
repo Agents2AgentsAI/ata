@@ -28,8 +28,8 @@ impl Default for FileCapabilityConfig {
     }
 }
 
-pub fn file_capabilities_for(provider_id: &str) -> FileCapabilityConfig {
-    match provider_id {
+pub fn file_capabilities_for(provider_id: &str, model: Option<&str>) -> FileCapabilityConfig {
+    let mut config = match provider_id {
         "openai" => FileCapabilityConfig {
             supports_pdf: true,
             max_inline_file_size: 50 * 1024 * 1024,
@@ -50,6 +50,25 @@ pub fn file_capabilities_for(provider_id: &str) -> FileCapabilityConfig {
             ..FileCapabilityConfig::default()
         },
         _ => FileCapabilityConfig::default(),
+    };
+
+    // Model-level overrides: some older models lack PDF support even though their
+    // provider generally supports it.
+    if let Some(model) = model {
+        apply_model_overrides(provider_id, model, &mut config);
+    }
+
+    config
+}
+
+/// Disable PDF support for known models that don't handle document attachments.
+fn apply_model_overrides(provider_id: &str, model: &str, config: &mut FileCapabilityConfig) {
+    if provider_id == "anthropic" {
+        // Claude 3 Opus and Claude 3 Haiku do not support PDF input.
+        let model_lower = model.to_lowercase();
+        if model_lower.contains("claude-3-opus") || model_lower.contains("claude-3-haiku") {
+            config.supports_pdf = false;
+        }
     }
 }
 
@@ -59,20 +78,20 @@ mod tests {
 
     #[test]
     fn known_providers_support_pdf() {
-        assert!(file_capabilities_for("openai").supports_pdf);
-        assert!(file_capabilities_for("anthropic").supports_pdf);
-        assert!(file_capabilities_for("gemini").supports_pdf);
+        assert!(file_capabilities_for("openai", None).supports_pdf);
+        assert!(file_capabilities_for("anthropic", None).supports_pdf);
+        assert!(file_capabilities_for("gemini", None).supports_pdf);
     }
 
     #[test]
     fn unknown_provider_defaults_to_no_pdf() {
-        assert!(!file_capabilities_for("unknown").supports_pdf);
+        assert!(!file_capabilities_for("unknown", None).supports_pdf);
     }
 
     #[test]
     fn gemini_has_lowest_inline_threshold() {
-        let openai = file_capabilities_for("openai");
-        let gemini = file_capabilities_for("gemini");
+        let openai = file_capabilities_for("openai", None);
+        let gemini = file_capabilities_for("gemini", None);
         assert!(gemini.max_inline_file_size <= openai.max_inline_file_size);
     }
 
@@ -87,8 +106,26 @@ mod tests {
     fn upload_limits_are_capped_by_local_processing_limit() {
         use codex_utils_file::MAX_FILE_SIZE;
         for provider_id in ["openai", "anthropic", "gemini"] {
-            let caps = file_capabilities_for(provider_id);
+            let caps = file_capabilities_for(provider_id, None);
             assert!(caps.max_upload_file_size <= MAX_FILE_SIZE);
         }
+    }
+
+    #[test]
+    fn claude_3_opus_disables_pdf() {
+        let caps = file_capabilities_for("anthropic", Some("claude-3-opus-20240229"));
+        assert!(!caps.supports_pdf);
+    }
+
+    #[test]
+    fn claude_3_haiku_disables_pdf() {
+        let caps = file_capabilities_for("anthropic", Some("claude-3-haiku-20240307"));
+        assert!(!caps.supports_pdf);
+    }
+
+    #[test]
+    fn claude_3_5_sonnet_keeps_pdf() {
+        let caps = file_capabilities_for("anthropic", Some("claude-3-5-sonnet-20241022"));
+        assert!(caps.supports_pdf);
     }
 }
