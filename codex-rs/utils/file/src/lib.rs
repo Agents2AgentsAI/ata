@@ -70,6 +70,15 @@ pub struct ProcessedFile {
     pub size_bytes: u64,
 }
 
+/// Convert a cached [`ProcessedFile`] reference into an owned value.
+///
+/// For large files, `encode_inline_cached()` may return an uncached `Arc` (strong count = 1). In
+/// that case, we can take ownership without cloning the base64 payload to avoid transient
+/// double-allocation.
+pub fn into_owned_processed_file(processed: Arc<ProcessedFile>) -> ProcessedFile {
+    Arc::try_unwrap(processed).unwrap_or_else(|processed| (*processed).clone())
+}
+
 /// Lightweight file metadata from stat + magic byte inspection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileMetadata {
@@ -317,6 +326,32 @@ mod tests {
             BASE64_STANDARD.encode(pdf_bytes),
             "base64 payload should match source bytes"
         );
+    }
+
+    #[test]
+    fn into_owned_processed_file_unwraps_when_unshared() {
+        let processed = ProcessedFile {
+            base64: "b64".to_string(),
+            mime_type: "application/pdf".to_string(),
+            filename: "file.pdf".to_string(),
+            size_bytes: 1,
+        };
+        let owned = into_owned_processed_file(Arc::new(processed.clone()));
+        assert_eq!(owned, processed);
+    }
+
+    #[test]
+    fn into_owned_processed_file_clones_when_shared() {
+        let processed = ProcessedFile {
+            base64: "b64".to_string(),
+            mime_type: "application/pdf".to_string(),
+            filename: "file.pdf".to_string(),
+            size_bytes: 1,
+        };
+        let shared = Arc::new(processed.clone());
+        let _other_ref = Arc::clone(&shared);
+        let owned = into_owned_processed_file(shared);
+        assert_eq!(owned, processed);
     }
 
     #[tokio::test(flavor = "multi_thread")]

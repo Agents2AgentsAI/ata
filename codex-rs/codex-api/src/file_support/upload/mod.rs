@@ -96,6 +96,14 @@ pub trait FileUploadService: Send + Sync {
         api_key: &str,
         base_url: &str,
     ) -> Result<UploadedFile, FileUploadError>;
+
+    async fn delete_file(
+        &self,
+        client: &reqwest::Client,
+        file_id: &str,
+        api_key: &str,
+        base_url: &str,
+    ) -> Result<(), FileUploadError>;
 }
 
 pub(crate) fn upload_url(base_url: &str, path: &str) -> String {
@@ -187,6 +195,17 @@ pub(crate) async fn read_upload_response<T: DeserializeOwned>(
     }
 
     serde_json::from_str(&body).map_err(|error| FileUploadError::Parse(error.to_string()))
+}
+
+pub(crate) async fn read_upload_response_empty(
+    response: reqwest::Response,
+) -> Result<(), FileUploadError> {
+    let status = response.status().as_u16();
+    let body = response.text().await.map_err(map_transport_error)?;
+    if status >= 400 {
+        return Err(FileUploadError::Response { status, body });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

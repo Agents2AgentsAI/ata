@@ -202,6 +202,33 @@ fn upload_service_for_provider(provider_id: &str) -> Option<Box<dyn FileUploadSe
     }
 }
 
+async fn delete_uploaded_files_best_effort(
+    uploaded_files: &[codex_api::file_support::UploadedFile],
+    upload_service: &dyn FileUploadService,
+    http_client: &reqwest::Client,
+    api_key: &str,
+    base_url: &str,
+) {
+    let mut seen = HashSet::new();
+    for uploaded in uploaded_files {
+        if !seen.insert(uploaded.file_id.as_str()) {
+            continue;
+        }
+
+        if let Err(error) = upload_service
+            .delete_file(http_client, &uploaded.file_id, api_key, base_url)
+            .await
+        {
+            warn!(
+                file_id = %uploaded.file_id,
+                provider = %uploaded.provider,
+                %error,
+                "failed to delete orphaned uploaded file"
+            );
+        }
+    }
+}
+
 async fn resolve_file_inputs_for_uploads(
     inputs: &mut [UserInput],
     provider: &ModelProviderInfo,
@@ -232,7 +259,7 @@ async fn resolve_file_inputs_for_uploads(
             _ => continue,
         };
 
-        let maybe_uploaded = maybe_upload_file(
+        let maybe_uploaded = match maybe_upload_file(
             &path,
             &capabilities,
             Some(upload_service.as_ref()),
@@ -240,7 +267,21 @@ async fn resolve_file_inputs_for_uploads(
             &api_key,
             &base_url,
         )
-        .await?;
+        .await
+        {
+            Ok(maybe_uploaded) => maybe_uploaded,
+            Err(error) => {
+                delete_uploaded_files_best_effort(
+                    &uploaded_files,
+                    upload_service.as_ref(),
+                    http_client,
+                    &api_key,
+                    &base_url,
+                )
+                .await;
+                return Err(error.into());
+            }
+        };
 
         if let Some((uploaded, metadata)) = maybe_uploaded {
             let file_id = uploaded.file_id.clone();
@@ -324,9 +365,35 @@ async fn resolve_and_prepare_file_inputs(
     config: &Config,
     http_client: &reqwest::Client,
 ) -> std::result::Result<Vec<codex_api::file_support::UploadedFile>, FileInputPreparationError> {
+    // Upload-step errors are handled inside `resolve_file_inputs_for_uploads`, which already
+    // performs best-effort cleanup of any earlier uploads.
     let uploaded_files =
         resolve_file_inputs_for_uploads(inputs, provider, config, http_client).await?;
-    prepare_file_inputs_async(inputs, provider).await?;
+
+    if let Err(error) = prepare_file_inputs_async(inputs, provider).await {
+        if !uploaded_files.is_empty() {
+            let (provider_id, _capabilities) = file_capabilities_for_provider(provider);
+            if let Some(api_key) = provider
+                .api_key_with_auth(&config.codex_home, config.cli_auth_credentials_store_mode)
+                .ok()
+                .flatten()
+                && let Some(upload_service) = upload_service_for_provider(&provider_id)
+            {
+                let base_url = upload_base_url_for_provider(&provider_id, provider);
+                delete_uploaded_files_best_effort(
+                    &uploaded_files,
+                    upload_service.as_ref(),
+                    http_client,
+                    &api_key,
+                    &base_url,
+                )
+                .await;
+            }
+        }
+
+        return Err(error);
+    }
+
     Ok(uploaded_files)
 }
 
@@ -7089,6 +7156,90 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_file_inputs_for_uploads_cleans_up_orphaned_uploads_on_error() {
+        let codex_home = tempfile::tempdir().expect("codex home");
+        login_with_provider_api_key(
+            codex_home.path(),
+            PROVIDER_OPENAI,
+            "sk-test-key",
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store api key");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/files"))
+            .and(header("authorization", "Bearer sk-test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "file-123",
+                "object": "file",
+                "filename": "uploaded.pdf",
+                "purpose": "user_data",
+                "bytes": 10
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/v1/files/file-123"))
+            .and(header("authorization", "Bearer sk-test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "file-123",
+                "object": "file",
+                "deleted": true
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut provider = ModelProviderInfo::create_openai_provider();
+        provider.base_url = Some(format!("{}/v1", server.uri()));
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let uploaded_path = dir.path().join("uploaded.pdf");
+        std::fs::write(&uploaded_path, b"%PDF-1.4\n").expect("write pdf header");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&uploaded_path)
+            .expect("open pdf")
+            .set_len(3 * 1024 * 1024)
+            .expect("grow file");
+
+        let too_large_path = dir.path().join("too_large.pdf");
+        std::fs::write(&too_large_path, b"%PDF-1.4\n").expect("write pdf header");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&too_large_path)
+            .expect("open pdf")
+            .set_len(codex_utils_file::MAX_FILE_SIZE + 1)
+            .expect("grow file");
+
+        let mut inputs = vec![
+            UserInput::LocalFile {
+                path: uploaded_path,
+            },
+            UserInput::LocalFile {
+                path: too_large_path,
+            },
+        ];
+        let http_client = reqwest::Client::new();
+        let err = resolve_file_inputs_for_uploads(&mut inputs, &provider, &config, &http_client)
+            .await
+            .expect_err("oversized file should fail routing");
+        assert!(matches!(
+            err,
+            FileInputPreparationError::Routing(FileRoutingError::Processing(
+                FileProcessingError::TooLarge { .. }
+            ))
+        ));
     }
 
     #[tokio::test]

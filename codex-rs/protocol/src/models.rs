@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use codex_utils_file::encode_inline_cached;
+use codex_utils_file::into_owned_processed_file;
 use codex_utils_image::load_and_resize_to_fit;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -779,10 +780,11 @@ pub fn local_image_content_items_with_label_number(
 pub fn local_file_content_items(path: &Path, label_number: Option<usize>) -> Vec<ContentItem> {
     match encode_inline_cached(path) {
         Ok(processed) => {
+            let processed = into_owned_processed_file(processed);
             let filename = processed.filename.clone();
             let file_item = ContentItem::inline_file(
-                processed.base64.clone(),
-                processed.mime_type.clone(),
+                processed.base64,
+                processed.mime_type,
                 Some(filename.clone()),
             );
             wrap_file_content_items(file_item, label_number, Some(filename.as_str()))

@@ -3,9 +3,11 @@ use std::path::Path;
 use codex_protocol::models::ContentItem;
 use codex_utils_file::FileMetadata;
 use codex_utils_file::FileProcessingError;
+use codex_utils_file::MAX_FILE_SIZE;
 use codex_utils_file::analyze_file;
 use codex_utils_file::bytes_to_megabytes;
 use codex_utils_file::encode_inline_cached;
+use codex_utils_file::into_owned_processed_file;
 use thiserror::Error;
 use tracing::warn;
 
@@ -77,11 +79,11 @@ fn decide_routing(
 }
 
 fn inline_content_item(path: &Path) -> Result<ContentItem, FileRoutingError> {
-    let processed = encode_inline_cached(path)?;
+    let processed = into_owned_processed_file(encode_inline_cached(path)?);
     Ok(ContentItem::inline_file(
-        processed.base64.clone(),
-        processed.mime_type.clone(),
-        Some(processed.filename.clone()),
+        processed.base64,
+        processed.mime_type,
+        Some(processed.filename),
     ))
 }
 
@@ -101,6 +103,37 @@ pub async fn maybe_upload_file(
 ) -> Result<Option<(UploadedFile, FileMetadata)>, FileRoutingError> {
     if !capabilities.supports_pdf {
         return Err(FileRoutingError::PdfNotSupported);
+    }
+
+    // Avoid redundant stat + magic-byte probing for always-inline files. The inline encoding path
+    // will validate magic bytes, so for tier-1 files we only need a size check here.
+    let size_bytes = std::fs::metadata(path)
+        .map_err(|source| FileProcessingError::Read {
+            path: path.to_path_buf(),
+            source,
+        })?
+        .len();
+    if size_bytes > MAX_FILE_SIZE {
+        return Err(FileProcessingError::TooLarge {
+            path: path.to_path_buf(),
+            size_mb: bytes_to_megabytes(size_bytes),
+            max_mb: MAX_FILE_SIZE / (1024 * 1024),
+        }
+        .into());
+    }
+    if size_bytes > capabilities.max_upload_file_size {
+        return Err(FileRoutingError::UploadTooLarge {
+            path: path.display().to_string(),
+            size_mb: bytes_to_megabytes(size_bytes),
+            max_mb: bytes_to_megabytes(capabilities.max_upload_file_size),
+        });
+    }
+
+    let always_inline_max = capabilities
+        .always_inline_max
+        .min(capabilities.max_inline_file_size);
+    if size_bytes <= always_inline_max {
+        return Ok(None);
     }
 
     let metadata = analyze_file(path)?;
@@ -282,6 +315,16 @@ mod tests {
                 }),
                 MockOutcome::Failure => Err(FileUploadError::Request("upload failed".to_string())),
             }
+        }
+
+        async fn delete_file(
+            &self,
+            _client: &reqwest::Client,
+            _file_id: &str,
+            _api_key: &str,
+            _base_url: &str,
+        ) -> Result<(), FileUploadError> {
+            Ok(())
         }
     }
 

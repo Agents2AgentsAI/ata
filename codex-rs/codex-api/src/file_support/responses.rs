@@ -3,6 +3,10 @@ use codex_protocol::models::ResponseItem;
 
 use crate::file_support::build_data_url;
 
+/// Wrap raw base64 `input_file.file_data` payloads in a `data:<mime>;base64,` URI.
+///
+/// This mutates `input` in-place. Callers should generally operate on a cloned request payload,
+/// not persisted conversation history, since this transformation is permanent.
 pub fn wrap_responses_input_file_data_uris(input: &mut [ResponseItem]) {
     for item in input {
         if let ResponseItem::Message { content, .. } = item {
@@ -20,6 +24,13 @@ pub fn wrap_responses_input_file_data_uris(input: &mut [ResponseItem]) {
             }
         }
     }
+}
+
+/// Convenience helper that clones `input` before applying [`wrap_responses_input_file_data_uris`].
+pub fn wrapped_responses_input_file_data_uris(input: &[ResponseItem]) -> Vec<ResponseItem> {
+    let mut normalized = input.to_vec();
+    wrap_responses_input_file_data_uris(&mut normalized);
+    normalized
 }
 
 #[cfg(test)]
@@ -116,5 +127,54 @@ mod tests {
         wrap_responses_input_file_data_uris(&mut input);
 
         assert_eq!(input, once);
+    }
+
+    #[test]
+    fn wrapper_does_not_mutate_original_input() {
+        let input = vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputFile {
+                file_data: Some("JVBERi0xLjQ=".to_string()),
+                file_id: None,
+                mime_type: "application/pdf".to_string(),
+                filename: Some("report.pdf".to_string()),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+
+        let wrapped = wrapped_responses_input_file_data_uris(&input);
+
+        assert_eq!(
+            input[0],
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputFile {
+                    file_data: Some("JVBERi0xLjQ=".to_string()),
+                    file_id: None,
+                    mime_type: "application/pdf".to_string(),
+                    filename: Some("report.pdf".to_string()),
+                }],
+                end_turn: None,
+                phase: None,
+            }
+        );
+        assert_eq!(
+            wrapped[0],
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputFile {
+                    file_data: Some("data:application/pdf;base64,JVBERi0xLjQ=".to_string()),
+                    file_id: None,
+                    mime_type: "application/pdf".to_string(),
+                    filename: Some("report.pdf".to_string()),
+                }],
+                end_turn: None,
+                phase: None,
+            }
+        );
     }
 }

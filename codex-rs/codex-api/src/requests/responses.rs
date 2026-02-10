@@ -2,7 +2,7 @@ use crate::common::Reasoning;
 use crate::common::ResponsesApiRequest;
 use crate::common::TextControls;
 use crate::error::ApiError;
-use crate::file_support::wrap_responses_input_file_data_uris;
+use crate::file_support::wrapped_responses_input_file_data_uris;
 use crate::provider::Provider;
 use crate::requests::headers::build_conversation_headers;
 use crate::requests::headers::insert_header;
@@ -120,8 +120,7 @@ impl<'a> ResponsesRequestBuilder<'a> {
             .input
             .ok_or_else(|| ApiError::Stream("missing input for responses request".into()))?;
         let tools = self.tools.unwrap_or_default();
-        let mut normalized_input = input.to_vec();
-        wrap_responses_input_file_data_uris(&mut normalized_input);
+        let normalized_input = wrapped_responses_input_file_data_uris(input);
 
         let store = self
             .store_override
