@@ -125,6 +125,97 @@ pub enum SteerInputError {
     NoActiveTurn(Vec<UserInput>),
     ExpectedTurnMismatch { expected: String, actual: String },
     EmptyInput,
+    InvalidFileInput(String),
+}
+
+#[derive(Debug, thiserror::Error)]
+enum FileInputPreparationError {
+    #[error(transparent)]
+    Processing(#[from] FileProcessingError),
+    #[error("provider `{provider}` does not support PDF attachments")]
+    UnsupportedProvider { provider: String },
+    #[error(
+        "file `{path}` is {size_mb:.1} MB and exceeds the inline limit of {max_mb:.1} MB for provider `{provider}`"
+    )]
+    InlineFileTooLarge {
+        provider: String,
+        path: String,
+        size_mb: f64,
+        max_mb: f64,
+    },
+    #[error(
+        "total local file payload is {total_mb:.1} MB and exceeds the inline budget of {max_mb:.1} MB for provider `{provider}`"
+    )]
+    InlinePayloadTooLarge {
+        provider: String,
+        total_mb: f64,
+        max_mb: f64,
+    },
+}
+
+fn file_capabilities_for_provider(provider: &ModelProviderInfo) -> (String, FileCapabilityConfig) {
+    let provider_id = match provider.wire_api {
+        WireApi::Responses => "openai",
+        WireApi::AnthropicMessages => "anthropic",
+        WireApi::GeminiGenerate => "gemini",
+    };
+    (provider_id.to_string(), file_capabilities_for(provider_id))
+}
+
+fn bytes_to_megabytes(bytes: u64) -> f64 {
+    bytes as f64 / (1024.0 * 1024.0)
+}
+
+fn max_raw_inline_bytes(max_inline_payload_bytes: u64) -> u64 {
+    max_inline_payload_bytes.saturating_mul(3).saturating_div(4)
+}
+
+fn prepare_file_inputs(
+    inputs: &[UserInput],
+    provider: &ModelProviderInfo,
+) -> std::result::Result<(), FileInputPreparationError> {
+    let (provider_id, capabilities) = file_capabilities_for_provider(provider);
+    let has_file_input = inputs.iter().any(|input| {
+        matches!(
+            input,
+            UserInput::LocalFile { .. } | UserInput::UploadedFile { .. }
+        )
+    });
+    if has_file_input && !capabilities.supports_pdf {
+        return Err(FileInputPreparationError::UnsupportedProvider {
+            provider: provider_id,
+        });
+    }
+
+    let max_total_raw_bytes = max_raw_inline_bytes(capabilities.max_inline_payload_bytes);
+    let mut total_raw_bytes = 0_u64;
+
+    for input in inputs {
+        if let UserInput::LocalFile { path } = input {
+            let metadata = analyze_file(path)?;
+            if metadata.size_bytes > capabilities.max_inline_file_size {
+                return Err(FileInputPreparationError::InlineFileTooLarge {
+                    provider: provider_id.clone(),
+                    path: path.display().to_string(),
+                    size_mb: bytes_to_megabytes(metadata.size_bytes),
+                    max_mb: bytes_to_megabytes(capabilities.max_inline_file_size),
+                });
+            }
+
+            total_raw_bytes = total_raw_bytes.saturating_add(metadata.size_bytes);
+            if total_raw_bytes > max_total_raw_bytes {
+                return Err(FileInputPreparationError::InlinePayloadTooLarge {
+                    provider: provider_id.clone(),
+                    total_mb: bytes_to_megabytes(total_raw_bytes),
+                    max_mb: bytes_to_megabytes(max_total_raw_bytes),
+                });
+            }
+
+            encode_inline_cached(path)?;
+        }
+    }
+
+    Ok(())
 }
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
@@ -214,6 +305,8 @@ use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
+use codex_api::file_support::FileCapabilityConfig;
+use codex_api::file_support::file_capabilities_for;
 use codex_async_utils::OrCancelExt;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
@@ -229,9 +322,14 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
+use codex_utils_file::FileProcessingError;
+use codex_utils_file::analyze_file;
+use codex_utils_file::encode_inline_cached;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
 use tokio::sync::watch;
+
+use crate::model_provider_info::WireApi;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -2454,6 +2552,14 @@ impl Session {
             return Err(SteerInputError::EmptyInput);
         }
 
+        let provider = {
+            let state = self.state.lock().await;
+            state.session_configuration.provider.clone()
+        };
+        if let Err(error) = prepare_file_inputs(&input, &provider) {
+            return Err(SteerInputError::InvalidFileInput(error.to_string()));
+        }
+
         let mut active = self.active_turn.lock().await;
         let Some(active_turn) = active.as_mut() else {
             return Err(SteerInputError::NoActiveTurn(input));
@@ -2992,24 +3098,44 @@ mod handlers {
         current_context.otel_manager.user_prompt(&items);
 
         // Attempt to inject input into current task.
-        if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
-            sess.seed_initial_context_if_needed(&current_context).await;
-            let resumed_model = sess.take_pending_resume_previous_model().await;
-            let update_items = sess.build_settings_update_items(
-                previous_context.as_ref(),
-                resumed_model.as_deref(),
-                &current_context,
-            );
-            if !update_items.is_empty() {
-                sess.record_conversation_items(&current_context, &update_items)
-                    .await;
-            }
+        match sess.steer_input(items, None).await {
+            Ok(_) => {}
+            Err(SteerInputError::NoActiveTurn(items)) => {
+                sess.seed_initial_context_if_needed(&current_context).await;
+                let resumed_model = sess.take_pending_resume_previous_model().await;
+                let update_items = sess.build_settings_update_items(
+                    previous_context.as_ref(),
+                    resumed_model.as_deref(),
+                    &current_context,
+                );
+                if !update_items.is_empty() {
+                    sess.record_conversation_items(&current_context, &update_items)
+                        .await;
+                }
 
-            sess.refresh_mcp_servers_if_requested(&current_context)
-                .await;
-            sess.spawn_task(Arc::clone(&current_context), items, RegularTask)
-                .await;
-            *previous_context = Some(current_context);
+                sess.refresh_mcp_servers_if_requested(&current_context)
+                    .await;
+                sess.spawn_task(Arc::clone(&current_context), items, RegularTask)
+                    .await;
+                *previous_context = Some(current_context);
+            }
+            Err(SteerInputError::InvalidFileInput(message)) => {
+                let event = EventMsg::Error(ErrorEvent {
+                    message,
+                    codex_error_info: Some(CodexErrorInfo::BadRequest),
+                });
+                sess.send_event(&current_context, event).await;
+            }
+            Err(SteerInputError::ExpectedTurnMismatch { expected, actual }) => {
+                warn!(
+                    expected_turn_id = expected,
+                    active_turn_id = actual,
+                    "unexpected active turn mismatch while steering user input"
+                );
+            }
+            Err(SteerInputError::EmptyInput) => {
+                warn!("unexpected empty user input while steering active turn");
+            }
         }
     }
 
@@ -3726,6 +3852,14 @@ pub(crate) async fn run_turn(
     cancellation_token: CancellationToken,
 ) -> Option<String> {
     if input.is_empty() {
+        return None;
+    }
+    if let Err(error) = prepare_file_inputs(&input, &turn_context.provider) {
+        let event = EventMsg::Error(ErrorEvent {
+            message: error.to_string(),
+            codex_error_info: Some(CodexErrorInfo::BadRequest),
+        });
+        sess.send_event(&turn_context, event).await;
         return None;
     }
 
@@ -6342,6 +6476,72 @@ mod tests {
             history.raw_items().iter().any(|item| item == &expected),
             "expected pending input to be persisted into history on turn completion"
         );
+    }
+
+    #[tokio::test]
+    async fn steer_input_surfaces_file_prepare_errors() {
+        let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+        let dir = tempfile::tempdir().expect("temp dir");
+        let missing = dir.path().join("missing.pdf");
+
+        let err = sess
+            .steer_input(vec![UserInput::LocalFile { path: missing }], None)
+            .await
+            .expect_err("missing local file should fail");
+
+        assert!(matches!(err, SteerInputError::InvalidFileInput(_)));
+    }
+
+    #[test]
+    fn prepare_file_inputs_rejects_file_over_provider_inline_limit() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("large.pdf");
+        std::fs::write(&path, b"%PDF-1.4\n").expect("write pdf header");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("open pdf")
+            .set_len(21 * 1024 * 1024)
+            .expect("grow file");
+
+        let provider = ModelProviderInfo::create_gemini_provider();
+        let err = prepare_file_inputs(&[UserInput::LocalFile { path }], &provider)
+            .expect_err("gemini inline limit should reject 21MB file");
+        assert!(matches!(
+            err,
+            FileInputPreparationError::InlineFileTooLarge { .. }
+        ));
+    }
+
+    #[test]
+    fn prepare_file_inputs_rejects_total_inline_payload_budget_overflow() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let first = dir.path().join("first.pdf");
+        let second = dir.path().join("second.pdf");
+
+        for path in [&first, &second] {
+            std::fs::write(path, b"%PDF-1.4\n").expect("write pdf header");
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .expect("open pdf")
+                .set_len(8 * 1024 * 1024)
+                .expect("grow file");
+        }
+
+        let provider = ModelProviderInfo::create_gemini_provider();
+        let err = prepare_file_inputs(
+            &[
+                UserInput::LocalFile { path: first },
+                UserInput::LocalFile { path: second },
+            ],
+            &provider,
+        )
+        .expect_err("gemini inline payload budget should reject 16MB raw payload");
+        assert!(matches!(
+            err,
+            FileInputPreparationError::InlinePayloadTooLarge { .. }
+        ));
     }
 
     #[tokio::test]

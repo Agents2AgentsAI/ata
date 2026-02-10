@@ -11,6 +11,7 @@ use serde_json::Value;
 use serde_json::json;
 
 use crate::error::ApiError;
+use crate::file_support::parse_data_url;
 use crate::provider_adapter::ProviderAdapter;
 use crate::provider_adapter::RequestOptions;
 use crate::tools::ToolFormatter;
@@ -84,23 +85,23 @@ impl ProviderAdapter for AnthropicAdapter {
         }
 
         // Add thinking config if reasoning is requested
-        if let Some(reasoning) = &options.reasoning {
-            if let Some(effort) = reasoning.get("effort").and_then(|e| e.as_str()) {
-                match effort {
-                    "none" => { /* skip — no thinking requested */ }
-                    "adaptive" => {
-                        body["thinking"] = json!({"type": "adaptive"});
-                    }
-                    _ => {
-                        let budget = match effort {
-                            "minimal" | "low" => 1024_u32,
-                            "medium" => 10_000,
-                            "high" => 32_000,
-                            _ => max_tokens.saturating_sub(1).max(1024), // xhigh or unknown
-                        };
-                        let budget = budget.max(1024).min(max_tokens.saturating_sub(1));
-                        body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
-                    }
+        if let Some(reasoning) = &options.reasoning
+            && let Some(effort) = reasoning.get("effort").and_then(|e| e.as_str())
+        {
+            match effort {
+                "none" => { /* skip — no thinking requested */ }
+                "adaptive" => {
+                    body["thinking"] = json!({"type": "adaptive"});
+                }
+                _ => {
+                    let budget = match effort {
+                        "minimal" | "low" => 1024_u32,
+                        "medium" => 10_000,
+                        "high" => 32_000,
+                        _ => max_tokens.saturating_sub(1).max(1024), // xhigh or unknown
+                    };
+                    let budget = budget.max(1024).min(max_tokens.saturating_sub(1));
+                    body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
                 }
             }
         }
@@ -124,7 +125,9 @@ impl ProviderAdapter for AnthropicAdapter {
         // results, not just on the first assistant turn. Safe to send
         // unconditionally: no effect on Opus 4.6 (adaptive) or non-thinking
         // requests.
-        if let Ok(value) = HeaderValue::from_str("interleaved-thinking-2025-05-14") {
+        if let Ok(value) =
+            HeaderValue::from_str("interleaved-thinking-2025-05-14,files-api-2025-04-14")
+        {
             headers.insert(HeaderName::from_static("anthropic-beta"), value);
         }
 
@@ -154,10 +157,10 @@ fn reorder_tool_outputs(input: &[Value]) -> Vec<Value> {
     let mut output_index: HashMap<&str, usize> = HashMap::new();
     for (i, item) in input.iter().enumerate() {
         let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
-        if item_type == "function_call_output" || item_type == "custom_tool_call_output" {
-            if let Some(call_id) = item.get("call_id").and_then(Value::as_str) {
-                output_index.insert(call_id, i);
-            }
+        if (item_type == "function_call_output" || item_type == "custom_tool_call_output")
+            && let Some(call_id) = item.get("call_id").and_then(Value::as_str)
+        {
+            output_index.insert(call_id, i);
         }
     }
 
@@ -173,15 +176,13 @@ fn reorder_tool_outputs(input: &[Value]) -> Vec<Value> {
 
         // After each tool call, insert its matching output if it isn't already next.
         let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
-        if item_type == "function_call" || item_type == "custom_tool_call" {
-            if let Some(call_id) = item.get("call_id").and_then(Value::as_str) {
-                if let Some(&out_idx) = output_index.get(call_id) {
-                    if out_idx != i + 1 {
-                        result.push(input[out_idx].clone());
-                        consumed.insert(out_idx);
-                    }
-                }
-            }
+        if (item_type == "function_call" || item_type == "custom_tool_call")
+            && let Some(call_id) = item.get("call_id").and_then(Value::as_str)
+            && let Some(&out_idx) = output_index.get(call_id)
+            && out_idx != i + 1
+        {
+            result.push(input[out_idx].clone());
+            consumed.insert(out_idx);
         }
     }
 
@@ -331,13 +332,13 @@ fn build_anthropic_messages(input: &[Value]) -> Result<Vec<Value>, ApiError> {
                         let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
                         match block_type {
                             "input_text" | "output_text" => {
-                                if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                                    if !text.trim().is_empty() {
-                                        blocks.push(json!({
-                                            "type": "text",
-                                            "text": text
-                                        }));
-                                    }
+                                if let Some(text) = block.get("text").and_then(|t| t.as_str())
+                                    && !text.trim().is_empty()
+                                {
+                                    blocks.push(json!({
+                                        "type": "text",
+                                        "text": text
+                                    }));
                                 }
                             }
                             "input_image" => {
@@ -365,6 +366,33 @@ fn build_anthropic_messages(input: &[Value]) -> Result<Vec<Value>, ApiError> {
                                             }
                                         }));
                                     }
+                                }
+                            }
+                            "input_file" => {
+                                if let Some(file_id) = block.get("file_id").and_then(Value::as_str)
+                                {
+                                    blocks.push(json!({
+                                        "type": "document",
+                                        "source": {
+                                            "type": "file",
+                                            "file_id": file_id
+                                        }
+                                    }));
+                                } else if let Some(data) =
+                                    block.get("file_data").and_then(Value::as_str)
+                                {
+                                    let mime = block
+                                        .get("mime_type")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("application/pdf");
+                                    blocks.push(json!({
+                                        "type": "document",
+                                        "source": {
+                                            "type": "base64",
+                                            "media_type": mime,
+                                            "data": data
+                                        }
+                                    }));
                                 }
                             }
                             _ => {}
@@ -560,15 +588,6 @@ fn build_anthropic_messages(input: &[Value]) -> Result<Vec<Value>, ApiError> {
     Ok(result)
 }
 
-/// Parses a data URL into (media_type, base64_data).
-fn parse_data_url(url: &str) -> Option<(String, String)> {
-    // Format: data:mime/type;base64,<data>
-    let url = url.strip_prefix("data:")?;
-    let (header, data) = url.split_once(',')?;
-    let mime = header.strip_suffix(";base64")?;
-    Some((mime.to_string(), data.to_string()))
-}
-
 /// Default max_tokens by model family.
 ///
 /// Anthropic API requires max_tokens, so we provide sensible defaults
@@ -630,10 +649,17 @@ mod tests {
         let headers = adapter.extra_headers();
 
         assert!(headers.contains_key("anthropic-version"));
-        assert_eq!(
-            headers.get("anthropic-beta").and_then(|v| v.to_str().ok()),
-            Some("interleaved-thinking-2025-05-14"),
-            "anthropic-beta header should enable interleaved thinking"
+        let beta = headers
+            .get("anthropic-beta")
+            .and_then(|value| value.to_str().ok())
+            .expect("anthropic-beta header should exist");
+        assert!(
+            beta.contains("interleaved-thinking-2025-05-14"),
+            "anthropic-beta header should include interleaved thinking"
+        );
+        assert!(
+            beta.contains("files-api-2025-04-14"),
+            "anthropic-beta header should include files API support"
         );
     }
 
@@ -723,6 +749,50 @@ mod tests {
         assert_eq!(messages[1]["role"], "assistant");
         assert_eq!(messages[2]["role"], "user");
         assert_eq!(messages[2]["content"][0]["text"], "Continue.");
+    }
+
+    #[test]
+    fn test_build_anthropic_messages_with_inline_file() {
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "input_file",
+                "file_data": "JVBERi0xLjQ=",
+                "mime_type": "application/pdf",
+                "filename": "report.pdf"
+            }]
+        })];
+
+        let messages = build_anthropic_messages(&input).expect("build messages");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"][0]["type"], "document");
+        assert_eq!(messages[0]["content"][0]["source"]["type"], "base64");
+        assert_eq!(
+            messages[0]["content"][0]["source"]["media_type"],
+            "application/pdf"
+        );
+        assert_eq!(messages[0]["content"][0]["source"]["data"], "JVBERi0xLjQ=");
+    }
+
+    #[test]
+    fn test_build_anthropic_messages_with_file_reference() {
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "input_file",
+                "file_id": "file_123"
+            }]
+        })];
+
+        let messages = build_anthropic_messages(&input).expect("build messages");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"][0]["type"], "document");
+        assert_eq!(messages[0]["content"][0]["source"]["type"], "file");
+        assert_eq!(messages[0]["content"][0]["source"]["file_id"], "file_123");
     }
 
     #[test]
