@@ -3,10 +3,12 @@ use chrono::Utc;
 use codex_api::AuthProvider as ApiAuthProvider;
 use codex_api::TransportError;
 use codex_api::error::ApiError;
+use codex_api::file_support::map_user_facing_file_error_from_http_body;
 use codex_api::rate_limits::parse_promo_message;
 use codex_api::rate_limits::parse_rate_limit;
 use http::HeaderMap;
 use serde::Deserialize;
+use tracing::debug;
 
 use crate::auth::CodexAuth;
 use crate::error::CodexErr;
@@ -46,9 +48,28 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                         .contains("The image data you provided does not represent a valid image")
                     {
                         CodexErr::InvalidImageRequest()
+                    } else if let Some(mapped) =
+                        map_user_facing_file_error_from_http_body(status.as_u16(), &body_text)
+                    {
+                        debug!(
+                            status = status.as_u16(),
+                            detail = %mapped.debug_detail,
+                            "mapped provider file error to user-friendly message"
+                        );
+                        CodexErr::InvalidRequest(mapped.user_message)
                     } else {
                         CodexErr::InvalidRequest(body_text)
                     }
+                } else if status == http::StatusCode::NOT_FOUND
+                    && let Some(mapped) =
+                        map_user_facing_file_error_from_http_body(status.as_u16(), &body_text)
+                {
+                    debug!(
+                        status = status.as_u16(),
+                        detail = %mapped.debug_detail,
+                        "mapped provider file not found error to user-friendly message"
+                    );
+                    CodexErr::InvalidRequest(mapped.user_message)
                 } else if status == http::StatusCode::INTERNAL_SERVER_ERROR {
                     CodexErr::InternalServerError
                 } else if status == http::StatusCode::TOO_MANY_REQUESTS {
@@ -127,6 +148,7 @@ mod tests {
     use codex_api::TransportError;
     use http::HeaderMap;
     use http::StatusCode;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn map_api_error_maps_model_cap_headers() {
@@ -151,6 +173,28 @@ mod tests {
         };
         assert_eq!(model_cap.model, "boomslang");
         assert_eq!(model_cap.reset_after_seconds, Some(120));
+    }
+
+    #[test]
+    fn map_api_error_maps_pdf_encrypted_error_to_friendly_invalid_request() {
+        let body =
+            r#"{"error":{"type":"invalid_request_error","message":"This PDF is encrypted."}}"#;
+        let err = map_api_error(ApiError::Transport(TransportError::Http {
+            status: StatusCode::BAD_REQUEST,
+            url: Some("https://api.openai.com/v1/responses".to_string()),
+            headers: None,
+            body: Some(body.to_string()),
+        }));
+
+        match err {
+            CodexErr::InvalidRequest(message) => {
+                assert_eq!(
+                    message,
+                    "This PDF appears to be encrypted. Please remove the password protection and try again."
+                );
+            }
+            other => panic!("expected CodexErr::InvalidRequest, got {other:?}"),
+        }
     }
 }
 

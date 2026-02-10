@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use crate::common::ResponseEvent;
 use crate::error::ApiError;
+use crate::file_support::map_user_facing_file_error_from_message;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
@@ -601,9 +602,19 @@ pub fn parse_anthropic_event(
             let payload: ErrorPayload = serde_json::from_str(data)
                 .map_err(|e| ApiError::Stream(format!("Failed to parse error: {e}")))?;
 
+            let message = map_user_facing_file_error_from_message(&payload.error.message)
+                .map(|mapped| mapped.user_message)
+                .unwrap_or(payload.error.message);
+
+            if payload.error.error_type == "invalid_request_error"
+                || payload.error.error_type == "not_found_error"
+            {
+                return Err(ApiError::InvalidRequest { message });
+            }
+
             return Err(ApiError::Stream(format!(
-                "Anthropic API error ({}): {}",
-                payload.error.error_type, payload.error.message
+                "Anthropic API error ({}): {message}",
+                payload.error.error_type
             )));
         }
     }
