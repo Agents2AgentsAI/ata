@@ -18,8 +18,10 @@ use super::read_upload_response;
 use super::run_with_upload_retry;
 use super::upload_url;
 
-const GEMINI_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const GEMINI_API_VERSION: &str = "v1beta";
 const GEMINI_MAX_POLL_ATTEMPTS: usize = 60;
+const GEMINI_POLL_BASE_INTERVAL: Duration = Duration::from_secs(1);
+const GEMINI_POLL_MAX_INTERVAL: Duration = Duration::from_secs(30);
 
 pub struct GeminiFileUpload;
 
@@ -33,9 +35,12 @@ impl GeminiFileUpload {
         retry: &crate::provider::RetryConfig,
     ) -> Result<GeminiFileMetadata, FileUploadError> {
         let normalized_file_name = file_name.trim_start_matches('/');
-        let url = upload_url(base_url, &format!("/v1beta/{normalized_file_name}"));
+        let url = upload_url(
+            base_url,
+            &format!("/{GEMINI_API_VERSION}/{normalized_file_name}"),
+        );
 
-        for _ in 0..GEMINI_MAX_POLL_ATTEMPTS {
+        for attempt in 0..GEMINI_MAX_POLL_ATTEMPTS {
             let parsed: GeminiFileResponse = run_with_upload_retry(retry, |_| async {
                 let response = client
                     .get(&url)
@@ -50,7 +55,7 @@ impl GeminiFileUpload {
 
             match parsed.file.state.as_str() {
                 "ACTIVE" => return Ok(parsed.file),
-                "PROCESSING" => tokio::time::sleep(GEMINI_POLL_INTERVAL).await,
+                "PROCESSING" => tokio::time::sleep(poll_delay(attempt)).await,
                 state => {
                     return Err(FileUploadError::Request(format!(
                         "gemini file processing failed with state `{state}`"
@@ -73,7 +78,7 @@ impl FileUploadService for GeminiFileUpload {
         api_key: &str,
         base_url: &str,
     ) -> Result<UploadedFile, FileUploadError> {
-        let url = upload_url(base_url, "/upload/v1beta/files");
+        let url = upload_url(base_url, &format!("/upload/{GEMINI_API_VERSION}/files"));
         let filename = file_name_or_default(file_path, "file.pdf");
         let metadata_json = serde_json::json!({
             "file": {
@@ -121,6 +126,7 @@ impl FileUploadService for GeminiFileUpload {
         let file_uri = file_metadata
             .uri
             .ok_or_else(|| FileUploadError::Request("missing file uri".to_string()))?;
+        validate_file_uri(&file_uri)?;
 
         Ok(UploadedFile {
             file_id: file_uri,
@@ -137,9 +143,39 @@ fn parse_expiration_time(expiration_time: Option<&str>) -> Option<SystemTime> {
         .map(|dt| SystemTime::from(dt.with_timezone(&Utc)))
 }
 
+fn poll_delay(attempt: usize) -> Duration {
+    let factor = 1_u64 << attempt.min(5);
+    let seconds = GEMINI_POLL_BASE_INTERVAL
+        .as_secs()
+        .saturating_mul(factor)
+        .min(GEMINI_POLL_MAX_INTERVAL.as_secs());
+    Duration::from_secs(seconds)
+}
+
+fn validate_file_uri(file_uri: &str) -> Result<(), FileUploadError> {
+    let parsed = url::Url::parse(file_uri).map_err(|error| {
+        FileUploadError::Request(format!(
+            "gemini upload returned invalid file uri `{file_uri}`: {error}"
+        ))
+    })?;
+    if parsed.scheme() != "https" {
+        return Err(FileUploadError::Request(format!(
+            "gemini upload returned non-https file uri `{file_uri}`"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
+    use tempfile::NamedTempFile;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::header;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
 
     use super::*;
 
@@ -153,5 +189,76 @@ mod tests {
     fn invalid_expiration_time_returns_none() {
         let parsed = parse_expiration_time(Some("not-a-timestamp"));
         assert_eq!(parsed, None);
+    }
+
+    #[test]
+    fn poll_delay_uses_exponential_backoff_with_cap() {
+        assert_eq!(poll_delay(0), Duration::from_secs(1));
+        assert_eq!(poll_delay(1), Duration::from_secs(2));
+        assert_eq!(poll_delay(2), Duration::from_secs(4));
+        assert_eq!(poll_delay(3), Duration::from_secs(8));
+        assert_eq!(poll_delay(4), Duration::from_secs(16));
+        assert_eq!(poll_delay(5), Duration::from_secs(30));
+        assert_eq!(poll_delay(20), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn validate_file_uri_accepts_https_uris() {
+        let result = validate_file_uri("https://example.com/files/123");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_file_uri_rejects_non_https_uris() {
+        let error = validate_file_uri("http://example.com/files/123")
+            .expect_err("non-https uri should fail");
+        assert!(matches!(error, FileUploadError::Request(_)));
+    }
+
+    #[test]
+    fn validate_file_uri_rejects_invalid_uris() {
+        let error = validate_file_uri("not a uri").expect_err("invalid uri should fail");
+        assert!(matches!(error, FileUploadError::Request(_)));
+    }
+
+    #[tokio::test]
+    async fn upload_file_posts_to_gemini_files_endpoint() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/upload/v1beta/files"))
+            .and(header("x-goog-api-key", "test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "file": {
+                    "name": "files/abc123",
+                    "uri": "https://generativelanguage.googleapis.com/v1beta/files/abc123",
+                    "state": "ACTIVE",
+                    "expirationTime": "2026-01-01T00:00:00Z"
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let file = NamedTempFile::new().expect("temp file");
+        std::fs::write(file.path(), b"%PDF-1.4\npayload").expect("write pdf");
+
+        let uploaded = GeminiFileUpload
+            .upload_file(
+                &reqwest::Client::new(),
+                file.path(),
+                "application/pdf",
+                "test-key",
+                &server.uri(),
+            )
+            .await
+            .expect("upload should succeed");
+
+        assert_eq!(
+            uploaded.file_id,
+            "https://generativelanguage.googleapis.com/v1beta/files/abc123"
+        );
+        assert_eq!(uploaded.provider, "gemini");
+        assert_eq!(uploaded.source_path, file.path().to_path_buf());
+        assert!(uploaded.expires_at.is_some());
     }
 }

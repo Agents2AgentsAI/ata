@@ -95,4 +95,26 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn wrapping_is_idempotent() {
+        let mut input = vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputFile {
+                file_data: Some("JVBERi0xLjQ=".to_string()),
+                file_id: None,
+                mime_type: "application/pdf".to_string(),
+                filename: Some("report.pdf".to_string()),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+
+        wrap_responses_input_file_data_uris(&mut input);
+        let once = input.clone();
+        wrap_responses_input_file_data_uris(&mut input);
+
+        assert_eq!(input, once);
+    }
 }

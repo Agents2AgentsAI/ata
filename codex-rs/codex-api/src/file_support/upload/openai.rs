@@ -60,3 +60,53 @@ impl FileUploadService for OpenAiFileUpload {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use tempfile::NamedTempFile;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::header;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn upload_file_posts_to_openai_files_endpoint() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/files"))
+            .and(header("authorization", "Bearer test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "file-123",
+                "object": "file",
+                "filename": "report.pdf",
+                "purpose": "user_data",
+                "bytes": 42
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let file = NamedTempFile::new().expect("temp file");
+        std::fs::write(file.path(), b"%PDF-1.4\npayload").expect("write pdf");
+
+        let uploaded = OpenAiFileUpload
+            .upload_file(
+                &reqwest::Client::new(),
+                file.path(),
+                "application/pdf",
+                "test-key",
+                &server.uri(),
+            )
+            .await
+            .expect("upload should succeed");
+
+        assert_eq!(uploaded.file_id, "file-123");
+        assert_eq!(uploaded.provider, "openai");
+        assert_eq!(uploaded.source_path, file.path().to_path_buf());
+    }
+}

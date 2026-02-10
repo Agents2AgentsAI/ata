@@ -6,7 +6,6 @@
 use http::HeaderMap;
 use serde_json::Value;
 use serde_json::json;
-use tracing::warn;
 
 use crate::error::ApiError;
 use crate::file_support::parse_data_url;
@@ -227,9 +226,11 @@ fn build_gemini_contents(input: &[Value]) -> Result<Vec<Value>, ApiError> {
                                         }
                                     }));
                                 } else {
-                                    warn!(
-                                        "input_file block has neither file_data nor file_id; skipping"
-                                    );
+                                    return Err(ApiError::InvalidRequest {
+                                        message:
+                                            "input_file block must include file_data or file_id"
+                                                .to_string(),
+                                    });
                                 }
                             }
                             _ => {}
@@ -507,5 +508,17 @@ mod tests {
         assert!(part.get("file_data").is_none());
         assert_eq!(part["fileData"]["mimeType"], "application/pdf");
         assert_eq!(part["fileData"]["fileUri"], "files/abc123");
+    }
+
+    #[test]
+    fn test_build_gemini_contents_rejects_input_file_without_data_or_id() {
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_file"}]
+        })];
+
+        let error = build_gemini_contents(&input).expect_err("missing file data/id should fail");
+        assert!(matches!(error, ApiError::InvalidRequest { .. }));
     }
 }

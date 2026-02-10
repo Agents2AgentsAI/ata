@@ -9,7 +9,6 @@ use http::HeaderName;
 use http::HeaderValue;
 use serde_json::Value;
 use serde_json::json;
-use tracing::warn;
 
 use crate::error::ApiError;
 use crate::file_support::parse_data_url;
@@ -20,6 +19,8 @@ use crate::tools::anthropic::AnthropicToolFormatter;
 
 /// Current Anthropic API version.
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+const ANTHROPIC_BETA_INTERLEAVED_THINKING: &str = "interleaved-thinking-2025-05-14";
+const ANTHROPIC_BETA_FILES_API: &str = "files-api-2025-04-14";
 
 /// Anthropic Messages API adapter.
 pub struct AnthropicAdapter {
@@ -115,24 +116,11 @@ impl ProviderAdapter for AnthropicAdapter {
     }
 
     fn extra_headers(&self) -> HeaderMap {
-        let mut headers = HeaderMap::new();
+        build_extra_headers(false)
+    }
 
-        // Required anthropic-version header
-        if let Ok(value) = HeaderValue::from_str(ANTHROPIC_VERSION) {
-            headers.insert(HeaderName::from_static("anthropic-version"), value);
-        }
-
-        // Enable interleaved thinking so thinking blocks appear after tool
-        // results, not just on the first assistant turn. Safe to send
-        // unconditionally: no effect on Opus 4.6 (adaptive) or non-thinking
-        // requests.
-        if let Ok(value) =
-            HeaderValue::from_str("interleaved-thinking-2025-05-14,files-api-2025-04-14")
-        {
-            headers.insert(HeaderName::from_static("anthropic-beta"), value);
-        }
-
-        headers
+    fn extra_headers_for_input(&self, input: &[Value]) -> HeaderMap {
+        build_extra_headers(has_input_file_content(input))
     }
 
     fn auth_header_name(&self) -> &str {
@@ -143,6 +131,42 @@ impl ProviderAdapter for AnthropicAdapter {
         // Anthropic uses the API key directly, not as Bearer token
         api_key.to_string()
     }
+}
+
+fn build_extra_headers(include_files_api: bool) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+
+    // Required anthropic-version header.
+    if let Ok(value) = HeaderValue::from_str(ANTHROPIC_VERSION) {
+        headers.insert(HeaderName::from_static("anthropic-version"), value);
+    }
+
+    // Enable interleaved thinking for multi-turn tool flows. The files-api
+    // beta is only required when file content blocks are present.
+    let beta = if include_files_api {
+        format!("{ANTHROPIC_BETA_INTERLEAVED_THINKING},{ANTHROPIC_BETA_FILES_API}")
+    } else {
+        ANTHROPIC_BETA_INTERLEAVED_THINKING.to_string()
+    };
+    if let Ok(value) = HeaderValue::from_str(&beta) {
+        headers.insert(HeaderName::from_static("anthropic-beta"), value);
+    }
+
+    headers
+}
+
+fn has_input_file_content(input: &[Value]) -> bool {
+    input.iter().any(|item| {
+        item.get("type").and_then(Value::as_str) == Some("message")
+            && item
+                .get("content")
+                .and_then(Value::as_array)
+                .is_some_and(|content| {
+                    content.iter().any(|block| {
+                        block.get("type").and_then(Value::as_str) == Some("input_file")
+                    })
+                })
+    })
 }
 
 /// Reorders input so tool outputs immediately follow their corresponding calls.
@@ -395,9 +419,11 @@ fn build_anthropic_messages(input: &[Value]) -> Result<Vec<Value>, ApiError> {
                                         }
                                     }));
                                 } else {
-                                    warn!(
-                                        "input_file block has neither file_data nor file_id; skipping"
-                                    );
+                                    return Err(ApiError::InvalidRequest {
+                                        message:
+                                            "input_file block must include file_data or file_id"
+                                                .to_string(),
+                                    });
                                 }
                             }
                             _ => {}
@@ -649,9 +675,13 @@ mod tests {
     }
 
     #[test]
-    fn test_extra_headers() {
+    fn test_extra_headers_without_file_input() {
         let adapter = AnthropicAdapter::new();
-        let headers = adapter.extra_headers();
+        let headers = adapter.extra_headers_for_input(&[json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hello"}]
+        })]);
 
         assert!(headers.contains_key("anthropic-version"));
         let beta = headers
@@ -659,12 +689,30 @@ mod tests {
             .and_then(|value| value.to_str().ok())
             .expect("anthropic-beta header should exist");
         assert!(
-            beta.contains("interleaved-thinking-2025-05-14"),
+            beta.contains(ANTHROPIC_BETA_INTERLEAVED_THINKING),
             "anthropic-beta header should include interleaved thinking"
         );
         assert!(
-            beta.contains("files-api-2025-04-14"),
-            "anthropic-beta header should include files API support"
+            !beta.contains(ANTHROPIC_BETA_FILES_API),
+            "anthropic-beta header should not include files API when request has no files"
+        );
+    }
+
+    #[test]
+    fn test_extra_headers_with_file_input_includes_files_api() {
+        let adapter = AnthropicAdapter::new();
+        let headers = adapter.extra_headers_for_input(&[json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_file", "file_id": "file_123"}]
+        })]);
+        let beta = headers
+            .get("anthropic-beta")
+            .and_then(|value| value.to_str().ok())
+            .expect("anthropic-beta header should exist");
+        assert!(
+            beta.contains(ANTHROPIC_BETA_FILES_API),
+            "anthropic-beta header should include files API when file input is present"
         );
     }
 
@@ -798,6 +846,18 @@ mod tests {
         assert_eq!(messages[0]["content"][0]["type"], "document");
         assert_eq!(messages[0]["content"][0]["source"]["type"], "file");
         assert_eq!(messages[0]["content"][0]["source"]["file_id"], "file_123");
+    }
+
+    #[test]
+    fn test_build_anthropic_messages_rejects_input_file_without_data_or_id() {
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_file"}]
+        })];
+
+        let error = build_anthropic_messages(&input).expect_err("missing file data/id should fail");
+        assert!(matches!(error, ApiError::InvalidRequest { .. }));
     }
 
     #[test]

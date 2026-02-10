@@ -4,6 +4,7 @@ use std::io::SeekFrom;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::UNIX_EPOCH;
 
@@ -23,13 +24,29 @@ pub const ALWAYS_INLINE_MAX: u64 = 2 * 1024 * 1024;
 
 const PDF_MAGIC: &[u8] = b"%PDF-";
 const CACHE_MAX_ENTRY_SIZE: u64 = 10 * 1024 * 1024;
-const FILE_CACHE_CAPACITY: usize = 8;
+const DEFAULT_FILE_CACHE_CAPACITY: usize = 8;
+const FILE_CACHE_CAPACITY_ENV_VAR: &str = "CODEX_FILE_CACHE_CAPACITY";
 
 type FileCacheKey = (PathBuf, u64, u64);
 
-static FILE_CACHE: LazyLock<BlockingLruCache<FileCacheKey, ProcessedFile>> = LazyLock::new(|| {
-    BlockingLruCache::new(NonZeroUsize::new(FILE_CACHE_CAPACITY).unwrap_or(NonZeroUsize::MIN))
-});
+static FILE_CACHE: LazyLock<BlockingLruCache<FileCacheKey, Arc<ProcessedFile>>> =
+    LazyLock::new(|| BlockingLruCache::new(file_cache_capacity()));
+
+fn parse_cache_capacity(raw: &str) -> Option<NonZeroUsize> {
+    raw.trim().parse::<usize>().ok().and_then(NonZeroUsize::new)
+}
+
+fn default_cache_capacity() -> NonZeroUsize {
+    NonZeroUsize::new(DEFAULT_FILE_CACHE_CAPACITY).unwrap_or(NonZeroUsize::MIN)
+}
+
+fn file_cache_capacity() -> NonZeroUsize {
+    std::env::var(FILE_CACHE_CAPACITY_ENV_VAR)
+        .ok()
+        .as_deref()
+        .and_then(parse_cache_capacity)
+        .unwrap_or_else(default_cache_capacity)
+}
 
 pub fn bytes_to_megabytes(bytes: u64) -> f64 {
     bytes as f64 / (1024.0 * 1024.0)
@@ -116,7 +133,7 @@ pub fn encode_inline(
 }
 
 /// Analyze and encode a file with cache lookup by canonical path + mtime + file size.
-pub fn encode_inline_cached(path: &Path) -> Result<ProcessedFile, FileProcessingError> {
+pub fn encode_inline_cached(path: &Path) -> Result<Arc<ProcessedFile>, FileProcessingError> {
     // Canonical path keeps cache keys stable across equivalent path spellings/symlinks.
     let canonical = std::fs::canonicalize(path).map_err(|source| FileProcessingError::Read {
         path: path.to_path_buf(),
@@ -177,14 +194,14 @@ pub fn encode_inline_cached(path: &Path) -> Result<ProcessedFile, FileProcessing
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_else(|| "file".to_string());
 
-    let processed = ProcessedFile {
+    let processed = Arc::new(ProcessedFile {
         base64: BASE64_STANDARD.encode(bytes),
         mime_type,
         filename,
         size_bytes,
-    };
+    });
     if processed.size_bytes <= CACHE_MAX_ENTRY_SIZE {
-        let _ = FILE_CACHE.insert(key, processed.clone());
+        let _ = FILE_CACHE.insert(key, Arc::clone(&processed));
     }
     Ok(processed)
 }
@@ -316,5 +333,42 @@ mod tests {
 
         assert_ne!(first.base64, second.base64);
         assert_eq!(first.mime_type, second.mime_type);
+    }
+
+    #[test]
+    fn parse_cache_capacity_rejects_invalid_values() {
+        assert_eq!(parse_cache_capacity(""), None);
+        assert_eq!(parse_cache_capacity("0"), None);
+        assert_eq!(parse_cache_capacity("-1"), None);
+        assert_eq!(parse_cache_capacity("abc"), None);
+    }
+
+    #[test]
+    fn parse_cache_capacity_accepts_positive_values() {
+        assert_eq!(parse_cache_capacity("16"), NonZeroUsize::new(16));
+        assert_eq!(parse_cache_capacity(" 32 "), NonZeroUsize::new(32));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cache_handles_concurrent_reads_for_same_file() {
+        FILE_CACHE.clear();
+
+        let file = NamedTempFile::new().expect("temp file");
+        write_pdf(file.path(), b"shared").expect("write pdf");
+        let expected = encode_inline_cached(file.path()).expect("seed cache");
+
+        let path = file.path().to_path_buf();
+        let mut tasks = Vec::new();
+        for _ in 0..8 {
+            let path = path.clone();
+            tasks.push(tokio::task::spawn_blocking(move || {
+                encode_inline_cached(&path).expect("concurrent encode")
+            }));
+        }
+
+        for task in tasks {
+            let value = task.await.expect("task join");
+            assert_eq!(value, expected);
+        }
     }
 }
