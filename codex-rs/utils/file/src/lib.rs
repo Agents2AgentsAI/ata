@@ -111,29 +111,65 @@ pub fn encode_inline(
 
 /// Analyze and encode a file with cache lookup by canonical path + mtime.
 pub fn encode_inline_cached(path: &Path) -> Result<ProcessedFile, FileProcessingError> {
+    // Canonical path keeps cache keys stable across equivalent path spellings/symlinks.
+    // `std::fs::canonicalize` does not expose metadata, so an explicit metadata call is still
+    // required to capture mtime for invalidation.
     let canonical = std::fs::canonicalize(path).map_err(|source| FileProcessingError::Read {
         path: path.to_path_buf(),
         source,
     })?;
-    let mtime_ns = file_mtime_ns(&canonical);
+    let metadata = std::fs::metadata(&canonical).map_err(|source| FileProcessingError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let mtime_ns = file_mtime_ns_from_metadata(&metadata);
     let key = (canonical, mtime_ns);
 
     if let Some(cached) = FILE_CACHE.get(&key) {
         return Ok(cached);
     }
 
-    let metadata = analyze_file(path)?;
-    let processed = encode_inline(path, &metadata)?;
+    let bytes = std::fs::read(&key.0).map_err(|source| FileProcessingError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let size_bytes = bytes.len() as u64;
+    if size_bytes > MAX_FILE_SIZE {
+        return Err(FileProcessingError::TooLarge {
+            path: path.to_path_buf(),
+            size_mb: size_bytes as f64 / (1024.0 * 1024.0),
+            max_mb: MAX_FILE_SIZE / (1024 * 1024),
+        });
+    }
+
+    let mime_probe_len = bytes.len().min(16);
+    let mime_type = detect_mime(&bytes[..mime_probe_len], path)?;
+    let filename = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "file".to_string());
+
+    let processed = ProcessedFile {
+        base64: BASE64_STANDARD.encode(bytes),
+        mime_type,
+        filename,
+        size_bytes,
+    };
     if processed.size_bytes <= CACHE_MAX_ENTRY_SIZE {
         let _ = FILE_CACHE.insert(key, processed.clone());
     }
     Ok(processed)
 }
 
+#[cfg(test)]
 fn file_mtime_ns(path: &Path) -> u64 {
     let Ok(metadata) = std::fs::metadata(path) else {
         return 0;
     };
+    file_mtime_ns_from_metadata(&metadata)
+}
+
+fn file_mtime_ns_from_metadata(metadata: &std::fs::Metadata) -> u64 {
     let Ok(modified) = metadata.modified() else {
         return 0;
     };

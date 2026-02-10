@@ -14,8 +14,6 @@ use codex_protocol::models::is_file_close_tag_text;
 use codex_protocol::models::is_file_open_tag_text;
 use codex_protocol::models::is_image_close_tag_text;
 use codex_protocol::models::is_image_open_tag_text;
-use codex_protocol::models::is_local_file_close_tag_text;
-use codex_protocol::models::is_local_file_open_tag_text;
 use codex_protocol::models::is_local_image_close_tag_text;
 use codex_protocol::models::is_local_image_open_tag_text;
 use codex_protocol::user_input::UserInput;
@@ -48,10 +46,10 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                 {
                     continue;
                 }
-                if (is_local_file_open_tag_text(text) || is_file_open_tag_text(text))
+                if is_file_open_tag_text(text)
                     && (matches!(message.get(idx + 1), Some(ContentItem::InputFile { .. })))
                     || (idx > 0
-                        && (is_local_file_close_tag_text(text) || is_file_close_tag_text(text))
+                        && is_file_close_tag_text(text)
                         && matches!(message.get(idx - 1), Some(ContentItem::InputFile { .. })))
                 {
                     continue;
@@ -307,7 +305,8 @@ mod tests {
 
     #[test]
     fn skips_local_file_label_text_and_file_item() {
-        let label = codex_protocol::models::local_file_open_tag_text(1);
+        let label =
+            codex_protocol::models::local_file_open_tag_text_with_filename(1, Some("report.pdf"));
         let user_text = "Please summarize this file.".to_string();
 
         let item = ResponseItem::Message {
