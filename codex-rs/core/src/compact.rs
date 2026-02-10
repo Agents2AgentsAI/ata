@@ -287,7 +287,7 @@ fn estimate_base64_payload_size_bytes(data: &str) -> Option<u64> {
     if non_whitespace_len == 0 {
         return Some(0);
     }
-    if non_whitespace_len % 4 != 0 {
+    if !non_whitespace_len.is_multiple_of(4) {
         return None;
     }
 
