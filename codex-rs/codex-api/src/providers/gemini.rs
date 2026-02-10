@@ -8,6 +8,7 @@ use serde_json::Value;
 use serde_json::json;
 
 use crate::error::ApiError;
+use crate::file_support::parse_data_url;
 use crate::provider_adapter::ProviderAdapter;
 use crate::provider_adapter::RequestOptions;
 use crate::tools::ToolFormatter;
@@ -58,31 +59,31 @@ impl ProviderAdapter for GeminiAdapter {
         });
 
         // Add thinking config if reasoning options are specified
-        if let Some(reasoning) = &options.reasoning {
-            if let Some(effort) = reasoning.get("effort").and_then(|e| e.as_str()) {
-                match effort {
-                    "none" => {
-                        // No thinking requested — skip thinkingConfig entirely
-                    }
-                    "minimal" | "low" => {
-                        generation_config["thinkingConfig"] = json!({
-                            "thinkingLevel": "low",
-                            "includeThoughts": true
-                        });
-                    }
-                    "medium" => {
-                        generation_config["thinkingConfig"] = json!({
-                            "thinkingLevel": "medium",
-                            "includeThoughts": true
-                        });
-                    }
-                    // "high", "xhigh", or any unknown value
-                    _ => {
-                        generation_config["thinkingConfig"] = json!({
-                            "thinkingLevel": "high",
-                            "includeThoughts": true
-                        });
-                    }
+        if let Some(reasoning) = &options.reasoning
+            && let Some(effort) = reasoning.get("effort").and_then(|e| e.as_str())
+        {
+            match effort {
+                "none" => {
+                    // No thinking requested — skip thinkingConfig entirely
+                }
+                "minimal" | "low" => {
+                    generation_config["thinkingConfig"] = json!({
+                        "thinkingLevel": "low",
+                        "includeThoughts": true
+                    });
+                }
+                "medium" => {
+                    generation_config["thinkingConfig"] = json!({
+                        "thinkingLevel": "medium",
+                        "includeThoughts": true
+                    });
+                }
+                // "high", "xhigh", or any unknown value
+                _ => {
+                    generation_config["thinkingConfig"] = json!({
+                        "thinkingLevel": "high",
+                        "includeThoughts": true
+                    });
                 }
             }
         }
@@ -104,7 +105,7 @@ impl ProviderAdapter for GeminiAdapter {
                 IMPORTANT for MCP tools: When using read_mcp_resource, NEVER guess server names. \
                 Common mistakes include guessing 'filesystem' for file:// URIs. \
                 ALWAYS call list_mcp_resources first to discover the actual server names and URIs.";
-            let full_instructions = format!("{}{}", instructions, gemini_guidance);
+            let full_instructions = format!("{instructions}{gemini_guidance}");
             body["systemInstruction"] = json!({
                 "parts": [{"text": full_instructions}]
             });
@@ -134,7 +135,7 @@ impl ProviderAdapter for GeminiAdapter {
     fn streaming_endpoint(&self, model: &str) -> String {
         // Gemini streaming endpoint format
         // Note: The model parameter needs URL encoding for model names with special chars
-        format!("/models/{}:streamGenerateContent", model)
+        format!("/models/{model}:streamGenerateContent")
     }
 
     fn extra_headers(&self) -> HeaderMap {
@@ -184,18 +185,46 @@ fn build_gemini_contents(input: &[Value]) -> Result<Vec<Value>, ApiError> {
                             }
                             "input_image" => {
                                 // Handle image content
-                                if let Some(url) = block.get("image_url").and_then(|u| u.as_str()) {
-                                    if url.starts_with("data:") {
-                                        // Base64 data URL
-                                        if let Some((mime, data)) = parse_data_url(url) {
-                                            parts.push(json!({
-                                                "inlineData": {
-                                                    "mimeType": mime,
-                                                    "data": data
-                                                }
-                                            }));
-                                        }
+                                if let Some(url) = block.get("image_url").and_then(|u| u.as_str())
+                                    && url.starts_with("data:")
+                                {
+                                    // Base64 data URL
+                                    if let Some((mime, data)) = parse_data_url(url) {
+                                        parts.push(json!({
+                                            "inlineData": {
+                                                "mimeType": mime,
+                                                "data": data
+                                            }
+                                        }));
                                     }
+                                }
+                            }
+                            "input_file" => {
+                                if let Some(file_uri) = block.get("file_id").and_then(Value::as_str)
+                                {
+                                    let mime = block
+                                        .get("mime_type")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("application/pdf");
+                                    parts.push(json!({
+                                        "fileData": {
+                                            "mimeType": mime,
+                                            "fileUri": file_uri
+                                        }
+                                    }));
+                                } else if let Some(data) =
+                                    block.get("file_data").and_then(Value::as_str)
+                                {
+                                    let mime = block
+                                        .get("mime_type")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("application/pdf");
+                                    parts.push(json!({
+                                        "inlineData": {
+                                            "mimeType": mime,
+                                            "data": data
+                                        }
+                                    }));
                                 }
                             }
                             _ => {}
@@ -286,15 +315,6 @@ fn build_gemini_contents(input: &[Value]) -> Result<Vec<Value>, ApiError> {
     }
 
     Ok(contents)
-}
-
-/// Parses a data URL into (mime_type, base64_data).
-fn parse_data_url(url: &str) -> Option<(String, String)> {
-    // Format: data:mime/type;base64,<data>
-    let url = url.strip_prefix("data:")?;
-    let (header, data) = url.split_once(',')?;
-    let mime = header.strip_suffix(";base64")?;
-    Some((mime.to_string(), data.to_string()))
 }
 
 /// Maps tool choice to Gemini function calling mode.
@@ -440,5 +460,47 @@ mod tests {
         assert_eq!(contents[0]["parts"][0]["text"], "Hi");
         assert_eq!(contents[1]["role"], "model");
         assert_eq!(contents[1]["parts"][0]["text"], "Hello!");
+    }
+
+    #[test]
+    fn test_build_gemini_contents_with_inline_file_uses_camel_case() {
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "input_file",
+                "file_data": "JVBERi0xLjQ=",
+                "mime_type": "application/pdf"
+            }]
+        })];
+
+        let contents = build_gemini_contents(&input).expect("build contents");
+        assert_eq!(contents.len(), 1);
+        let part = &contents[0]["parts"][0];
+        assert!(part.get("inlineData").is_some());
+        assert!(part.get("inline_data").is_none());
+        assert_eq!(part["inlineData"]["mimeType"], "application/pdf");
+        assert_eq!(part["inlineData"]["data"], "JVBERi0xLjQ=");
+    }
+
+    #[test]
+    fn test_build_gemini_contents_with_file_reference_uses_camel_case() {
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "input_file",
+                "file_id": "files/abc123",
+                "mime_type": "application/pdf"
+            }]
+        })];
+
+        let contents = build_gemini_contents(&input).expect("build contents");
+        assert_eq!(contents.len(), 1);
+        let part = &contents[0]["parts"][0];
+        assert!(part.get("fileData").is_some());
+        assert!(part.get("file_data").is_none());
+        assert_eq!(part["fileData"]["mimeType"], "application/pdf");
+        assert_eq!(part["fileData"]["fileUri"], "files/abc123");
     }
 }

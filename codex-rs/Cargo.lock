@@ -1578,6 +1578,7 @@ dependencies = [
  "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
+ "codex-utils-file",
  "codex-utils-home-dir",
  "codex-utils-pty",
  "codex-utils-readiness",
@@ -2005,6 +2006,7 @@ dependencies = [
  "codex-execpolicy",
  "codex-git",
  "codex-utils-absolute-path",
+ "codex-utils-file",
  "codex-utils-image",
  "icu_decimal",
  "icu_locale_core",
@@ -2268,6 +2270,18 @@ dependencies = [
  "assert_cmd",
  "runfiles",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "codex-utils-file"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "codex-utils-cache",
+ "pretty_assertions",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

@@ -4819,6 +4819,9 @@ impl CodexMessageProcessor {
                         INVALID_REQUEST_ERROR_CODE,
                         "input must not be empty".to_string(),
                     ),
+                    SteerInputError::InvalidFileInput(message) => {
+                        (INVALID_REQUEST_ERROR_CODE, message)
+                    }
                 };
                 let error = JSONRPCErrorError {
                     code,
