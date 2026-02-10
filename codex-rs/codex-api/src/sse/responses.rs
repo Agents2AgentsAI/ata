@@ -1,6 +1,7 @@
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::error::ApiError;
+use crate::file_support::map_user_facing_file_error_from_message;
 use crate::rate_limits::parse_rate_limit;
 use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
@@ -239,6 +240,17 @@ pub fn process_responses_event(
                             .message
                             .unwrap_or_else(|| "Invalid request.".to_string());
                         response_error = ApiError::InvalidRequest { message };
+                    } else if let Some(message) = error.message.as_deref()
+                        && let Some(mapped) = map_user_facing_file_error_from_message(message)
+                    {
+                        response_error = ApiError::InvalidRequest {
+                            message: mapped.user_message,
+                        };
+                    } else if is_invalid_request_error(&error) {
+                        let message = error
+                            .message
+                            .unwrap_or_else(|| "Invalid request.".to_string());
+                        response_error = ApiError::InvalidRequest { message };
                     } else {
                         let delay = try_parse_retry_after(&error);
                         let message = error.message.unwrap_or_default();
@@ -420,6 +432,11 @@ fn is_usage_not_included(error: &Error) -> bool {
 
 fn is_invalid_prompt_error(error: &Error) -> bool {
     error.code.as_deref() == Some("invalid_prompt")
+}
+
+fn is_invalid_request_error(error: &Error) -> bool {
+    error.r#type.as_deref() == Some("invalid_request_error")
+        || error.code.as_deref() == Some("invalid_request_error")
 }
 
 fn rate_limit_regex() -> &'static regex_lite::Regex {
@@ -757,6 +774,27 @@ mod tests {
                 assert_eq!(
                     message,
                     "Invalid prompt: we've limited access to this content for safety reasons."
+                );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_request_error_is_invalid_request() {
+        let raw_error = r#"{"type":"response.failed","sequence_number":3,"response":{"id":"resp_invalid_request","object":"response","created_at":1759771629,"status":"failed","background":false,"error":{"type":"invalid_request_error","message":"This PDF is encrypted."},"incomplete_details":null}}"#;
+
+        let sse1 = format!("event: response.failed\ndata: {raw_error}\n\n");
+
+        let events = collect_events(&[sse1.as_bytes()]).await;
+
+        assert_eq!(events.len(), 1);
+
+        match &events[0] {
+            Err(ApiError::InvalidRequest { message }) => {
+                assert_eq!(
+                    message,
+                    "This PDF appears to be encrypted. Please remove the password protection and try again."
                 );
             }
             other => panic!("unexpected event: {other:?}"),

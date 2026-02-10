@@ -1,5 +1,6 @@
 pub mod capabilities;
 pub mod data_url;
+pub mod errors;
 pub mod responses;
 pub mod routing;
 pub mod upload;
@@ -11,6 +12,9 @@ pub use capabilities::FileCapabilityConfig;
 pub use capabilities::file_capabilities_for;
 pub use data_url::build_data_url;
 pub use data_url::parse_data_url;
+pub use errors::UserFacingMappedError;
+pub use errors::map_user_facing_file_error_from_http_body;
+pub use errors::map_user_facing_file_error_from_message;
 pub use responses::wrap_responses_input_file_data_uris;
 pub use routing::FileRoutingError;
 pub use routing::route_file_input;
