@@ -152,41 +152,41 @@ fn fix_gemini_command_quoting(args: &Value) -> Value {
             .get("cmd")
             .or_else(|| obj.get("command"))
             .and_then(|v| v.as_str())
+    {
+        // Strip leading/trailing quotes only if the ENTIRE command is wrapped in matching quotes
+        let cmd = if (cmd.starts_with('\'') && cmd.ends_with('\''))
+            || (cmd.starts_with('"') && cmd.ends_with('"'))
         {
-            // Strip leading/trailing quotes only if the ENTIRE command is wrapped in matching quotes
-            let cmd = if (cmd.starts_with('\'') && cmd.ends_with('\''))
-                || (cmd.starts_with('"') && cmd.ends_with('"'))
-            {
-                &cmd[1..cmd.len() - 1]
-            } else {
-                cmd
-            };
+            &cmd[1..cmd.len() - 1]
+        } else {
+            cmd
+        };
 
-            // Fix quoted metacharacters within command.
-            // Order matters: process longer/more specific patterns first to avoid partial matches.
-            let cmd = cmd
-                // Compound redirections (most specific first)
-                .replace("'2>&1'", "2>&1")
-                .replace("'>&2'", ">&2")
-                .replace("'>>'", ">>")
-                .replace("'<<'", "<<")
-                .replace("'2>'", "2>")
-                .replace("'>&'", ">&")
-                // Simple redirections and operators
-                .replace("'>'", ">")
-                .replace("'<'", "<")
-                .replace("'|'", "|")
-                .replace("'&'", "&");
+        // Fix quoted metacharacters within command.
+        // Order matters: process longer/more specific patterns first to avoid partial matches.
+        let cmd = cmd
+            // Compound redirections (most specific first)
+            .replace("'2>&1'", "2>&1")
+            .replace("'>&2'", ">&2")
+            .replace("'>>'", ">>")
+            .replace("'<<'", "<<")
+            .replace("'2>'", "2>")
+            .replace("'>&'", ">&")
+            // Simple redirections and operators
+            .replace("'>'", ">")
+            .replace("'<'", "<")
+            .replace("'|'", "|")
+            .replace("'&'", "&");
 
-            // Rebuild the object with the fixed command
-            let mut new_obj = obj.clone();
-            if obj.contains_key("cmd") {
-                new_obj.insert("cmd".to_string(), json!(cmd));
-            } else if obj.contains_key("command") {
-                new_obj.insert("command".to_string(), json!(cmd));
-            }
-            return Value::Object(new_obj);
+        // Rebuild the object with the fixed command
+        let mut new_obj = obj.clone();
+        if obj.contains_key("cmd") {
+            new_obj.insert("cmd".to_string(), json!(cmd));
+        } else if obj.contains_key("command") {
+            new_obj.insert("command".to_string(), json!(cmd));
         }
+        return Value::Object(new_obj);
+    }
     args.clone()
 }
 
@@ -214,9 +214,10 @@ pub fn parse_gemini_chunk(
 
     // Check for prompt feedback blocking
     if let Some(feedback) = &chunk.prompt_feedback
-        && let Some(reason) = &feedback.block_reason {
-            return Err(ApiError::Stream(format!("Prompt blocked: {reason}")));
-        }
+        && let Some(reason) = &feedback.block_reason
+    {
+        return Err(ApiError::Stream(format!("Prompt blocked: {reason}")));
+    }
 
     // Process candidates
     if let Some(ref candidates) = chunk.candidates {
@@ -234,107 +235,39 @@ pub fn parse_gemini_chunk(
             }
 
             if let Some(ref content) = candidate.content
-                && let Some(ref parts) = content.parts {
-                    for part in parts {
-                        // Handle thinking/reasoning content (Gemini thinking mode)
-                        if part.thought {
-                            if let Some(ref text) = part.text
-                                && !text.is_empty() {
-                                    // Emit OutputItemAdded for Reasoning on first thinking part
-                                    if !state.reasoning_item_started {
-                                        state.reasoning_item_started = true;
-                                        events.push(ResponseEvent::OutputItemAdded(
-                                            ResponseItem::Reasoning {
-                                                id: String::new(),
-                                                summary: vec![],
-                                                content: None,
-                                                encrypted_content: None,
-                                            },
-                                        ));
-                                    }
-                                    events.push(ResponseEvent::ReasoningSummaryDelta {
-                                        delta: text.clone(),
-                                        summary_index: state.thought_index,
-                                    });
-                                    state.accumulated_thought_text.push_str(text);
-                                    if !state.in_thought_section {
-                                        state.in_thought_section = true;
-                                    }
-                                }
-                            continue; // Don't process as regular text
-                        }
-
-                        // Emit section break and Reasoning item done when transitioning out of thought
-                        if state.in_thought_section {
-                            events.push(ResponseEvent::ReasoningSummaryPartAdded {
+                && let Some(ref parts) = content.parts
+            {
+                for part in parts {
+                    // Handle thinking/reasoning content (Gemini thinking mode)
+                    if part.thought {
+                        if let Some(ref text) = part.text
+                            && !text.is_empty()
+                        {
+                            // Emit OutputItemAdded for Reasoning on first thinking part
+                            if !state.reasoning_item_started {
+                                state.reasoning_item_started = true;
+                                events.push(ResponseEvent::OutputItemAdded(
+                                    ResponseItem::Reasoning {
+                                        id: String::new(),
+                                        summary: vec![],
+                                        content: None,
+                                        encrypted_content: None,
+                                    },
+                                ));
+                            }
+                            events.push(ResponseEvent::ReasoningSummaryDelta {
+                                delta: text.clone(),
                                 summary_index: state.thought_index,
                             });
-                            events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
-                                id: String::new(),
-                                summary: vec![ReasoningItemReasoningSummary::SummaryText {
-                                    text: std::mem::take(&mut state.accumulated_thought_text),
-                                }],
-                                content: None,
-                                encrypted_content: None,
-                            }));
-                            state.thought_index += 1;
-                            state.in_thought_section = false;
-                            state.reasoning_item_started = false;
-                        }
-
-                        // Handle text content
-                        if let Some(ref text) = part.text
-                            && !text.is_empty() {
-                                // Emit OutputItemAdded for the message if this is the first text
-                                if !state.message_started {
-                                    state.message_started = true;
-                                    events.push(ResponseEvent::OutputItemAdded(
-                                        ResponseItem::Message {
-                                            id: None,
-                                            role: "assistant".to_string(),
-                                            content: vec![],
-                                            end_turn: None,
-                                            phase: None,
-                                        },
-                                    ));
-                                }
-                                events.push(ResponseEvent::OutputTextDelta(text.clone()));
+                            state.accumulated_thought_text.push_str(text);
+                            if !state.in_thought_section {
+                                state.in_thought_section = true;
                             }
-
-                        // Handle function calls
-                        if let Some(ref function_call) = part.function_call {
-                            let call_id = state.next_call_id();
-                            // Fix Gemini's tendency to quote shell metacharacters
-                            let fixed_args = function_call
-                                .args
-                                .as_ref()
-                                .map(fix_gemini_command_quoting)
-                                .unwrap_or_else(|| json!({}));
-                            let arguments = fixed_args.to_string();
-
-                            // Emit the function call as an OutputItemDone
-                            events.push(ResponseEvent::OutputItemDone(
-                                ResponseItem::FunctionCall {
-                                    id: None,
-                                    call_id,
-                                    name: function_call.name.clone(),
-                                    arguments,
-                                    thought_signature: part.thought_signature.clone(),
-                                },
-                            ));
                         }
+                        continue; // Don't process as regular text
                     }
-                }
 
-            // Check for completion
-            if let Some(finish_reason) = &candidate.finish_reason
-                && (finish_reason == "STOP"
-                    || finish_reason == "MAX_TOKENS"
-                    || finish_reason == "SAFETY"
-                    || finish_reason == "RECITATION"
-                    || finish_reason == "OTHER")
-                {
-                    // Flush any outstanding thinking section before completing
+                    // Emit section break and Reasoning item done when transitioning out of thought
                     if state.in_thought_section {
                         events.push(ResponseEvent::ReasoningSummaryPartAdded {
                             summary_index: state.thought_index,
@@ -352,57 +285,125 @@ pub fn parse_gemini_chunk(
                         state.reasoning_item_started = false;
                     }
 
-                    // Get usage from the chunk if available
-                    let token_usage = chunk.usage_metadata.as_ref().map(|usage| TokenUsage {
-                        input_tokens: usage.prompt_token_count.unwrap_or(0),
-                        output_tokens: usage.candidates_token_count.unwrap_or(0),
-                        cached_input_tokens: usage.cached_content_token_count.unwrap_or(0),
-                        reasoning_output_tokens: usage.thoughts_token_count.unwrap_or(0),
-                        total_tokens: usage.total_token_count.unwrap_or(0),
-                    });
+                    // Handle text content
+                    if let Some(ref text) = part.text
+                        && !text.is_empty()
+                    {
+                        // Emit OutputItemAdded for the message if this is the first text
+                        if !state.message_started {
+                            state.message_started = true;
+                            events.push(ResponseEvent::OutputItemAdded(ResponseItem::Message {
+                                id: None,
+                                role: "assistant".to_string(),
+                                content: vec![],
+                                end_turn: None,
+                                phase: None,
+                            }));
+                        }
+                        events.push(ResponseEvent::OutputTextDelta(text.clone()));
+                    }
 
-                    events.push(ResponseEvent::Completed {
-                        response_id: String::new(),
-                        token_usage,
-                    });
+                    // Handle function calls
+                    if let Some(ref function_call) = part.function_call {
+                        let call_id = state.next_call_id();
+                        // Fix Gemini's tendency to quote shell metacharacters
+                        let fixed_args = function_call
+                            .args
+                            .as_ref()
+                            .map(fix_gemini_command_quoting)
+                            .unwrap_or_else(|| json!({}));
+                        let arguments = fixed_args.to_string();
+
+                        // Emit the function call as an OutputItemDone
+                        events.push(ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
+                            id: None,
+                            call_id,
+                            name: function_call.name.clone(),
+                            arguments,
+                            thought_signature: part.thought_signature.clone(),
+                        }));
+                    }
                 }
+            }
+
+            // Check for completion
+            if let Some(finish_reason) = &candidate.finish_reason
+                && (finish_reason == "STOP"
+                    || finish_reason == "MAX_TOKENS"
+                    || finish_reason == "SAFETY"
+                    || finish_reason == "RECITATION"
+                    || finish_reason == "OTHER")
+            {
+                // Flush any outstanding thinking section before completing
+                if state.in_thought_section {
+                    events.push(ResponseEvent::ReasoningSummaryPartAdded {
+                        summary_index: state.thought_index,
+                    });
+                    events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
+                        id: String::new(),
+                        summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                            text: std::mem::take(&mut state.accumulated_thought_text),
+                        }],
+                        content: None,
+                        encrypted_content: None,
+                    }));
+                    state.thought_index += 1;
+                    state.in_thought_section = false;
+                    state.reasoning_item_started = false;
+                }
+
+                // Get usage from the chunk if available
+                let token_usage = chunk.usage_metadata.as_ref().map(|usage| TokenUsage {
+                    input_tokens: usage.prompt_token_count.unwrap_or(0),
+                    output_tokens: usage.candidates_token_count.unwrap_or(0),
+                    cached_input_tokens: usage.cached_content_token_count.unwrap_or(0),
+                    reasoning_output_tokens: usage.thoughts_token_count.unwrap_or(0),
+                    total_tokens: usage.total_token_count.unwrap_or(0),
+                });
+
+                events.push(ResponseEvent::Completed {
+                    response_id: String::new(),
+                    token_usage,
+                });
+            }
         }
     }
 
     // If no candidates but we have usage metadata, this might be a final chunk
     if chunk.candidates.is_none()
-        && let Some(usage) = chunk.usage_metadata {
-            // Flush any outstanding thinking section before completing
-            if state.in_thought_section {
-                events.push(ResponseEvent::ReasoningSummaryPartAdded {
-                    summary_index: state.thought_index,
-                });
-                events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
-                    id: String::new(),
-                    summary: vec![ReasoningItemReasoningSummary::SummaryText {
-                        text: std::mem::take(&mut state.accumulated_thought_text),
-                    }],
-                    content: None,
-                    encrypted_content: None,
-                }));
-                state.thought_index += 1;
-                state.in_thought_section = false;
-                state.reasoning_item_started = false;
-            }
-
-            let token_usage = Some(TokenUsage {
-                input_tokens: usage.prompt_token_count.unwrap_or(0),
-                output_tokens: usage.candidates_token_count.unwrap_or(0),
-                cached_input_tokens: usage.cached_content_token_count.unwrap_or(0),
-                reasoning_output_tokens: usage.thoughts_token_count.unwrap_or(0),
-                total_tokens: usage.total_token_count.unwrap_or(0),
+        && let Some(usage) = chunk.usage_metadata
+    {
+        // Flush any outstanding thinking section before completing
+        if state.in_thought_section {
+            events.push(ResponseEvent::ReasoningSummaryPartAdded {
+                summary_index: state.thought_index,
             });
-
-            events.push(ResponseEvent::Completed {
-                response_id: String::new(),
-                token_usage,
-            });
+            events.push(ResponseEvent::OutputItemDone(ResponseItem::Reasoning {
+                id: String::new(),
+                summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                    text: std::mem::take(&mut state.accumulated_thought_text),
+                }],
+                content: None,
+                encrypted_content: None,
+            }));
+            state.thought_index += 1;
+            state.in_thought_section = false;
+            state.reasoning_item_started = false;
         }
+
+        let token_usage = Some(TokenUsage {
+            input_tokens: usage.prompt_token_count.unwrap_or(0),
+            output_tokens: usage.candidates_token_count.unwrap_or(0),
+            cached_input_tokens: usage.cached_content_token_count.unwrap_or(0),
+            reasoning_output_tokens: usage.thoughts_token_count.unwrap_or(0),
+            total_tokens: usage.total_token_count.unwrap_or(0),
+        });
+
+        events.push(ResponseEvent::Completed {
+            response_id: String::new(),
+            token_usage,
+        });
+    }
 
     Ok(events)
 }

@@ -73,7 +73,7 @@ pub(super) async fn stream_anthropic_api(
         )
         .json(&body);
 
-    for (name, value) in adapter.extra_headers().iter() {
+    for (name, value) in adapter.extra_headers_for_input(&input_values).iter() {
         if let Ok(value_str) = value.to_str() {
             request = request.header(name.as_str(), value_str);
         }

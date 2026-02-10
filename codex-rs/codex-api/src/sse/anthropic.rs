@@ -236,10 +236,11 @@ impl ContentBlockDeltaPayload {
     /// Parse from a `serde_json::Value`, returning `None` for the delta
     /// if the delta type is unknown rather than failing.
     fn from_value(v: &Value) -> Result<Self, ApiError> {
-        let index =
-            v.get("index").and_then(serde_json::Value::as_u64).ok_or_else(|| {
-                ApiError::Stream("Missing index in content_block_delta".to_string())
-            })? as u32;
+        let index = v
+            .get("index")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| ApiError::Stream("Missing index in content_block_delta".to_string()))?
+            as u32;
 
         let delta = v.get("delta").and_then(|d| {
             let delta_type = d.get("type").and_then(|t| t.as_str())?;
@@ -507,9 +508,10 @@ pub fn parse_anthropic_event(
 
             // Capture final output_tokens from message_delta usage
             if let Some(usage) = &payload.usage
-                && let Some(output_tokens) = usage.output_tokens {
-                    state.output_tokens = Some(output_tokens);
-                }
+                && let Some(output_tokens) = usage.output_tokens
+            {
+                state.output_tokens = Some(output_tokens);
+            }
         }
 
         AnthropicEventType::MessageStop => {

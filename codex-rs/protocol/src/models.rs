@@ -726,6 +726,15 @@ fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> Co
     }
 }
 
+fn local_file_error_placeholder(
+    path: &std::path::Path,
+    error: impl std::fmt::Display,
+) -> ContentItem {
+    ContentItem::InputText {
+        text: format!("Codex cannot attach file at `{}`: {error}.", path.display()),
+    }
+}
+
 pub fn local_image_content_items_with_label_number(
     path: &std::path::Path,
     label_number: Option<usize>,
@@ -776,10 +785,10 @@ pub fn local_image_content_items_with_label_number(
 pub fn local_file_content_items(path: &Path, label_number: Option<usize>) -> Vec<ContentItem> {
     match encode_inline_cached(path) {
         Ok(processed) => {
-            let filename = processed.filename;
+            let filename = processed.filename.clone();
             let file_item = ContentItem::inline_file(
-                processed.base64,
-                processed.mime_type,
+                processed.base64.clone(),
+                processed.mime_type.clone(),
                 Some(filename.clone()),
             );
             wrap_file_content_items(file_item, label_number, Some(filename.as_str()))
@@ -788,9 +797,9 @@ pub fn local_file_content_items(path: &Path, label_number: Option<usize>) -> Vec
             tracing::warn!(
                 path = %path.display(),
                 %error,
-                "local file encoding failed; omitting file from model input"
+                "local file encoding failed; adding placeholder text"
             );
-            Vec::new()
+            vec![local_file_error_placeholder(path, &error)]
         }
     }
 }
@@ -2059,14 +2068,27 @@ mod tests {
     }
 
     #[test]
-    fn local_file_read_error_omits_file_content() {
+    fn local_file_read_error_adds_placeholder() {
         let dir = tempdir().expect("temp dir");
         let missing = dir.path().join("missing-report.pdf");
         let item = ResponseInputItem::from(vec![UserInput::LocalFile { path: missing }]);
 
         match item {
             ResponseInputItem::Message { content, .. } => {
-                assert_eq!(content, Vec::<ContentItem>::new());
+                assert_eq!(content.len(), 1);
+                match &content[0] {
+                    ContentItem::InputText { text } => {
+                        assert!(
+                            text.contains("Codex cannot attach file"),
+                            "placeholder should describe file attach failure: {text}"
+                        );
+                        assert!(
+                            text.contains("missing-report.pdf"),
+                            "placeholder should include path: {text}"
+                        );
+                    }
+                    other => panic!("expected placeholder text but found {other:?}"),
+                }
             }
             other => panic!("expected message response but got {other:?}"),
         }

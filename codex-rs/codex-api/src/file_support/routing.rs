@@ -39,9 +39,9 @@ pub enum FileRoutingError {
 fn inline_content_item(path: &Path) -> Result<ContentItem, FileRoutingError> {
     let processed = encode_inline_cached(path)?;
     Ok(ContentItem::inline_file(
-        processed.base64,
-        processed.mime_type,
-        Some(processed.filename),
+        processed.base64.clone(),
+        processed.mime_type.clone(),
+        Some(processed.filename.clone()),
     ))
 }
 

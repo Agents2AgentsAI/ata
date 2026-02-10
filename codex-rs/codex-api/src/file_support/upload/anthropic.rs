@@ -60,3 +60,54 @@ impl FileUploadService for AnthropicFileUpload {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use tempfile::NamedTempFile;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::header;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn upload_file_posts_to_anthropic_files_endpoint() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/files"))
+            .and(header("x-api-key", "test-key"))
+            .and(header("anthropic-version", "2023-06-01"))
+            .and(header("anthropic-beta", "files-api-2025-04-14"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "file_abc123",
+                "type": "file",
+                "filename": "report.pdf",
+                "size": 123
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let file = NamedTempFile::new().expect("temp file");
+        std::fs::write(file.path(), b"%PDF-1.4\npayload").expect("write pdf");
+
+        let uploaded = AnthropicFileUpload
+            .upload_file(
+                &reqwest::Client::new(),
+                file.path(),
+                "application/pdf",
+                "test-key",
+                &server.uri(),
+            )
+            .await
+            .expect("upload should succeed");
+
+        assert_eq!(uploaded.file_id, "file_abc123");
+        assert_eq!(uploaded.provider, "anthropic");
+        assert_eq!(uploaded.source_path, file.path().to_path_buf());
+    }
+}
