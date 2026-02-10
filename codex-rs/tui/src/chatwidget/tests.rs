@@ -427,6 +427,136 @@ async fn submission_preserves_text_elements_and_local_images() {
 }
 
 #[tokio::test]
+async fn submission_maps_pdf_attachment_to_local_file() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().expect("rollout file");
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(codex_core::protocol::SessionConfiguredEvent {
+            session_id: conversation_id,
+            forked_from_id: None,
+            thread_name: None,
+            model: "test-model".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            cwd: PathBuf::from("/home/user/project"),
+            reasoning_effort: Some(ReasoningEffortConfig::default()),
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            rollout_path: Some(rollout_file.path().to_path_buf()),
+        }),
+    });
+    drain_insert_history(&mut rx);
+
+    let dir = tempdir().expect("temp dir");
+    let pdf_path = dir.path().join("submitted.pdf");
+    std::fs::write(&pdf_path, b"%PDF-1.4\ntest").expect("write pdf");
+
+    let placeholder = "[Image #1]";
+    let text = format!("{placeholder} submit");
+    let text_elements = vec![TextElement::new(
+        (0..placeholder.len()).into(),
+        Some(placeholder.to_string()),
+    )];
+    chat.bottom_pane
+        .set_composer_text(text.clone(), text_elements.clone(), vec![pdf_path.clone()]);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0], UserInput::LocalFile { path: pdf_path });
+    assert_eq!(
+        items[1],
+        UserInput::Text {
+            text,
+            text_elements,
+        }
+    );
+}
+
+#[tokio::test]
+async fn submission_rejects_unsupported_attachment_type() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().expect("rollout file");
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(codex_core::protocol::SessionConfiguredEvent {
+            session_id: conversation_id,
+            forked_from_id: None,
+            thread_name: None,
+            model: "test-model".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            cwd: PathBuf::from("/home/user/project"),
+            reasoning_effort: Some(ReasoningEffortConfig::default()),
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            rollout_path: Some(rollout_file.path().to_path_buf()),
+        }),
+    });
+    drain_insert_history(&mut rx);
+
+    let dir = tempdir().expect("temp dir");
+    let txt_path = dir.path().join("unsupported.txt");
+    std::fs::write(&txt_path, b"not an attachment").expect("write txt");
+
+    let placeholder = "[Image #1]";
+    let text = format!("{placeholder} submit");
+    let text_elements = vec![TextElement::new(
+        (0..placeholder.len()).into(),
+        Some(placeholder.to_string()),
+    )];
+    chat.bottom_pane
+        .set_composer_text(text.clone(), text_elements, vec![txt_path.clone()]);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::UserTurn { .. }) => panic!("expected no user turn op"),
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Disconnected) => panic!("op channel disconnected"),
+        }
+    }
+
+    assert_eq!(chat.bottom_pane.composer_text(), text);
+    assert_eq!(
+        chat.bottom_pane.composer_local_image_paths(),
+        vec![txt_path]
+    );
+
+    let warning = drain_insert_history(&mut rx)
+        .last()
+        .map(|lines| lines_to_single_string(lines))
+        .expect("expected warning cell");
+    assert!(
+        warning.contains("Unsupported attachment"),
+        "expected unsupported attachment warning, got: {warning}"
+    );
+    assert!(
+        warning.contains("Supported: PDF, PNG,"),
+        "expected supported-types prefix, got: {warning}"
+    );
+    assert!(
+        warning.contains("JPG, GIF, WebP."),
+        "expected supported-types suffix, got: {warning}"
+    );
+}
+
+#[tokio::test]
 async fn submission_prefers_selected_duplicate_skill_path() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 

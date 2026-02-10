@@ -160,6 +160,8 @@ use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
+use crate::clipboard_paste::AttachmentKind;
+use crate::clipboard_paste::detect_attachment_kind;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
@@ -572,7 +574,7 @@ impl ChatComposer {
             self.pending_pastes.push((placeholder, pasted));
         } else if char_count > 1
             && self.image_paste_enabled()
-            && self.handle_paste_image_path(pasted.clone())
+            && self.handle_paste_attachment_path(pasted.clone())
         {
             self.textarea.insert_str(" ");
         } else {
@@ -584,24 +586,28 @@ impl ChatComposer {
         true
     }
 
-    pub fn handle_paste_image_path(&mut self, pasted: String) -> bool {
+    pub fn handle_paste_attachment_path(&mut self, pasted: String) -> bool {
         let Some(path_buf) = normalize_pasted_path(&pasted) else {
             return false;
         };
 
-        // normalize_pasted_path already handles Windows → WSL path conversion,
-        // so we can directly try to read the image dimensions.
-        match image::image_dimensions(&path_buf) {
-            Ok((width, height)) => {
-                tracing::info!("OK: {pasted}");
-                tracing::debug!("image dimensions={}x{}", width, height);
-                let format = pasted_image_format(&path_buf);
-                tracing::debug!("attached image format={}", format.label());
+        match detect_attachment_kind(&path_buf) {
+            AttachmentKind::Image => {
+                if let Ok((width, height)) = image::image_dimensions(&path_buf) {
+                    tracing::debug!("image dimensions={}x{}", width, height);
+                    let format = pasted_image_format(&path_buf);
+                    tracing::debug!("attached image format={}", format.label());
+                }
                 self.attach_image(path_buf);
                 true
             }
-            Err(err) => {
-                tracing::trace!("ERR: {err}");
+            AttachmentKind::File => {
+                tracing::debug!("attached file path={}", path_buf.display());
+                self.attach_image(path_buf);
+                true
+            }
+            AttachmentKind::Unsupported => {
+                tracing::trace!("unsupported pasted attachment path: {pasted}");
                 false
             }
         }

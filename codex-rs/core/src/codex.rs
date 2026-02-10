@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -132,6 +133,8 @@ pub enum SteerInputError {
 enum FileInputPreparationError {
     #[error(transparent)]
     Processing(#[from] FileProcessingError),
+    #[error(transparent)]
+    Routing(#[from] FileRoutingError),
     #[error("failed to prepare local file attachments: {0}")]
     Task(String),
     #[error("provider `{provider}` does not support PDF attachments")]
@@ -169,6 +172,100 @@ fn max_raw_inline_bytes(max_inline_payload_bytes: u64) -> u64 {
     max_inline_payload_bytes.saturating_mul(3).saturating_div(4)
 }
 
+fn upload_base_url_for_provider(provider_id: &str, provider: &ModelProviderInfo) -> String {
+    let fallback = match provider_id {
+        "openai" => "https://api.openai.com",
+        "anthropic" => "https://api.anthropic.com",
+        "gemini" => "https://generativelanguage.googleapis.com",
+        _ => "",
+    };
+    let base = provider
+        .base_url
+        .as_deref()
+        .unwrap_or(fallback)
+        .trim_end_matches('/');
+
+    match provider_id {
+        "openai" | "anthropic" => base.strip_suffix("/v1").unwrap_or(base).to_string(),
+        "gemini" => base.strip_suffix("/v1beta").unwrap_or(base).to_string(),
+        _ => base.to_string(),
+    }
+}
+
+fn upload_service_for_provider(provider_id: &str) -> Option<Box<dyn FileUploadService>> {
+    match provider_id {
+        "openai" => Some(Box::new(OpenAiFileUpload)),
+        "anthropic" => Some(Box::new(AnthropicFileUpload)),
+        "gemini" => Some(Box::new(GeminiFileUpload)),
+        _ => None,
+    }
+}
+
+fn file_name_or_default(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "file".to_string())
+}
+
+async fn resolve_file_inputs_for_uploads(
+    inputs: &mut [UserInput],
+    provider: &ModelProviderInfo,
+    config: &Config,
+) -> std::result::Result<(), FileInputPreparationError> {
+    let (provider_id, capabilities) = file_capabilities_for_provider(provider);
+    if !capabilities.supports_pdf {
+        return Ok(());
+    }
+
+    let Some(api_key) = provider
+        .api_key_with_auth(&config.codex_home, config.cli_auth_credentials_store_mode)
+        .ok()
+        .flatten()
+    else {
+        return Ok(());
+    };
+    let Some(upload_service) = upload_service_for_provider(&provider_id) else {
+        return Ok(());
+    };
+    let base_url = upload_base_url_for_provider(&provider_id, provider);
+    let http_client = reqwest::Client::new();
+
+    for input in inputs {
+        let path = match input {
+            UserInput::LocalFile { path } => path.clone(),
+            _ => continue,
+        };
+
+        let routed = route_file_input(
+            &path,
+            &capabilities,
+            Some(upload_service.as_ref()),
+            &http_client,
+            &api_key,
+            &base_url,
+        )
+        .await?;
+
+        if let ContentItem::InputFile {
+            file_id: Some(file_id),
+            mime_type,
+            filename,
+            ..
+        } = routed
+        {
+            *input = UserInput::UploadedFile {
+                file_id,
+                mime_type,
+                filename: filename.unwrap_or_else(|| file_name_or_default(&path)),
+                source_path: path,
+            };
+        }
+    }
+
+    Ok(())
+}
+
 fn prepare_file_inputs(
     inputs: &[UserInput],
     provider: &ModelProviderInfo,
@@ -196,7 +293,7 @@ fn prepare_file_inputs(
             let metadata = analyze_file(path)?;
             if metadata.size_bytes > capabilities.max_inline_file_size {
                 return Err(FileInputPreparationError::InlineFileTooLarge {
-                    provider: provider_id.clone(),
+                    provider: provider_id,
                     path: path.display().to_string(),
                     size_mb: bytes_to_megabytes(metadata.size_bytes),
                     max_mb: bytes_to_megabytes(capabilities.max_inline_file_size),
@@ -206,7 +303,7 @@ fn prepare_file_inputs(
             total_raw_bytes = total_raw_bytes.saturating_add(metadata.size_bytes);
             if total_raw_bytes > max_total_raw_bytes {
                 return Err(FileInputPreparationError::InlinePayloadTooLarge {
-                    provider: provider_id.clone(),
+                    provider: provider_id,
                     total_mb: bytes_to_megabytes(total_raw_bytes),
                     max_mb: bytes_to_megabytes(max_total_raw_bytes),
                 });
@@ -228,6 +325,15 @@ async fn prepare_file_inputs_async(
     tokio::task::spawn_blocking(move || prepare_file_inputs(&inputs, &provider))
         .await
         .map_err(|error| FileInputPreparationError::Task(error.to_string()))?
+}
+
+async fn resolve_and_prepare_file_inputs(
+    inputs: &mut [UserInput],
+    provider: &ModelProviderInfo,
+    config: &Config,
+) -> std::result::Result<(), FileInputPreparationError> {
+    resolve_file_inputs_for_uploads(inputs, provider, config).await?;
+    prepare_file_inputs_async(inputs, provider).await
 }
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
@@ -318,7 +424,13 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_api::file_support::FileCapabilityConfig;
+use codex_api::file_support::FileRoutingError;
 use codex_api::file_support::file_capabilities_for;
+use codex_api::file_support::route_file_input;
+use codex_api::file_support::upload::AnthropicFileUpload;
+use codex_api::file_support::upload::FileUploadService;
+use codex_api::file_support::upload::GeminiFileUpload;
+use codex_api::file_support::upload::OpenAiFileUpload;
 use codex_async_utils::OrCancelExt;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
@@ -2558,18 +2670,23 @@ impl Session {
     /// Returns the active turn id when accepted.
     pub async fn steer_input(
         &self,
-        input: Vec<UserInput>,
+        mut input: Vec<UserInput>,
         expected_turn_id: Option<&str>,
     ) -> Result<String, SteerInputError> {
         if input.is_empty() {
             return Err(SteerInputError::EmptyInput);
         }
 
-        let provider = {
+        let (provider, config) = {
             let state = self.state.lock().await;
-            state.session_configuration.provider.clone()
+            (
+                state.session_configuration.provider.clone(),
+                Arc::clone(&state.session_configuration.original_config_do_not_use),
+            )
         };
-        if let Err(error) = prepare_file_inputs_async(&input, &provider).await {
+        if let Err(error) =
+            resolve_and_prepare_file_inputs(&mut input, &provider, config.as_ref()).await
+        {
             return Err(SteerInputError::InvalidFileInput(error.to_string()));
         }
 
@@ -3861,13 +3978,19 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
 pub(crate) async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    input: Vec<UserInput>,
+    mut input: Vec<UserInput>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
     if input.is_empty() {
         return None;
     }
-    if let Err(error) = prepare_file_inputs_async(&input, &turn_context.provider).await {
+    if let Err(error) = resolve_and_prepare_file_inputs(
+        &mut input,
+        &turn_context.provider,
+        turn_context.config.as_ref(),
+    )
+    .await
+    {
         let event = EventMsg::Error(ErrorEvent {
             message: error.to_string(),
             codex_error_info: Some(CodexErrorInfo::BadRequest),
@@ -5127,6 +5250,9 @@ pub(crate) use tests::make_session_and_context_with_rx;
 mod tests {
     use super::*;
     use crate::CodexAuth;
+    use crate::auth::AuthCredentialsStoreMode;
+    use crate::auth::PROVIDER_OPENAI;
+    use crate::auth::login_with_provider_api_key;
     use crate::config::ConfigBuilder;
     use crate::config::test_config;
     use crate::exec::ExecToolCallOutput;
@@ -5175,6 +5301,12 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::header;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
 
     struct InstructionsTestCase {
         slug: &'static str,
@@ -6555,6 +6687,66 @@ mod tests {
             err,
             FileInputPreparationError::InlinePayloadTooLarge { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn resolve_file_inputs_for_uploads_rewrites_to_uploaded_file() {
+        let codex_home = tempfile::tempdir().expect("codex home");
+        login_with_provider_api_key(
+            codex_home.path(),
+            PROVIDER_OPENAI,
+            "sk-test-key",
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store api key");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/files"))
+            .and(header("authorization", "Bearer sk-test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "file-123",
+                "object": "file",
+                "filename": "mid.pdf",
+                "purpose": "user_data",
+                "bytes": 10
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut provider = ModelProviderInfo::create_openai_provider();
+        provider.base_url = Some(format!("{}/v1", server.uri()));
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("mid.pdf");
+        std::fs::write(&path, b"%PDF-1.4\n").expect("write pdf header");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("open pdf")
+            .set_len(3 * 1024 * 1024)
+            .expect("grow file");
+
+        let mut inputs = vec![UserInput::LocalFile { path: path.clone() }];
+        resolve_file_inputs_for_uploads(&mut inputs, &provider, &config)
+            .await
+            .expect("resolve files");
+
+        assert_eq!(
+            inputs,
+            vec![UserInput::UploadedFile {
+                file_id: "file-123".to_string(),
+                mime_type: "application/pdf".to_string(),
+                filename: "mid.pdf".to_string(),
+                source_path: path,
+            }]
+        );
     }
 
     #[tokio::test]
