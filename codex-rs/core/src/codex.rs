@@ -5,6 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::SystemTime;
 
 use crate::AuthManager;
 use crate::CodexAuth;
@@ -212,10 +213,10 @@ async fn resolve_file_inputs_for_uploads(
     inputs: &mut [UserInput],
     provider: &ModelProviderInfo,
     config: &Config,
-) -> std::result::Result<(), FileInputPreparationError> {
+) -> std::result::Result<Vec<codex_api::file_support::UploadedFile>, FileInputPreparationError> {
     let (provider_id, capabilities) = file_capabilities_for_provider(provider);
     if !capabilities.supports_pdf {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let Some(api_key) = provider
@@ -223,13 +224,14 @@ async fn resolve_file_inputs_for_uploads(
         .ok()
         .flatten()
     else {
-        return Ok(());
+        return Ok(Vec::new());
     };
     let Some(upload_service) = upload_service_for_provider(&provider_id) else {
-        return Ok(());
+        return Ok(Vec::new());
     };
     let base_url = upload_base_url_for_provider(&provider_id, provider);
     let http_client = reqwest::Client::new();
+    let mut uploaded_files = Vec::new();
 
     for input in inputs {
         let path = match input {
@@ -237,7 +239,7 @@ async fn resolve_file_inputs_for_uploads(
             _ => continue,
         };
 
-        let routed = route_file_input(
+        let routed = route_file_input_with_upload_metadata(
             &path,
             &capabilities,
             Some(upload_service.as_ref()),
@@ -247,12 +249,21 @@ async fn resolve_file_inputs_for_uploads(
         )
         .await?;
 
+        let codex_api::file_support::RoutedFileInput {
+            content_item: routed_item,
+            uploaded,
+        } = routed;
+
+        if let Some(uploaded) = uploaded {
+            uploaded_files.push(uploaded);
+        }
+
         if let ContentItem::InputFile {
             file_id: Some(file_id),
             mime_type,
             filename,
             ..
-        } = routed
+        } = routed_item
         {
             *input = UserInput::UploadedFile {
                 file_id,
@@ -263,7 +274,7 @@ async fn resolve_file_inputs_for_uploads(
         }
     }
 
-    Ok(())
+    Ok(uploaded_files)
 }
 
 fn prepare_file_inputs(
@@ -331,10 +342,214 @@ async fn resolve_and_prepare_file_inputs(
     inputs: &mut [UserInput],
     provider: &ModelProviderInfo,
     config: &Config,
-) -> std::result::Result<(), FileInputPreparationError> {
-    resolve_file_inputs_for_uploads(inputs, provider, config).await?;
-    prepare_file_inputs_async(inputs, provider).await
+) -> std::result::Result<Vec<codex_api::file_support::UploadedFile>, FileInputPreparationError> {
+    let uploaded_files = resolve_file_inputs_for_uploads(inputs, provider, config).await?;
+    prepare_file_inputs_async(inputs, provider).await?;
+    Ok(uploaded_files)
 }
+
+#[derive(Debug, thiserror::Error)]
+enum FileReferenceRefreshError {
+    #[error(
+        "cannot refresh uploaded file attachments without an API key for provider `{provider}`"
+    )]
+    MissingApiKey { provider: String },
+    #[error("provider `{provider}` does not support file uploads")]
+    MissingUploadService { provider: String },
+    #[error("failed to refresh file attachment `{filename}`: {error}")]
+    RefreshFailed {
+        filename: String,
+        #[source]
+        error: FileUploadError,
+    },
+}
+
+fn collect_referenced_upload_file_ids(
+    items: &[ResponseItem],
+) -> (Vec<String>, HashMap<String, String>) {
+    let mut referenced_file_ids = Vec::new();
+    let mut referenced_mime_types = HashMap::new();
+
+    for item in items {
+        let ResponseItem::Message { content, .. } = item else {
+            continue;
+        };
+
+        for content_item in content {
+            let ContentItem::InputFile {
+                file_id: Some(file_id),
+                mime_type,
+                ..
+            } = content_item
+            else {
+                continue;
+            };
+
+            referenced_file_ids.push(file_id.clone());
+            referenced_mime_types
+                .entry(file_id.clone())
+                .or_insert_with(|| mime_type.clone());
+        }
+    }
+
+    (referenced_file_ids, referenced_mime_types)
+}
+
+fn rewrite_uploaded_file_ids(items: &mut [ResponseItem], replacements: &HashMap<String, String>) {
+    for item in items {
+        let ResponseItem::Message { content, .. } = item else {
+            continue;
+        };
+
+        for content_item in content {
+            let ContentItem::InputFile {
+                file_id: Some(file_id),
+                ..
+            } = content_item
+            else {
+                continue;
+            };
+
+            if let Some(new_file_id) = replacements.get(file_id) {
+                *file_id = new_file_id.clone();
+            }
+        }
+    }
+}
+
+async fn refresh_uploaded_file_references(
+    sess: &Session,
+    turn_context: &TurnContext,
+) -> Result<(), FileReferenceRefreshError> {
+    let (provider_id, _capabilities) = file_capabilities_for_provider(&turn_context.provider);
+
+    let (referenced_file_ids, referenced_mime_types) = {
+        let state = sess.state.lock().await;
+        collect_referenced_upload_file_ids(state.history.raw_items())
+    };
+    if referenced_file_ids.is_empty() {
+        return Ok(());
+    }
+
+    let now = SystemTime::now();
+    let refresh_candidates = {
+        let cache = sess.file_reference_cache.lock().await;
+        cache.refresh_candidates(
+            referenced_file_ids.iter().map(String::as_str),
+            &provider_id,
+            now,
+        )
+    };
+    if refresh_candidates.is_empty() {
+        return Ok(());
+    }
+
+    let requires_provider_switch_refresh = refresh_candidates
+        .iter()
+        .any(|entry| entry.provider != provider_id);
+
+    let Some(api_key) = turn_context
+        .provider
+        .api_key_with_auth(
+            &turn_context.config.codex_home,
+            turn_context.config.cli_auth_credentials_store_mode,
+        )
+        .ok()
+        .flatten()
+    else {
+        if requires_provider_switch_refresh {
+            return Err(FileReferenceRefreshError::MissingApiKey {
+                provider: provider_id,
+            });
+        }
+        warn!(
+            provider_id = %provider_id,
+            "skipping uploaded file refresh because no API key is configured"
+        );
+        return Ok(());
+    };
+
+    let Some(upload_service) = upload_service_for_provider(&provider_id) else {
+        if requires_provider_switch_refresh {
+            return Err(FileReferenceRefreshError::MissingUploadService {
+                provider: provider_id,
+            });
+        }
+        warn!(
+            provider_id = %provider_id,
+            "skipping uploaded file refresh because upload service is unavailable"
+        );
+        return Ok(());
+    };
+
+    let base_url = upload_base_url_for_provider(&provider_id, &turn_context.provider);
+    let http_client = reqwest::Client::new();
+
+    let mut updated_file_ids = HashMap::new();
+    let mut refreshed_uploads = Vec::new();
+    let mut stale_file_ids = Vec::new();
+
+    for candidate in refresh_candidates {
+        let is_provider_switch = candidate.provider != provider_id;
+        let mime_type = referenced_mime_types
+            .get(&candidate.file_id)
+            .map(String::as_str)
+            .unwrap_or("application/pdf");
+
+        match upload_service
+            .upload_file(
+                &http_client,
+                &candidate.source_path,
+                mime_type,
+                &api_key,
+                &base_url,
+            )
+            .await
+        {
+            Ok(uploaded) => {
+                updated_file_ids.insert(candidate.file_id.clone(), uploaded.file_id.clone());
+                stale_file_ids.push(candidate.file_id);
+                refreshed_uploads.push(uploaded);
+            }
+            Err(error) if is_provider_switch => {
+                return Err(FileReferenceRefreshError::RefreshFailed {
+                    filename: file_name_or_default(&candidate.source_path),
+                    error,
+                });
+            }
+            Err(error) => {
+                warn!(
+                    file_id = %candidate.file_id,
+                    path = %candidate.source_path.display(),
+                    %error,
+                    "failed to refresh near-expiry uploaded file; continuing with existing reference"
+                );
+            }
+        }
+    }
+
+    if updated_file_ids.is_empty() {
+        return Ok(());
+    }
+
+    {
+        let mut state = sess.state.lock().await;
+        let mut items = state.history.raw_items().to_vec();
+        rewrite_uploaded_file_ids(&mut items, &updated_file_ids);
+        state.replace_history(items);
+    }
+
+    {
+        let mut cache = sess.file_reference_cache.lock().await;
+        for file_id in &stale_file_ids {
+            cache.remove(file_id);
+        }
+        cache.record_all(refreshed_uploads);
+    }
+
+    Ok(())
+}
+
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
 use crate::file_watcher::FileWatcher;
@@ -424,9 +639,11 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_api::file_support::FileCapabilityConfig;
+use codex_api::file_support::FileReferenceCache;
 use codex_api::file_support::FileRoutingError;
+use codex_api::file_support::FileUploadError;
 use codex_api::file_support::file_capabilities_for;
-use codex_api::file_support::route_file_input;
+use codex_api::file_support::route_file_input_with_upload_metadata;
 use codex_api::file_support::upload::AnthropicFileUpload;
 use codex_api::file_support::upload::FileUploadService;
 use codex_api::file_support::upload::GeminiFileUpload;
@@ -721,6 +938,7 @@ pub(crate) struct Session {
     tx_event: Sender<Event>,
     agent_status: watch::Sender<AgentStatus>,
     state: Mutex<SessionState>,
+    file_reference_cache: Mutex<FileReferenceCache>,
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     features: Features,
@@ -1329,6 +1547,7 @@ impl Session {
             tx_event: tx_event.clone(),
             agent_status,
             state: Mutex::new(state),
+            file_reference_cache: Mutex::new(FileReferenceCache::default()),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
@@ -2684,10 +2903,13 @@ impl Session {
                 Arc::clone(&state.session_configuration.original_config_do_not_use),
             )
         };
-        if let Err(error) =
-            resolve_and_prepare_file_inputs(&mut input, &provider, config.as_ref()).await
-        {
-            return Err(SteerInputError::InvalidFileInput(error.to_string()));
+        let uploaded_files =
+            resolve_and_prepare_file_inputs(&mut input, &provider, config.as_ref())
+                .await
+                .map_err(|error| SteerInputError::InvalidFileInput(error.to_string()))?;
+        if !uploaded_files.is_empty() {
+            let mut cache = self.file_reference_cache.lock().await;
+            cache.record_all(uploaded_files);
         }
 
         let mut active = self.active_turn.lock().await;
@@ -3984,19 +4206,26 @@ pub(crate) async fn run_turn(
     if input.is_empty() {
         return None;
     }
-    if let Err(error) = resolve_and_prepare_file_inputs(
+    let uploaded_files = match resolve_and_prepare_file_inputs(
         &mut input,
         &turn_context.provider,
         turn_context.config.as_ref(),
     )
     .await
     {
-        let event = EventMsg::Error(ErrorEvent {
-            message: error.to_string(),
-            codex_error_info: Some(CodexErrorInfo::BadRequest),
-        });
-        sess.send_event(&turn_context, event).await;
-        return None;
+        Ok(uploaded_files) => uploaded_files,
+        Err(error) => {
+            let event = EventMsg::Error(ErrorEvent {
+                message: error.to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            });
+            sess.send_event(&turn_context, event).await;
+            return None;
+        }
+    };
+    if !uploaded_files.is_empty() {
+        let mut cache = sess.file_reference_cache.lock().await;
+        cache.record_all(uploaded_files);
     }
 
     let model_info = turn_context.model_info.clone();
@@ -4141,6 +4370,17 @@ pub(crate) async fn run_turn(
                     .await;
                 }
             }
+        }
+
+        if let Err(error) =
+            refresh_uploaded_file_references(sess.as_ref(), turn_context.as_ref()).await
+        {
+            let event = EventMsg::Error(ErrorEvent {
+                message: error.to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            });
+            sess.send_event(&turn_context, event).await;
+            break;
         }
 
         // Construct the input that we will send to the model.
@@ -6264,6 +6504,7 @@ mod tests {
             tx_event,
             agent_status: agent_status_tx,
             state: Mutex::new(state),
+            file_reference_cache: Mutex::new(FileReferenceCache::default()),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
@@ -6399,6 +6640,7 @@ mod tests {
             tx_event,
             agent_status: agent_status_tx,
             state: Mutex::new(state),
+            file_reference_cache: Mutex::new(FileReferenceCache::default()),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
@@ -6734,7 +6976,7 @@ mod tests {
             .expect("grow file");
 
         let mut inputs = vec![UserInput::LocalFile { path: path.clone() }];
-        resolve_file_inputs_for_uploads(&mut inputs, &provider, &config)
+        let uploaded_files = resolve_file_inputs_for_uploads(&mut inputs, &provider, &config)
             .await
             .expect("resolve files");
 
@@ -6744,6 +6986,15 @@ mod tests {
                 file_id: "file-123".to_string(),
                 mime_type: "application/pdf".to_string(),
                 filename: "mid.pdf".to_string(),
+                source_path: path.clone(),
+            }]
+        );
+        assert_eq!(
+            uploaded_files,
+            vec![codex_api::file_support::UploadedFile {
+                file_id: "file-123".to_string(),
+                provider: "openai".to_string(),
+                expires_at: None,
                 source_path: path,
             }]
         );
@@ -6804,7 +7055,7 @@ mod tests {
                 path: second.clone(),
             },
         ];
-        resolve_file_inputs_for_uploads(&mut inputs, &provider, &config)
+        let uploaded_files = resolve_file_inputs_for_uploads(&mut inputs, &provider, &config)
             .await
             .expect("resolve files");
 
@@ -6815,12 +7066,29 @@ mod tests {
                     file_id: "file-123".to_string(),
                     mime_type: "application/pdf".to_string(),
                     filename: "first.pdf".to_string(),
-                    source_path: first,
+                    source_path: first.clone(),
                 },
                 UserInput::UploadedFile {
                     file_id: "file-123".to_string(),
                     mime_type: "application/pdf".to_string(),
                     filename: "second.pdf".to_string(),
+                    source_path: second.clone(),
+                },
+            ]
+        );
+        assert_eq!(
+            uploaded_files,
+            vec![
+                codex_api::file_support::UploadedFile {
+                    file_id: "file-123".to_string(),
+                    provider: "openai".to_string(),
+                    expires_at: None,
+                    source_path: first,
+                },
+                codex_api::file_support::UploadedFile {
+                    file_id: "file-123".to_string(),
+                    provider: "openai".to_string(),
+                    expires_at: None,
                     source_path: second,
                 },
             ]

@@ -11,6 +11,7 @@ use tracing::warn;
 use super::capabilities::FileCapabilityConfig;
 use super::upload::FileUploadError;
 use super::upload::FileUploadService;
+use super::upload::UploadedFile;
 
 #[derive(Debug, Error)]
 pub enum FileRoutingError {
@@ -47,14 +48,20 @@ fn inline_content_item(path: &Path) -> Result<ContentItem, FileRoutingError> {
     ))
 }
 
-pub async fn route_file_input(
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoutedFileInput {
+    pub content_item: ContentItem,
+    pub uploaded: Option<UploadedFile>,
+}
+
+pub async fn route_file_input_with_upload_metadata(
     path: &Path,
     capabilities: &FileCapabilityConfig,
     upload_service: Option<&dyn FileUploadService>,
     client: &reqwest::Client,
     api_key: &str,
     base_url: &str,
-) -> Result<ContentItem, FileRoutingError> {
+) -> Result<RoutedFileInput, FileRoutingError> {
     if !capabilities.supports_pdf {
         return Err(FileRoutingError::PdfNotSupported);
     }
@@ -74,7 +81,10 @@ pub async fn route_file_input(
         .always_inline_max
         .min(capabilities.max_inline_file_size);
     if metadata.size_bytes <= always_inline_max {
-        return inline_content_item(path);
+        return Ok(RoutedFileInput {
+            content_item: inline_content_item(path)?,
+            uploaded: None,
+        });
     }
 
     if metadata.size_bytes <= capabilities.max_inline_file_size {
@@ -84,11 +94,14 @@ pub async fn route_file_input(
                 .await
             {
                 Ok(uploaded) => {
-                    return Ok(ContentItem::file_ref(
-                        uploaded.file_id,
-                        metadata.mime_type,
-                        Some(metadata.filename),
-                    ));
+                    return Ok(RoutedFileInput {
+                        content_item: ContentItem::file_ref(
+                            uploaded.file_id.clone(),
+                            metadata.mime_type,
+                            Some(metadata.filename),
+                        ),
+                        uploaded: Some(uploaded),
+                    });
                 }
                 Err(error) => {
                     warn!(
@@ -100,18 +113,24 @@ pub async fn route_file_input(
             }
         }
 
-        return inline_content_item(path);
+        return Ok(RoutedFileInput {
+            content_item: inline_content_item(path)?,
+            uploaded: None,
+        });
     }
 
     if let Some(uploader) = upload_service {
         let uploaded = uploader
             .upload_file(client, path, &metadata.mime_type, api_key, base_url)
             .await?;
-        return Ok(ContentItem::file_ref(
-            uploaded.file_id,
-            metadata.mime_type,
-            Some(metadata.filename),
-        ));
+        return Ok(RoutedFileInput {
+            content_item: ContentItem::file_ref(
+                uploaded.file_id.clone(),
+                metadata.mime_type,
+                Some(metadata.filename),
+            ),
+            uploaded: Some(uploaded),
+        });
     }
 
     Err(FileRoutingError::InlineTooLargeWithoutUploader {
@@ -119,6 +138,26 @@ pub async fn route_file_input(
         size_mb: bytes_to_megabytes(metadata.size_bytes),
         max_mb: bytes_to_megabytes(capabilities.max_inline_file_size),
     })
+}
+
+pub async fn route_file_input(
+    path: &Path,
+    capabilities: &FileCapabilityConfig,
+    upload_service: Option<&dyn FileUploadService>,
+    client: &reqwest::Client,
+    api_key: &str,
+    base_url: &str,
+) -> Result<ContentItem, FileRoutingError> {
+    route_file_input_with_upload_metadata(
+        path,
+        capabilities,
+        upload_service,
+        client,
+        api_key,
+        base_url,
+    )
+    .await
+    .map(|routed| routed.content_item)
 }
 
 #[cfg(test)]

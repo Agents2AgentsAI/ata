@@ -144,8 +144,9 @@ pub fn map_user_facing_file_error_from_http_body(
     let kind = classify_file_error(message)?;
 
     let error_code = detail
-        .and_then(|detail| detail.error_code)
-        .unwrap_or_default();
+        .as_ref()
+        .and_then(|detail| detail.error_code.as_deref())
+        .unwrap_or("");
     let debug_detail = if error_code.is_empty() {
         format!("[{status}] {message}")
     } else {

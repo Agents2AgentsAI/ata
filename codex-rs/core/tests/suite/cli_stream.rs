@@ -2,6 +2,7 @@ use assert_cmd::Command as AssertCommand;
 use codex_core::RolloutRecorder;
 use codex_core::auth::CODEX_API_KEY_ENV_VAR;
 use codex_core::protocol::GitInfo;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_utils_cargo_bin::find_resource;
 use core_test_support::fs_wait;
 use core_test_support::responses;
@@ -27,6 +28,10 @@ async fn responses_mode_stream_cli() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
+    // `ata exec` refreshes `/v1/models` to seed its model list.
+    // Provide a hermetic stub so the CLI doesn't block/hang when using a mock provider.
+    let _models_mock =
+        responses::mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
     let repo_root = repo_root();
     let sse = responses::sse(vec![
         responses::ev_response_created("resp-1"),
@@ -45,6 +50,9 @@ async fn responses_mode_stream_cli() {
     cmd.timeout(Duration::from_secs(30));
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
+        // Avoid keyring prompts/latency in CI by forcing file-backed auth storage.
+        .arg("-c")
+        .arg("cli_auth_credentials_store=\"file\"")
         .arg("-c")
         .arg(&provider_override)
         .arg("-c")
@@ -99,6 +107,9 @@ async fn exec_cli_applies_model_instructions_file() {
     // Start mock server which will capture the request and return a minimal
     // SSE stream for a single turn.
     let server = MockServer::start().await;
+    // `ata exec` refreshes `/v1/models` to seed its model list.
+    let _models_mock =
+        responses::mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
     let sse = concat!(
         "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
@@ -126,6 +137,9 @@ async fn exec_cli_applies_model_instructions_file() {
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
+        // Avoid keyring prompts/latency in CI by forcing file-backed auth storage.
+        .arg("-c")
+        .arg("cli_auth_credentials_store=\"file\"")
         .arg("-c")
         .arg(&provider_override)
         .arg("-c")

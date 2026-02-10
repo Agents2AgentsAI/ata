@@ -49,7 +49,7 @@
       "description": "Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.",
       "properties": {
         "enabled": {
-          "description": "When `false`, disables analytics across Ata product surfaces in this profile.",
+          "description": "When `false`, disables analytics across Codex product surfaces in this profile.",
           "type": "boolean"
         }
       },
@@ -69,7 +69,7 @@
         },
         "enabled": {
           "default": true,
-          "description": "When `false`, Ata does not surface this app.",
+          "description": "When `false`, Codex does not surface this app.",
           "type": "boolean"
         }
       },
@@ -90,7 +90,7 @@
       "type": "object"
     },
     "AskForApproval": {
-      "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Ata.",
+      "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
       "oneOf": [
         {
           "description": "Under this policy, only \"known safe\" commands—as determined by `is_safe_command()`—that **only read files** are auto‑approved. Everything else will ask the user to approve.",
@@ -123,7 +123,7 @@
       ]
     },
     "AuthCredentialsStoreMode": {
-      "description": "Determine where Ata should store CLI auth credentials.",
+      "description": "Determine where Codex should store CLI auth credentials.",
       "oneOf": [
         {
           "description": "Persist credentials in CODEX_HOME/auth.json with 0600 permissions.",
@@ -339,7 +339,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "description": "When `false`, disables the feedback flow across Ata product surfaces.",
+          "description": "When `false`, disables the feedback flow across Codex product surfaces.",
           "type": "boolean"
         }
       },
@@ -511,7 +511,7 @@
       "type": "object"
     },
     "Notice": {
-      "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Ata IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
+      "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Codex IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
       "properties": {
         "hide_full_access_warning": {
           "description": "Tracks whether the user has acknowledged the full access warning prompt.",
@@ -566,17 +566,17 @@
       ]
     },
     "OAuthCredentialsStoreMode": {
-      "description": "Determine where Ata should store and read MCP credentials.",
+      "description": "Determine where Codex should store and read MCP credentials.",
       "oneOf": [
         {
-          "description": "`Keyring` when available; otherwise, `File`. Credentials stored in the keyring will only be readable by Ata unless the user explicitly grants access via OS-level keyring access.",
+          "description": "`Keyring` when available; otherwise, `File`. Credentials stored in the keyring will only be readable by Codex unless the user explicitly grants access via OS-level keyring access.",
           "enum": [
             "auto"
           ],
           "type": "string"
         },
         {
-          "description": "CODEX_HOME/.credentials.json This file will be readable to Ata and other applications running as the same user.",
+          "description": "CODEX_HOME/.credentials.json This file will be readable to Codex and other applications running as the same user.",
           "enum": [
             "file"
           ],
@@ -1198,7 +1198,7 @@
           "$ref": "#/definitions/AnalyticsConfigToml"
         }
       ],
-      "description": "When `false`, disables analytics across Ata product surfaces in this machine. Defaults to `true`."
+      "description": "When `false`, disables analytics across Codex product surfaces in this machine. Defaults to `true`."
     },
     "approval_policy": {
       "allOf": [
@@ -1232,7 +1232,7 @@
         }
       ],
       "default": null,
-      "description": "Preferred backend for storing CLI auth credentials. file: Use a file in the Ata home directory with 0600 permissions. keyring: Use an OS-specific keyring service. auto (default): Use keyring when available, fall back to file. If keyring access fails, it remembers and uses file storage for the session."
+      "description": "Preferred backend for storing CLI auth credentials. file: Use a file in the Codex home directory with 0600 permissions. keyring: Use an OS-specific keyring service. auto (default): Use keyring when available, fall back to file. If keyring access fails, it remembers and uses file storage for the session."
     },
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
@@ -1372,7 +1372,7 @@
           "$ref": "#/definitions/FeedbackConfigToml"
         }
       ],
-      "description": "When `false`, disables feedback collection across Ata product surfaces. Defaults to `true`."
+      "description": "When `false`, disables feedback collection across Codex product surfaces. Defaults to `true`."
     },
     "file_opener": {
       "allOf": [
@@ -1428,10 +1428,10 @@
           "$ref": "#/definitions/AbsolutePathBuf"
         }
       ],
-      "description": "Directory where Ata writes log files, for example `codex-tui.log`. Defaults to `$CODEX_HOME/log`."
+      "description": "Directory where Codex writes log files, for example `codex-tui.log`. Defaults to `$CODEX_HOME/log`."
     },
     "mcp_oauth_callback_port": {
-      "description": "Optional fixed port for the local HTTP callback server used during MCP OAuth login. When unset, Ata will bind to an ephemeral port chosen by the OS.",
+      "description": "Optional fixed port for the local HTTP callback server used during MCP OAuth login. When unset, Codex will bind to an ephemeral port chosen by the OS.",
       "format": "uint16",
       "minimum": 0.0,
       "type": "integer"
@@ -1443,14 +1443,14 @@
         }
       ],
       "default": null,
-      "description": "Preferred backend for storing MCP OAuth credentials. keyring: Use an OS-specific keyring service. https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2 file: Use a file in the Ata home directory. auto (default): Use the OS-specific keyring service if available, otherwise use a file."
+      "description": "Preferred backend for storing MCP OAuth credentials. keyring: Use an OS-specific keyring service. https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2 file: Use a file in the Codex home directory. auto (default): Use the OS-specific keyring service if available, otherwise use a file."
     },
     "mcp_servers": {
       "additionalProperties": {
         "$ref": "#/definitions/RawMcpServerConfig"
       },
       "default": {},
-      "description": "Definition for MCP servers that Ata can reach out to for tool calls.",
+      "description": "Definition for MCP servers that Codex can reach out to for tool calls.",
       "type": "object"
     },
     "model": {
@@ -1473,7 +1473,7 @@
           "$ref": "#/definitions/AbsolutePathBuf"
         }
       ],
-      "description": "Optional path to a file containing model instructions that will override the built-in instructions for the selected model. Users are STRONGLY DISCOURAGED from using this field, as deviating from the instructions sanctioned by Ata will likely degrade model performance."
+      "description": "Optional path to a file containing model instructions that will override the built-in instructions for the selected model. Users are STRONGLY DISCOURAGED from using this field, as deviating from the instructions sanctioned by Codex will likely degrade model performance."
     },
     "model_provider": {
       "description": "Provider to use from the model_providers map.",
