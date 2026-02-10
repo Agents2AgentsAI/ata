@@ -20,6 +20,7 @@ pub use errors::map_user_facing_file_error_from_message;
 pub use responses::wrap_responses_input_file_data_uris;
 pub use routing::FileRoutingError;
 pub use routing::RoutedFileInput;
+pub use routing::maybe_upload_file;
 pub use routing::route_file_input;
 pub use routing::route_file_input_with_upload_metadata;
 pub use upload::FileUploadError;

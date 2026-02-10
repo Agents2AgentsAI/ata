@@ -1,4 +1,6 @@
 use std::path::Path;
+use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use anyhow::Result;
 use codex_core::config::edit::ConfigEditsBuilder;
@@ -11,8 +13,11 @@ use serde_json::Value as JsonValue;
 use serde_json::json;
 use tempfile::TempDir;
 
+static ATA_BIN: OnceLock<PathBuf> = OnceLock::new();
+
 fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
-    let mut cmd = assert_cmd::Command::new(codex_utils_cargo_bin::cargo_bin("ata")?);
+    let bin = ATA_BIN.get_or_init(|| codex_utils_cargo_bin::cargo_bin("ata").unwrap());
+    let mut cmd = assert_cmd::Command::new(bin);
     cmd.env("CODEX_HOME", codex_home);
     Ok(cmd)
 }

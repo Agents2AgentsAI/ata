@@ -68,6 +68,7 @@ pub struct AnthropicFileUploadResponse {
     #[serde(rename = "type")]
     pub object_type: String,
     pub filename: String,
+    #[serde(alias = "size_bytes")]
     pub size: u64,
 }
 
@@ -103,14 +104,6 @@ pub(crate) fn upload_url(base_url: &str, path: &str) -> String {
         base_url.trim_end_matches('/'),
         path.trim_start_matches('/')
     )
-}
-
-pub(crate) fn file_name_or_default(file_path: &Path, default_name: &str) -> String {
-    file_path
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| default_name.to_string())
 }
 
 pub(crate) fn mime_type_or_default(mime_type: &str) -> &str {
@@ -166,9 +159,7 @@ where
         }
     }
 
-    Err(FileUploadError::Request(
-        "upload retry exhausted without final error".to_string(),
-    ))
+    unreachable!("upload retry loop always returns")
 }
 
 pub(crate) async fn build_file_part(
@@ -208,15 +199,6 @@ mod tests {
     fn joins_upload_urls_without_duplicate_slashes() {
         let url = upload_url("https://example.com/v1/", "/files");
         assert_eq!(url, "https://example.com/v1/files");
-    }
-
-    #[test]
-    fn resolves_filename_or_default() {
-        let resolved = file_name_or_default(Path::new("/tmp/report.pdf"), "fallback.pdf");
-        assert_eq!(resolved, "report.pdf");
-
-        let fallback = file_name_or_default(Path::new("/"), "fallback.pdf");
-        assert_eq!(fallback, "fallback.pdf");
     }
 
     #[test]
@@ -303,6 +285,27 @@ mod tests {
             "type": "file",
             "filename": "report.pdf",
             "size": 1024
+        }"#;
+        let parsed: AnthropicFileUploadResponse =
+            serde_json::from_str(body).expect("anthropic upload response");
+        assert_eq!(
+            parsed,
+            AnthropicFileUploadResponse {
+                id: "file_123".to_string(),
+                object_type: "file".to_string(),
+                filename: "report.pdf".to_string(),
+                size: 1024,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_anthropic_upload_response_with_size_bytes_alias() {
+        let body = r#"{
+            "id": "file_123",
+            "type": "file",
+            "filename": "report.pdf",
+            "size_bytes": 1024
         }"#;
         let parsed: AnthropicFileUploadResponse =
             serde_json::from_str(body).expect("anthropic upload response");

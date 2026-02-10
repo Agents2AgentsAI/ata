@@ -220,6 +220,16 @@ fn build_gemini_contents(input: &[Value]) -> Result<Vec<Value>, ApiError> {
                                         .get("mime_type")
                                         .and_then(Value::as_str)
                                         .unwrap_or("application/pdf");
+                                    let (mime, data) = if data.starts_with("data:") {
+                                        parse_data_url(data).ok_or_else(|| {
+                                            ApiError::InvalidRequest {
+                                                message: "invalid data URL in input_file block"
+                                                    .to_string(),
+                                            }
+                                        })?
+                                    } else {
+                                        (mime.to_string(), data.to_string())
+                                    };
                                     parts.push(json!({
                                         "inlineData": {
                                             "mimeType": mime,
@@ -484,6 +494,25 @@ mod tests {
         let part = &contents[0]["parts"][0];
         assert!(part.get("inlineData").is_some());
         assert!(part.get("inline_data").is_none());
+        assert_eq!(part["inlineData"]["mimeType"], "application/pdf");
+        assert_eq!(part["inlineData"]["data"], "JVBERi0xLjQ=");
+    }
+
+    #[test]
+    fn test_build_gemini_contents_with_inline_file_data_uri_strips_prefix() {
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "input_file",
+                "file_data": "data:application/pdf;base64,JVBERi0xLjQ=",
+                "mime_type": "application/pdf"
+            }]
+        })];
+
+        let contents = build_gemini_contents(&input).expect("build contents");
+        assert_eq!(contents.len(), 1);
+        let part = &contents[0]["parts"][0];
         assert_eq!(part["inlineData"]["mimeType"], "application/pdf");
         assert_eq!(part["inlineData"]["data"], "JVBERi0xLjQ=");
     }

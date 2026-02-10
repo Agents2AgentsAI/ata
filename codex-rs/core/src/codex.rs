@@ -202,17 +202,11 @@ fn upload_service_for_provider(provider_id: &str) -> Option<Box<dyn FileUploadSe
     }
 }
 
-fn file_name_or_default(path: &Path) -> String {
-    path.file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "file".to_string())
-}
-
 async fn resolve_file_inputs_for_uploads(
     inputs: &mut [UserInput],
     provider: &ModelProviderInfo,
     config: &Config,
+    http_client: &reqwest::Client,
 ) -> std::result::Result<Vec<codex_api::file_support::UploadedFile>, FileInputPreparationError> {
     let (provider_id, capabilities) = file_capabilities_for_provider(provider);
     if !capabilities.supports_pdf {
@@ -230,7 +224,6 @@ async fn resolve_file_inputs_for_uploads(
         return Ok(Vec::new());
     };
     let base_url = upload_base_url_for_provider(&provider_id, provider);
-    let http_client = reqwest::Client::new();
     let mut uploaded_files = Vec::new();
 
     for input in inputs {
@@ -239,36 +232,23 @@ async fn resolve_file_inputs_for_uploads(
             _ => continue,
         };
 
-        let routed = route_file_input_with_upload_metadata(
+        let maybe_uploaded = maybe_upload_file(
             &path,
             &capabilities,
             Some(upload_service.as_ref()),
-            &http_client,
+            http_client,
             &api_key,
             &base_url,
         )
         .await?;
 
-        let codex_api::file_support::RoutedFileInput {
-            content_item: routed_item,
-            uploaded,
-        } = routed;
-
-        if let Some(uploaded) = uploaded {
+        if let Some((uploaded, metadata)) = maybe_uploaded {
+            let file_id = uploaded.file_id.clone();
             uploaded_files.push(uploaded);
-        }
-
-        if let ContentItem::InputFile {
-            file_id: Some(file_id),
-            mime_type,
-            filename,
-            ..
-        } = routed_item
-        {
             *input = UserInput::UploadedFile {
                 file_id,
-                mime_type,
-                filename: filename.unwrap_or_else(|| file_name_or_default(&path)),
+                mime_type: metadata.mime_type,
+                filename: metadata.filename,
                 source_path: path,
             };
         }
@@ -342,8 +322,10 @@ async fn resolve_and_prepare_file_inputs(
     inputs: &mut [UserInput],
     provider: &ModelProviderInfo,
     config: &Config,
+    http_client: &reqwest::Client,
 ) -> std::result::Result<Vec<codex_api::file_support::UploadedFile>, FileInputPreparationError> {
-    let uploaded_files = resolve_file_inputs_for_uploads(inputs, provider, config).await?;
+    let uploaded_files =
+        resolve_file_inputs_for_uploads(inputs, provider, config, http_client).await?;
     prepare_file_inputs_async(inputs, provider).await?;
     Ok(uploaded_files)
 }
@@ -483,7 +465,7 @@ async fn refresh_uploaded_file_references(
     };
 
     let base_url = upload_base_url_for_provider(&provider_id, &turn_context.provider);
-    let http_client = reqwest::Client::new();
+    let http_client = &sess.file_upload_http_client;
 
     let mut updated_file_ids = HashMap::new();
     let mut refreshed_uploads = Vec::new();
@@ -498,7 +480,7 @@ async fn refresh_uploaded_file_references(
 
         match upload_service
             .upload_file(
-                &http_client,
+                http_client,
                 &candidate.source_path,
                 mime_type,
                 &api_key,
@@ -513,7 +495,7 @@ async fn refresh_uploaded_file_references(
             }
             Err(error) if is_provider_switch => {
                 return Err(FileReferenceRefreshError::RefreshFailed {
-                    filename: file_name_or_default(&candidate.source_path),
+                    filename: file_name_or_default(&candidate.source_path, "file"),
                     error,
                 });
             }
@@ -643,7 +625,7 @@ use codex_api::file_support::FileReferenceCache;
 use codex_api::file_support::FileRoutingError;
 use codex_api::file_support::FileUploadError;
 use codex_api::file_support::file_capabilities_for;
-use codex_api::file_support::route_file_input_with_upload_metadata;
+use codex_api::file_support::maybe_upload_file;
 use codex_api::file_support::upload::AnthropicFileUpload;
 use codex_api::file_support::upload::FileUploadService;
 use codex_api::file_support::upload::GeminiFileUpload;
@@ -667,6 +649,7 @@ use codex_utils_file::FileProcessingError;
 use codex_utils_file::analyze_file;
 use codex_utils_file::bytes_to_megabytes;
 use codex_utils_file::encode_inline_cached;
+use codex_utils_file::file_name_or_default;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
 use tokio::sync::watch;
@@ -939,6 +922,7 @@ pub(crate) struct Session {
     agent_status: watch::Sender<AgentStatus>,
     state: Mutex<SessionState>,
     file_reference_cache: Mutex<FileReferenceCache>,
+    file_upload_http_client: reqwest::Client,
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     features: Features,
@@ -1548,6 +1532,7 @@ impl Session {
             agent_status,
             state: Mutex::new(state),
             file_reference_cache: Mutex::new(FileReferenceCache::default()),
+            file_upload_http_client: reqwest::Client::new(),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
@@ -2903,10 +2888,14 @@ impl Session {
                 Arc::clone(&state.session_configuration.original_config_do_not_use),
             )
         };
-        let uploaded_files =
-            resolve_and_prepare_file_inputs(&mut input, &provider, config.as_ref())
-                .await
-                .map_err(|error| SteerInputError::InvalidFileInput(error.to_string()))?;
+        let uploaded_files = resolve_and_prepare_file_inputs(
+            &mut input,
+            &provider,
+            config.as_ref(),
+            &self.file_upload_http_client,
+        )
+        .await
+        .map_err(|error| SteerInputError::InvalidFileInput(error.to_string()))?;
         if !uploaded_files.is_empty() {
             let mut cache = self.file_reference_cache.lock().await;
             cache.record_all(uploaded_files);
@@ -4210,6 +4199,7 @@ pub(crate) async fn run_turn(
         &mut input,
         &turn_context.provider,
         turn_context.config.as_ref(),
+        &sess.file_upload_http_client,
     )
     .await
     {
@@ -6505,6 +6495,7 @@ mod tests {
             agent_status: agent_status_tx,
             state: Mutex::new(state),
             file_reference_cache: Mutex::new(FileReferenceCache::default()),
+            file_upload_http_client: reqwest::Client::new(),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
@@ -6641,6 +6632,7 @@ mod tests {
             agent_status: agent_status_tx,
             state: Mutex::new(state),
             file_reference_cache: Mutex::new(FileReferenceCache::default()),
+            file_upload_http_client: reqwest::Client::new(),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
@@ -6976,9 +6968,11 @@ mod tests {
             .expect("grow file");
 
         let mut inputs = vec![UserInput::LocalFile { path: path.clone() }];
-        let uploaded_files = resolve_file_inputs_for_uploads(&mut inputs, &provider, &config)
-            .await
-            .expect("resolve files");
+        let http_client = reqwest::Client::new();
+        let uploaded_files =
+            resolve_file_inputs_for_uploads(&mut inputs, &provider, &config, &http_client)
+                .await
+                .expect("resolve files");
 
         assert_eq!(
             inputs,
@@ -7055,9 +7049,11 @@ mod tests {
                 path: second.clone(),
             },
         ];
-        let uploaded_files = resolve_file_inputs_for_uploads(&mut inputs, &provider, &config)
-            .await
-            .expect("resolve files");
+        let http_client = reqwest::Client::new();
+        let uploaded_files =
+            resolve_file_inputs_for_uploads(&mut inputs, &provider, &config, &http_client)
+                .await
+                .expect("resolve files");
 
         assert_eq!(
             inputs,

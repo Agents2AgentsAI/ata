@@ -7,11 +7,11 @@ use super::FileUploadService;
 use super::UploadedFile;
 use super::build_file_part;
 use super::default_upload_retry_config;
-use super::file_name_or_default;
 use super::map_transport_error;
 use super::read_upload_response;
 use super::run_with_upload_retry;
 use super::upload_url;
+use codex_utils_file::file_name_or_default;
 
 pub struct AnthropicFileUpload;
 

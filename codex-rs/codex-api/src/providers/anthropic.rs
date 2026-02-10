@@ -117,11 +117,11 @@ impl ProviderAdapter for AnthropicAdapter {
     }
 
     fn extra_headers(&self) -> HeaderMap {
-        build_extra_headers(false)
+        build_extra_headers()
     }
 
-    fn extra_headers_for_input(&self, input: &[Value]) -> HeaderMap {
-        build_extra_headers(has_input_file_content(input))
+    fn extra_headers_for_input(&self, _input: &[Value]) -> HeaderMap {
+        build_extra_headers()
     }
 
     fn auth_header_name(&self) -> &str {
@@ -134,7 +134,7 @@ impl ProviderAdapter for AnthropicAdapter {
     }
 }
 
-fn build_extra_headers(include_files_api: bool) -> HeaderMap {
+fn build_extra_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
 
     // Required anthropic-version header.
@@ -142,32 +142,15 @@ fn build_extra_headers(include_files_api: bool) -> HeaderMap {
         headers.insert(HeaderName::from_static("anthropic-version"), value);
     }
 
-    // Enable interleaved thinking for multi-turn tool flows. The files-api
-    // beta is only required when file content blocks are present.
-    let beta = if include_files_api {
-        format!("{ANTHROPIC_BETA_INTERLEAVED_THINKING},{ANTHROPIC_BETA_FILES_API}")
-    } else {
-        ANTHROPIC_BETA_INTERLEAVED_THINKING.to_string()
-    };
+    // Enable interleaved thinking for multi-turn tool flows and the files API beta.
+    // The files API beta is a no-op unless file content blocks are present, so we
+    // include it unconditionally to avoid per-request history scans.
+    let beta = format!("{ANTHROPIC_BETA_INTERLEAVED_THINKING},{ANTHROPIC_BETA_FILES_API}");
     if let Ok(value) = HeaderValue::from_str(&beta) {
         headers.insert(HeaderName::from_static("anthropic-beta"), value);
     }
 
     headers
-}
-
-fn has_input_file_content(input: &[Value]) -> bool {
-    input.iter().any(|item| {
-        item.get("type").and_then(Value::as_str) == Some("message")
-            && item
-                .get("content")
-                .and_then(Value::as_array)
-                .is_some_and(|content| {
-                    content.iter().any(|block| {
-                        block.get("type").and_then(Value::as_str) == Some("input_file")
-                    })
-                })
-    })
 }
 
 /// Reorders input so tool outputs immediately follow their corresponding calls.
@@ -706,8 +689,8 @@ mod tests {
             "anthropic-beta header should include interleaved thinking"
         );
         assert!(
-            !beta.contains(ANTHROPIC_BETA_FILES_API),
-            "anthropic-beta header should not include files API when request has no files"
+            beta.contains(ANTHROPIC_BETA_FILES_API),
+            "anthropic-beta header should include files API"
         );
     }
 
@@ -725,7 +708,7 @@ mod tests {
             .expect("anthropic-beta header should exist");
         assert!(
             beta.contains(ANTHROPIC_BETA_FILES_API),
-            "anthropic-beta header should include files API when file input is present"
+            "anthropic-beta header should include files API"
         );
     }
 

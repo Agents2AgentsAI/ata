@@ -16,6 +16,9 @@ impl Default for FileCapabilityConfig {
             supports_pdf: false,
             always_inline_max: ALWAYS_INLINE_MAX,
             max_inline_file_size: 20 * 1024 * 1024,
+            // We intentionally cap provider uploads at the local processing limit. While some
+            // providers accept larger uploads, current cross-provider PDF processing support is
+            // limited to ~50 MB, so allowing bigger uploads would lead to confusing failures.
             max_upload_file_size: MAX_FILE_SIZE,
             max_inline_payload_bytes: 20 * 1024 * 1024,
         }
