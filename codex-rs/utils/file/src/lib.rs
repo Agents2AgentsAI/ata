@@ -23,6 +23,7 @@ pub const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024;
 pub const ALWAYS_INLINE_MAX: u64 = 2 * 1024 * 1024;
 
 const PDF_MAGIC: &[u8] = b"%PDF-";
+const MIME_PROBE_BYTES: usize = 1024;
 const CACHE_MAX_ENCODED_ENTRY_SIZE: u64 = 10 * 1024 * 1024;
 const DEFAULT_FILE_CACHE_CAPACITY: usize = 8;
 const FILE_CACHE_CAPACITY_ENV_VAR: &str = "CODEX_FILE_CACHE_CAPACITY";
@@ -104,7 +105,7 @@ pub fn analyze_file(path: &Path) -> Result<FileMetadata, FileProcessingError> {
         });
     }
 
-    let mut buf = [0u8; 16];
+    let mut buf = [0u8; MIME_PROBE_BYTES];
     let bytes_read = {
         let mut file = std::fs::File::open(path).map_err(|source| FileProcessingError::Read {
             path: path.to_path_buf(),
@@ -181,7 +182,7 @@ pub fn encode_inline_cached(path: &Path) -> Result<Arc<ProcessedFile>, FileProce
         return Ok(cached);
     }
 
-    let mut mime_probe = [0_u8; 16];
+    let mut mime_probe = [0_u8; MIME_PROBE_BYTES];
     let bytes_read = file
         .read(&mut mime_probe)
         .map_err(|source| FileProcessingError::Read {
@@ -235,8 +236,26 @@ fn file_mtime_ns_from_metadata(metadata: &std::fs::Metadata) -> u64 {
 }
 
 fn detect_mime(bytes: &[u8], path: &Path) -> Result<String, FileProcessingError> {
-    if bytes.len() >= PDF_MAGIC.len() && &bytes[..PDF_MAGIC.len()] == PDF_MAGIC {
-        return Ok("application/pdf".to_string());
+    // Some real-world PDFs can have leading whitespace or a UTF-8 BOM. The PDF header is expected
+    // to appear very early in the file, so we scan a bounded prefix and require that any bytes
+    // before the header are ignorable.
+    for (offset, window) in bytes.windows(PDF_MAGIC.len()).enumerate() {
+        if window != PDF_MAGIC {
+            continue;
+        }
+
+        let prefix = &bytes[..offset];
+        let prefix = prefix.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(prefix);
+        if !prefix.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+
+        if bytes
+            .get(offset + PDF_MAGIC.len())
+            .is_some_and(u8::is_ascii_digit)
+        {
+            return Ok("application/pdf".to_string());
+        }
     }
     Err(FileProcessingError::UnsupportedType {
         path: path.to_path_buf(),
@@ -291,6 +310,26 @@ mod tests {
                 .to_string_lossy()
                 .to_string()
         );
+    }
+
+    #[test]
+    fn detects_pdf_magic_bytes_with_leading_whitespace() {
+        let file = NamedTempFile::new().expect("temp file");
+        std::fs::write(file.path(), b"\n \t\r%PDF-1.4\npayload").expect("write pdf");
+
+        let metadata = analyze_file(file.path()).expect("analyze file");
+        assert_eq!(metadata.mime_type, "application/pdf");
+    }
+
+    #[test]
+    fn detects_pdf_magic_bytes_with_utf8_bom() {
+        let file = NamedTempFile::new().expect("temp file");
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(b"%PDF-1.7\npayload");
+        std::fs::write(file.path(), bytes).expect("write pdf");
+
+        let metadata = analyze_file(file.path()).expect("analyze file");
+        assert_eq!(metadata.mime_type, "application/pdf");
     }
 
     #[test]
