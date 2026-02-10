@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use codex_protocol::models::ContentItem;
+use codex_utils_file::FileMetadata;
 use codex_utils_file::FileProcessingError;
 use codex_utils_file::analyze_file;
 use codex_utils_file::bytes_to_megabytes;
@@ -39,6 +40,42 @@ pub enum FileRoutingError {
     },
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum RoutingDecision {
+    Inline,
+    PreferUpload,
+    MustUpload,
+}
+
+fn decide_routing(
+    path: &Path,
+    metadata: &FileMetadata,
+    capabilities: &FileCapabilityConfig,
+) -> Result<RoutingDecision, FileRoutingError> {
+    let path_str = path.display().to_string();
+
+    if metadata.size_bytes > capabilities.max_upload_file_size {
+        return Err(FileRoutingError::UploadTooLarge {
+            path: path_str,
+            size_mb: bytes_to_megabytes(metadata.size_bytes),
+            max_mb: bytes_to_megabytes(capabilities.max_upload_file_size),
+        });
+    }
+
+    let always_inline_max = capabilities
+        .always_inline_max
+        .min(capabilities.max_inline_file_size);
+    if metadata.size_bytes <= always_inline_max {
+        return Ok(RoutingDecision::Inline);
+    }
+
+    if metadata.size_bytes <= capabilities.max_inline_file_size {
+        return Ok(RoutingDecision::PreferUpload);
+    }
+
+    Ok(RoutingDecision::MustUpload)
+}
+
 fn inline_content_item(path: &Path) -> Result<ContentItem, FileRoutingError> {
     let processed = encode_inline_cached(path)?;
     Ok(ContentItem::inline_file(
@@ -54,6 +91,58 @@ pub struct RoutedFileInput {
     pub uploaded: Option<UploadedFile>,
 }
 
+pub async fn maybe_upload_file(
+    path: &Path,
+    capabilities: &FileCapabilityConfig,
+    upload_service: Option<&dyn FileUploadService>,
+    client: &reqwest::Client,
+    api_key: &str,
+    base_url: &str,
+) -> Result<Option<(UploadedFile, FileMetadata)>, FileRoutingError> {
+    if !capabilities.supports_pdf {
+        return Err(FileRoutingError::PdfNotSupported);
+    }
+
+    let metadata = analyze_file(path)?;
+    match decide_routing(path, &metadata, capabilities)? {
+        RoutingDecision::Inline => Ok(None),
+        RoutingDecision::PreferUpload => {
+            let Some(uploader) = upload_service else {
+                return Ok(None);
+            };
+
+            match uploader
+                .upload_file(client, path, &metadata.mime_type, api_key, base_url)
+                .await
+            {
+                Ok(uploaded) => Ok(Some((uploaded, metadata))),
+                Err(error) => {
+                    warn!(
+                        path = %path.display(),
+                        %error,
+                        "file upload failed for middle-tier file; falling back to inline"
+                    );
+                    Ok(None)
+                }
+            }
+        }
+        RoutingDecision::MustUpload => {
+            let Some(uploader) = upload_service else {
+                return Err(FileRoutingError::InlineTooLargeWithoutUploader {
+                    path: path.display().to_string(),
+                    size_mb: bytes_to_megabytes(metadata.size_bytes),
+                    max_mb: bytes_to_megabytes(capabilities.max_inline_file_size),
+                });
+            };
+
+            let uploaded = uploader
+                .upload_file(client, path, &metadata.mime_type, api_key, base_url)
+                .await?;
+            Ok(Some((uploaded, metadata)))
+        }
+    }
+}
+
 pub async fn route_file_input_with_upload_metadata(
     path: &Path,
     capabilities: &FileCapabilityConfig,
@@ -67,77 +156,64 @@ pub async fn route_file_input_with_upload_metadata(
     }
 
     let metadata = analyze_file(path)?;
-    let path_str = path.display().to_string();
-
-    if metadata.size_bytes > capabilities.max_upload_file_size {
-        return Err(FileRoutingError::UploadTooLarge {
-            path: path_str,
-            size_mb: bytes_to_megabytes(metadata.size_bytes),
-            max_mb: bytes_to_megabytes(capabilities.max_upload_file_size),
-        });
-    }
-
-    let always_inline_max = capabilities
-        .always_inline_max
-        .min(capabilities.max_inline_file_size);
-    if metadata.size_bytes <= always_inline_max {
-        return Ok(RoutedFileInput {
+    match decide_routing(path, &metadata, capabilities)? {
+        RoutingDecision::Inline => Ok(RoutedFileInput {
             content_item: inline_content_item(path)?,
             uploaded: None,
-        });
-    }
-
-    if metadata.size_bytes <= capabilities.max_inline_file_size {
-        if let Some(uploader) = upload_service {
-            match uploader
-                .upload_file(client, path, &metadata.mime_type, api_key, base_url)
-                .await
-            {
-                Ok(uploaded) => {
-                    return Ok(RoutedFileInput {
-                        content_item: ContentItem::file_ref(
-                            uploaded.file_id.clone(),
-                            metadata.mime_type,
-                            Some(metadata.filename),
-                        ),
-                        uploaded: Some(uploaded),
-                    });
-                }
-                Err(error) => {
-                    warn!(
-                        path = %path.display(),
-                        %error,
-                        "file upload failed for middle-tier file; falling back to inline"
-                    );
+        }),
+        RoutingDecision::PreferUpload => {
+            if let Some(uploader) = upload_service {
+                match uploader
+                    .upload_file(client, path, &metadata.mime_type, api_key, base_url)
+                    .await
+                {
+                    Ok(uploaded) => {
+                        return Ok(RoutedFileInput {
+                            content_item: ContentItem::file_ref(
+                                uploaded.file_id.clone(),
+                                metadata.mime_type,
+                                Some(metadata.filename),
+                            ),
+                            uploaded: Some(uploaded),
+                        });
+                    }
+                    Err(error) => {
+                        warn!(
+                            path = %path.display(),
+                            %error,
+                            "file upload failed for middle-tier file; falling back to inline"
+                        );
+                    }
                 }
             }
+
+            Ok(RoutedFileInput {
+                content_item: inline_content_item(path)?,
+                uploaded: None,
+            })
         }
+        RoutingDecision::MustUpload => {
+            let Some(uploader) = upload_service else {
+                return Err(FileRoutingError::InlineTooLargeWithoutUploader {
+                    path: path.display().to_string(),
+                    size_mb: bytes_to_megabytes(metadata.size_bytes),
+                    max_mb: bytes_to_megabytes(capabilities.max_inline_file_size),
+                });
+            };
 
-        return Ok(RoutedFileInput {
-            content_item: inline_content_item(path)?,
-            uploaded: None,
-        });
+            let uploaded = uploader
+                .upload_file(client, path, &metadata.mime_type, api_key, base_url)
+                .await?;
+            Ok(RoutedFileInput {
+                content_item: ContentItem::file_ref(
+                    uploaded.file_id.clone(),
+                    metadata.mime_type,
+                    Some(metadata.filename),
+                ),
+                uploaded: Some(uploaded),
+            })
+        }
     }
-
-    if let Some(uploader) = upload_service {
-        let uploaded = uploader
-            .upload_file(client, path, &metadata.mime_type, api_key, base_url)
-            .await?;
-        return Ok(RoutedFileInput {
-            content_item: ContentItem::file_ref(
-                uploaded.file_id.clone(),
-                metadata.mime_type,
-                Some(metadata.filename),
-            ),
-            uploaded: Some(uploaded),
-        });
-    }
-
-    Err(FileRoutingError::InlineTooLargeWithoutUploader {
-        path: path_str,
-        size_mb: bytes_to_megabytes(metadata.size_bytes),
-        max_mb: bytes_to_megabytes(capabilities.max_inline_file_size),
-    })
 }
 
 pub async fn route_file_input(
@@ -289,6 +365,32 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn maybe_upload_file_tier1_small_file_skips_upload() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = create_pdf_file(&dir, "small.pdf", 12);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let uploader = MockUploadService {
+            calls: Arc::clone(&calls),
+            outcome: MockOutcome::Success("file-1".to_string()),
+        };
+
+        let client = reqwest::Client::new();
+        let uploaded = maybe_upload_file(
+            &path,
+            &capabilities(),
+            Some(&uploader),
+            &client,
+            "api-key",
+            "https://example.test",
+        )
+        .await
+        .expect("maybe upload");
+
+        assert_eq!(uploaded, None);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn route_rejects_provider_without_pdf_support() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = create_pdf_file(&dir, "small.pdf", 12);
@@ -306,6 +408,95 @@ mod tests {
         .expect_err("routing should fail");
 
         assert!(matches!(error, FileRoutingError::PdfNotSupported));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn maybe_upload_file_prefers_upload() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = create_pdf_file(&dir, "middle.pdf", 32);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let uploader = MockUploadService {
+            calls: Arc::clone(&calls),
+            outcome: MockOutcome::Success("file-tier2".to_string()),
+        };
+
+        let client = reqwest::Client::new();
+        let uploaded = maybe_upload_file(
+            &path,
+            &capabilities(),
+            Some(&uploader),
+            &client,
+            "api-key",
+            "https://example.test",
+        )
+        .await
+        .expect("maybe upload");
+
+        let Some((uploaded, metadata)) = uploaded else {
+            panic!("expected upload result");
+        };
+        assert_eq!(uploaded.file_id, "file-tier2");
+        assert_eq!(uploaded.source_path, path);
+        assert_eq!(metadata.mime_type, "application/pdf");
+        assert_eq!(metadata.filename, "middle.pdf");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn maybe_upload_file_upload_failure_falls_back_to_inline() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = create_pdf_file(&dir, "middle.pdf", 32);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let uploader = MockUploadService {
+            calls: Arc::clone(&calls),
+            outcome: MockOutcome::Failure,
+        };
+
+        let client = reqwest::Client::new();
+        let uploaded = maybe_upload_file(
+            &path,
+            &capabilities(),
+            Some(&uploader),
+            &client,
+            "api-key",
+            "https://example.test",
+        )
+        .await
+        .expect("maybe upload");
+
+        assert_eq!(uploaded, None);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn maybe_upload_file_tier3_large_file_requires_upload() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = create_pdf_file(&dir, "large.pdf", 96);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let uploader = MockUploadService {
+            calls: Arc::clone(&calls),
+            outcome: MockOutcome::Success("file-tier3".to_string()),
+        };
+
+        let client = reqwest::Client::new();
+        let uploaded = maybe_upload_file(
+            &path,
+            &capabilities(),
+            Some(&uploader),
+            &client,
+            "api-key",
+            "https://example.test",
+        )
+        .await
+        .expect("maybe upload");
+
+        let Some((uploaded, metadata)) = uploaded else {
+            panic!("expected upload result");
+        };
+        assert_eq!(uploaded.file_id, "file-tier3");
+        assert_eq!(uploaded.source_path, path);
+        assert_eq!(metadata.filename, "large.pdf");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test(flavor = "multi_thread")]

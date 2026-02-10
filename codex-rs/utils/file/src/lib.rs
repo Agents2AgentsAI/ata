@@ -52,6 +52,13 @@ pub fn bytes_to_megabytes(bytes: u64) -> f64 {
     bytes as f64 / (1024.0 * 1024.0)
 }
 
+pub fn file_name_or_default(path: &Path, default_name: &str) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| default_name.to_string())
+}
+
 /// Processed file data ready for model input.
 ///
 /// This stores only base64 data (not raw bytes) to avoid duplicating memory.
@@ -102,10 +109,7 @@ pub fn analyze_file(path: &Path) -> Result<FileMetadata, FileProcessingError> {
     };
 
     let mime_type = detect_mime(&buf[..bytes_read], path)?;
-    let filename = path
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| "file".to_string());
+    let filename = file_name_or_default(path, "file");
 
     Ok(FileMetadata {
         mime_type,
@@ -189,10 +193,7 @@ pub fn encode_inline_cached(path: &Path) -> Result<Arc<ProcessedFile>, FileProce
             source,
         })?;
 
-    let filename = path
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| "file".to_string());
+    let filename = file_name_or_default(path, "file");
 
     let processed = Arc::new(ProcessedFile {
         base64: BASE64_STANDARD.encode(bytes),
@@ -244,6 +245,15 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use super::*;
+
+    #[test]
+    fn resolves_filename_or_default() {
+        let resolved = file_name_or_default(Path::new("/tmp/report.pdf"), "fallback.pdf");
+        assert_eq!(resolved, "report.pdf");
+
+        let fallback = file_name_or_default(Path::new("/"), "fallback.pdf");
+        assert_eq!(fallback, "fallback.pdf");
+    }
 
     fn write_pdf(path: &Path, body: &[u8]) -> std::io::Result<()> {
         let mut bytes = b"%PDF-1.4\n".to_vec();

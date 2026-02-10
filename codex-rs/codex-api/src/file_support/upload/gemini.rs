@@ -12,11 +12,11 @@ use super::GeminiFileResponse;
 use super::UploadedFile;
 use super::build_file_part;
 use super::default_upload_retry_config;
-use super::file_name_or_default;
 use super::map_transport_error;
 use super::read_upload_response;
 use super::run_with_upload_retry;
 use super::upload_url;
+use codex_utils_file::file_name_or_default;
 
 const GEMINI_API_VERSION: &str = "v1beta";
 // Cap processing wait to roughly 10 minutes worst-case
@@ -84,7 +84,7 @@ impl FileUploadService for GeminiFileUpload {
         let filename = file_name_or_default(file_path, "file.pdf");
         let metadata_json = serde_json::json!({
             "file": {
-                "display_name": filename.clone(),
+                "displayName": filename.clone(),
             }
         });
         let retry = default_upload_retry_config();

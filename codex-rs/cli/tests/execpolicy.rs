@@ -1,9 +1,17 @@
 use std::fs;
+use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use assert_cmd::Command;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
+
+static ATA_BIN: OnceLock<PathBuf> = OnceLock::new();
+
+fn ata_bin() -> &'static PathBuf {
+    ATA_BIN.get_or_init(|| codex_utils_cargo_bin::cargo_bin("ata").unwrap())
+}
 
 #[test]
 fn execpolicy_check_matches_expected_json() -> Result<(), Box<dyn std::error::Error>> {
@@ -24,7 +32,7 @@ prefix_rule(
 "#,
     )?;
 
-    let output = Command::new(codex_utils_cargo_bin::cargo_bin("ata")?)
+    let output = Command::new(ata_bin())
         .env("CODEX_HOME", codex_home.path())
         .args([
             "execpolicy",
@@ -81,7 +89,7 @@ prefix_rule(
 "#,
     )?;
 
-    let output = Command::new(codex_utils_cargo_bin::cargo_bin("ata")?)
+    let output = Command::new(ata_bin())
         .env("CODEX_HOME", codex_home.path())
         .args([
             "execpolicy",

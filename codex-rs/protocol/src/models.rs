@@ -729,15 +729,6 @@ fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> Co
     }
 }
 
-fn local_file_error_placeholder(
-    path: &std::path::Path,
-    error: impl std::fmt::Display,
-) -> ContentItem {
-    ContentItem::InputText {
-        text: format!("Codex cannot attach file at `{}`: {error}.", path.display()),
-    }
-}
-
 pub fn local_image_content_items_with_label_number(
     path: &std::path::Path,
     label_number: Option<usize>,
@@ -800,9 +791,9 @@ pub fn local_file_content_items(path: &Path, label_number: Option<usize>) -> Vec
             tracing::warn!(
                 path = %path.display(),
                 %error,
-                "local file encoding failed; adding placeholder text"
+                "local file encoding failed; dropping attachment"
             );
-            vec![local_file_error_placeholder(path, &error)]
+            Vec::new()
         }
     }
 }
@@ -2105,27 +2096,17 @@ mod tests {
     }
 
     #[test]
-    fn local_file_read_error_adds_placeholder() {
+    fn local_file_read_error_drops_attachment() {
         let dir = tempdir().expect("temp dir");
         let missing = dir.path().join("missing-report.pdf");
         let item = ResponseInputItem::from(vec![UserInput::LocalFile { path: missing }]);
 
         match item {
             ResponseInputItem::Message { content, .. } => {
-                assert_eq!(content.len(), 1);
-                match &content[0] {
-                    ContentItem::InputText { text } => {
-                        assert!(
-                            text.contains("Codex cannot attach file"),
-                            "placeholder should describe file attach failure: {text}"
-                        );
-                        assert!(
-                            text.contains("missing-report.pdf"),
-                            "placeholder should include path: {text}"
-                        );
-                    }
-                    other => panic!("expected placeholder text but found {other:?}"),
-                }
+                assert!(
+                    content.is_empty(),
+                    "local file attachment errors should not send placeholder content to the model"
+                );
             }
             other => panic!("expected message response but got {other:?}"),
         }
