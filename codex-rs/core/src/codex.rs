@@ -7243,6 +7243,181 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resolve_file_inputs_for_uploads_dedupes_orphan_cleanup_across_three_files() {
+        let codex_home = tempfile::tempdir().expect("codex home");
+        login_with_provider_api_key(
+            codex_home.path(),
+            PROVIDER_OPENAI,
+            "sk-test-key",
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store api key");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/files"))
+            .and(header("authorization", "Bearer sk-test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "file-123",
+                "object": "file",
+                "filename": "uploaded.pdf",
+                "purpose": "user_data",
+                "bytes": 10
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        // `delete_uploaded_files_best_effort` should only delete each file id once even if the
+        // upstream upload endpoint returned duplicates.
+        Mock::given(method("DELETE"))
+            .and(path("/v1/files/file-123"))
+            .and(header("authorization", "Bearer sk-test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "file-123",
+                "object": "file",
+                "deleted": true
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut provider = ModelProviderInfo::create_openai_provider();
+        provider.base_url = Some(format!("{}/v1", server.uri()));
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let first = dir.path().join("first.pdf");
+        let second = dir.path().join("second.pdf");
+        for path in [&first, &second] {
+            std::fs::write(path, b"%PDF-1.4\n").expect("write pdf header");
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .expect("open pdf")
+                .set_len(3 * 1024 * 1024)
+                .expect("grow file");
+        }
+
+        let too_large = dir.path().join("too_large.pdf");
+        std::fs::write(&too_large, b"%PDF-1.4\n").expect("write pdf header");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&too_large)
+            .expect("open pdf")
+            .set_len(codex_utils_file::MAX_FILE_SIZE + 1)
+            .expect("grow file");
+
+        let mut inputs = vec![
+            UserInput::LocalFile { path: first },
+            UserInput::LocalFile { path: second },
+            UserInput::LocalFile { path: too_large },
+        ];
+
+        let http_client = reqwest::Client::new();
+        let err = resolve_file_inputs_for_uploads(&mut inputs, &provider, &config, &http_client)
+            .await
+            .expect_err("oversized file should fail routing");
+        assert!(matches!(
+            err,
+            FileInputPreparationError::Routing(FileRoutingError::Processing(
+                FileProcessingError::TooLarge { .. }
+            ))
+        ));
+    }
+
+    #[tokio::test]
+    async fn refresh_uploaded_file_references_reuploads_near_expiry_and_rewrites_history() {
+        let (sess, mut turn_context) = make_session_and_context().await;
+        login_with_provider_api_key(
+            turn_context.config.codex_home.as_path(),
+            PROVIDER_OPENAI,
+            "sk-test-key",
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store api key");
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/files"))
+            .and(header("authorization", "Bearer sk-test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "file-999",
+                "object": "file",
+                "filename": "report.pdf",
+                "purpose": "user_data",
+                "bytes": 10
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        turn_context.provider = ModelProviderInfo::create_openai_provider();
+        turn_context.provider.base_url = Some(format!("{}/v1", server.uri()));
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("report.pdf");
+        std::fs::write(&path, b"%PDF-1.4\npayload").expect("write pdf");
+
+        let old_file_id = "file-old";
+        {
+            let mut state = sess.state.lock().await;
+            state.replace_history(vec![ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputFile {
+                    file_data: None,
+                    file_id: Some(old_file_id.to_string()),
+                    mime_type: "application/pdf".to_string(),
+                    filename: Some("report.pdf".to_string()),
+                }],
+                end_turn: None,
+                phase: None,
+            }]);
+        }
+        {
+            let mut cache = sess.file_reference_cache.lock().await;
+            cache.record(codex_api::file_support::UploadedFile {
+                file_id: old_file_id.to_string(),
+                provider: "openai".to_string(),
+                expires_at: Some(std::time::SystemTime::now() + StdDuration::from_secs(30)),
+                source_path: path,
+            });
+        }
+
+        refresh_uploaded_file_references(&sess, &turn_context)
+            .await
+            .expect("refresh should succeed");
+
+        {
+            let state = sess.state.lock().await;
+            assert_eq!(
+                state.history.raw_items(),
+                &[ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputFile {
+                        file_data: None,
+                        file_id: Some("file-999".to_string()),
+                        mime_type: "application/pdf".to_string(),
+                        filename: Some("report.pdf".to_string()),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                }]
+            );
+        }
+        {
+            let cache = sess.file_reference_cache.lock().await;
+            assert!(!cache.contains(old_file_id));
+            assert!(cache.contains("file-999"));
+        }
+    }
+
+    #[tokio::test]
     async fn steer_input_requires_active_turn() {
         let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
         let input = vec![UserInput::Text {

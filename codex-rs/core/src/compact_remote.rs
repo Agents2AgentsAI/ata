@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::compact::sanitize_compaction_inline_files;
 use crate::context_manager::ContextManager;
 use crate::context_manager::is_codex_generated_item;
 use crate::error::Result as CodexResult;
@@ -82,7 +83,7 @@ async fn run_remote_compact_task_inner_impl(
         .collect();
 
     let prompt = Prompt {
-        input: history.for_prompt(),
+        input: sanitize_compaction_inline_files(history.for_prompt()),
         tools: vec![],
         parallel_tool_calls: false,
         base_instructions,
