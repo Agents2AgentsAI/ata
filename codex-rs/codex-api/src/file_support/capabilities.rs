@@ -23,24 +23,21 @@ pub fn file_capabilities_for(provider_id: &str) -> FileCapabilityConfig {
     match provider_id {
         "openai" => FileCapabilityConfig {
             supports_pdf: true,
-            always_inline_max: 2 * 1024 * 1024,
             max_inline_file_size: 50 * 1024 * 1024,
             max_upload_file_size: 512 * 1024 * 1024,
             max_inline_payload_bytes: 50 * 1024 * 1024,
+            ..FileCapabilityConfig::default()
         },
         "anthropic" => FileCapabilityConfig {
             supports_pdf: true,
-            always_inline_max: 2 * 1024 * 1024,
             max_inline_file_size: 24 * 1024 * 1024,
             max_upload_file_size: 500 * 1024 * 1024,
             max_inline_payload_bytes: 32 * 1024 * 1024,
+            ..FileCapabilityConfig::default()
         },
         "gemini" => FileCapabilityConfig {
             supports_pdf: true,
-            always_inline_max: 2 * 1024 * 1024,
-            max_inline_file_size: 20 * 1024 * 1024,
-            max_upload_file_size: 50 * 1024 * 1024,
-            max_inline_payload_bytes: 20 * 1024 * 1024,
+            ..FileCapabilityConfig::default()
         },
         _ => FileCapabilityConfig::default(),
     }

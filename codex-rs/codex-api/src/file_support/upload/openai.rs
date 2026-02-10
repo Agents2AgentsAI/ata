@@ -5,7 +5,12 @@ use super::FileUploadError;
 use super::FileUploadService;
 use super::OpenAiFileUploadResponse;
 use super::UploadedFile;
+use super::build_file_part;
+use super::default_upload_retry_config;
 use super::file_name_or_default;
+use super::map_transport_error;
+use super::read_upload_response;
+use super::run_with_upload_retry;
 use super::upload_url;
 
 pub struct OpenAiFileUpload;
@@ -22,43 +27,30 @@ impl FileUploadService for OpenAiFileUpload {
     ) -> Result<UploadedFile, FileUploadError> {
         let url = upload_url(base_url, "/v1/files");
         let filename = file_name_or_default(file_path, "file.pdf");
-        let mime_type = if mime_type.is_empty() {
-            "application/pdf"
-        } else {
-            mime_type
-        };
+        let retry = default_upload_retry_config();
 
-        let file = tokio::fs::File::open(file_path).await?;
-        let stream = tokio_util::io::ReaderStream::new(file);
-        let body = reqwest::Body::wrap_stream(stream);
-        let part = reqwest::multipart::Part::stream(body)
-            .file_name(filename)
-            .mime_str(mime_type)
-            .map_err(|error| FileUploadError::Request(error.to_string()))?;
-        let form = reqwest::multipart::Form::new()
-            .text("purpose", "user_data")
-            .part("file", part);
+        let parsed: OpenAiFileUploadResponse = run_with_upload_retry(&retry, |_| {
+            let filename = filename.clone();
+            let url = url.clone();
+            async move {
+                let part = build_file_part(file_path, filename, mime_type).await?;
+                let form = reqwest::multipart::Form::new()
+                    .text("purpose", "user_data")
+                    .part("file", part);
 
-        let response = client
-            .post(url)
-            .header("Authorization", format!("Bearer {api_key}"))
-            .timeout(DEFAULT_UPLOAD_TIMEOUT)
-            .multipart(form)
-            .send()
-            .await
-            .map_err(|error| FileUploadError::Request(error.to_string()))?;
+                let response = client
+                    .post(url)
+                    .header("Authorization", format!("Bearer {api_key}"))
+                    .timeout(DEFAULT_UPLOAD_TIMEOUT)
+                    .multipart(form)
+                    .send()
+                    .await
+                    .map_err(map_transport_error)?;
 
-        let status = response.status().as_u16();
-        let body = response
-            .text()
-            .await
-            .map_err(|error| FileUploadError::Request(error.to_string()))?;
-        if status >= 400 {
-            return Err(FileUploadError::Response { status, body });
-        }
-
-        let parsed: OpenAiFileUploadResponse = serde_json::from_str(&body)
-            .map_err(|error| FileUploadError::Request(error.to_string()))?;
+                read_upload_response(response).await
+            }
+        })
+        .await?;
 
         Ok(UploadedFile {
             file_id: parsed.id,

@@ -603,9 +603,7 @@ impl ModelClientSession {
     fn build_responses_request(prompt: &Prompt) -> Result<ApiPrompt> {
         let instructions = prompt.base_instructions.text.clone();
         let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
-        let mut api_prompt = build_api_prompt(prompt, instructions, tools_json);
-        codex_api::file_support::wrap_responses_input_file_data_uris(&mut api_prompt.input);
-        Ok(api_prompt)
+        Ok(build_api_prompt(prompt, instructions, tools_json))
     }
 
     #[allow(clippy::too_many_arguments)]

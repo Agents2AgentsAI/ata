@@ -73,6 +73,6 @@ pub trait ProviderAdapter: Send + Sync {
     /// Formats the API key for use in the auth header.
     /// Defaults to Bearer token format.
     fn format_auth_header(&self, api_key: &str) -> String {
-        format!("Bearer {}", api_key)
+        format!("Bearer {api_key}")
     }
 }

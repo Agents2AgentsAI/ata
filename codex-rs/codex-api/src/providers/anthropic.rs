@@ -9,6 +9,7 @@ use http::HeaderName;
 use http::HeaderValue;
 use serde_json::Value;
 use serde_json::json;
+use tracing::warn;
 
 use crate::error::ApiError;
 use crate::file_support::parse_data_url;
@@ -393,6 +394,10 @@ fn build_anthropic_messages(input: &[Value]) -> Result<Vec<Value>, ApiError> {
                                             "data": data
                                         }
                                     }));
+                                } else {
+                                    warn!(
+                                        "input_file block has neither file_data nor file_id; skipping"
+                                    );
                                 }
                             }
                             _ => {}
