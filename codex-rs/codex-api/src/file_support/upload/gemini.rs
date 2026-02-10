@@ -14,6 +14,7 @@ use super::build_file_part;
 use super::default_upload_retry_config;
 use super::map_transport_error;
 use super::read_upload_response;
+use super::read_upload_response_empty;
 use super::run_with_upload_retry;
 use super::upload_url;
 use codex_utils_file::file_name_or_default;
@@ -137,6 +138,41 @@ impl FileUploadService for GeminiFileUpload {
             source_path: file_path.to_path_buf(),
         })
     }
+
+    async fn delete_file(
+        &self,
+        client: &reqwest::Client,
+        file_id: &str,
+        api_key: &str,
+        base_url: &str,
+    ) -> Result<(), FileUploadError> {
+        let url = if file_id.starts_with("http://") || file_id.starts_with("https://") {
+            file_id.to_string()
+        } else {
+            let normalized_file_name = file_id.trim_start_matches('/');
+            upload_url(
+                base_url,
+                &format!("/{GEMINI_API_VERSION}/{normalized_file_name}"),
+            )
+        };
+        let retry = default_upload_retry_config();
+
+        run_with_upload_retry(&retry, |_| {
+            let url = url.clone();
+            async move {
+                let response = client
+                    .delete(&url)
+                    .header("x-goog-api-key", api_key)
+                    .timeout(DEFAULT_UPLOAD_TIMEOUT)
+                    .send()
+                    .await
+                    .map_err(map_transport_error)?;
+
+                read_upload_response_empty(response).await
+            }
+        })
+        .await
+    }
 }
 
 fn parse_expiration_time(expiration_time: Option<&str>) -> Option<SystemTime> {
@@ -170,10 +206,16 @@ fn validate_file_uri(file_uri: &str) -> Result<(), FileUploadError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
     use pretty_assertions::assert_eq;
     use tempfile::NamedTempFile;
     use wiremock::Mock;
     use wiremock::MockServer;
+    use wiremock::Request;
+    use wiremock::Respond;
     use wiremock::ResponseTemplate;
     use wiremock::matchers::header;
     use wiremock::matchers::method;
@@ -262,5 +304,90 @@ mod tests {
         assert_eq!(uploaded.provider, "gemini");
         assert_eq!(uploaded.source_path, file.path().to_path_buf());
         assert!(uploaded.expires_at.is_some());
+    }
+
+    struct ProcessingThenActive {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl Respond for ProcessingThenActive {
+        fn respond(&self, _request: &Request) -> ResponseTemplate {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call == 0 {
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "file": {
+                        "name": "files/abc123",
+                        "uri": null,
+                        "state": "PROCESSING",
+                        "expirationTime": null,
+                    }
+                }))
+            } else {
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "file": {
+                        "name": "files/abc123",
+                        "uri": "https://generativelanguage.googleapis.com/v1beta/files/abc123",
+                        "state": "ACTIVE",
+                        "expirationTime": "2026-01-01T00:00:00Z"
+                    }
+                }))
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn upload_file_polls_processing_state_until_active() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/upload/v1beta/files"))
+            .and(header("x-goog-api-key", "test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "file": {
+                    "name": "files/abc123",
+                    "uri": null,
+                    "state": "PROCESSING",
+                    "expirationTime": null
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        Mock::given(method("GET"))
+            .and(path("/v1beta/files/abc123"))
+            .and(header("x-goog-api-key", "test-key"))
+            .respond_with(ProcessingThenActive {
+                calls: Arc::clone(&calls),
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let file = NamedTempFile::new().expect("temp file");
+        std::fs::write(file.path(), b"%PDF-1.4\npayload").expect("write pdf");
+
+        let path = file.path().to_path_buf();
+        let base_url = server.uri();
+        let client = reqwest::Client::new();
+
+        let handle = tokio::spawn(async move {
+            GeminiFileUpload
+                .upload_file(&client, &path, "application/pdf", "test-key", &base_url)
+                .await
+        });
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(1)).await;
+
+        let uploaded = handle
+            .await
+            .expect("upload task join")
+            .expect("upload should succeed");
+
+        assert_eq!(
+            uploaded.file_id,
+            "https://generativelanguage.googleapis.com/v1beta/files/abc123"
+        );
     }
 }

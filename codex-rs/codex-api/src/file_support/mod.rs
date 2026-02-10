@@ -18,6 +18,7 @@ pub use errors::UserFacingMappedError;
 pub use errors::map_user_facing_file_error_from_http_body;
 pub use errors::map_user_facing_file_error_from_message;
 pub use responses::wrap_responses_input_file_data_uris;
+pub use responses::wrapped_responses_input_file_data_uris;
 pub use routing::FileRoutingError;
 pub use routing::RoutedFileInput;
 pub use routing::maybe_upload_file;

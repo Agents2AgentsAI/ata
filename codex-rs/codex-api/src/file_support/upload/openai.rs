@@ -9,6 +9,7 @@ use super::build_file_part;
 use super::default_upload_retry_config;
 use super::map_transport_error;
 use super::read_upload_response;
+use super::read_upload_response_empty;
 use super::run_with_upload_retry;
 use super::upload_url;
 use codex_utils_file::file_name_or_default;
@@ -58,6 +59,33 @@ impl FileUploadService for OpenAiFileUpload {
             expires_at: None,
             source_path: file_path.to_path_buf(),
         })
+    }
+
+    async fn delete_file(
+        &self,
+        client: &reqwest::Client,
+        file_id: &str,
+        api_key: &str,
+        base_url: &str,
+    ) -> Result<(), FileUploadError> {
+        let url = upload_url(base_url, &format!("/v1/files/{file_id}"));
+        let retry = default_upload_retry_config();
+
+        run_with_upload_retry(&retry, |_| {
+            let url = url.clone();
+            async move {
+                let response = client
+                    .delete(url)
+                    .header("Authorization", format!("Bearer {api_key}"))
+                    .timeout(DEFAULT_UPLOAD_TIMEOUT)
+                    .send()
+                    .await
+                    .map_err(map_transport_error)?;
+
+                read_upload_response_empty(response).await
+            }
+        })
+        .await
     }
 }
 
