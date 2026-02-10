@@ -272,7 +272,7 @@ mod tests {
             content: vec![codex_protocol::models::ContentItem::InputFile {
                 file_data: Some("JVBERi0xLjQ=".into()),
                 file_id: None,
-                mime_type: "application/pdf".into(),
+                mime_type: Some("application/pdf".into()),
                 filename: Some("report.pdf".into()),
             }],
             end_turn: None,

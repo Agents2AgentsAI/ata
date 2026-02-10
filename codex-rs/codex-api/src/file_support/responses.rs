@@ -3,7 +3,13 @@ use codex_protocol::models::ResponseItem;
 
 use crate::file_support::build_data_url;
 
-/// Wrap raw base64 `input_file.file_data` payloads in a `data:<mime>;base64,` URI.
+/// Wrap raw base64 `input_file.file_data` payloads in a `data:<mime>;base64,` URI and strip the
+/// `mime_type` field so it is not serialized in the outgoing request.
+///
+/// The OpenAI Responses API does not accept `mime_type` on `input_file` blocks — the MIME type
+/// must be embedded exclusively in the `file_data` data-URI. Provider adapters for Anthropic and
+/// Gemini read `mime_type` from the serialized JSON before this function runs, so they are
+/// unaffected.
 ///
 /// This mutates `input` in-place. Callers should generally operate on a cloned request payload,
 /// not persisted conversation history, since this transformation is permanent.
@@ -12,14 +18,19 @@ pub fn wrap_responses_input_file_data_uris(input: &mut [ResponseItem]) {
         if let ResponseItem::Message { content, .. } = item {
             for content_item in content {
                 if let ContentItem::InputFile {
-                    file_data: Some(file_data),
+                    file_data,
                     mime_type,
                     ..
                 } = content_item
-                    && !file_data.starts_with("data:")
                 {
-                    let wrapped = build_data_url(mime_type, file_data);
-                    *file_data = wrapped;
+                    if let Some(data) = file_data {
+                        if !data.starts_with("data:") {
+                            let mime = mime_type.as_deref().unwrap_or("application/pdf");
+                            *data = build_data_url(mime, data);
+                        }
+                    }
+                    // Strip mime_type so it is not serialized for the OpenAI Responses API.
+                    *mime_type = None;
                 }
             }
         }
@@ -47,7 +58,7 @@ mod tests {
             content: vec![ContentItem::InputFile {
                 file_data: Some("JVBERi0xLjQ=".to_string()),
                 file_id: None,
-                mime_type: "application/pdf".to_string(),
+                mime_type: Some("application/pdf".to_string()),
                 filename: Some("report.pdf".to_string()),
             }],
             end_turn: None,
@@ -64,7 +75,7 @@ mod tests {
                 content: vec![ContentItem::InputFile {
                     file_data: Some("data:application/pdf;base64,JVBERi0xLjQ=".to_string()),
                     file_id: None,
-                    mime_type: "application/pdf".to_string(),
+                    mime_type: None,
                     filename: Some("report.pdf".to_string()),
                 }],
                 end_turn: None,
@@ -81,7 +92,7 @@ mod tests {
             content: vec![ContentItem::InputFile {
                 file_data: None,
                 file_id: Some("file_123".to_string()),
-                mime_type: "application/pdf".to_string(),
+                mime_type: Some("application/pdf".to_string()),
                 filename: Some("report.pdf".to_string()),
             }],
             end_turn: None,
@@ -98,7 +109,7 @@ mod tests {
                 content: vec![ContentItem::InputFile {
                     file_data: None,
                     file_id: Some("file_123".to_string()),
-                    mime_type: "application/pdf".to_string(),
+                    mime_type: None,
                     filename: Some("report.pdf".to_string()),
                 }],
                 end_turn: None,
@@ -115,7 +126,7 @@ mod tests {
             content: vec![ContentItem::InputFile {
                 file_data: Some("JVBERi0xLjQ=".to_string()),
                 file_id: None,
-                mime_type: "application/pdf".to_string(),
+                mime_type: Some("application/pdf".to_string()),
                 filename: Some("report.pdf".to_string()),
             }],
             end_turn: None,
@@ -137,7 +148,7 @@ mod tests {
             content: vec![ContentItem::InputFile {
                 file_data: Some("JVBERi0xLjQ=".to_string()),
                 file_id: None,
-                mime_type: "application/pdf".to_string(),
+                mime_type: Some("application/pdf".to_string()),
                 filename: Some("report.pdf".to_string()),
             }],
             end_turn: None,
@@ -154,7 +165,7 @@ mod tests {
                 content: vec![ContentItem::InputFile {
                     file_data: Some("JVBERi0xLjQ=".to_string()),
                     file_id: None,
-                    mime_type: "application/pdf".to_string(),
+                    mime_type: Some("application/pdf".to_string()),
                     filename: Some("report.pdf".to_string()),
                 }],
                 end_turn: None,
@@ -169,7 +180,7 @@ mod tests {
                 content: vec![ContentItem::InputFile {
                     file_data: Some("data:application/pdf;base64,JVBERi0xLjQ=".to_string()),
                     file_id: None,
-                    mime_type: "application/pdf".to_string(),
+                    mime_type: None,
                     filename: Some("report.pdf".to_string()),
                 }],
                 end_turn: None,

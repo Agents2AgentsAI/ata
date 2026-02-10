@@ -317,7 +317,7 @@ mod tests {
                 ContentItem::InputFile {
                     file_data: Some("JVBERi0xLjQ=".to_string()),
                     file_id: None,
-                    mime_type: "application/pdf".to_string(),
+                    mime_type: Some("application/pdf".to_string()),
                     filename: Some("report.pdf".to_string()),
                 },
                 ContentItem::InputText {

@@ -84,7 +84,12 @@ pub enum ContentItem {
         file_data: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         file_id: Option<String>,
-        mime_type: String,
+        /// MIME type for the file. Stored internally for provider adapters (Anthropic, Gemini)
+        /// that need it when converting to their native format. Skipped during serialization
+        /// because the OpenAI Responses API does not accept this field on `input_file` blocks;
+        /// the MIME type is already embedded in the `file_data` data-URI.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mime_type: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         filename: Option<String>,
     },
@@ -105,7 +110,7 @@ enum UncheckedContentItem {
     InputFile {
         file_data: Option<String>,
         file_id: Option<String>,
-        mime_type: String,
+        mime_type: Option<String>,
         filename: Option<String>,
     },
     OutputText {
@@ -152,7 +157,7 @@ impl ContentItem {
         Self::InputFile {
             file_data: Some(base64_data),
             file_id: None,
-            mime_type,
+            mime_type: Some(mime_type),
             filename,
         }
     }
@@ -161,7 +166,7 @@ impl ContentItem {
         Self::InputFile {
             file_data: None,
             file_id: Some(file_id),
-            mime_type,
+            mime_type: Some(mime_type),
             filename,
         }
     }
@@ -1952,7 +1957,7 @@ mod tests {
             } => {
                 assert_eq!(file_data, Some("JVBERi0xLjQ=".to_string()));
                 assert_eq!(file_id, None);
-                assert_eq!(mime_type, "application/pdf".to_string());
+                assert_eq!(mime_type, Some("application/pdf".to_string()));
                 assert_eq!(filename, Some("report.pdf".to_string()));
             }
             other => panic!("expected input file but found {other:?}"),
@@ -1976,7 +1981,7 @@ mod tests {
             } => {
                 assert_eq!(file_data, None);
                 assert_eq!(file_id, Some("file-123".to_string()));
-                assert_eq!(mime_type, "application/pdf".to_string());
+                assert_eq!(mime_type, Some("application/pdf".to_string()));
                 assert_eq!(filename, Some("report.pdf".to_string()));
             }
             other => panic!("expected input file but found {other:?}"),
@@ -2084,7 +2089,7 @@ mod tests {
                     } => {
                         assert!(file_data.is_some(), "inline file should include file_data");
                         assert_eq!(file_id, &None);
-                        assert_eq!(mime_type, "application/pdf");
+                        assert_eq!(mime_type, &Some("application/pdf".to_string()));
                         assert_eq!(filename, &Some("report.pdf".to_string()));
                     }
                     other => panic!("expected input file content but found {other:?}"),
@@ -2151,7 +2156,7 @@ mod tests {
                         ContentItem::InputFile {
                             file_data: None,
                             file_id: Some("file-abc".to_string()),
-                            mime_type: "application/pdf".to_string(),
+                            mime_type: Some("application/pdf".to_string()),
                             filename: Some("report.pdf".to_string()),
                         },
                         ContentItem::InputText {

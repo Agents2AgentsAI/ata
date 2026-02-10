@@ -293,7 +293,7 @@ fn sanitize_compaction_message_content(
                     sanitized.push(ContentItem::InputText {
                         text: file_placeholder_text(
                             filename.as_deref(),
-                            &mime_type,
+                            mime_type.as_deref().unwrap_or("application/octet-stream"),
                             file_data.as_deref(),
                         ),
                     });
@@ -651,7 +651,7 @@ mod tests {
             content: vec![ContentItem::InputFile {
                 file_data: Some("JVBERi0xLjQ=".to_string()),
                 file_id: None,
-                mime_type: "application/pdf".to_string(),
+                mime_type: Some("application/pdf".to_string()),
                 filename: Some("report.pdf".to_string()),
             }],
             end_turn: None,
@@ -682,7 +682,7 @@ mod tests {
                 ContentItem::InputFile {
                     file_data: Some("JVBERi0xLjQ=".to_string()),
                     file_id: None,
-                    mime_type: "application/pdf".to_string(),
+                    mime_type: Some("application/pdf".to_string()),
                     filename: Some("report.pdf".to_string()),
                 },
                 ContentItem::InputText {
@@ -713,7 +713,7 @@ mod tests {
             content: vec![ContentItem::InputFile {
                 file_data: None,
                 file_id: Some("file-123".to_string()),
-                mime_type: "application/pdf".to_string(),
+                mime_type: Some("application/pdf".to_string()),
                 filename: Some("report.pdf".to_string()),
             }],
             end_turn: None,
@@ -747,7 +747,7 @@ mod tests {
                     ContentItem::InputFile {
                         file_data: Some("JVBERi0xLjQ=".to_string()),
                         file_id: None,
-                        mime_type: "application/pdf".to_string(),
+                        mime_type: Some("application/pdf".to_string()),
                         filename: Some("inline.pdf".to_string()),
                     },
                     ContentItem::InputText {
@@ -767,7 +767,7 @@ mod tests {
                     ContentItem::InputFile {
                         file_data: None,
                         file_id: Some("file-123".to_string()),
-                        mime_type: "application/pdf".to_string(),
+                        mime_type: Some("application/pdf".to_string()),
                         filename: Some("uploaded.pdf".to_string()),
                     },
                     ContentItem::InputText {
@@ -800,7 +800,7 @@ mod tests {
                     ContentItem::InputFile {
                         file_data: None,
                         file_id: Some("file-123".to_string()),
-                        mime_type: "application/pdf".to_string(),
+                        mime_type: Some("application/pdf".to_string()),
                         filename: Some("uploaded.pdf".to_string()),
                     },
                     ContentItem::InputText {
