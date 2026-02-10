@@ -112,7 +112,7 @@ async fn run_compact_task_inner(
 
     loop {
         // Clone is required because of the loop
-        let turn_input = history.clone().for_prompt();
+        let turn_input = sanitize_compaction_prompt_input(history.clone().for_prompt());
         let turn_input_len = turn_input.len();
         let prompt = Prompt {
             input: turn_input,
@@ -212,6 +212,105 @@ async fn run_compact_task_inner(
     });
     sess.send_event(&turn_context, warning).await;
     Ok(())
+}
+
+fn sanitize_compaction_prompt_input(items: Vec<ResponseItem>) -> Vec<ResponseItem> {
+    items
+        .into_iter()
+        .map(|item| match item {
+            ResponseItem::Message {
+                id,
+                role,
+                content,
+                end_turn,
+                phase,
+            } => ResponseItem::Message {
+                id,
+                role,
+                content: content
+                    .into_iter()
+                    .map(sanitize_compaction_content_item)
+                    .collect(),
+                end_turn,
+                phase,
+            },
+            other => other,
+        })
+        .collect()
+}
+
+fn sanitize_compaction_content_item(item: ContentItem) -> ContentItem {
+    match item {
+        ContentItem::InputFile {
+            file_data,
+            file_id: _,
+            mime_type,
+            filename,
+        } => ContentItem::InputText {
+            text: file_placeholder_text(filename.as_deref(), &mime_type, file_data.as_deref()),
+        },
+        other => other,
+    }
+}
+
+fn file_placeholder_text(
+    filename: Option<&str>,
+    mime_type: &str,
+    maybe_base64_data: Option<&str>,
+) -> String {
+    let name = filename.unwrap_or("unnamed");
+    match maybe_base64_data.and_then(estimate_base64_payload_size_bytes) {
+        Some(size_bytes) => {
+            let display_size = human_readable_size(size_bytes);
+            format!("[File: {name}, {display_size}, {mime_type}]")
+        }
+        None => format!("[File: {name}, {mime_type}]"),
+    }
+}
+
+fn estimate_base64_payload_size_bytes(data: &str) -> Option<u64> {
+    let payload = data
+        .split_once("base64,")
+        .map_or(data.trim(), |(_, payload)| payload.trim());
+    let mut non_whitespace_len = 0usize;
+    let mut tail = [0u8; 2];
+
+    for byte in payload.bytes() {
+        if byte.is_ascii_whitespace() {
+            continue;
+        }
+        tail[0] = tail[1];
+        tail[1] = byte;
+        non_whitespace_len += 1;
+    }
+
+    if non_whitespace_len == 0 {
+        return Some(0);
+    }
+    if non_whitespace_len % 4 != 0 {
+        return None;
+    }
+
+    let padding = if tail[1] == b'=' {
+        if tail[0] == b'=' { 2 } else { 1 }
+    } else {
+        0
+    };
+    let decoded_len = (non_whitespace_len / 4) * 3;
+    decoded_len.checked_sub(padding).map(|size| size as u64)
+}
+
+fn human_readable_size(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = KIB * 1024;
+
+    if bytes >= MIB {
+        format!("{:.1}MB", bytes as f64 / MIB as f64)
+    } else if bytes >= KIB {
+        format!("{:.1}KB", bytes as f64 / KIB as f64)
+    } else {
+        format!("{bytes}B")
+    }
 }
 
 pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
@@ -451,6 +550,67 @@ mod tests {
         let joined = content_items_to_text(&items);
 
         assert_eq!(None, joined);
+    }
+
+    #[test]
+    fn estimate_base64_payload_size_bytes_supports_raw_and_data_url() {
+        assert_eq!(Some(8), estimate_base64_payload_size_bytes("JVBERi0xLjQ="));
+        assert_eq!(
+            Some(8),
+            estimate_base64_payload_size_bytes("data:application/pdf;base64,JVBERi0xLjQ=")
+        );
+    }
+
+    #[test]
+    fn sanitize_compaction_prompt_input_replaces_inline_file_content() {
+        let input = vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputFile {
+                file_data: Some("JVBERi0xLjQ=".to_string()),
+                file_id: None,
+                mime_type: "application/pdf".to_string(),
+                filename: Some("report.pdf".to_string()),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+
+        let sanitized = sanitize_compaction_prompt_input(input);
+        let [ResponseItem::Message { content, .. }] = sanitized.as_slice() else {
+            panic!("expected one user message");
+        };
+        let [ContentItem::InputText { text }] = content.as_slice() else {
+            panic!("expected file placeholder text");
+        };
+        assert_eq!(text, "[File: report.pdf, 8B, application/pdf]");
+    }
+
+    #[test]
+    fn sanitize_compaction_prompt_input_replaces_uploaded_file_references() {
+        let input = vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputFile {
+                file_data: None,
+                file_id: Some("file-123".to_string()),
+                mime_type: "application/pdf".to_string(),
+                filename: Some("report.pdf".to_string()),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+
+        let sanitized = sanitize_compaction_prompt_input(input);
+        let [ResponseItem::Message { content, .. }] = sanitized.as_slice() else {
+            panic!("expected one user message");
+        };
+        assert_eq!(
+            content,
+            &vec![ContentItem::InputText {
+                text: "[File: report.pdf, application/pdf]".to_string(),
+            }]
+        );
     }
 
     #[test]

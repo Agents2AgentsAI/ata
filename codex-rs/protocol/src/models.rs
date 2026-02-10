@@ -66,7 +66,11 @@ pub enum ResponseInputItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    try_from = "UncheckedContentItem"
+)]
 pub enum ContentItem {
     InputText {
         text: String,
@@ -86,6 +90,57 @@ pub enum ContentItem {
     OutputText {
         text: String,
     },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum UncheckedContentItem {
+    InputText {
+        text: String,
+    },
+    InputImage {
+        image_url: String,
+    },
+    InputFile {
+        file_data: Option<String>,
+        file_id: Option<String>,
+        mime_type: String,
+        filename: Option<String>,
+    },
+    OutputText {
+        text: String,
+    },
+}
+
+impl TryFrom<UncheckedContentItem> for ContentItem {
+    type Error = &'static str;
+
+    fn try_from(value: UncheckedContentItem) -> Result<Self, Self::Error> {
+        match value {
+            UncheckedContentItem::InputText { text } => Ok(Self::InputText { text }),
+            UncheckedContentItem::InputImage { image_url } => Ok(Self::InputImage { image_url }),
+            UncheckedContentItem::InputFile {
+                file_data,
+                file_id,
+                mime_type,
+                filename,
+            } => {
+                let has_file_data = file_data.is_some();
+                let has_file_id = file_id.is_some();
+                if has_file_data == has_file_id {
+                    return Err("input_file must include exactly one of `file_data` or `file_id`");
+                }
+
+                Ok(Self::InputFile {
+                    file_data,
+                    file_id,
+                    mime_type,
+                    filename,
+                })
+            }
+            UncheckedContentItem::OutputText { text } => Ok(Self::OutputText { text }),
+        }
+    }
 }
 
 impl ContentItem {
@@ -552,7 +607,8 @@ const IMAGE_CLOSE_TAG: &str = "</image>";
 const LOCAL_IMAGE_OPEN_TAG_PREFIX: &str = "<image name=";
 const LOCAL_IMAGE_OPEN_TAG_SUFFIX: &str = ">";
 const LOCAL_IMAGE_CLOSE_TAG: &str = IMAGE_CLOSE_TAG;
-const FILE_OPEN_TAG_PREFIX: &str = "<file_start>";
+const FILE_OPEN_TAG_BARE: &str = "<file_start>";
+const FILE_OPEN_TAG_PREFIX: &str = "<file_start";
 const FILE_OPEN_TAG_SUFFIX: &str = "</file_start>";
 const FILE_CLOSE_TAG: &str = "<file_end></file_end>";
 
@@ -578,8 +634,23 @@ pub fn local_image_open_tag_text(label_number: usize) -> String {
 }
 
 pub fn local_file_open_tag_text(label_number: usize) -> String {
+    local_file_open_tag_text_with_filename(label_number, None)
+}
+
+pub fn local_file_open_tag_text_with_filename(
+    label_number: usize,
+    filename: Option<&str>,
+) -> String {
     let label = local_file_label_text(label_number);
-    format!("{FILE_OPEN_TAG_PREFIX}{label}{FILE_OPEN_TAG_SUFFIX}")
+    match filename.filter(|name| !name.is_empty()) {
+        Some(filename) => {
+            let escaped_filename = escape_tag_attribute_value(filename);
+            format!(
+                r#"{FILE_OPEN_TAG_PREFIX} name="{escaped_filename}">{label}{FILE_OPEN_TAG_SUFFIX}"#
+            )
+        }
+        None => format!("{FILE_OPEN_TAG_BARE}{label}{FILE_OPEN_TAG_SUFFIX}"),
+    }
 }
 
 pub fn is_local_image_open_tag_text(text: &str) -> bool {
@@ -588,8 +659,16 @@ pub fn is_local_image_open_tag_text(text: &str) -> bool {
 }
 
 pub fn is_local_file_open_tag_text(text: &str) -> bool {
-    text.strip_prefix(FILE_OPEN_TAG_PREFIX)
-        .is_some_and(|rest| rest.ends_with(FILE_OPEN_TAG_SUFFIX))
+    let Some(rest) = text.strip_prefix(FILE_OPEN_TAG_PREFIX) else {
+        return false;
+    };
+    let Some((attributes, tail)) = rest.split_once('>') else {
+        return false;
+    };
+    if !attributes.is_empty() && !attributes.starts_with(' ') {
+        return false;
+    }
+    tail.ends_with(FILE_OPEN_TAG_SUFFIX)
 }
 
 pub fn is_local_image_close_tag_text(text: &str) -> bool {
@@ -605,7 +684,7 @@ pub fn is_image_open_tag_text(text: &str) -> bool {
 }
 
 pub fn is_file_open_tag_text(text: &str) -> bool {
-    text == FILE_OPEN_TAG_PREFIX
+    text == FILE_OPEN_TAG_BARE || is_local_file_open_tag_text(text)
 }
 
 pub fn is_image_close_tag_text(text: &str) -> bool {
@@ -614,6 +693,14 @@ pub fn is_image_close_tag_text(text: &str) -> bool {
 
 pub fn is_file_close_tag_text(text: &str) -> bool {
     text == FILE_CLOSE_TAG
+}
+
+fn escape_tag_attribute_value(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn invalid_image_error_placeholder(
@@ -689,23 +776,13 @@ pub fn local_image_content_items_with_label_number(
 pub fn local_file_content_items(path: &Path, label_number: Option<usize>) -> Vec<ContentItem> {
     match encode_inline_cached(path) {
         Ok(processed) => {
-            let mut items = Vec::with_capacity(3);
-            if let Some(label_number) = label_number {
-                items.push(ContentItem::InputText {
-                    text: local_file_open_tag_text(label_number),
-                });
-            }
-            items.push(ContentItem::inline_file(
+            let filename = processed.filename;
+            let file_item = ContentItem::inline_file(
                 processed.base64,
                 processed.mime_type,
-                Some(processed.filename),
-            ));
-            if label_number.is_some() {
-                items.push(ContentItem::InputText {
-                    text: FILE_CLOSE_TAG.to_string(),
-                });
-            }
-            items
+                Some(filename.clone()),
+            );
+            wrap_file_content_items(file_item, label_number, Some(filename.as_str()))
         }
         Err(error) => {
             tracing::warn!(
@@ -716,6 +793,26 @@ pub fn local_file_content_items(path: &Path, label_number: Option<usize>) -> Vec
             Vec::new()
         }
     }
+}
+
+fn wrap_file_content_items(
+    file_item: ContentItem,
+    label_number: Option<usize>,
+    filename: Option<&str>,
+) -> Vec<ContentItem> {
+    let mut items = Vec::with_capacity(if label_number.is_some() { 3 } else { 1 });
+    if let Some(label_number) = label_number {
+        items.push(ContentItem::InputText {
+            text: local_file_open_tag_text_with_filename(label_number, filename),
+        });
+    }
+    items.push(file_item);
+    if label_number.is_some() {
+        items.push(ContentItem::InputText {
+            text: FILE_CLOSE_TAG.to_string(),
+        });
+    }
+    items
 }
 
 impl From<ResponseInputItem> for ResponseItem {
@@ -845,7 +942,16 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                         mime_type,
                         filename,
                         ..
-                    } => vec![ContentItem::file_ref(file_id, mime_type, Some(filename))],
+                    } => {
+                        file_index += 1;
+                        let file_item =
+                            ContentItem::file_ref(file_id, mime_type, Some(filename.clone()));
+                        wrap_file_content_items(
+                            file_item,
+                            Some(file_index),
+                            Some(filename.as_str()),
+                        )
+                    }
                     UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(), // Tool bodies are injected later in core
                 })
                 .collect::<Vec<ContentItem>>(),
@@ -1868,6 +1974,47 @@ mod tests {
     }
 
     #[test]
+    fn local_file_open_tag_with_filename_is_detected() {
+        let tag = local_file_open_tag_text_with_filename(1, Some("report.pdf"));
+        assert!(is_local_file_open_tag_text(&tag));
+        assert!(is_file_open_tag_text(&tag));
+    }
+
+    #[test]
+    fn input_file_deserialization_rejects_both_file_data_and_file_id() {
+        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "input_file",
+            "file_data": "JVBERi0xLjQ=",
+            "file_id": "file-123",
+            "mime_type": "application/pdf",
+            "filename": "report.pdf",
+        }))
+        .expect_err("deserialization should fail");
+
+        assert!(
+            err.to_string()
+                .contains("input_file must include exactly one of `file_data` or `file_id`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn input_file_deserialization_rejects_missing_file_data_and_file_id() {
+        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "input_file",
+            "mime_type": "application/pdf",
+            "filename": "report.pdf",
+        }))
+        .expect_err("deserialization should fail");
+
+        assert!(
+            err.to_string()
+                .contains("input_file must include exactly one of `file_data` or `file_id`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn wraps_local_file_user_input_with_tags() -> Result<()> {
         let dir = tempdir()?;
         let path = dir.path().join("report.pdf");
@@ -1881,7 +2028,7 @@ mod tests {
                 assert_eq!(
                     content[0],
                     ContentItem::InputText {
-                        text: local_file_open_tag_text(1),
+                        text: local_file_open_tag_text_with_filename(1, Some("report.pdf")),
                     }
                 );
                 match &content[1] {
@@ -1926,7 +2073,7 @@ mod tests {
     }
 
     #[test]
-    fn uploaded_file_user_input_produces_file_ref_content_item() {
+    fn uploaded_file_user_input_produces_tagged_file_ref_content_item() {
         let item = ResponseInputItem::from(vec![UserInput::UploadedFile {
             file_id: "file-abc".to_string(),
             mime_type: "application/pdf".to_string(),
@@ -1938,12 +2085,20 @@ mod tests {
             ResponseInputItem::Message { content, .. } => {
                 assert_eq!(
                     content,
-                    vec![ContentItem::InputFile {
-                        file_data: None,
-                        file_id: Some("file-abc".to_string()),
-                        mime_type: "application/pdf".to_string(),
-                        filename: Some("report.pdf".to_string()),
-                    }]
+                    vec![
+                        ContentItem::InputText {
+                            text: local_file_open_tag_text_with_filename(1, Some("report.pdf")),
+                        },
+                        ContentItem::InputFile {
+                            file_data: None,
+                            file_id: Some("file-abc".to_string()),
+                            mime_type: "application/pdf".to_string(),
+                            filename: Some("report.pdf".to_string()),
+                        },
+                        ContentItem::InputText {
+                            text: FILE_CLOSE_TAG.to_string(),
+                        }
+                    ]
                 );
             }
             other => panic!("expected message response but got {other:?}"),
