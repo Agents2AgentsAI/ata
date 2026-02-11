@@ -186,12 +186,15 @@ fn dedup_local_files_from_cache(
             continue;
         };
         let Ok(canonical) = std::fs::canonicalize(&*path) else {
+            tracing::debug!(path = %path.display(), "file dedup: canonicalize failed");
             continue;
         };
         let Ok(metadata) = std::fs::metadata(&canonical) else {
+            tracing::debug!(path = %canonical.display(), "file dedup: metadata failed");
             continue;
         };
         let Ok(mtime) = metadata.modified() else {
+            tracing::debug!(path = %canonical.display(), "file dedup: mtime failed");
             continue;
         };
 
@@ -224,26 +227,39 @@ fn record_upload_paths(cache: &mut FileReferenceCache, inputs: &[UserInput]) {
             continue;
         };
         let Ok(canonical) = std::fs::canonicalize(source_path) else {
+            tracing::debug!(path = %source_path.display(), "record_upload_paths: canonicalize failed");
             continue;
         };
         let Ok(metadata) = std::fs::metadata(&canonical) else {
+            tracing::debug!(path = %canonical.display(), "record_upload_paths: metadata failed");
             continue;
         };
         let Ok(mtime) = metadata.modified() else {
+            tracing::debug!(path = %canonical.display(), "record_upload_paths: mtime failed");
             continue;
         };
-        let (expires_at, provider) = match cache.get(file_id) {
-            Some(u) => (u.expires_at, u.provider.clone()),
-            None => (None, String::new()),
+        let Some(uploaded) = cache.get(file_id) else {
+            tracing::warn!(
+                file_id,
+                "skipping path record: file_id not found in cache entries"
+            );
+            continue;
         };
+        let (expires_at, provider) = (uploaded.expires_at, uploaded.provider.clone());
         cache.record_path(
-            canonical,
+            canonical.clone(),
             file_id,
             &provider,
             mime_type.clone(),
             filename.clone(),
             mtime,
             expires_at,
+        );
+        tracing::debug!(
+            path = %canonical.display(),
+            file_id,
+            provider,
+            "recorded file upload path in cache"
         );
     }
 }
@@ -332,6 +348,7 @@ async fn resolve_file_inputs_for_uploads(
     let (provider_id, capabilities) =
         file_capabilities_for_provider(provider, config.model.as_deref());
     if !capabilities.supports_pdf {
+        tracing::debug!("skipping file uploads: provider does not support PDF");
         return empty;
     }
 
@@ -340,9 +357,14 @@ async fn resolve_file_inputs_for_uploads(
         .ok()
         .flatten()
     else {
+        tracing::debug!("skipping file uploads: no API key available for file upload");
         return empty;
     };
     let Some(upload_service) = upload_service_for_provider(&provider_id) else {
+        tracing::debug!(
+            provider_id,
+            "skipping file uploads: no upload service for provider"
+        );
         return empty;
     };
     let base_url = upload_base_url_for_provider(&provider_id, provider);
@@ -403,6 +425,12 @@ async fn resolve_file_inputs_for_uploads(
     for (idx, path, result) in results {
         match result {
             Ok(upload_result) => {
+                tracing::debug!(
+                    path = %path.display(),
+                    uploaded = upload_result.uploaded.is_some(),
+                    has_warning = upload_result.warning.is_some(),
+                    "file upload result"
+                );
                 if let Some(warning) = upload_result.warning {
                     warnings.push(warning);
                 }
