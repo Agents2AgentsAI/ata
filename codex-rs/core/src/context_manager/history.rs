@@ -179,6 +179,30 @@ impl ContextManager {
         }
     }
 
+    /// Removes URL-based file attachments from the most recent user message.
+    ///
+    /// Returns the number of removed `ContentItem::UrlFile` blocks.
+    pub(crate) fn drop_last_turn_url_files(&mut self) -> usize {
+        let Some(index) = self
+            .items
+            .iter()
+            .rposition(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
+        else {
+            return 0;
+        };
+
+        let ResponseItem::Message { content, .. } = &mut self.items[index] else {
+            return 0;
+        };
+        let before = content.len();
+        content.retain(|item| !matches!(item, ContentItem::UrlFile { .. }));
+        let removed = before.saturating_sub(content.len());
+        if removed > 0 && content.is_empty() {
+            self.items.remove(index);
+        }
+        removed
+    }
+
     /// Drop the last `num_turns` user turns from this history.
     ///
     /// "User turns" are identified as `ResponseItem::Message` entries whose role is `"user"`.
@@ -468,6 +492,7 @@ pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
             }
             ContentItem::InputImage { .. } => {}
             ContentItem::InputFile { .. } => {}
+            ContentItem::UrlFile { .. } => {}
         }
     }
 

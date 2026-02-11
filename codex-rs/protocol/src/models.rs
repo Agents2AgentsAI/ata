@@ -97,6 +97,16 @@ pub enum ContentItem {
     OutputText {
         text: String,
     },
+    UrlFile {
+        url: String,
+        /// MIME type for provider adapters or tools that need a type hint.
+        /// Not part of the stable public wire shape.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(skip)]
+        mime_type: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -116,6 +126,11 @@ enum UncheckedContentItem {
     },
     OutputText {
         text: String,
+    },
+    UrlFile {
+        url: Option<String>,
+        mime_type: Option<String>,
+        filename: Option<String>,
     },
 }
 
@@ -149,6 +164,20 @@ impl TryFrom<UncheckedContentItem> for ContentItem {
                 })
             }
             UncheckedContentItem::OutputText { text } => Ok(Self::OutputText { text }),
+            UncheckedContentItem::UrlFile {
+                url,
+                mime_type,
+                filename,
+            } => {
+                let url = url
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or("url_file requires a non-empty `url`")?;
+                Ok(Self::UrlFile {
+                    url,
+                    mime_type,
+                    filename,
+                })
+            }
         }
     }
 }
@@ -168,6 +197,14 @@ impl ContentItem {
             file_data: None,
             file_id: Some(file_id),
             mime_type: Some(mime_type),
+            filename,
+        }
+    }
+
+    pub fn url_file(url: String, mime_type: Option<String>, filename: Option<String>) -> Self {
+        Self::UrlFile {
+            url,
+            mime_type,
             filename,
         }
     }
@@ -2063,6 +2100,69 @@ mod tests {
                 .contains("input_file must include exactly one of `file_data` or `file_id`"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn url_file_deserialization_accepts_non_empty_url() {
+        let item = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "url_file",
+            "url": "https://example.com/report.pdf",
+            "filename": "report.pdf",
+            "mime_type": "application/pdf",
+        }))
+        .expect("deserialization should succeed");
+
+        assert_eq!(
+            item,
+            ContentItem::UrlFile {
+                url: "https://example.com/report.pdf".to_string(),
+                mime_type: Some("application/pdf".to_string()),
+                filename: Some("report.pdf".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn url_file_deserialization_rejects_empty_url() {
+        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "url_file",
+            "url": "",
+        }))
+        .expect_err("deserialization should fail");
+
+        assert!(
+            err.to_string()
+                .contains("url_file requires a non-empty `url`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn url_file_deserialization_rejects_whitespace_url() {
+        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "url_file",
+            "url": "   ",
+        }))
+        .expect_err("deserialization should fail");
+
+        assert!(
+            err.to_string()
+                .contains("url_file requires a non-empty `url`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn url_file_round_trip_preserves_fields() {
+        let original = ContentItem::UrlFile {
+            url: "https://example.com/docs/report.pdf".to_string(),
+            mime_type: Some("application/pdf".to_string()),
+            filename: Some("report.pdf".to_string()),
+        };
+        let serialized = serde_json::to_value(&original).expect("serialize");
+        let parsed = serde_json::from_value::<ContentItem>(serialized).expect("deserialize");
+
+        assert_eq!(parsed, original);
     }
 
     #[test]

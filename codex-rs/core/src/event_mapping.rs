@@ -47,10 +47,16 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                     continue;
                 }
                 if is_file_open_tag_text(text)
-                    && (matches!(message.get(idx + 1), Some(ContentItem::InputFile { .. })))
+                    && (matches!(
+                        message.get(idx + 1),
+                        Some(ContentItem::InputFile { .. } | ContentItem::UrlFile { .. })
+                    ))
                     || (idx > 0
                         && is_file_close_tag_text(text)
-                        && matches!(message.get(idx - 1), Some(ContentItem::InputFile { .. })))
+                        && matches!(
+                            message.get(idx - 1),
+                            Some(ContentItem::InputFile { .. } | ContentItem::UrlFile { .. })
+                        ))
                 {
                     continue;
                 }
@@ -69,6 +75,7 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                 });
             }
             ContentItem::InputFile { .. } => {}
+            ContentItem::UrlFile { .. } => {}
             ContentItem::OutputText { text } => {
                 if is_session_prefix(text) {
                     return None;

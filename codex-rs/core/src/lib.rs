@@ -53,6 +53,7 @@ mod model_provider_info;
 pub mod path_utils;
 pub mod personality_migration;
 mod proposed_plan_parser;
+mod provider_transport_capabilities;
 mod sandbox_tags;
 pub mod sandboxing;
 mod session_prefix;

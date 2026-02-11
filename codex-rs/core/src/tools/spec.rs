@@ -10,6 +10,7 @@ use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
+use crate::tools::handlers::attach_url_files::register_attach_url_files;
 use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MIN_WAIT_TIMEOUT_MS;
@@ -30,6 +31,9 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+#[cfg(test)]
+use crate::tools::handlers::attach_url_files::ATTACH_URL_FILES_TOOL;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
@@ -1620,6 +1624,8 @@ pub(crate) fn build_specs_with_research(
         }
     }
 
+    register_attach_url_files(&mut builder, config);
+
     builder
 }
 
@@ -1897,6 +1903,7 @@ mod tests {
                 external_web_access: Some(true),
             },
             create_view_image_tool(),
+            ATTACH_URL_FILES_TOOL.clone(),
         ] {
             expected.insert(tool_name(&spec).to_string(), spec);
         }
@@ -2109,6 +2116,7 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "attach_url_files",
             ],
         );
     }
@@ -2133,6 +2141,7 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "attach_url_files",
             ],
         );
     }
@@ -2244,6 +2253,7 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "attach_url_files",
             ],
         );
     }

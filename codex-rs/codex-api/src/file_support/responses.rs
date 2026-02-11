@@ -1,5 +1,6 @@
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use serde_json::Value;
 
 use crate::file_support::build_data_url;
 
@@ -42,6 +43,67 @@ pub fn wrapped_responses_input_file_data_uris(input: &[ResponseItem]) -> Vec<Res
     let mut normalized = input.to_vec();
     wrap_responses_input_file_data_uris(&mut normalized);
     normalized
+}
+
+/// Rewrites internal `url_file` blocks into OpenAI wire-compatible
+/// `input_file.file_url` blocks.
+pub fn rewrite_openai_url_file_blocks_in_payload(payload: &mut Value) {
+    match payload {
+        Value::Array(items) => {
+            for item in items {
+                rewrite_openai_url_file_blocks_in_payload(item);
+            }
+        }
+        Value::Object(map) => {
+            if map.get("type").and_then(Value::as_str) == Some("message")
+                && let Some(Value::Array(content)) = map.get_mut("content")
+            {
+                rewrite_openai_url_file_blocks_in_content(content);
+            }
+
+            for value in map.values_mut() {
+                rewrite_openai_url_file_blocks_in_payload(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+pub fn rewrite_openai_url_file_blocks_in_content(content: &mut [Value]) {
+    for block in content {
+        let is_url_file = block
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|ty| ty == "url_file");
+        if !is_url_file {
+            continue;
+        }
+
+        let url = block
+            .get("url")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|url| !url.is_empty());
+        let Some(url) = url else {
+            continue;
+        };
+
+        let filename = block
+            .get("filename")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|filename| !filename.is_empty())
+            .map(ToString::to_string);
+
+        let mut rewritten = serde_json::json!({
+            "type": "input_file",
+            "file_url": url,
+        });
+        if let Some(filename) = filename {
+            rewritten["filename"] = serde_json::json!(filename);
+        }
+        *block = rewritten;
+    }
 }
 
 #[cfg(test)]
@@ -186,6 +248,33 @@ mod tests {
                 end_turn: None,
                 phase: None,
             }
+        );
+    }
+
+    #[test]
+    fn rewrites_url_file_blocks_for_openai_payload() {
+        let mut payload = serde_json::json!({
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "url_file",
+                    "url": "https://example.com/report.pdf",
+                    "filename": "report.pdf",
+                    "mime_type": "application/pdf"
+                }]
+            }]
+        });
+
+        rewrite_openai_url_file_blocks_in_payload(&mut payload);
+
+        assert_eq!(
+            payload["input"][0]["content"][0],
+            serde_json::json!({
+                "type": "input_file",
+                "file_url": "https://example.com/report.pdf",
+                "filename": "report.pdf"
+            })
         );
     }
 }

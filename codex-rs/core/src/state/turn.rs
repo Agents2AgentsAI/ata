@@ -73,6 +73,7 @@ pub(crate) struct TurnState {
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
+    url_attachments_injected: usize,
 }
 
 impl TurnState {
@@ -96,6 +97,7 @@ impl TurnState {
         self.pending_user_input.clear();
         self.pending_dynamic_tools.clear();
         self.pending_input.clear();
+        self.url_attachments_injected = 0;
     }
 
     pub(crate) fn insert_pending_user_input(
@@ -144,6 +146,28 @@ impl TurnState {
 
     pub(crate) fn has_pending_input(&self) -> bool {
         !self.pending_input.is_empty()
+    }
+
+    /// Reserve capacity for URL file attachments in this turn.
+    ///
+    /// Returns `Ok(())` if reservation succeeds, or `Err(current_count)` when the
+    /// reservation would exceed the per-turn limit.
+    pub(crate) fn reserve_url_attachments(
+        &mut self,
+        to_add: usize,
+        per_turn_limit: usize,
+    ) -> Result<(), usize> {
+        if to_add == 0 {
+            return Ok(());
+        }
+
+        let next = self.url_attachments_injected.saturating_add(to_add);
+        if next > per_turn_limit {
+            return Err(self.url_attachments_injected);
+        }
+
+        self.url_attachments_injected = next;
+        Ok(())
     }
 }
 
