@@ -125,7 +125,6 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::models::MessagePhase;
-use codex_protocol::models::local_file_label_text;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::request_user_input::RequestUserInputEvent;
@@ -703,6 +702,7 @@ pub(crate) fn create_initial_user_message(
             .map(|(idx, path)| LocalImageAttachment {
                 placeholder: local_image_label_text(idx + 1),
                 path,
+                is_file: false,
             })
             .collect();
         Some(UserMessage {
@@ -714,15 +714,11 @@ pub(crate) fn create_initial_user_message(
     }
 }
 
-/// Returns `true` when `placeholder` looks like a `[File #N]` label.
-fn is_file_placeholder(placeholder: &str) -> bool {
-    placeholder.starts_with("[File ")
-}
-
 // When merging multiple queued drafts (e.g., after interrupt), each draft starts numbering
 // its attachments at [Image #1] or [File #1]. Reassign placeholder labels based on the
 // attachment list so the combined local_image_paths order matches the labels, even if
 // placeholders were moved in the text.
+// File attachments keep their placeholder as-is (filename-based), only images get renumbered.
 fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) -> UserMessage {
     let UserMessage {
         text,
@@ -742,17 +738,20 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
     let mut mapping: HashMap<String, String> = HashMap::new();
     let mut remapped_images = Vec::new();
     for attachment in local_images {
-        let is_file = is_file_placeholder(&attachment.placeholder);
-        let new_placeholder = if is_file {
-            local_file_label_text(*next_label)
+        let new_placeholder = if attachment.is_file {
+            attachment.placeholder.clone()
         } else {
-            local_image_label_text(*next_label)
+            let ph = local_image_label_text(*next_label);
+            *next_label += 1;
+            ph
         };
-        *next_label += 1;
-        mapping.insert(attachment.placeholder.clone(), new_placeholder.clone());
+        if attachment.placeholder != new_placeholder {
+            mapping.insert(attachment.placeholder.clone(), new_placeholder.clone());
+        }
         remapped_images.push(LocalImageAttachment {
             placeholder: new_placeholder,
             path: attachment.path,
+            is_file: attachment.is_file,
         });
     }
 

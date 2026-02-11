@@ -204,9 +204,20 @@ pub enum InputResult {
 struct AttachedImage {
     placeholder: String,
     path: PathBuf,
-    /// When `true`, the attachment is a non-image file (e.g. PDF) and should
-    /// use `[File #N]` labels instead of `[Image #N]`.
+    /// When `true`, the attachment is a non-image file (e.g. PDF) and uses a
+    /// filename-based placeholder like `[report.pdf]` instead of `[Image #N]`.
     is_file: bool,
+}
+
+/// Build a placeholder label from a file path, e.g. `[report.pdf]`.
+/// Falls back to `[File]` when the filename is missing or non-UTF-8.
+fn file_placeholder_for_path(path: &std::path::Path) -> String {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| !n.is_empty())
+        .unwrap_or("File");
+    format!("[{name}]")
 }
 
 enum PromptSelectionMode {
@@ -809,11 +820,20 @@ impl ChatComposer {
             .collect();
         for (idx, path) in local_image_paths.into_iter().enumerate() {
             let n = idx + 1;
-            let file_ph = local_file_label_text(n);
+            let filename_ph = file_placeholder_for_path(&path);
+            let legacy_file_ph = local_file_label_text(n);
             let image_ph = local_image_label_text(n);
-            if image_placeholders.contains(&file_ph) {
+            if image_placeholders.contains(&filename_ph) {
+                // New-format filename placeholder (e.g. [report.pdf]).
                 self.attached_images.push(AttachedImage {
-                    placeholder: file_ph,
+                    placeholder: filename_ph,
+                    path,
+                    is_file: true,
+                });
+            } else if image_placeholders.contains(&legacy_file_ph) {
+                // Legacy [File #N] format (from older history entries).
+                self.attached_images.push(AttachedImage {
+                    placeholder: legacy_file_ph,
                     path,
                     is_file: true,
                 });
@@ -908,6 +928,7 @@ impl ChatComposer {
             .map(|img| LocalImageAttachment {
                 placeholder: img.placeholder.clone(),
                 path: img.path.clone(),
+                is_file: img.is_file,
             })
             .collect()
     }
@@ -934,7 +955,7 @@ impl ChatComposer {
 
     /// Insert an image attachment placeholder and track it for the next submission.
     pub fn attach_image(&mut self, path: PathBuf) {
-        let image_number = self.attached_images.len() + 1;
+        let image_number = self.attached_images.iter().filter(|a| !a.is_file).count() + 1;
         let placeholder = local_image_label_text(image_number);
         // Insert as an element to match large paste placeholder behavior:
         // styled distinctly and treated atomically for cursor/mutations.
@@ -948,8 +969,7 @@ impl ChatComposer {
 
     /// Insert a non-image file attachment placeholder (e.g. PDF) and track it.
     pub fn attach_file(&mut self, path: PathBuf) {
-        let file_number = self.attached_images.len() + 1;
-        let placeholder = local_file_label_text(file_number);
+        let placeholder = file_placeholder_for_path(&path);
         self.textarea.insert_element(&placeholder);
         self.attached_images.push(AttachedImage {
             placeholder,
@@ -971,6 +991,7 @@ impl ChatComposer {
             .map(|img| LocalImageAttachment {
                 placeholder: img.placeholder,
                 path: img.path,
+                is_file: img.is_file,
             })
             .collect()
     }
@@ -2632,11 +2653,14 @@ impl ChatComposer {
     }
 
     fn relabel_attached_images_and_update_placeholders(&mut self) {
+        let mut image_counter = 0usize;
         for idx in 0..self.attached_images.len() {
             let expected = if self.attached_images[idx].is_file {
-                local_file_label_text(idx + 1)
+                // File attachments use filename-based placeholders; no renumbering.
+                file_placeholder_for_path(&self.attached_images[idx].path)
             } else {
-                local_image_label_text(idx + 1)
+                image_counter += 1;
+                local_image_label_text(image_counter)
             };
             let current = self.attached_images[idx].placeholder.clone();
             if current == expected {
@@ -5863,6 +5887,126 @@ mod tests {
         }
         let imgs = composer.take_recent_submission_images();
         assert_eq!(vec![path], imgs);
+    }
+
+    #[test]
+    fn attach_file_uses_filename_placeholder() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        let path = PathBuf::from("/tmp/report.pdf");
+        composer.attach_file(path.clone());
+        let text = composer.current_text();
+        assert_eq!(text, "[report.pdf]");
+        let images = composer.local_images();
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].placeholder, "[report.pdf]");
+        assert!(images[0].is_file);
+        assert_eq!(images[0].path, path);
+    }
+
+    #[test]
+    fn mixed_image_file_numbering() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.attach_image(PathBuf::from("/tmp/a.png"));
+        composer.attach_file(PathBuf::from("/tmp/report.pdf"));
+        composer.attach_image(PathBuf::from("/tmp/b.png"));
+
+        let images = composer.local_images();
+        assert_eq!(images.len(), 3);
+        assert_eq!(images[0].placeholder, "[Image #1]");
+        assert!(!images[0].is_file);
+        assert_eq!(images[1].placeholder, "[report.pdf]");
+        assert!(images[1].is_file);
+        assert_eq!(images[2].placeholder, "[Image #2]");
+        assert!(!images[2].is_file);
+    }
+
+    #[test]
+    fn file_with_no_filename_falls_back() {
+        assert_eq!(file_placeholder_for_path(&PathBuf::from("/")), "[File]");
+    }
+
+    #[test]
+    fn relabel_after_delete_preserves_filename() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Attach image #1, file, image #2.
+        composer.attach_image(PathBuf::from("/tmp/a.png"));
+        composer.attach_file(PathBuf::from("/tmp/report.pdf"));
+        composer.attach_image(PathBuf::from("/tmp/b.png"));
+
+        // Verify initial state.
+        assert_eq!(composer.current_text(), "[Image #1][report.pdf][Image #2]");
+
+        // Position cursor after [Image #1] and delete it via backspace.
+        composer.textarea.set_cursor("[Image #1]".len());
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        // File label unchanged, image renumbered from #2 to #1.
+        assert_eq!(composer.current_text(), "[report.pdf][Image #1]");
+        let images = composer.local_images();
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].placeholder, "[report.pdf]");
+        assert!(images[0].is_file);
+        assert_eq!(images[1].placeholder, "[Image #1]");
+        assert!(!images[1].is_file);
+    }
+
+    #[test]
+    fn restore_reconstructs_filename_placeholder() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        let placeholder = "[report.pdf]";
+        let text = format!("{placeholder} check this");
+        let text_elements = vec![TextElement::new(
+            (0..placeholder.len()).into(),
+            Some(placeholder.to_string()),
+        )];
+        let local_image_paths = vec![PathBuf::from("/tmp/report.pdf")];
+        composer.set_text_content_with_mention_bindings(
+            text,
+            text_elements,
+            local_image_paths,
+            Vec::new(),
+        );
+        let images = composer.local_images();
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].placeholder, "[report.pdf]");
+        assert!(images[0].is_file);
     }
 
     #[test]

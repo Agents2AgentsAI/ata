@@ -73,11 +73,35 @@ impl FileReferenceCache {
         now: SystemTime,
     ) -> Option<CachedFileHit> {
         let entry = self.path_index.get(canonical_path)?;
-        if entry.source_mtime != source_mtime
-            || entry.provider != current_provider
-            || expires_soon(entry.expires_at, now)
-            || !self.entries.contains_key(&entry.file_id)
-        {
+        if entry.source_mtime != source_mtime {
+            tracing::debug!(
+                path = %canonical_path.display(),
+                "file upload cache miss: mtime changed"
+            );
+            return None;
+        }
+        if entry.provider != current_provider {
+            tracing::debug!(
+                path = %canonical_path.display(),
+                cached_provider = %entry.provider,
+                current_provider,
+                "file upload cache miss: provider mismatch"
+            );
+            return None;
+        }
+        if expires_soon(entry.expires_at, now) {
+            tracing::debug!(
+                path = %canonical_path.display(),
+                "file upload cache miss: expires soon"
+            );
+            return None;
+        }
+        if !self.entries.contains_key(&entry.file_id) {
+            tracing::debug!(
+                path = %canonical_path.display(),
+                file_id = %entry.file_id,
+                "file upload cache miss: file_id not in entries"
+            );
             return None;
         }
         Some(CachedFileHit {
