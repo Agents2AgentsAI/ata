@@ -48,6 +48,8 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                         .contains("The image data you provided does not represent a valid image")
                     {
                         CodexErr::InvalidImageRequest()
+                    } else if body_text.contains("prompt is too long") {
+                        CodexErr::ContextWindowExceeded
                     } else if let Some(mapped) =
                         map_user_facing_file_error_from_http_body(status.as_u16(), &body_text)
                     {
@@ -195,6 +197,22 @@ mod tests {
             }
             other => panic!("expected CodexErr::InvalidRequest, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn map_api_error_maps_prompt_too_long_to_context_window_exceeded() {
+        let body = r#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 211584 tokens > 200000 maximum"}}"#;
+        let err = map_api_error(ApiError::Transport(TransportError::Http {
+            status: StatusCode::BAD_REQUEST,
+            url: Some("https://api.anthropic.com/v1/messages".to_string()),
+            headers: None,
+            body: Some(body.to_string()),
+        }));
+
+        assert!(
+            matches!(err, CodexErr::ContextWindowExceeded),
+            "expected CodexErr::ContextWindowExceeded, got {err:?}"
+        );
     }
 }
 

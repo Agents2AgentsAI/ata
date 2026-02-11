@@ -602,6 +602,10 @@ pub fn parse_anthropic_event(
             let payload: ErrorPayload = serde_json::from_str(data)
                 .map_err(|e| ApiError::Stream(format!("Failed to parse error: {e}")))?;
 
+            if payload.error.message.contains("prompt is too long") {
+                return Err(ApiError::ContextWindowExceeded);
+            }
+
             let message = map_user_facing_file_error_from_message(&payload.error.message)
                 .map(|mapped| mapped.user_message)
                 .unwrap_or(payload.error.message);
@@ -788,6 +792,26 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("Invalid API key"));
+    }
+
+    #[test]
+    fn test_parse_error_prompt_too_long_maps_to_context_window_exceeded() {
+        let data = r#"{
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "prompt is too long: 211584 tokens > 200000 maximum"
+            }
+        }"#;
+
+        let mut state = AnthropicStreamState::new();
+        let result = parse_anthropic_event("error", data, &mut state);
+
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), ApiError::ContextWindowExceeded),
+            "expected ApiError::ContextWindowExceeded"
+        );
     }
 
     #[test]
