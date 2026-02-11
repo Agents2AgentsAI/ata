@@ -380,7 +380,10 @@ async fn submission_preserves_text_elements_and_local_images() {
         (0..placeholder.len()).into(),
         Some(placeholder.to_string()),
     )];
-    let local_images = vec![PathBuf::from("/tmp/submitted.png")];
+    let image_dir = tempdir().expect("tempdir");
+    let image_path = image_dir.path().join("submitted.png");
+    std::fs::write(&image_path, b"").expect("write test image");
+    let local_images = vec![image_path];
 
     chat.bottom_pane
         .set_composer_text(text.clone(), text_elements.clone(), local_images.clone());
