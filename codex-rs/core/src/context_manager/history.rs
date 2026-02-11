@@ -15,6 +15,8 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::is_file_close_tag_text;
+use codex_protocol::models::is_file_open_tag_text;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -179,11 +181,11 @@ impl ContextManager {
         }
     }
 
-    /// Removes URL-based file attachments from the most recent user message.
+    /// Removes URL-based file attachments from user messages in the most recent turn.
     ///
     /// Returns the number of removed `ContentItem::UrlFile` blocks.
     pub(crate) fn drop_last_turn_url_files(&mut self) -> usize {
-        let Some(index) = self
+        let Some(last_user_index) = self
             .items
             .iter()
             .rposition(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
@@ -191,16 +193,77 @@ impl ContextManager {
             return 0;
         };
 
-        let ResponseItem::Message { content, .. } = &mut self.items[index] else {
-            return 0;
-        };
-        let before = content.len();
-        content.retain(|item| !matches!(item, ContentItem::UrlFile { .. }));
-        let removed = before.saturating_sub(content.len());
-        if removed > 0 && content.is_empty() {
-            self.items.remove(index);
+        let turn_start = self.items[..last_user_index]
+            .iter()
+            .rposition(
+                |item| matches!(item, ResponseItem::Message { role, .. } if role == "assistant"),
+            )
+            .map_or(0, |index| index.saturating_add(1));
+
+        let mut removed_total = 0usize;
+        let mut index = self.items.len();
+        while index > turn_start {
+            index -= 1;
+
+            let mut should_remove_message = false;
+            if let ResponseItem::Message { role, content, .. } = &mut self.items[index]
+                && role == "user"
+            {
+                let mut removed_in_message = 0usize;
+                let mut filtered = Vec::with_capacity(content.len());
+                let mut content_index = 0usize;
+
+                while content_index < content.len() {
+                    if let ContentItem::InputText { text } = &content[content_index]
+                        && is_file_open_tag_text(text)
+                        && let Some(ContentItem::UrlFile { .. }) = content.get(content_index + 1)
+                    {
+                        removed_in_message = removed_in_message.saturating_add(1);
+                        content_index += 2;
+                        if let Some(ContentItem::InputText { text }) = content.get(content_index)
+                            && is_file_close_tag_text(text)
+                        {
+                            content_index += 1;
+                        }
+                        continue;
+                    }
+
+                    if matches!(
+                        content.get(content_index),
+                        Some(ContentItem::UrlFile { .. })
+                    ) {
+                        removed_in_message = removed_in_message.saturating_add(1);
+                        if filtered.last().is_some_and(|item| {
+                            matches!(item, ContentItem::InputText { text } if is_file_open_tag_text(text))
+                        }) {
+                            filtered.pop();
+                        }
+                        content_index += 1;
+                        if let Some(ContentItem::InputText { text }) = content.get(content_index)
+                            && is_file_close_tag_text(text)
+                        {
+                            content_index += 1;
+                        }
+                        continue;
+                    }
+
+                    filtered.push(content[content_index].clone());
+                    content_index += 1;
+                }
+
+                if removed_in_message > 0 {
+                    removed_total = removed_total.saturating_add(removed_in_message);
+                    *content = filtered;
+                    should_remove_message = content.is_empty();
+                }
+            }
+
+            if should_remove_message {
+                self.items.remove(index);
+            }
         }
-        removed
+
+        removed_total
     }
 
     /// Drop the last `num_turns` user turns from this history.

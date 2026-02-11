@@ -34,6 +34,7 @@ ts-rs = { workspace = true, features = [
     "serde-json-impl",
     "no-serde-warnings",
 ] }
+url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v7", "v4"] }
 
 [dev-dependencies]

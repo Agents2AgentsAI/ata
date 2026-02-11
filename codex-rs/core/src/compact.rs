@@ -14,6 +14,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::TurnContextItem;
 use crate::protocol::TurnStartedEvent;
 use crate::protocol::WarningEvent;
+use crate::tools::url_validation::redact_url_for_display;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
@@ -320,18 +321,19 @@ fn sanitize_compaction_message_content(
                 mime_type,
                 filename,
             } => {
-                if should_replace_file_parts(Some(&url), mode) {
+                if matches!(mode, FileSanitizeMode::AllFiles) {
                     sanitized.push(ContentItem::InputText {
                         text: url_file_placeholder_text(filename.as_deref(), &url),
                     });
+                    prev_replaced_file = true;
                 } else {
                     sanitized.push(ContentItem::UrlFile {
                         url,
                         mime_type,
                         filename,
                     });
+                    prev_replaced_file = false;
                 }
-                prev_replaced_file = false;
             }
             other => {
                 prev_replaced_file = false;
@@ -378,13 +380,9 @@ fn file_placeholder_text(
 fn url_file_placeholder_text(filename: Option<&str>, url: &str) -> String {
     let name = filename.unwrap_or("unnamed");
     let redacted = Url::parse(url)
-        .map(|mut parsed| {
-            parsed.set_query(None);
-            parsed.set_fragment(None);
-            parsed.to_string()
-        })
+        .map(|parsed| redact_url_for_display(&parsed))
         .unwrap_or_else(|_| "<invalid-url>".to_string());
-    format!("[File URL: {name}, {redacted}]")
+    format!("[File: {name}, {redacted}]")
 }
 
 fn estimate_base64_payload_size_bytes(data: &str) -> Option<u64> {
@@ -743,6 +741,70 @@ mod tests {
                 text: "[File: report.pdf, 8B, application/pdf]".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn sanitize_compaction_prompt_input_drops_wrappers_for_url_files() {
+        use codex_protocol::models::local_file_open_tag_text_with_filename;
+
+        let input = vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: local_file_open_tag_text_with_filename(1, Some("remote.pdf")),
+                },
+                ContentItem::UrlFile {
+                    url: "https://example.com/docs/remote.pdf?token=abc#page=2".to_string(),
+                    mime_type: Some("application/pdf".to_string()),
+                    filename: Some("remote.pdf".to_string()),
+                },
+                ContentItem::InputText {
+                    text: "<file_end></file_end>".to_string(),
+                },
+            ],
+            end_turn: None,
+            phase: None,
+        }];
+
+        let sanitized = sanitize_compaction_prompt_input(input);
+        let [ResponseItem::Message { content, .. }] = sanitized.as_slice() else {
+            panic!("expected one user message");
+        };
+        assert_eq!(
+            content,
+            &vec![ContentItem::InputText {
+                text: "[File: remote.pdf, https://example.com/docs/remote.pdf]".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn sanitize_compaction_inline_files_keeps_url_file_blocks() {
+        use codex_protocol::models::local_file_open_tag_text_with_filename;
+
+        let input = vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: local_file_open_tag_text_with_filename(1, Some("remote.pdf")),
+                },
+                ContentItem::UrlFile {
+                    url: "https://example.com/docs/remote.pdf".to_string(),
+                    mime_type: Some("application/pdf".to_string()),
+                    filename: Some("remote.pdf".to_string()),
+                },
+                ContentItem::InputText {
+                    text: "<file_end></file_end>".to_string(),
+                },
+            ],
+            end_turn: None,
+            phase: None,
+        }];
+
+        let sanitized = sanitize_compaction_inline_files(input.clone());
+        assert_eq!(sanitized, input);
     }
 
     #[test]

@@ -179,10 +179,17 @@ pub(crate) fn derive_pdf_filename(url: &Url, filename_hint: Option<&str>) -> Str
                 .and_then(Iterator::last)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
+                .map(|value| {
+                    urlencoding::decode(value)
+                        .map(|decoded| decoded.into_owned())
+                        .unwrap_or_else(|_| value.to_string())
+                })
         });
 
     let mut sanitized = sanitize_filename(raw.as_deref().unwrap_or(DEFAULT_FILENAME));
+    if sanitized.is_empty() {
+        return DEFAULT_FILENAME.to_string();
+    }
     if !sanitized.to_ascii_lowercase().ends_with(".pdf") {
         sanitized.push_str(".pdf");
     }
@@ -363,7 +370,13 @@ mod tests {
             derive_pdf_filename(&url, Some(" summary report ")),
             "summary_report.pdf"
         );
-        assert_eq!(derive_pdf_filename(&url, None), "report_20Q1.PDF");
+        assert_eq!(derive_pdf_filename(&url, None), "report_Q1.PDF");
+    }
+
+    #[test]
+    fn derives_default_pdf_filename_when_sanitization_removes_everything() {
+        let url = Url::parse("https://example.com/files/...").expect("valid url");
+        assert_eq!(derive_pdf_filename(&url, None), DEFAULT_FILENAME);
     }
 
     #[test]
