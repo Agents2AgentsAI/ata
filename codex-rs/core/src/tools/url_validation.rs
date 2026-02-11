@@ -196,7 +196,7 @@ pub(crate) fn derive_pdf_filename(url: &Url, filename_hint: Option<&str>) -> Str
                 .filter(|value| !value.is_empty())
                 .map(|value| {
                     urlencoding::decode(value)
-                        .map(|decoded| decoded.into_owned())
+                        .map(std::borrow::Cow::into_owned)
                         .unwrap_or_else(|_| value.to_string())
                 })
         });

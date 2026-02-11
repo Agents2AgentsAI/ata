@@ -4988,7 +4988,7 @@ pub(crate) async fn run_turn(
                         &turn_context,
                         EventMsg::Warning(WarningEvent {
                             message: format!(
-                                "Dropped {dropped_url_files} URL attachment(s) because the context window was exceeded."
+                                "Dropped {dropped_url_files} attachment(s) because the context window was exceeded."
                             ),
                         }),
                     )

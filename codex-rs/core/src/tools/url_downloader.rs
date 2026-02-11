@@ -28,6 +28,7 @@ const MAX_REDIRECTS: usize = 5;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
 const STALL_TIMEOUT: Duration = Duration::from_secs(15);
+const CACHE_TTL: Duration = Duration::from_secs(60 * 60); // 1 hour
 pub(crate) const DEFAULT_MAX_DOWNLOAD_CONCURRENCY: usize = 4;
 
 #[derive(Debug, Clone)]
@@ -156,7 +157,7 @@ async fn download_one_url_to_cache(
         });
     }
 
-    if cache_entry_dir.exists() {
+    if fs::try_exists(&cache_entry_dir).await.unwrap_or(false) {
         let mut entries = fs::read_dir(&cache_entry_dir).await.map_err(write_error)?;
         while let Some(entry) = entries.next_entry().await.map_err(write_error)? {
             let candidate = entry.path();
@@ -192,7 +193,7 @@ async fn download_one_url_to_cache(
             .send()
             .await
             .map_err(|error| UrlDownloadError::Request {
-                message: error.to_string(),
+                message: sanitize_request_error(&error),
             })?;
 
         if response.status().is_redirection() {
@@ -254,7 +255,13 @@ fn build_downloader_client() -> Client {
 }
 
 async fn is_cached_pdf_valid(path: &Path) -> Result<bool, UrlDownloadError> {
-    if !path.exists() {
+    if !fs::try_exists(path).await.unwrap_or(false) {
+        return Ok(false);
+    }
+
+    if is_cache_entry_stale(path).await {
+        let _ = fs::remove_file(path).await;
+        remove_dir_if_empty(path.parent()).await;
         return Ok(false);
     }
 
@@ -267,12 +274,29 @@ async fn is_cached_pdf_valid(path: &Path) -> Result<bool, UrlDownloadError> {
     }
 }
 
+async fn is_cache_entry_stale(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path).await else {
+        return false;
+    };
+    let Ok(modified) = metadata.modified() else {
+        return false;
+    };
+    modified.elapsed().unwrap_or(Duration::ZERO) > CACHE_TTL
+}
+
+async fn remove_dir_if_empty(dir: Option<&Path>) {
+    if let Some(dir) = dir {
+        // fs::remove_dir only succeeds if the directory is empty.
+        let _ = fs::remove_dir(dir).await;
+    }
+}
+
 async fn write_response_to_path(
     response: reqwest::Response,
     final_path: &Path,
 ) -> Result<(), UrlDownloadError> {
     let temp_path = temp_path_for(final_path);
-    if temp_path.exists() {
+    if fs::try_exists(&temp_path).await.unwrap_or(false) {
         let _ = fs::remove_file(&temp_path).await;
     }
 
@@ -286,7 +310,7 @@ async fn write_response_to_path(
             .map_err(|_| UrlDownloadError::StallTimeout)?
         {
             let chunk = chunk_result.map_err(|error| UrlDownloadError::Request {
-                message: error.to_string(),
+                message: sanitize_request_error(&error),
             })?;
             total_written = total_written.saturating_add(chunk.len() as u64);
             if total_written > MAX_FILE_SIZE {
@@ -347,6 +371,33 @@ fn invalid_pdf_error(error: impl ToString) -> UrlDownloadError {
     UrlDownloadError::InvalidPdf {
         message: error.to_string(),
     }
+}
+
+/// Extracts an error description from a `reqwest::Error` without including the URL,
+/// which may contain sensitive query parameters or tokens.
+fn sanitize_request_error(error: &reqwest::Error) -> String {
+    if error.is_timeout() {
+        return "request timed out".to_string();
+    }
+    if error.is_connect() {
+        return "connection failed".to_string();
+    }
+    if error.is_redirect() {
+        return "too many redirects".to_string();
+    }
+    if error.is_request() {
+        return "request error".to_string();
+    }
+    if error.is_body() {
+        return "response body error".to_string();
+    }
+    if error.is_decode() {
+        return "response decode error".to_string();
+    }
+    if let Some(status) = error.status() {
+        return format!("HTTP {status}");
+    }
+    "unknown request error".to_string()
 }
 
 fn temp_path_for(path: &Path) -> PathBuf {
@@ -557,5 +608,181 @@ mod tests {
         };
         assert_eq!(hits.load(Ordering::SeqCst), 1);
         assert_eq!(second_success.path, first_success.path);
+    }
+
+    #[tokio::test]
+    async fn redirect_without_location_header() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/no-location.pdf"))
+            .respond_with(ResponseTemplate::new(302))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let request = UrlDownloadRequest {
+            url: validated(&format!("{}/no-location.pdf", server.uri())),
+            filename_hint: None,
+        };
+
+        let outcomes = download_with_test_options(codex_home.path(), vec![request]).await;
+        assert_eq!(outcomes.len(), 1);
+        let UrlDownloadOutcome::Failure(failure) = &outcomes[0] else {
+            panic!("expected failure");
+        };
+        assert!(failure.reason.contains("missing Location header"));
+    }
+
+    #[tokio::test]
+    async fn non_pdf_response_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/not-a-pdf.pdf"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"not-a-pdf".to_vec()))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let request = UrlDownloadRequest {
+            url: validated(&format!("{}/not-a-pdf.pdf", server.uri())),
+            filename_hint: None,
+        };
+
+        let outcomes = download_with_test_options(codex_home.path(), vec![request]).await;
+        assert_eq!(outcomes.len(), 1);
+        let UrlDownloadOutcome::Failure(failure) = &outcomes[0] else {
+            panic!("expected failure");
+        };
+        assert!(failure.reason.contains("not a valid PDF"));
+    }
+
+    #[tokio::test]
+    async fn corrupt_cached_file_is_cleaned_up() {
+        let server = MockServer::start().await;
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_for_mock = Arc::clone(&hits);
+        Mock::given(method("GET"))
+            .and(path("/corrupt-test.pdf"))
+            .respond_with({
+                let hits_for_mock = Arc::clone(&hits_for_mock);
+                move |_req: &wiremock::Request| {
+                    hits_for_mock.fetch_add(1, Ordering::SeqCst);
+                    ResponseTemplate::new(200).set_body_bytes(b"%PDF-1.4\nvalid".to_vec())
+                }
+            })
+            .mount(&server)
+            .await;
+
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let url = validated(&format!("{}/corrupt-test.pdf", server.uri()));
+
+        // Pre-populate cache dir with a corrupt file at the expected path.
+        let dir = cache_entry_dir(codex_home.path(), url.normalized_cache_key());
+        fs::create_dir_all(&dir).await.expect("create cache dir");
+        let filename = url.derive_pdf_filename(Some("corrupt-test.pdf"));
+        let corrupt_path = dir.join(&filename);
+        fs::write(&corrupt_path, b"corrupt-not-a-pdf")
+            .await
+            .expect("write corrupt file");
+
+        let request = UrlDownloadRequest {
+            url,
+            filename_hint: Some("corrupt-test.pdf".to_string()),
+        };
+
+        let outcomes = download_with_test_options(codex_home.path(), vec![request]).await;
+        assert_eq!(outcomes.len(), 1);
+        let UrlDownloadOutcome::Success(success) = &outcomes[0] else {
+            panic!("expected success after re-download");
+        };
+        // Corrupt file should have been cleaned up and re-downloaded.
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        let content = fs::read(&success.path).await.expect("read cached file");
+        assert_eq!(content, b"%PDF-1.4\nvalid");
+    }
+
+    #[tokio::test]
+    async fn http_error_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/error.pdf"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let request = UrlDownloadRequest {
+            url: validated(&format!("{}/error.pdf", server.uri())),
+            filename_hint: None,
+        };
+
+        let outcomes = download_with_test_options(codex_home.path(), vec![request]).await;
+        assert_eq!(outcomes.len(), 1);
+        let UrlDownloadOutcome::Failure(failure) = &outcomes[0] else {
+            panic!("expected failure");
+        };
+        assert!(failure.reason.contains("500"));
+    }
+
+    #[tokio::test]
+    async fn stale_cache_entry_triggers_redownload() {
+        let server = MockServer::start().await;
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_for_mock = Arc::clone(&hits);
+        Mock::given(method("GET"))
+            .and(path("/stale-test.pdf"))
+            .respond_with({
+                let hits_for_mock = Arc::clone(&hits_for_mock);
+                move |_req: &wiremock::Request| {
+                    hits_for_mock.fetch_add(1, Ordering::SeqCst);
+                    ResponseTemplate::new(200).set_body_bytes(b"%PDF-1.4\nfresh".to_vec())
+                }
+            })
+            .mount(&server)
+            .await;
+
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let url = validated(&format!("{}/stale-test.pdf", server.uri()));
+
+        // Pre-populate cache with a valid PDF that has an old mtime.
+        let dir = cache_entry_dir(codex_home.path(), url.normalized_cache_key());
+        fs::create_dir_all(&dir).await.expect("create cache dir");
+        let filename = url.derive_pdf_filename(Some("stale-test.pdf"));
+        let cached_path = dir.join(&filename);
+        fs::write(&cached_path, b"%PDF-1.4\nstale")
+            .await
+            .expect("write stale file");
+
+        // Backdate the mtime to beyond the TTL.
+        let past = std::time::SystemTime::now() - CACHE_TTL - Duration::from_secs(60);
+        let file = std::fs::File::options()
+            .write(true)
+            .open(&cached_path)
+            .expect("open for set_times");
+        file.set_times(
+            std::fs::FileTimes::new()
+                .set_accessed(past)
+                .set_modified(past),
+        )
+        .expect("set_times");
+        drop(file);
+
+        let request = UrlDownloadRequest {
+            url,
+            filename_hint: Some("stale-test.pdf".to_string()),
+        };
+
+        let outcomes = download_with_test_options(codex_home.path(), vec![request]).await;
+        assert_eq!(outcomes.len(), 1);
+        let UrlDownloadOutcome::Success(success) = &outcomes[0] else {
+            panic!("expected success");
+        };
+        // Should have re-downloaded (stale entry was evicted).
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        let content = fs::read(&success.path).await.expect("read file");
+        assert_eq!(content, b"%PDF-1.4\nfresh");
     }
 }
