@@ -4,6 +4,7 @@ use crate::tools::url_validation::UrlValidationError;
 use crate::tools::url_validation::UrlValidationOptions;
 use crate::tools::url_validation::ValidatedUrl;
 use crate::tools::url_validation::validate_parsed_url;
+use codex_utils_file::FileMetadata;
 use codex_utils_file::MAX_FILE_SIZE;
 use codex_utils_file::analyze_file;
 use futures::StreamExt;
@@ -227,7 +228,7 @@ fn build_downloader_client() -> Client {
         .timeout(REQUEST_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .expect("failed to build downloader HTTP client")
 }
 
 async fn is_cached_pdf_valid(path: &Path) -> Result<bool, UrlDownloadError> {
@@ -235,14 +236,7 @@ async fn is_cached_pdf_valid(path: &Path) -> Result<bool, UrlDownloadError> {
         return Ok(false);
     }
 
-    let path_buf = path.to_path_buf();
-    let analysis = spawn_blocking(move || analyze_file(&path_buf))
-        .await
-        .map_err(|error| UrlDownloadError::InvalidPdf {
-            message: error.to_string(),
-        })?;
-
-    match analysis {
+    match analyze_pdf(path).await {
         Ok(metadata) if metadata.mime_type == "application/pdf" => Ok(true),
         _ => {
             let _ = fs::remove_file(path).await;
@@ -261,12 +255,7 @@ async fn write_response_to_path(
     }
 
     let write_result = async {
-        let mut file =
-            fs::File::create(&temp_path)
-                .await
-                .map_err(|error| UrlDownloadError::WriteError {
-                    message: error.to_string(),
-                })?;
+        let mut file = fs::File::create(&temp_path).await.map_err(write_error)?;
         let mut stream = response.bytes_stream();
         let mut total_written = 0_u64;
 
@@ -283,30 +272,16 @@ async fn write_response_to_path(
                     max_bytes: MAX_FILE_SIZE,
                 });
             }
-            file.write_all(&chunk)
-                .await
-                .map_err(|error| UrlDownloadError::WriteError {
-                    message: error.to_string(),
-                })?;
+            file.write_all(&chunk).await.map_err(write_error)?;
         }
 
-        file.flush()
-            .await
-            .map_err(|error| UrlDownloadError::WriteError {
-                message: error.to_string(),
-            })?;
-        file.sync_all()
-            .await
-            .map_err(|error| UrlDownloadError::WriteError {
-                message: error.to_string(),
-            })?;
+        file.flush().await.map_err(write_error)?;
+        file.sync_all().await.map_err(write_error)?;
         drop(file);
 
         fs::rename(&temp_path, final_path)
             .await
-            .map_err(|error| UrlDownloadError::WriteError {
-                message: error.to_string(),
-            })?;
+            .map_err(write_error)?;
 
         Ok(())
     }
@@ -320,24 +295,36 @@ async fn write_response_to_path(
 }
 
 async fn validate_downloaded_pdf(path: &Path) -> Result<(), UrlDownloadError> {
-    let path_buf = path.to_path_buf();
-    let analysis = spawn_blocking(move || analyze_file(&path_buf))
-        .await
-        .map_err(|error| UrlDownloadError::InvalidPdf {
-            message: error.to_string(),
-        })?
-        .map_err(|error| UrlDownloadError::InvalidPdf {
-            message: error.to_string(),
-        })?;
-
+    let analysis = analyze_pdf(path).await?;
     if analysis.mime_type != "application/pdf" {
         let _ = fs::remove_file(path).await;
-        return Err(UrlDownloadError::InvalidPdf {
-            message: format!("detected MIME type `{}`", analysis.mime_type),
-        });
+        return Err(invalid_pdf_error(format!(
+            "detected MIME type `{}`",
+            analysis.mime_type
+        )));
     }
 
     Ok(())
+}
+
+async fn analyze_pdf(path: &Path) -> Result<FileMetadata, UrlDownloadError> {
+    let path_buf = path.to_path_buf();
+    spawn_blocking(move || analyze_file(&path_buf))
+        .await
+        .map_err(invalid_pdf_error)?
+        .map_err(invalid_pdf_error)
+}
+
+fn write_error(error: std::io::Error) -> UrlDownloadError {
+    UrlDownloadError::WriteError {
+        message: error.to_string(),
+    }
+}
+
+fn invalid_pdf_error(error: impl ToString) -> UrlDownloadError {
+    UrlDownloadError::InvalidPdf {
+        message: error.to_string(),
+    }
 }
 
 fn temp_path_for(path: &Path) -> PathBuf {

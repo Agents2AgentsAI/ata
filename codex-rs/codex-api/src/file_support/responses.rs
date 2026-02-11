@@ -69,7 +69,7 @@ pub fn rewrite_openai_url_file_blocks_in_payload(payload: &mut Value) {
     }
 }
 
-pub fn rewrite_openai_url_file_blocks_in_content(content: &mut [Value]) {
+fn rewrite_openai_url_file_blocks_in_content(content: &mut [Value]) {
     for block in content {
         let is_url_file = block
             .get("type")

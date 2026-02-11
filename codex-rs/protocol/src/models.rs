@@ -9,6 +9,7 @@ use serde::Deserializer;
 use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
+use url::Url;
 
 use crate::config_types::CollaborationMode;
 use crate::config_types::SandboxMode;
@@ -170,8 +171,14 @@ impl TryFrom<UncheckedContentItem> for ContentItem {
                 filename,
             } => {
                 let url = url
-                    .filter(|value| !value.trim().is_empty())
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
                     .ok_or("url_file requires a non-empty `url`")?;
+                let parsed =
+                    Url::parse(&url).map_err(|_| "url_file `url` must be a valid absolute URL")?;
+                if !matches!(parsed.scheme(), "http" | "https") {
+                    return Err("url_file `url` must use http or https");
+                }
                 Ok(Self::UrlFile {
                     url,
                     mime_type,
@@ -2106,7 +2113,7 @@ mod tests {
     fn url_file_deserialization_accepts_non_empty_url() {
         let item = serde_json::from_value::<ContentItem>(serde_json::json!({
             "type": "url_file",
-            "url": "https://example.com/report.pdf",
+            "url": " https://example.com/report.pdf ",
             "filename": "report.pdf",
             "mime_type": "application/pdf",
         }))
@@ -2119,6 +2126,36 @@ mod tests {
                 mime_type: Some("application/pdf".to_string()),
                 filename: Some("report.pdf".to_string()),
             }
+        );
+    }
+
+    #[test]
+    fn url_file_deserialization_rejects_invalid_scheme() {
+        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "url_file",
+            "url": "file:///tmp/report.pdf",
+        }))
+        .expect_err("deserialization should fail");
+
+        assert!(
+            err.to_string()
+                .contains("url_file `url` must use http or https"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn url_file_deserialization_rejects_non_url_values() {
+        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "url_file",
+            "url": "not-a-url",
+        }))
+        .expect_err("deserialization should fail");
+
+        assert!(
+            err.to_string()
+                .contains("url_file `url` must be a valid absolute URL"),
+            "unexpected error: {err}"
         );
     }
 

@@ -139,7 +139,7 @@ impl ToolHandler for AttachUrlFilesHandler {
             )));
         }
 
-        let (validated_files, mut failures) = validate_and_dedup(args.files).await;
+        let (validated_files, mut failures, mut warnings) = validate_and_dedup(args.files).await;
         if validated_files.is_empty() {
             return Err(FunctionCallError::RespondToModel(
                 render_failure_only_summary(&failures),
@@ -149,7 +149,6 @@ impl ToolHandler for AttachUrlFilesHandler {
         let supports_url_ingestion =
             provider_transport_capabilities(&turn.provider).supports_file_url_ingestion;
         let mut success_count = 0usize;
-        let mut warnings = Vec::new();
 
         if supports_url_ingestion {
             let mut content = Vec::with_capacity(validated_files.len());
@@ -166,13 +165,9 @@ impl ToolHandler for AttachUrlFilesHandler {
             }
 
             success_count = validated_files.len();
-            let input = ResponseInputItem::Message {
-                role: "user".to_string(),
-                content,
-            };
             session
                 .inject_response_items_with_url_attachment_budget(
-                    vec![input],
+                    vec![user_message_response_input(content)],
                     success_count,
                     MAX_URLS_PER_TURN,
                 )
@@ -194,32 +189,10 @@ impl ToolHandler for AttachUrlFilesHandler {
             .await;
 
             let mut prepared_content = Vec::new();
+            let mut downloaded_successes = Vec::new();
             for outcome in download_outcomes {
                 match outcome {
-                    UrlDownloadOutcome::Success(success) => {
-                        match resolve_and_prepare_local_files_for_injection(
-                            FileInjectionContext {
-                                session: session.as_ref(),
-                                provider: &turn.provider,
-                                config: turn.config.as_ref(),
-                                http_client: session.file_upload_http_client(),
-                            },
-                            vec![success.path],
-                        )
-                        .await
-                        {
-                            Ok(prepared) => {
-                                success_count =
-                                    success_count.saturating_add(prepared.attachment_count);
-                                prepared_content.extend(prepared.content_items);
-                                warnings.extend(prepared.warnings);
-                            }
-                            Err(error) => failures.push(AttachmentFailure {
-                                redacted_url: success.url.redacted_for_display(),
-                                reason: error.to_string(),
-                            }),
-                        }
-                    }
+                    UrlDownloadOutcome::Success(success) => downloaded_successes.push(success),
                     UrlDownloadOutcome::Failure(failure) => {
                         failures.push(AttachmentFailure {
                             redacted_url: failure.redacted_url,
@@ -229,13 +202,61 @@ impl ToolHandler for AttachUrlFilesHandler {
                 }
             }
 
+            if !downloaded_successes.is_empty() {
+                let downloaded_paths = downloaded_successes
+                    .iter()
+                    .map(|success| success.path.clone())
+                    .collect();
+                let batch_prepared = resolve_and_prepare_local_files_for_injection(
+                    FileInjectionContext {
+                        session: session.as_ref(),
+                        provider: &turn.provider,
+                        config: turn.config.as_ref(),
+                        http_client: session.file_upload_http_client(),
+                    },
+                    downloaded_paths,
+                )
+                .await;
+
+                match batch_prepared {
+                    Ok(prepared) => {
+                        success_count = success_count.saturating_add(prepared.attachment_count);
+                        prepared_content.extend(prepared.content_items);
+                        warnings.extend(prepared.warnings);
+                    }
+                    Err(_) => {
+                        for success in downloaded_successes {
+                            match resolve_and_prepare_local_files_for_injection(
+                                FileInjectionContext {
+                                    session: session.as_ref(),
+                                    provider: &turn.provider,
+                                    config: turn.config.as_ref(),
+                                    http_client: session.file_upload_http_client(),
+                                },
+                                vec![success.path],
+                            )
+                            .await
+                            {
+                                Ok(prepared) => {
+                                    success_count =
+                                        success_count.saturating_add(prepared.attachment_count);
+                                    prepared_content.extend(prepared.content_items);
+                                    warnings.extend(prepared.warnings);
+                                }
+                                Err(error) => failures.push(AttachmentFailure {
+                                    redacted_url: success.url.redacted_for_display(),
+                                    reason: error.to_string(),
+                                }),
+                            }
+                        }
+                    }
+                }
+            }
+
             if success_count > 0 {
                 session
                     .inject_response_items_with_url_attachment_budget(
-                        vec![ResponseInputItem::Message {
-                            role: "user".to_string(),
-                            content: prepared_content,
-                        }],
+                        vec![user_message_response_input(prepared_content)],
                         success_count,
                         MAX_URLS_PER_TURN,
                     )
@@ -253,23 +274,32 @@ impl ToolHandler for AttachUrlFilesHandler {
         let summary = render_summary(success_count, &failures, &warnings);
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(summary),
-            success: Some(failures.is_empty()),
+            success: Some(success_count > 0),
         })
     }
 }
 
 async fn validate_and_dedup(
     files: Vec<AttachUrlFileArg>,
-) -> (Vec<ValidatedAttachment>, Vec<AttachmentFailure>) {
+) -> (
+    Vec<ValidatedAttachment>,
+    Vec<AttachmentFailure>,
+    Vec<String>,
+) {
     let mut seen = HashSet::new();
     let mut validated = Vec::new();
     let mut failures = Vec::new();
+    let mut warnings = Vec::new();
 
     for file in files {
         match validate_url_strict(&file.url).await {
             Ok(url) => {
                 let normalized_key = url.normalized_cache_key().to_string();
                 if !seen.insert(normalized_key) {
+                    warnings.push(format!(
+                        "Skipped duplicate URL: {}",
+                        url.redacted_for_display()
+                    ));
                     continue;
                 }
                 let filename = file
@@ -285,7 +315,7 @@ async fn validate_and_dedup(
         }
     }
 
-    (validated, failures)
+    (validated, failures, warnings)
 }
 
 fn render_summary(
@@ -326,6 +356,13 @@ fn render_failure_only_summary(failures: &[AttachmentFailure]) -> String {
         ));
     }
     summary
+}
+
+fn user_message_response_input(content: Vec<ContentItem>) -> ResponseInputItem {
+    ResponseInputItem::Message {
+        role: "user".to_string(),
+        content,
+    }
 }
 
 fn redact_raw_url(raw_url: &str) -> String {
@@ -424,5 +461,36 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(FunctionCallError::RespondToModel(_))));
+    }
+
+    #[tokio::test]
+    async fn duplicate_urls_emit_warning_and_attach_once() {
+        let (session, mut turn_context) = make_session_and_context().await;
+        turn_context.provider = crate::ModelProviderInfo::create_openai_provider();
+        let session = Arc::new(session);
+        *session.active_turn.lock().await = Some(ActiveTurn::default());
+
+        let handler = AttachUrlFilesHandler;
+        let output = handler
+            .handle(ToolInvocation {
+                session,
+                turn: Arc::new(turn_context),
+                tracker: Arc::new(Mutex::new(crate::turn_diff_tracker::TurnDiffTracker::new())),
+                call_id: "call-3".to_string(),
+                tool_name: TOOL_NAME.to_string(),
+                payload: ToolPayload::Function {
+                    arguments: r#"{"files":[{"url":"https://example.com/doc.pdf"},{"url":"https://example.com/doc.pdf"}]}"#.to_string(),
+                },
+            })
+            .await
+            .expect("tool call should succeed");
+
+        let ToolOutput::Function { body, success } = output else {
+            panic!("expected function output");
+        };
+        let text = body.to_text().expect("text body");
+        assert!(text.contains("Attached 1 URL file(s)."));
+        assert!(text.contains("Skipped duplicate URL: https://example.com/doc.pdf"));
+        assert_eq!(success, Some(true));
     }
 }

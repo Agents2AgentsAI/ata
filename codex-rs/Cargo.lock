@@ -1741,6 +1741,7 @@ dependencies = [
  "tracing-subscriber",
  "tracing-test",
  "url",
+ "urlencoding",
  "uuid",
  "walkdir",
  "which",
@@ -2127,6 +2128,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "ts-rs",
+ "url",
  "uuid",
 ]
 
