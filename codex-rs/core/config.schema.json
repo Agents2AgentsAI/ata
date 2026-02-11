@@ -248,6 +248,9 @@
             "runtime_metrics": {
               "type": "boolean"
             },
+            "search_tool": {
+              "type": "boolean"
+            },
             "shell_snapshot": {
               "type": "boolean"
             },
@@ -610,6 +613,14 @@
         "log_user_prompt": {
           "description": "Log user prompt in traces",
           "type": "boolean"
+        },
+        "metrics_exporter": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/OtelExporterKind"
+            }
+          ],
+          "description": "Optional metrics exporter"
         },
         "trace_exporter": {
           "allOf": [
@@ -1325,6 +1336,9 @@
           "type": "boolean"
         },
         "runtime_metrics": {
+          "type": "boolean"
+        },
+        "search_tool": {
           "type": "boolean"
         },
         "shell_snapshot": {
