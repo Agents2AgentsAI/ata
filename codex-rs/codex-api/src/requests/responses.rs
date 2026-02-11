@@ -127,11 +127,11 @@ impl<'a> ResponsesRequestBuilder<'a> {
             .unwrap_or_else(|| provider.is_azure_responses_endpoint());
 
         let req = ResponsesApiRequest {
-            model,
-            instructions,
-            input: &normalized_input,
-            tools,
-            tool_choice: "auto",
+            model: model.to_string(),
+            instructions: instructions.to_string(),
+            input: normalized_input.clone(),
+            tools: tools.to_vec(),
+            tool_choice: "auto".to_string(),
             parallel_tool_calls: self.parallel_tool_calls,
             reasoning: self.reasoning,
             store,
@@ -162,7 +162,7 @@ impl<'a> ResponsesRequestBuilder<'a> {
     }
 }
 
-fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
+pub(crate) fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
     let Some(input_value) = payload_json.get_mut("input") else {
         return;
     };

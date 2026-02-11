@@ -16,6 +16,7 @@ use crate::client_common::ResponseStream;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
+use crate::tools::spec::create_tools_json_for_responses_api;
 
 /// Streams a turn via the Anthropic Messages API.
 pub(super) async fn stream_anthropic_api(
@@ -25,7 +26,9 @@ pub(super) async fn stream_anthropic_api(
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
 ) -> Result<ResponseStream> {
-    let api_prompt = ModelClientSession::build_responses_request(prompt)?;
+    let input = prompt.get_formatted_input();
+    let instructions = &prompt.base_instructions.text;
+    let tools = create_tools_json_for_responses_api(&prompt.tools)?;
 
     let api_key = session
         .client
@@ -38,17 +41,17 @@ pub(super) async fn stream_anthropic_api(
         .ok_or_else(|| CodexErr::Api("Missing ANTHROPIC_API_KEY".to_string()))?;
 
     let adapter = AnthropicAdapter::new();
-    let input_values = serialize_input_items(&api_prompt.input)?;
+    let input_values = serialize_input_items(&input)?;
     let reasoning_value = build_reasoning_value(model_info, effort, summary);
 
     let body = adapter
         .build_request_body(
             &model_info.slug,
-            &api_prompt.instructions,
+            instructions,
             &input_values,
-            &api_prompt.tools,
+            &tools,
             &codex_api::RequestOptions {
-                parallel_tool_calls: api_prompt.parallel_tool_calls,
+                parallel_tool_calls: prompt.parallel_tool_calls,
                 reasoning: reasoning_value,
                 ..Default::default()
             },

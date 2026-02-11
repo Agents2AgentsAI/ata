@@ -322,15 +322,6 @@ struct AppServerCommand {
     #[command(subcommand)]
     subcommand: Option<AppServerSubcommand>,
 
-    /// Transport endpoint URL. Supported values: `stdio://` (default),
-    /// `ws://IP:PORT`.
-    #[arg(
-        long = "listen",
-        value_name = "URL",
-        default_value = codex_app_server::AppServerTransport::DEFAULT_LISTEN_URL
-    )]
-    listen: codex_app_server::AppServerTransport,
-
     /// Controls whether analytics are enabled by default.
     ///
     /// Analytics are disabled by default for app-server. Users have to explicitly opt in
@@ -621,13 +612,11 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::AppServer(app_server_cli)) => match app_server_cli.subcommand {
             None => {
-                let transport = app_server_cli.listen;
-                codex_app_server::run_main_with_transport(
+                codex_app_server::run_main(
                     codex_linux_sandbox_exe,
                     root_config_overrides,
                     codex_core::config_loader::LoaderOverrides::default(),
                     app_server_cli.analytics_default_enabled,
-                    transport,
                 )
                 .await?;
             }
@@ -1372,10 +1361,6 @@ mod tests {
     fn app_server_analytics_default_disabled_without_flag() {
         let app_server = app_server_from_args(["ata", "app-server"].as_ref());
         assert!(!app_server.analytics_default_enabled);
-        assert_eq!(
-            app_server.listen,
-            codex_app_server::AppServerTransport::Stdio
-        );
     }
 
     #[test]

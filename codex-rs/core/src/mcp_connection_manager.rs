@@ -541,6 +541,33 @@ impl McpConnectionManager {
         tools
     }
 
+    /// Force-refresh codex apps tools by bypassing the in-process cache.
+    ///
+    /// On success, the refreshed tools replace the cache contents. On failure,
+    /// the existing cache remains unchanged.
+    pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<()> {
+        let managed_client = self
+            .clients
+            .get(CODEX_APPS_MCP_SERVER_NAME)
+            .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?
+            .client()
+            .await
+            .context("failed to get client")?;
+
+        let tools = list_tools_for_client_uncached(
+            CODEX_APPS_MCP_SERVER_NAME,
+            &managed_client.client,
+            managed_client.tool_timeout,
+        )
+        .await
+        .with_context(|| {
+            format!("failed to refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}'")
+        })?;
+
+        write_cached_codex_apps_tools(&tools);
+        Ok(())
+    }
+
     /// Returns a single map that contains all resources. Each key is the
     /// server name and the value is a vector of resources.
     pub async fn list_all_resources(&self) -> HashMap<String, Vec<Resource>> {
@@ -851,6 +878,37 @@ fn filter_tools(tools: Vec<ToolInfo>, filter: ToolFilter) -> Vec<ToolInfo> {
         .into_iter()
         .filter(|tool| filter.allows(&tool.tool_name))
         .collect()
+}
+
+pub(crate) fn filter_codex_apps_mcp_tools_only(
+    mut mcp_tools: HashMap<String, ToolInfo>,
+    connectors: &[crate::connectors::AppInfo],
+) -> HashMap<String, ToolInfo> {
+    let allowed: HashSet<&str> = connectors
+        .iter()
+        .map(|connector| connector.id.as_str())
+        .collect();
+
+    mcp_tools.retain(|_, tool| {
+        if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
+            return false;
+        }
+        let Some(connector_id) = tool.connector_id.as_deref() else {
+            return false;
+        };
+        allowed.contains(connector_id)
+    });
+
+    mcp_tools
+}
+
+pub(crate) fn filter_mcp_tools_by_name(
+    mut mcp_tools: HashMap<String, ToolInfo>,
+    selected_tools: &[String],
+) -> HashMap<String, ToolInfo> {
+    let allowed: HashSet<&str> = selected_tools.iter().map(String::as_str).collect();
+    mcp_tools.retain(|name, _| allowed.contains(name.as_str()));
+    mcp_tools
 }
 
 fn normalize_codex_apps_tool_title(

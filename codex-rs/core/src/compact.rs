@@ -59,6 +59,7 @@ pub(crate) async fn run_compact_task(
     input: Vec<UserInput>,
 ) -> CodexResult<()> {
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
+        turn_id: turn_context.sub_id.clone(),
         model_context_window: turn_context.model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
@@ -97,6 +98,7 @@ async fn run_compact_task_inner(
     // session config before this write occurs.
     let collaboration_mode = sess.current_collaboration_mode().await;
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
+        turn_id: Some(turn_context.sub_id.clone()),
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
         sandbox_policy: turn_context.sandbox_policy.clone(),
@@ -114,7 +116,11 @@ async fn run_compact_task_inner(
 
     loop {
         // Clone is required because of the loop
-        let turn_input = sanitize_compaction_prompt_input(history.clone().for_prompt());
+        let turn_input = sanitize_compaction_prompt_input(
+            history
+                .clone()
+                .for_prompt(&turn_context.model_info.input_modalities),
+        );
         let turn_input_len = turn_input.len();
         let prompt = Prompt {
             input: turn_input,

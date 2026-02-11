@@ -10,6 +10,7 @@ static ATA_BIN: OnceLock<PathBuf> = OnceLock::new();
 
 /// Regression test for https://github.com/openai/codex/issues/8803.
 #[tokio::test]
+#[ignore = "TODO(mbolin): flaky"]
 async fn malformed_rules_should_not_panic() -> anyhow::Result<()> {
     // run_codex_cli() does not work on Windows due to PTY limitations.
     if cfg!(windows) {

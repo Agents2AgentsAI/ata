@@ -5,7 +5,7 @@ use codex_api::TransportError;
 use codex_api::error::ApiError;
 use codex_api::file_support::map_user_facing_file_error_from_http_body;
 use codex_api::rate_limits::parse_promo_message;
-use codex_api::rate_limits::parse_rate_limit;
+use codex_api::rate_limits::parse_rate_limit_for_limit;
 use http::HeaderMap;
 use serde::Deserialize;
 use tracing::debug;
@@ -94,7 +94,10 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
 
                     if let Ok(err) = serde_json::from_str::<UsageErrorResponse>(&body_text) {
                         if err.error.error_type.as_deref() == Some("usage_limit_reached") {
-                            let rate_limits = headers.as_ref().and_then(parse_rate_limit);
+                            let limit_id = extract_header(headers.as_ref(), ACTIVE_LIMIT_HEADER);
+                            let rate_limits = headers.as_ref().and_then(|map| {
+                                parse_rate_limit_for_limit(map, limit_id.as_deref())
+                            });
                             let promo_message = headers.as_ref().and_then(parse_promo_message);
                             let resets_at = err
                                 .error
@@ -103,8 +106,9 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                             return CodexErr::UsageLimitReached(UsageLimitReachedError {
                                 plan_type: err.error.plan_type,
                                 resets_at,
-                                rate_limits,
+                                rate_limits: rate_limits.map(Box::new),
                                 promo_message,
+                                limit_name: limit_id,
                             });
                         } else if err.error.error_type.as_deref() == Some("usage_not_included") {
                             return CodexErr::UsageNotIncluded;
@@ -140,6 +144,7 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
 
 const MODEL_CAP_MODEL_HEADER: &str = "x-codex-model-cap-model";
 const MODEL_CAP_RESET_AFTER_HEADER: &str = "x-codex-model-cap-reset-after-seconds";
+const ACTIVE_LIMIT_HEADER: &str = "x-codex-active-limit";
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const OAI_REQUEST_ID_HEADER: &str = "x-oai-request-id";
 const CF_RAY_HEADER: &str = "cf-ray";
@@ -213,6 +218,33 @@ mod tests {
             matches!(err, CodexErr::ContextWindowExceeded),
             "expected CodexErr::ContextWindowExceeded, got {err:?}"
         );
+    }
+
+    #[test]
+    fn map_api_error_maps_usage_limit_limit_name_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            ACTIVE_LIMIT_HEADER,
+            http::HeaderValue::from_static("codex_other"),
+        );
+        let body = serde_json::json!({
+            "error": {
+                "type": "usage_limit_reached",
+                "plan_type": "pro",
+            }
+        })
+        .to_string();
+        let err = map_api_error(ApiError::Transport(TransportError::Http {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            url: Some("http://example.com/v1/responses".to_string()),
+            headers: Some(headers),
+            body: Some(body),
+        }));
+
+        let CodexErr::UsageLimitReached(usage_limit) = err else {
+            panic!("expected CodexErr::UsageLimitReached, got {err:?}");
+        };
+        assert_eq!(usage_limit.limit_name.as_deref(), Some("codex_other"));
     }
 }
 
