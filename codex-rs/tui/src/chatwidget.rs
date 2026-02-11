@@ -125,6 +125,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::models::MessagePhase;
+use codex_protocol::models::local_file_label_text;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::request_user_input::RequestUserInputEvent;
@@ -713,10 +714,15 @@ pub(crate) fn create_initial_user_message(
     }
 }
 
+/// Returns `true` when `placeholder` looks like a `[File #N]` label.
+fn is_file_placeholder(placeholder: &str) -> bool {
+    placeholder.starts_with("[File ")
+}
+
 // When merging multiple queued drafts (e.g., after interrupt), each draft starts numbering
-// its attachments at [Image #1]. Reassign placeholder labels based on the attachment list so
-// the combined local_image_paths order matches the labels, even if placeholders were moved
-// in the text (e.g., [Image #2] appearing before [Image #1]).
+// its attachments at [Image #1] or [File #1]. Reassign placeholder labels based on the
+// attachment list so the combined local_image_paths order matches the labels, even if
+// placeholders were moved in the text.
 fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) -> UserMessage {
     let UserMessage {
         text,
@@ -736,7 +742,12 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
     let mut mapping: HashMap<String, String> = HashMap::new();
     let mut remapped_images = Vec::new();
     for attachment in local_images {
-        let new_placeholder = local_image_label_text(*next_label);
+        let is_file = is_file_placeholder(&attachment.placeholder);
+        let new_placeholder = if is_file {
+            local_file_label_text(*next_label)
+        } else {
+            local_image_label_text(*next_label)
+        };
         *next_label += 1;
         mapping.insert(attachment.placeholder.clone(), new_placeholder.clone());
         remapped_images.push(LocalImageAttachment {

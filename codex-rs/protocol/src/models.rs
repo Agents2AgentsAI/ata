@@ -927,8 +927,9 @@ pub enum ReasoningItemContent {
 
 impl From<Vec<UserInput>> for ResponseInputItem {
     fn from(items: Vec<UserInput>) -> Self {
-        let mut image_index = 0;
-        let mut file_index = 0;
+        // Use a single attachment counter so images and files share the same
+        // numbering sequence, matching the composer's combined label counter.
+        let mut attachment_index = 0;
         Self::Message {
             role: "user".to_string(),
             content: items
@@ -945,12 +946,12 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                         },
                     ],
                     UserInput::LocalImage { path } => {
-                        image_index += 1;
-                        local_image_content_items_with_label_number(&path, Some(image_index))
+                        attachment_index += 1;
+                        local_image_content_items_with_label_number(&path, Some(attachment_index))
                     }
                     UserInput::LocalFile { path } => {
-                        file_index += 1;
-                        local_file_content_items(&path, Some(file_index))
+                        attachment_index += 1;
+                        local_file_content_items(&path, Some(attachment_index))
                     }
                     UserInput::UploadedFile {
                         file_id,
@@ -958,12 +959,12 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                         filename,
                         ..
                     } => {
-                        file_index += 1;
+                        attachment_index += 1;
                         let file_item =
                             ContentItem::file_ref(file_id, mime_type, Some(filename.clone()));
                         wrap_file_content_items(
                             file_item,
-                            Some(file_index),
+                            Some(attachment_index),
                             Some(filename.as_str()),
                         )
                     }
