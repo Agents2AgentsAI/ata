@@ -10,6 +10,7 @@ use url::Url;
 const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_FILENAME: &str = "document.pdf";
 const MAX_FILENAME_LEN: usize = 120;
+pub(crate) const MAX_URL_LENGTH: usize = 8192;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UrlValidationOptions {
@@ -66,6 +67,8 @@ pub(crate) enum UrlValidationError {
     EmptyUrl,
     #[error("invalid URL: {message}")]
     InvalidUrl { message: String },
+    #[error("URL exceeds max length of {max_length} characters")]
+    UrlTooLong { max_length: usize },
     #[error("unsupported URL scheme `{scheme}`")]
     UnsupportedScheme { scheme: String },
     #[error("URL must not include embedded credentials")]
@@ -91,6 +94,11 @@ pub(crate) async fn validate_url(
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return Err(UrlValidationError::EmptyUrl);
+    }
+    if trimmed.len() > MAX_URL_LENGTH {
+        return Err(UrlValidationError::UrlTooLong {
+            max_length: MAX_URL_LENGTH,
+        });
     }
 
     let parsed = Url::parse(trimmed).map_err(|error| UrlValidationError::InvalidUrl {
@@ -167,6 +175,13 @@ pub(crate) fn redact_url_for_display(url: &Url) -> String {
     redacted.set_query(None);
     redacted.set_fragment(None);
     redacted.to_string()
+}
+
+pub(crate) fn redact_url_string_for_display(raw_url: &str) -> String {
+    Url::parse(raw_url.trim())
+        .ok()
+        .map(|url| redact_url_for_display(&url))
+        .unwrap_or_else(|| "<invalid-url>".to_string())
 }
 
 pub(crate) fn derive_pdf_filename(url: &Url, filename_hint: Option<&str>) -> String {
@@ -386,6 +401,32 @@ mod tests {
         assert_eq!(
             redact_url_for_display(&url),
             "https://example.com/path/file.pdf"
+        );
+    }
+
+    #[test]
+    fn redacts_or_marks_invalid_raw_url_for_display() {
+        assert_eq!(
+            redact_url_string_for_display("https://example.com/file.pdf?token=abc#page=2"),
+            "https://example.com/file.pdf"
+        );
+        assert_eq!(
+            redact_url_string_for_display("not-a-url"),
+            "<invalid-url>".to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_url_longer_than_max_length() {
+        let long_url = format!("https://example.com/{}", "a".repeat(MAX_URL_LENGTH));
+        let error = validate_url_strict(&long_url)
+            .await
+            .expect_err("URL should be rejected");
+        assert_eq!(
+            error,
+            UrlValidationError::UrlTooLong {
+                max_length: MAX_URL_LENGTH
+            }
         );
     }
 }

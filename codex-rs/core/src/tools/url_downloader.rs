@@ -156,6 +156,28 @@ async fn download_one_url_to_cache(
         });
     }
 
+    if cache_entry_dir.exists() {
+        let mut entries = fs::read_dir(&cache_entry_dir).await.map_err(write_error)?;
+        while let Some(entry) = entries.next_entry().await.map_err(write_error)? {
+            let candidate = entry.path();
+            if candidate == final_path {
+                continue;
+            }
+            if candidate
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(".part"))
+            {
+                continue;
+            }
+            if is_cached_pdf_valid(&candidate).await? {
+                return Ok(UrlDownloadSuccess {
+                    url: request.url,
+                    path: candidate,
+                });
+            }
+        }
+    }
+
     fs::create_dir_all(&cache_entry_dir)
         .await
         .map_err(|error| UrlDownloadError::WriteError {
@@ -495,5 +517,45 @@ mod tests {
         assert!(matches!(outcomes1[0], UrlDownloadOutcome::Success(_)));
         assert!(matches!(outcomes2[0], UrlDownloadOutcome::Success(_)));
         assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn reuses_cache_when_filename_hint_changes_for_same_url() {
+        let server = MockServer::start().await;
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_for_mock = Arc::clone(&hits);
+        Mock::given(method("GET"))
+            .and(path("/filename-drift.pdf"))
+            .respond_with({
+                let hits_for_mock = Arc::clone(&hits_for_mock);
+                move |_req: &wiremock::Request| {
+                    hits_for_mock.fetch_add(1, Ordering::SeqCst);
+                    ResponseTemplate::new(200).set_body_bytes(b"%PDF-1.4\ncached".to_vec())
+                }
+            })
+            .mount(&server)
+            .await;
+
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let first = UrlDownloadRequest {
+            url: validated(&format!("{}/filename-drift.pdf", server.uri())),
+            filename_hint: Some("first-name.pdf".to_string()),
+        };
+        let second = UrlDownloadRequest {
+            url: validated(&format!("{}/filename-drift.pdf", server.uri())),
+            filename_hint: Some("second-name.pdf".to_string()),
+        };
+
+        let outcomes1 = download_with_test_options(codex_home.path(), vec![first]).await;
+        let outcomes2 = download_with_test_options(codex_home.path(), vec![second]).await;
+
+        let UrlDownloadOutcome::Success(first_success) = &outcomes1[0] else {
+            panic!("expected first request to succeed");
+        };
+        let UrlDownloadOutcome::Success(second_success) = &outcomes2[0] else {
+            panic!("expected second request to succeed");
+        };
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert_eq!(second_success.path, first_success.path);
     }
 }

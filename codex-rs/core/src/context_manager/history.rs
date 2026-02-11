@@ -183,8 +183,12 @@ impl ContextManager {
 
     /// Removes URL-based file attachments from user messages in the most recent turn.
     ///
-    /// Returns the number of removed `ContentItem::UrlFile` blocks.
-    pub(crate) fn drop_last_turn_url_files(&mut self) -> usize {
+    /// When `url_attachments_in_turn` is greater than zero, this also removes `InputFile`
+    /// attachments from the most recent turn until that count is exhausted. This supports URL
+    /// attachments that were downloaded and injected as local `input_file` blocks.
+    ///
+    /// Returns the number of removed URL attachment blocks.
+    pub(crate) fn drop_last_turn_url_files(&mut self, url_attachments_in_turn: usize) -> usize {
         let Some(last_user_index) = self
             .items
             .iter()
@@ -200,9 +204,14 @@ impl ContextManager {
             )
             .map_or(0, |index| index.saturating_add(1));
 
+        let remove_url_files_only = url_attachments_in_turn == 0;
+        let mut remaining_url_attachments = url_attachments_in_turn;
         let mut removed_total = 0usize;
         let mut index = self.items.len();
         while index > turn_start {
+            if !remove_url_files_only && remaining_url_attachments == 0 {
+                break;
+            }
             index -= 1;
 
             let mut should_remove_message = false;
@@ -214,11 +223,24 @@ impl ContextManager {
                 let mut content_index = 0usize;
 
                 while content_index < content.len() {
+                    if !remove_url_files_only && remaining_url_attachments == 0 {
+                        filtered.extend(content[content_index..].iter().cloned());
+                        break;
+                    }
+
+                    let next_is_removable = content.get(content_index + 1).is_some_and(|next| {
+                        matches!(next, ContentItem::UrlFile { .. })
+                            || (!remove_url_files_only
+                                && matches!(next, ContentItem::InputFile { .. }))
+                    });
                     if let ContentItem::InputText { text } = &content[content_index]
                         && is_file_open_tag_text(text)
-                        && let Some(ContentItem::UrlFile { .. }) = content.get(content_index + 1)
+                        && next_is_removable
                     {
                         removed_in_message = removed_in_message.saturating_add(1);
+                        if !remove_url_files_only {
+                            remaining_url_attachments = remaining_url_attachments.saturating_sub(1);
+                        }
                         content_index += 2;
                         if let Some(ContentItem::InputText { text }) = content.get(content_index)
                             && is_file_close_tag_text(text)
@@ -228,11 +250,19 @@ impl ContextManager {
                         continue;
                     }
 
-                    if matches!(
+                    let current_is_removable = matches!(
                         content.get(content_index),
                         Some(ContentItem::UrlFile { .. })
-                    ) {
+                    ) || (!remove_url_files_only
+                        && matches!(
+                            content.get(content_index),
+                            Some(ContentItem::InputFile { .. })
+                        ));
+                    if current_is_removable {
                         removed_in_message = removed_in_message.saturating_add(1);
+                        if !remove_url_files_only {
+                            remaining_url_attachments = remaining_url_attachments.saturating_sub(1);
+                        }
                         if filtered.last().is_some_and(|item| {
                             matches!(item, ContentItem::InputText { text } if is_file_open_tag_text(text))
                         }) {
