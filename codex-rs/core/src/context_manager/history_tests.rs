@@ -535,7 +535,7 @@ fn drop_last_turn_url_files_removes_wrapped_url_files_and_tags() {
     }];
     let mut history = create_history_with_items(items);
 
-    assert_eq!(history.drop_last_turn_url_files(), 1);
+    assert_eq!(history.drop_last_turn_url_files(0), 1);
     assert_eq!(
         history.raw_items(),
         vec![ResponseItem::Message {
@@ -595,7 +595,41 @@ fn drop_last_turn_url_files_applies_to_multiple_user_messages_in_last_turn() {
     ];
     let mut history = create_history_with_items(items);
 
-    assert_eq!(history.drop_last_turn_url_files(), 2);
+    assert_eq!(history.drop_last_turn_url_files(0), 2);
+    assert_eq!(history.raw_items(), vec![assistant_msg("prior turn")]);
+}
+
+#[test]
+fn drop_last_turn_url_files_removes_download_path_input_files_when_budget_is_known() {
+    let items = vec![
+        assistant_msg("prior turn"),
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: codex_protocol::models::local_file_open_tag_text_with_filename(
+                        1,
+                        Some("downloaded.pdf"),
+                    ),
+                },
+                ContentItem::InputFile {
+                    file_data: Some("JVBERi0xLjQ=".to_string()),
+                    file_id: None,
+                    mime_type: Some("application/pdf".to_string()),
+                    filename: Some("downloaded.pdf".to_string()),
+                },
+                ContentItem::InputText {
+                    text: "<file_end></file_end>".to_string(),
+                },
+            ],
+            end_turn: None,
+            phase: None,
+        },
+    ];
+    let mut history = create_history_with_items(items);
+
+    assert_eq!(history.drop_last_turn_url_files(1), 1);
     assert_eq!(history.raw_items(), vec![assistant_msg("prior turn")]);
 }
 

@@ -18,7 +18,7 @@ use crate::tools::url_downloader::UrlDownloadOutcome;
 use crate::tools::url_downloader::UrlDownloadRequest;
 use crate::tools::url_downloader::download_url_files_to_cache;
 use crate::tools::url_validation::ValidatedUrl;
-use crate::tools::url_validation::redact_url_for_display;
+use crate::tools::url_validation::redact_url_string_for_display;
 use crate::tools::url_validation::validate_url_strict;
 use async_trait::async_trait;
 use codex_protocol::config_types::WebSearchMode;
@@ -30,7 +30,6 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::LazyLock;
-use url::Url;
 
 const TOOL_NAME: &str = "attach_url_files";
 const MAX_URLS_PER_CALL: usize = 10;
@@ -174,6 +173,25 @@ impl ToolHandler for AttachUrlFilesHandler {
                 .await
                 .map_err(map_budget_injection_error)?;
         } else {
+            {
+                let mut active = session.active_turn.lock().await;
+                let Some(active_turn) = active.as_mut() else {
+                    return Err(map_budget_injection_error(
+                        crate::codex::UrlAttachmentInjectionError::NoActiveTurn,
+                    ));
+                };
+                let turn_state = active_turn.turn_state.lock().await;
+                if let Err(current) = turn_state.can_reserve_url_attachments(1, MAX_URLS_PER_TURN) {
+                    return Err(map_budget_injection_error(
+                        crate::codex::UrlAttachmentInjectionError::PerTurnLimitExceeded {
+                            attempted: 1,
+                            current,
+                            limit: MAX_URLS_PER_TURN,
+                        },
+                    ));
+                }
+            }
+
             let requests: Vec<UrlDownloadRequest> = validated_files
                 .iter()
                 .map(|attachment| UrlDownloadRequest {
@@ -309,7 +327,7 @@ async fn validate_and_dedup(
                 validated.push(ValidatedAttachment { url, filename });
             }
             Err(error) => failures.push(AttachmentFailure {
-                redacted_url: redact_raw_url(&file.url),
+                redacted_url: redact_url_string_for_display(&file.url),
                 reason: error.to_string(),
             }),
         }
@@ -363,13 +381,6 @@ fn user_message_response_input(content: Vec<ContentItem>) -> ResponseInputItem {
         role: "user".to_string(),
         content,
     }
-}
-
-fn redact_raw_url(raw_url: &str) -> String {
-    Url::parse(raw_url.trim())
-        .ok()
-        .map(|url| redact_url_for_display(&url))
-        .unwrap_or_else(|| "<invalid-url>".to_string())
 }
 
 fn map_budget_injection_error(
@@ -492,5 +503,40 @@ mod tests {
         assert!(text.contains("Attached 1 URL file(s)."));
         assert!(text.contains("Skipped duplicate URL: https://example.com/doc.pdf"));
         assert_eq!(success, Some(true));
+    }
+
+    #[tokio::test]
+    async fn download_path_fails_fast_when_per_turn_budget_is_exhausted() {
+        let (session, mut turn_context) = make_session_and_context().await;
+        turn_context.provider = crate::ModelProviderInfo::create_gemini_provider();
+        let session = Arc::new(session);
+        *session.active_turn.lock().await = Some(ActiveTurn::default());
+        {
+            let mut active = session.active_turn.lock().await;
+            let active_turn = active.as_mut().expect("active turn");
+            let mut turn_state = active_turn.turn_state.lock().await;
+            turn_state
+                .reserve_url_attachments(MAX_URLS_PER_TURN, MAX_URLS_PER_TURN)
+                .expect("reserve URL attachment budget");
+        }
+
+        let handler = AttachUrlFilesHandler;
+        let result = handler
+            .handle(ToolInvocation {
+                session,
+                turn: Arc::new(turn_context),
+                tracker: Arc::new(Mutex::new(crate::turn_diff_tracker::TurnDiffTracker::new())),
+                call_id: "call-4".to_string(),
+                tool_name: TOOL_NAME.to_string(),
+                payload: ToolPayload::Function {
+                    arguments: r#"{"files":[{"url":"https://example.com/doc.pdf"}]}"#.to_string(),
+                },
+            })
+            .await;
+
+        let Err(FunctionCallError::RespondToModel(message)) = result else {
+            panic!("expected per-turn budget error");
+        };
+        assert!(message.contains("per-turn attachment limit"));
     }
 }

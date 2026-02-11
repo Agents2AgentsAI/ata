@@ -135,6 +135,8 @@ enum UncheckedContentItem {
     },
 }
 
+const MAX_URL_FILE_URL_LENGTH: usize = 8192;
+
 impl TryFrom<UncheckedContentItem> for ContentItem {
     type Error = &'static str;
 
@@ -174,6 +176,9 @@ impl TryFrom<UncheckedContentItem> for ContentItem {
                     .map(|value| value.trim().to_string())
                     .filter(|value| !value.is_empty())
                     .ok_or("url_file requires a non-empty `url`")?;
+                if url.len() > MAX_URL_FILE_URL_LENGTH {
+                    return Err("url_file `url` exceeds max length of 8192 characters");
+                }
                 let parsed =
                     Url::parse(&url).map_err(|_| "url_file `url` must be a valid absolute URL")?;
                 if !matches!(parsed.scheme(), "http" | "https") {
@@ -2155,6 +2160,25 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("url_file `url` must be a valid absolute URL"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn url_file_deserialization_rejects_overly_long_urls() {
+        let long_url = format!(
+            "https://example.com/{}",
+            "a".repeat(MAX_URL_FILE_URL_LENGTH)
+        );
+        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "url_file",
+            "url": long_url,
+        }))
+        .expect_err("deserialization should fail");
+
+        assert!(
+            err.to_string()
+                .contains("url_file `url` exceeds max length of 8192 characters"),
             "unexpected error: {err}"
         );
     }

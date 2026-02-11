@@ -14,7 +14,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::TurnContextItem;
 use crate::protocol::TurnStartedEvent;
 use crate::protocol::WarningEvent;
-use crate::tools::url_validation::redact_url_for_display;
+use crate::tools::url_validation::redact_url_string_for_display;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
@@ -30,7 +30,6 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 use futures::prelude::*;
 use tracing::error;
-use url::Url;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
@@ -379,9 +378,7 @@ fn file_placeholder_text(
 
 fn url_file_placeholder_text(filename: Option<&str>, url: &str) -> String {
     let name = filename.unwrap_or("unnamed");
-    let redacted = Url::parse(url)
-        .map(|parsed| redact_url_for_display(&parsed))
-        .unwrap_or_else(|_| "<invalid-url>".to_string());
+    let redacted = redact_url_string_for_display(url);
     format!("[File: {name}, {redacted}]")
 }
 

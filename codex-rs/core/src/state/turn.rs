@@ -152,8 +152,8 @@ impl TurnState {
     ///
     /// Returns `Ok(())` if reservation succeeds, or `Err(current_count)` when the
     /// reservation would exceed the per-turn limit.
-    pub(crate) fn reserve_url_attachments(
-        &mut self,
+    pub(crate) fn can_reserve_url_attachments(
+        &self,
         to_add: usize,
         per_turn_limit: usize,
     ) -> Result<(), usize> {
@@ -166,7 +166,24 @@ impl TurnState {
             return Err(self.url_attachments_injected);
         }
 
-        self.url_attachments_injected = next;
+        Ok(())
+    }
+
+    pub(crate) fn url_attachments_injected(&self) -> usize {
+        self.url_attachments_injected
+    }
+
+    /// Reserve capacity for URL file attachments in this turn.
+    ///
+    /// Returns `Ok(())` if reservation succeeds, or `Err(current_count)` when the
+    /// reservation would exceed the per-turn limit.
+    pub(crate) fn reserve_url_attachments(
+        &mut self,
+        to_add: usize,
+        per_turn_limit: usize,
+    ) -> Result<(), usize> {
+        self.can_reserve_url_attachments(to_add, per_turn_limit)?;
+        self.url_attachments_injected = self.url_attachments_injected.saturating_add(to_add);
         Ok(())
     }
 }

@@ -4967,9 +4967,21 @@ pub(crate) async fn run_turn(
                 break;
             }
             Err(CodexErr::ContextWindowExceeded) => {
+                let url_attachments_in_turn = {
+                    let mut active = sess.active_turn.lock().await;
+                    match active.as_mut() {
+                        Some(active_turn) => {
+                            let turn_state = active_turn.turn_state.lock().await;
+                            turn_state.url_attachments_injected()
+                        }
+                        None => 0,
+                    }
+                };
                 let dropped_url_files = {
                     let mut state = sess.state.lock().await;
-                    state.history.drop_last_turn_url_files()
+                    state
+                        .history
+                        .drop_last_turn_url_files(url_attachments_in_turn)
                 };
                 if dropped_url_files > 0 {
                     sess.send_event(
