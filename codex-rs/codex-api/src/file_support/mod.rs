@@ -9,6 +9,7 @@ pub mod upload;
 pub(crate) const INPUT_FILE_BLOCK_MISSING_DATA_OR_ID: &str =
     "input_file block must include file_data or file_id";
 
+pub use cache::CachedFileHit;
 pub use cache::FileReferenceCache;
 pub use capabilities::FileCapabilityConfig;
 pub use capabilities::file_capabilities_for;
