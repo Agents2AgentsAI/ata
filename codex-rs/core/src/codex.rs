@@ -4745,6 +4745,35 @@ pub(crate) async fn run_turn(
                 sess.send_event(&turn_context, event).await;
                 break;
             }
+            Err(CodexErr::ContextWindowExceeded) => {
+                // Only attempt compaction if there's conversation history
+                // (assistant messages) to compress. On the first turn the
+                // initial input itself exceeds the limit and compaction
+                // can't help.
+                let has_compactable_history = sess
+                    .clone_history()
+                    .await
+                    .raw_items()
+                    .iter()
+                    .any(|item| {
+                        matches!(item, ResponseItem::Message { role, .. } if role == "assistant")
+                    });
+
+                if has_compactable_history {
+                    info!("Context window exceeded; attempting auto-compaction");
+                    sess.set_total_tokens_full(&turn_context).await;
+                    if run_auto_compact(&sess, &turn_context).await.is_err() {
+                        return None;
+                    }
+                    continue;
+                }
+
+                // No history to compact — surface clear error.
+                info!("Context window exceeded on initial input; no history to compact");
+                let event = EventMsg::Error(CodexErr::ContextWindowExceeded.to_error_event(None));
+                sess.send_event(&turn_context, event).await;
+                break;
+            }
             Err(e) => {
                 info!("Turn error: {e:#}");
                 let event = EventMsg::Error(e.to_error_event(None));
