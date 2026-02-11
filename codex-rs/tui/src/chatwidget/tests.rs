@@ -456,7 +456,7 @@ async fn submission_maps_pdf_attachment_to_local_file() {
     let pdf_path = dir.path().join("submitted.pdf");
     std::fs::write(&pdf_path, b"%PDF-1.4\ntest").expect("write pdf");
 
-    let placeholder = "[Image #1]";
+    let placeholder = "[File #1]";
     let text = format!("{placeholder} submit");
     let text_elements = vec![TextElement::new(
         (0..placeholder.len()).into(),

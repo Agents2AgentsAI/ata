@@ -149,6 +149,7 @@ use crate::style::user_message_style;
 use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
+use codex_protocol::models::local_file_label_text;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
@@ -203,6 +204,9 @@ pub enum InputResult {
 struct AttachedImage {
     placeholder: String,
     path: PathBuf,
+    /// When `true`, the attachment is a non-image file (e.g. PDF) and should
+    /// use `[File #N]` labels instead of `[Image #N]`.
+    is_file: bool,
 }
 
 enum PromptSelectionMode {
@@ -603,7 +607,7 @@ impl ChatComposer {
             }
             AttachmentKind::File => {
                 tracing::debug!("attached file path={}", path_buf.display());
-                self.attach_image(path_buf);
+                self.attach_file(path_buf);
                 true
             }
             AttachmentKind::Unsupported => {
@@ -708,7 +712,7 @@ impl ChatComposer {
             self.textarea.insert_str(&text[idx..]);
         }
 
-        // Keep image placeholders normalized to [Image #1].. in attachment order.
+        // Keep attachment placeholders normalized to [Image #1].. / [File #1].. in order.
         self.relabel_attached_images_and_update_placeholders();
         self.textarea.set_cursor(self.textarea.text().len());
         self.sync_popups();
@@ -804,10 +808,21 @@ impl ChatComposer {
             .filter_map(|elem| elem.placeholder(&text).map(str::to_string))
             .collect();
         for (idx, path) in local_image_paths.into_iter().enumerate() {
-            let placeholder = local_image_label_text(idx + 1);
-            if image_placeholders.contains(&placeholder) {
-                self.attached_images
-                    .push(AttachedImage { placeholder, path });
+            let n = idx + 1;
+            let file_ph = local_file_label_text(n);
+            let image_ph = local_image_label_text(n);
+            if image_placeholders.contains(&file_ph) {
+                self.attached_images.push(AttachedImage {
+                    placeholder: file_ph,
+                    path,
+                    is_file: true,
+                });
+            } else if image_placeholders.contains(&image_ph) {
+                self.attached_images.push(AttachedImage {
+                    placeholder: image_ph,
+                    path,
+                    is_file: false,
+                });
             }
         }
 
@@ -917,15 +932,30 @@ impl ChatComposer {
             .retain(|img| image_placeholders.contains(img.placeholder.as_str()));
     }
 
-    /// Insert an attachment placeholder and track it for the next submission.
+    /// Insert an image attachment placeholder and track it for the next submission.
     pub fn attach_image(&mut self, path: PathBuf) {
         let image_number = self.attached_images.len() + 1;
         let placeholder = local_image_label_text(image_number);
         // Insert as an element to match large paste placeholder behavior:
         // styled distinctly and treated atomically for cursor/mutations.
         self.textarea.insert_element(&placeholder);
-        self.attached_images
-            .push(AttachedImage { placeholder, path });
+        self.attached_images.push(AttachedImage {
+            placeholder,
+            path,
+            is_file: false,
+        });
+    }
+
+    /// Insert a non-image file attachment placeholder (e.g. PDF) and track it.
+    pub fn attach_file(&mut self, path: PathBuf) {
+        let file_number = self.attached_images.len() + 1;
+        let placeholder = local_file_label_text(file_number);
+        self.textarea.insert_element(&placeholder);
+        self.attached_images.push(AttachedImage {
+            placeholder,
+            path,
+            is_file: true,
+        });
     }
 
     #[cfg(test)]
@@ -1436,7 +1466,7 @@ impl ChatComposer {
                     AttachmentKind::File => {
                         tracing::debug!("attached file from popup path={}", path_buf.display());
                         self.remove_current_at_token();
-                        self.attach_image(path_buf);
+                        self.attach_file(path_buf);
                         self.textarea.insert_str(" ");
                     }
                     AttachmentKind::Unsupported => {
@@ -2603,7 +2633,11 @@ impl ChatComposer {
 
     fn relabel_attached_images_and_update_placeholders(&mut self) {
         for idx in 0..self.attached_images.len() {
-            let expected = local_image_label_text(idx + 1);
+            let expected = if self.attached_images[idx].is_file {
+                local_file_label_text(idx + 1)
+            } else {
+                local_image_label_text(idx + 1)
+            };
             let current = self.attached_images[idx].placeholder.clone();
             if current == expected {
                 continue;
@@ -6275,7 +6309,8 @@ mod tests {
         assert_eq!(
             vec![AttachedImage {
                 path: path2,
-                placeholder: "[Image #1]".to_string()
+                placeholder: "[Image #1]".to_string(),
+                is_file: false,
             }],
             composer.attached_images,
             "one image mapping remains"
@@ -6338,7 +6373,8 @@ mod tests {
         assert_eq!(
             vec![AttachedImage {
                 path: path2,
-                placeholder: placeholder1
+                placeholder: placeholder1,
+                is_file: false,
             }],
             composer.attached_images,
             "attachment renumbered after deletion"
@@ -7608,6 +7644,7 @@ mod tests {
         composer.attached_images.push(AttachedImage {
             placeholder: placeholder.clone(),
             path: PathBuf::from("img.png"),
+            is_file: false,
         });
         composer
             .pending_pastes
@@ -7642,6 +7679,7 @@ mod tests {
         composer.attached_images.push(AttachedImage {
             placeholder: placeholder.clone(),
             path: PathBuf::from("img.png"),
+            is_file: false,
         });
 
         composer.apply_external_edit("No images here".to_string());
@@ -7720,6 +7758,7 @@ mod tests {
         composer.attached_images.push(AttachedImage {
             placeholder: placeholder.clone(),
             path: PathBuf::from("img.png"),
+            is_file: false,
         });
 
         composer.apply_external_edit(format!("{placeholder} extra {placeholder}"));
