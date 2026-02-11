@@ -335,7 +335,7 @@ mod tests {
         }
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn upload_file_polls_processing_state_until_active() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -367,22 +367,15 @@ mod tests {
         let file = NamedTempFile::new().expect("temp file");
         std::fs::write(file.path(), b"%PDF-1.4\npayload").expect("write pdf");
 
-        let path = file.path().to_path_buf();
-        let base_url = server.uri();
-        let client = reqwest::Client::new();
-
-        let handle = tokio::spawn(async move {
-            GeminiFileUpload
-                .upload_file(&client, &path, "application/pdf", "test-key", &base_url)
-                .await
-        });
-
-        tokio::task::yield_now().await;
-        tokio::time::advance(Duration::from_secs(1)).await;
-
-        let uploaded = handle
+        let uploaded = GeminiFileUpload
+            .upload_file(
+                &reqwest::Client::new(),
+                file.path(),
+                "application/pdf",
+                "test-key",
+                &server.uri(),
+            )
             .await
-            .expect("upload task join")
             .expect("upload should succeed");
 
         assert_eq!(

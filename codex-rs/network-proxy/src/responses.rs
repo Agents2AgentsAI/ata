@@ -160,7 +160,7 @@ mod tests {
         assert_eq!(
             message,
             r#"CODEX_NETWORK_POLICY_DECISION {"decision":"deny","reason":"not_allowed","source":"baseline_policy","protocol":"http","host":"api.example.com","port":80}
-Codex blocked this request: domain not in allowlist."#
+Ata blocked this request: domain not in allowlist."#
         );
     }
 }

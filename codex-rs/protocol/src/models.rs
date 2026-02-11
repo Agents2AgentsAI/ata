@@ -89,6 +89,7 @@ pub enum ContentItem {
         /// because the OpenAI Responses API does not accept this field on `input_file` blocks;
         /// the MIME type is already embedded in the `file_data` data-URI.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(skip)]
         mime_type: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         filename: Option<String>,

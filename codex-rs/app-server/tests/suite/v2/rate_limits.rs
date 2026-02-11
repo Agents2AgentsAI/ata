@@ -46,7 +46,7 @@ async fn get_account_rate_limits_requires_auth() -> Result<()> {
     assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
     assert_eq!(
         error.error.message,
-        "codex account authentication required to read rate limits"
+        "ata account authentication required to read rate limits"
     );
 
     Ok(())

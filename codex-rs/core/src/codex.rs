@@ -4677,9 +4677,15 @@ pub(crate) async fn run_turn(
         {
             Ok(sampling_request_output) => {
                 let SamplingRequestResult {
-                    needs_follow_up,
+                    mut needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
                 } = sampling_request_output;
+                // Narrow race window: user input can be injected right after sampling
+                // reports completion but before we decide whether to break out of the
+                // task loop. Re-check pending input here so we do not drop that input.
+                if !needs_follow_up {
+                    needs_follow_up = sess.has_pending_input().await;
+                }
                 let total_usage_tokens = sess.get_total_token_usage().await;
                 let token_limit_reached = total_usage_tokens >= auto_compact_limit;
 
