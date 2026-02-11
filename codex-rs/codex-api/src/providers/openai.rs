@@ -74,3 +74,32 @@ impl ProviderAdapter for OpenAiAdapter {
         "/responses".to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn build_request_body_passes_input_through_unchanged() {
+        let adapter = OpenAiAdapter::new();
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "input_file",
+                "file_data": "data:application/pdf;base64,JVBERi0xLjQ=",
+                "mime_type": "application/pdf"
+            }]
+        })];
+        let body = adapter
+            .build_request_body("gpt-test", "inst", &input, &[], &RequestOptions::default())
+            .expect("request body");
+
+        assert_eq!(
+            body["input"][0]["content"][0]["file_data"],
+            "data:application/pdf;base64,JVBERi0xLjQ="
+        );
+    }
+}

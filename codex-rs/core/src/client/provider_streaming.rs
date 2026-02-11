@@ -1,10 +1,12 @@
 use codex_api::common::Reasoning;
+use codex_api::error::ApiError;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use futures::StreamExt;
 use reqwest::RequestBuilder;
+use reqwest::StatusCode;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -13,6 +15,16 @@ use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::error::CodexErr;
 use crate::error::Result;
+
+/// Maps an [`ApiError`] to the corresponding [`CodexErr`] variant,
+/// preserving structured error kinds (e.g. `ContextWindowExceeded`)
+/// instead of flattening them to a generic string.
+pub(super) fn map_api_err_to_codex_err(err: ApiError) -> CodexErr {
+    match err {
+        ApiError::ContextWindowExceeded => CodexErr::ContextWindowExceeded,
+        other => CodexErr::Api(other.to_string()),
+    }
+}
 
 /// Serializes input items with proper error handling.
 ///
@@ -78,11 +90,14 @@ where
                 if !response.status().is_success() {
                     let status = response.status();
                     let body = response.text().await.unwrap_or_default();
-                    let _ = tx_event
-                        .send(Err(CodexErr::Api(format!(
-                            "{status_error_prefix} API error {status}: {body}"
-                        ))))
-                        .await;
+                    let err = if status == StatusCode::BAD_REQUEST
+                        && body.contains("prompt is too long")
+                    {
+                        CodexErr::ContextWindowExceeded
+                    } else {
+                        CodexErr::Api(format!("{status_error_prefix} API error {status}: {body}"))
+                    };
+                    let _ = tx_event.send(Err(err)).await;
                     return;
                 }
 

@@ -2,6 +2,7 @@ use crate::common::Reasoning;
 use crate::common::ResponsesApiRequest;
 use crate::common::TextControls;
 use crate::error::ApiError;
+use crate::file_support::wrapped_responses_input_file_data_uris;
 use crate::provider::Provider;
 use crate::requests::headers::build_conversation_headers;
 use crate::requests::headers::insert_header;
@@ -119,6 +120,7 @@ impl<'a> ResponsesRequestBuilder<'a> {
             .input
             .ok_or_else(|| ApiError::Stream("missing input for responses request".into()))?;
         let tools = self.tools.unwrap_or_default();
+        let normalized_input = wrapped_responses_input_file_data_uris(input);
 
         let store = self
             .store_override
@@ -127,7 +129,7 @@ impl<'a> ResponsesRequestBuilder<'a> {
         let req = ResponsesApiRequest {
             model,
             instructions,
-            input,
+            input: &normalized_input,
             tools,
             tool_choice: "auto",
             parallel_tool_calls: self.parallel_tool_calls,
@@ -143,7 +145,7 @@ impl<'a> ResponsesRequestBuilder<'a> {
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
 
         if store && provider.is_azure_responses_endpoint() {
-            attach_item_ids(&mut body, input);
+            attach_item_ids(&mut body, &normalized_input);
         }
 
         let mut headers = self.headers;
@@ -258,6 +260,32 @@ mod tests {
         assert_eq!(
             request.headers.get("x-openai-subagent"),
             Some(&HeaderValue::from_static("review"))
+        );
+    }
+
+    #[test]
+    fn wraps_inline_file_data_as_data_uri() {
+        let provider = provider("openai", "https://api.openai.com/v1");
+        let input = vec![ResponseItem::Message {
+            id: None,
+            role: "user".into(),
+            content: vec![codex_protocol::models::ContentItem::InputFile {
+                file_data: Some("JVBERi0xLjQ=".into()),
+                file_id: None,
+                mime_type: Some("application/pdf".into()),
+                filename: Some("report.pdf".into()),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+
+        let request = ResponsesRequestBuilder::new("gpt-test", "inst", &input)
+            .build(&provider)
+            .expect("request");
+
+        assert_eq!(
+            request.body["input"][0]["content"][0]["file_data"],
+            "data:application/pdf;base64,JVBERi0xLjQ="
         );
     }
 }

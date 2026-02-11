@@ -1217,8 +1217,10 @@ dependencies = [
  "assert_matches",
  "async-trait",
  "bytes",
+ "chrono",
  "codex-client",
  "codex-protocol",
+ "codex-utils-file",
  "eventsource-stream",
  "futures",
  "http 1.4.0",
@@ -1228,6 +1230,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-test",
@@ -1578,6 +1581,7 @@ dependencies = [
  "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
+ "codex-utils-file",
  "codex-utils-home-dir",
  "codex-utils-pty",
  "codex-utils-readiness",
@@ -2005,6 +2009,7 @@ dependencies = [
  "codex-execpolicy",
  "codex-git",
  "codex-utils-absolute-path",
+ "codex-utils-file",
  "codex-utils-image",
  "icu_decimal",
  "icu_locale_core",
@@ -2268,6 +2273,18 @@ dependencies = [
  "assert_cmd",
  "runfiles",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "codex-utils-file"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "codex-utils-cache",
+ "pretty_assertions",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -7132,6 +7149,7 @@ dependencies = [
  "js-sys",
  "log",
  "mime",
+ "mime_guess",
  "native-tls",
  "percent-encoding",
  "pin-project-lite",

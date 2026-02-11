@@ -2,6 +2,7 @@ pub mod auth;
 pub mod common;
 pub mod endpoint;
 pub mod error;
+pub mod file_support;
 pub mod provider;
 pub mod provider_adapter;
 pub mod provider_factory;

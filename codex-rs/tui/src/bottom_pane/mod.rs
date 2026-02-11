@@ -53,6 +53,8 @@ mod bottom_pane_view;
 pub(crate) struct LocalImageAttachment {
     pub(crate) placeholder: String,
     pub(crate) path: PathBuf,
+    /// When `true`, the attachment is a non-image file (e.g. PDF).
+    pub(crate) is_file: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

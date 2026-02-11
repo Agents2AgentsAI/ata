@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use crate::common::ResponseEvent;
 use crate::error::ApiError;
+use crate::file_support::map_user_facing_file_error_from_message;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
@@ -236,10 +237,11 @@ impl ContentBlockDeltaPayload {
     /// Parse from a `serde_json::Value`, returning `None` for the delta
     /// if the delta type is unknown rather than failing.
     fn from_value(v: &Value) -> Result<Self, ApiError> {
-        let index =
-            v.get("index").and_then(|i| i.as_u64()).ok_or_else(|| {
-                ApiError::Stream("Missing index in content_block_delta".to_string())
-            })? as u32;
+        let index = v
+            .get("index")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| ApiError::Stream("Missing index in content_block_delta".to_string()))?
+            as u32;
 
         let delta = v.get("delta").and_then(|d| {
             let delta_type = d.get("type").and_then(|t| t.as_str())?;
@@ -506,10 +508,10 @@ pub fn parse_anthropic_event(
                 .map_err(|e| ApiError::Stream(format!("Failed to parse message_delta: {e}")))?;
 
             // Capture final output_tokens from message_delta usage
-            if let Some(usage) = &payload.usage {
-                if let Some(output_tokens) = usage.output_tokens {
-                    state.output_tokens = Some(output_tokens);
-                }
+            if let Some(usage) = &payload.usage
+                && let Some(output_tokens) = usage.output_tokens
+            {
+                state.output_tokens = Some(output_tokens);
             }
         }
 
@@ -600,9 +602,23 @@ pub fn parse_anthropic_event(
             let payload: ErrorPayload = serde_json::from_str(data)
                 .map_err(|e| ApiError::Stream(format!("Failed to parse error: {e}")))?;
 
+            if payload.error.message.contains("prompt is too long") {
+                return Err(ApiError::ContextWindowExceeded);
+            }
+
+            let message = map_user_facing_file_error_from_message(&payload.error.message)
+                .map(|mapped| mapped.user_message)
+                .unwrap_or(payload.error.message);
+
+            if payload.error.error_type == "invalid_request_error"
+                || payload.error.error_type == "not_found_error"
+            {
+                return Err(ApiError::InvalidRequest { message });
+            }
+
             return Err(ApiError::Stream(format!(
-                "Anthropic API error ({}): {}",
-                payload.error.error_type, payload.error.message
+                "Anthropic API error ({}): {message}",
+                payload.error.error_type
             )));
         }
     }
@@ -776,6 +792,26 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("Invalid API key"));
+    }
+
+    #[test]
+    fn test_parse_error_prompt_too_long_maps_to_context_window_exceeded() {
+        let data = r#"{
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "prompt is too long: 211584 tokens > 200000 maximum"
+            }
+        }"#;
+
+        let mut state = AnthropicStreamState::new();
+        let result = parse_anthropic_event("error", data, &mut state);
+
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), ApiError::ContextWindowExceeded),
+            "expected ApiError::ContextWindowExceeded"
+        );
     }
 
     #[test]

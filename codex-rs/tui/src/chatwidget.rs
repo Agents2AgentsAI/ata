@@ -182,6 +182,8 @@ use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use crate::clipboard_paste::AttachmentKind;
+use crate::clipboard_paste::detect_attachment_kind;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::collab;
 use crate::collaboration_modes;
@@ -247,6 +249,8 @@ use strum::IntoEnumIterator;
 
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
+const UNSUPPORTED_ATTACHMENT_TYPES_MESSAGE: &str =
+    "Unsupported file type. Supported: PDF, PNG, JPG, GIF, WebP.";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 // Track information about an in-flight exec command.
 struct RunningCommand {
@@ -698,6 +702,7 @@ pub(crate) fn create_initial_user_message(
             .map(|(idx, path)| LocalImageAttachment {
                 placeholder: local_image_label_text(idx + 1),
                 path,
+                is_file: false,
             })
             .collect();
         Some(UserMessage {
@@ -710,9 +715,10 @@ pub(crate) fn create_initial_user_message(
 }
 
 // When merging multiple queued drafts (e.g., after interrupt), each draft starts numbering
-// its attachments at [Image #1]. Reassign placeholder labels based on the attachment list so
-// the combined local_image_paths order matches the labels, even if placeholders were moved
-// in the text (e.g., [Image #2] appearing before [Image #1]).
+// its attachments at [Image #1] or [File #1]. Reassign placeholder labels based on the
+// attachment list so the combined local_image_paths order matches the labels, even if
+// placeholders were moved in the text.
+// File attachments keep their placeholder as-is (filename-based), only images get renumbered.
 fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) -> UserMessage {
     let UserMessage {
         text,
@@ -732,12 +738,20 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
     let mut mapping: HashMap<String, String> = HashMap::new();
     let mut remapped_images = Vec::new();
     for attachment in local_images {
-        let new_placeholder = local_image_label_text(*next_label);
-        *next_label += 1;
-        mapping.insert(attachment.placeholder.clone(), new_placeholder.clone());
+        let new_placeholder = if attachment.is_file {
+            attachment.placeholder.clone()
+        } else {
+            let ph = local_image_label_text(*next_label);
+            *next_label += 1;
+            ph
+        };
+        if attachment.placeholder != new_placeholder {
+            mapping.insert(attachment.placeholder.clone(), new_placeholder.clone());
+        }
         remapped_images.push(LocalImageAttachment {
             placeholder: new_placeholder,
             path: attachment.path,
+            is_file: attachment.is_file,
         });
     }
 
@@ -3368,14 +3382,13 @@ impl ChatWidget {
                     tracing::error!("failed to clear model on logout: {e}");
                 }
                 // Also clear the global model setting in case no profile is active
-                if self.config.active_profile.is_some() {
-                    if let Err(e) =
+                if self.config.active_profile.is_some()
+                    && let Err(e) =
                         codex_core::config::edit::ConfigEditsBuilder::new(&self.config.codex_home)
                             .set_model(None, None, None)
                             .apply_blocking()
-                    {
-                        tracing::error!("failed to clear global model on logout: {e}");
-                    }
+                {
+                    tracing::error!("failed to clear global model on logout: {e}");
                 }
 
                 if let Err(e) = codex_core::auth::logout(
@@ -3679,15 +3692,6 @@ impl ChatWidget {
         if text.is_empty() && local_images.is_empty() {
             return;
         }
-        if !local_images.is_empty() && !self.current_model_supports_images() {
-            self.restore_blocked_image_submission(
-                text,
-                text_elements,
-                local_images,
-                mention_bindings,
-            );
-            return;
-        }
 
         let mut items: Vec<UserInput> = Vec::new();
 
@@ -3709,10 +3713,49 @@ impl ChatWidget {
             return;
         }
 
-        for image in &local_images {
-            items.push(UserInput::LocalImage {
-                path: image.path.clone(),
-            });
+        let mut has_image_attachment = false;
+        let mut first_unsupported_attachment: Option<PathBuf> = None;
+        for attachment in &local_images {
+            match detect_attachment_kind(&attachment.path) {
+                AttachmentKind::Image => {
+                    has_image_attachment = true;
+                    items.push(UserInput::LocalImage {
+                        path: attachment.path.clone(),
+                    });
+                }
+                AttachmentKind::File => {
+                    items.push(UserInput::LocalFile {
+                        path: attachment.path.clone(),
+                    });
+                }
+                AttachmentKind::Unsupported => {
+                    if first_unsupported_attachment.is_none() {
+                        first_unsupported_attachment = Some(attachment.path.clone());
+                    }
+                }
+            }
+        }
+        if let Some(path) = first_unsupported_attachment {
+            self.restore_blocked_attachment_submission(
+                text,
+                text_elements,
+                local_images,
+                mention_bindings,
+                format!(
+                    "Unsupported attachment `{}`. {UNSUPPORTED_ATTACHMENT_TYPES_MESSAGE}",
+                    path.display()
+                ),
+            );
+            return;
+        }
+        if has_image_attachment && !self.current_model_supports_images() {
+            self.restore_blocked_image_submission(
+                text,
+                text_elements,
+                local_images,
+                mention_bindings,
+            );
+            return;
         }
 
         if !text.is_empty() {
@@ -3868,12 +3911,13 @@ impl ChatWidget {
     /// mention bindings alongside visible text; restoring only `$name` tokens
     /// makes the draft look correct while degrading mention resolution to
     /// name-only heuristics on retry.
-    fn restore_blocked_image_submission(
+    fn restore_blocked_attachment_submission(
         &mut self,
         text: String,
         text_elements: Vec<TextElement>,
         local_images: Vec<LocalImageAttachment>,
         mention_bindings: Vec<MentionBinding>,
+        warning_message: String,
     ) {
         // Preserve the user's composed payload so they can retry after changing models.
         let local_image_paths = local_images.iter().map(|img| img.path.clone()).collect();
@@ -3883,10 +3927,31 @@ impl ChatWidget {
             local_image_paths,
             mention_bindings,
         );
-        self.add_to_history(history_cell::new_warning_event(
-            self.image_inputs_not_supported_message(),
-        ));
+        self.add_to_history(history_cell::new_warning_event(warning_message));
         self.request_redraw();
+    }
+
+    /// Restore the blocked submission draft without losing mention resolution state.
+    ///
+    /// The blocked-image path intentionally keeps the draft in the composer so
+    /// users can remove attachments and retry. We must restore
+    /// mention bindings alongside visible text; restoring only `$name` tokens
+    /// makes the draft look correct while degrading mention resolution to
+    /// name-only heuristics on retry.
+    fn restore_blocked_image_submission(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_images: Vec<LocalImageAttachment>,
+        mention_bindings: Vec<MentionBinding>,
+    ) {
+        self.restore_blocked_attachment_submission(
+            text,
+            text_elements,
+            local_images,
+            mention_bindings,
+            self.image_inputs_not_supported_message(),
+        );
     }
 
     /// Replay a subset of initial events into the UI to seed the transcript when

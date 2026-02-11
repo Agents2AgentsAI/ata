@@ -8,6 +8,7 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use super::ModelClientSession;
 use super::provider_streaming::ParseSseEventResult;
 use super::provider_streaming::build_reasoning_value;
+use super::provider_streaming::map_api_err_to_codex_err;
 use super::provider_streaming::serialize_input_items;
 use super::provider_streaming::spawn_provider_sse_stream;
 use crate::client_common::Prompt;
@@ -73,7 +74,7 @@ pub(super) async fn stream_anthropic_api(
         )
         .json(&body);
 
-    for (name, value) in adapter.extra_headers().iter() {
+    for (name, value) in adapter.extra_headers_for_input(&input_values).iter() {
         if let Ok(value_str) = value.to_str() {
             request = request.header(name.as_str(), value_str);
         }
@@ -109,7 +110,7 @@ pub(super) async fn stream_anthropic_api(
 
             match codex_api::sse::anthropic::parse_anthropic_event(&event_type, &data, state) {
                 Ok(events) => ParseSseEventResult::Emit(events),
-                Err(err) => ParseSseEventResult::Fatal(CodexErr::Api(err.to_string())),
+                Err(err) => ParseSseEventResult::Fatal(map_api_err_to_codex_err(err)),
             }
         },
         |_buffer, _state| ParseSseEventResult::Continue,
