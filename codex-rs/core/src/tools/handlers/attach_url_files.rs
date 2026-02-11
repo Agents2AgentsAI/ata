@@ -37,14 +37,26 @@ const MAX_URLS_PER_TURN: usize = 20;
 
 pub(crate) static ATTACH_URL_FILES_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut file_props = BTreeMap::new();
-    file_props.insert("url".to_string(), JsonSchema::String { description: None });
+    file_props.insert(
+        "url".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Direct HTTPS URL to a PDF file (e.g., https://example.com/paper.pdf).".to_string(),
+            ),
+        },
+    );
     file_props.insert(
         "filename".to_string(),
-        JsonSchema::String { description: None },
+        JsonSchema::String {
+            description: Some(
+                "Optional display name for the attached file. If omitted, derived from URL."
+                    .to_string(),
+            ),
+        },
     );
 
     let files_schema = JsonSchema::Array {
-        description: None,
+        description: Some("List of PDF files to attach by URL.".to_string()),
         items: Box::new(JsonSchema::Object {
             properties: file_props,
             required: Some(vec!["url".to_string()]),
@@ -57,7 +69,7 @@ pub(crate) static ATTACH_URL_FILES_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
 
     ToolSpec::Function(ResponsesApiTool {
         name: TOOL_NAME.to_string(),
-        description: "Attach PDF files from URLs. Validates each URL, then either injects URL references (when provider supports URL ingestion) or downloads and attaches local files.".to_string(),
+        description: "Attach PDF files from URLs so you can read and analyze their contents. Use this tool whenever you need to read a PDF — always prefer this over downloading PDFs via shell commands. Each URL must point directly to a PDF file (e.g., https://arxiv.org/pdf/2512.04538.pdf). For arXiv, convert abstract URLs to PDF URLs: change /abs/<id> to /pdf/<id>.pdf. Supports up to 10 URLs per call.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -569,5 +581,134 @@ mod tests {
             panic!("expected per-turn budget error");
         };
         assert!(message.contains("per-turn attachment limit"));
+    }
+
+    #[tokio::test]
+    async fn all_invalid_urls_produce_failure_only_summary() {
+        let (session, mut turn_context) = make_session_and_context().await;
+        turn_context.provider = crate::ModelProviderInfo::create_openai_provider();
+        let session = Arc::new(session);
+        *session.active_turn.lock().await = Some(ActiveTurn::default());
+
+        let handler = AttachUrlFilesHandler;
+        let result = handler
+            .handle(ToolInvocation {
+                session: Arc::clone(&session),
+                turn: Arc::new(turn_context),
+                tracker: Arc::new(Mutex::new(crate::turn_diff_tracker::TurnDiffTracker::new())),
+                call_id: "call-5".to_string(),
+                tool_name: TOOL_NAME.to_string(),
+                payload: ToolPayload::Function {
+                    arguments: r#"{"files":[{"url":"ftp://example.com/a.pdf"},{"url":"http://example.com/b.pdf"}]}"#.to_string(),
+                },
+            })
+            .await;
+
+        let Err(FunctionCallError::RespondToModel(message)) = result else {
+            panic!("expected failure-only summary");
+        };
+        assert!(
+            message.contains("No URL files were attached."),
+            "expected failure-only header, got: {message}"
+        );
+        assert!(
+            message.contains("Failures:"),
+            "expected failures section, got: {message}"
+        );
+
+        let pending = session.get_pending_input().await;
+        assert!(pending.is_empty(), "no pending input for all-invalid URLs");
+    }
+
+    #[tokio::test]
+    async fn mixed_valid_and_invalid_urls_partial_success() {
+        let (session, mut turn_context) = make_session_and_context().await;
+        turn_context.provider = crate::ModelProviderInfo::create_openai_provider();
+        let session = Arc::new(session);
+        *session.active_turn.lock().await = Some(ActiveTurn::default());
+
+        let handler = AttachUrlFilesHandler;
+        let output = handler
+            .handle(ToolInvocation {
+                session: Arc::clone(&session),
+                turn: Arc::new(turn_context),
+                tracker: Arc::new(Mutex::new(crate::turn_diff_tracker::TurnDiffTracker::new())),
+                call_id: "call-6".to_string(),
+                tool_name: TOOL_NAME.to_string(),
+                payload: ToolPayload::Function {
+                    arguments: r#"{"files":[{"url":"https://example.com/valid.pdf"},{"url":"ftp://bad.com/invalid.pdf"}]}"#.to_string(),
+                },
+            })
+            .await
+            .expect("mixed URLs should succeed overall");
+
+        let ToolOutput::Function { body, success } = output else {
+            panic!("expected function output");
+        };
+        let text = body.to_text().expect("text body");
+        assert!(
+            text.contains("Attached 1 URL file(s)."),
+            "expected 1 attachment, got: {text}"
+        );
+        assert!(
+            text.contains("Failures:"),
+            "expected failures section, got: {text}"
+        );
+        assert_eq!(success, Some(true));
+
+        let pending = session.get_pending_input().await;
+        assert_eq!(pending.len(), 1);
+        let ResponseInputItem::Message { content, .. } = &pending[0] else {
+            panic!("expected message input");
+        };
+        assert_eq!(content.len(), 1);
+        assert!(matches!(content[0], ContentItem::UrlFile { .. }));
+    }
+
+    #[test]
+    fn tool_gating_by_web_search_mode() {
+        let modes_that_register = [
+            (Some(WebSearchMode::Cached), "Cached"),
+            (Some(WebSearchMode::Live), "Live"),
+            (None, "None"),
+        ];
+        for (mode, label) in modes_that_register {
+            let mut builder = ToolRegistryBuilder::new();
+            let config = ToolsConfig {
+                web_search_mode: mode,
+                ..minimal_tools_config()
+            };
+            register_attach_url_files(&mut builder, &config);
+            let (specs, _) = builder.build();
+            assert!(
+                specs.iter().any(|s| s.spec.name() == TOOL_NAME),
+                "expected {TOOL_NAME} registered for web_search_mode={label}"
+            );
+        }
+
+        let mut builder = ToolRegistryBuilder::new();
+        let config = ToolsConfig {
+            web_search_mode: Some(WebSearchMode::Disabled),
+            ..minimal_tools_config()
+        };
+        register_attach_url_files(&mut builder, &config);
+        let (specs, _) = builder.build();
+        assert!(
+            !specs.iter().any(|s| s.spec.name() == TOOL_NAME),
+            "expected {TOOL_NAME} NOT registered for web_search_mode=Disabled"
+        );
+    }
+
+    fn minimal_tools_config() -> ToolsConfig {
+        ToolsConfig {
+            shell_type: codex_protocol::openai_models::ConfigShellToolType::Disabled,
+            apply_patch_tool_type: None,
+            web_search_mode: None,
+            search_tool: false,
+            collab_tools: false,
+            collaboration_modes_tools: false,
+            request_rule_enabled: false,
+            experimental_supported_tools: Vec::new(),
+        }
     }
 }
