@@ -95,7 +95,7 @@ struct AttachmentFailure {
 }
 
 pub(crate) fn register_attach_url_files(builder: &mut ToolRegistryBuilder, config: &ToolsConfig) {
-    if config.web_search_mode != Some(WebSearchMode::Live) {
+    if config.web_search_mode == Some(WebSearchMode::Disabled) {
         return;
     }
 
@@ -138,7 +138,8 @@ impl ToolHandler for AttachUrlFilesHandler {
             )));
         }
 
-        let (validated_files, mut failures, mut warnings) = validate_and_dedup(args.files).await;
+        let (mut validated_files, mut failures, mut warnings) =
+            validate_and_dedup(args.files).await;
         if validated_files.is_empty() {
             return Err(FunctionCallError::RespondToModel(
                 render_failure_only_summary(&failures),
@@ -173,7 +174,7 @@ impl ToolHandler for AttachUrlFilesHandler {
                 .await
                 .map_err(map_budget_injection_error)?;
         } else {
-            {
+            let remaining_budget = {
                 let mut active = session.active_turn.lock().await;
                 let Some(active_turn) = active.as_mut() else {
                     return Err(map_budget_injection_error(
@@ -181,13 +182,25 @@ impl ToolHandler for AttachUrlFilesHandler {
                     ));
                 };
                 let turn_state = active_turn.turn_state.lock().await;
-                if let Err(current) = turn_state.can_reserve_url_attachments(1, MAX_URLS_PER_TURN) {
-                    return Err(map_budget_injection_error(
-                        crate::codex::UrlAttachmentInjectionError::PerTurnLimitExceeded {
-                            attempted: 1,
-                            current,
-                            limit: MAX_URLS_PER_TURN,
-                        },
+                let already_used = turn_state.url_attachments_injected();
+                MAX_URLS_PER_TURN.saturating_sub(already_used)
+            };
+
+            if remaining_budget == 0 {
+                return Err(map_budget_injection_error(
+                    crate::codex::UrlAttachmentInjectionError::PerTurnLimitExceeded {
+                        attempted: validated_files.len(),
+                        current: MAX_URLS_PER_TURN,
+                        limit: MAX_URLS_PER_TURN,
+                    },
+                ));
+            }
+
+            if validated_files.len() > remaining_budget {
+                for attachment in validated_files.drain(remaining_budget..) {
+                    warnings.push(format!(
+                        "Skipped {} (per-turn attachment budget exceeded)",
+                        attachment.url.redacted_for_display()
                     ));
                 }
             }
@@ -304,13 +317,33 @@ async fn validate_and_dedup(
     Vec<AttachmentFailure>,
     Vec<String>,
 ) {
+    use futures::stream::StreamExt;
+
+    // Validate all URLs concurrently, preserving input order via index tracking.
+    let validation_results: Vec<(usize, _)> = futures::stream::iter(files.into_iter().enumerate())
+        .map(|(idx, file)| async move {
+            let result = validate_url_strict(&file.url).await;
+            (idx, file, result)
+        })
+        .buffer_unordered(MAX_URLS_PER_CALL)
+        .map(|(idx, file, result)| (idx, file, result))
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .map(|(idx, file, result)| (idx, (file, result)))
+        .collect();
+
+    // Sort by original index to preserve input order.
+    let mut sorted_results = validation_results;
+    sorted_results.sort_by_key(|(idx, _)| *idx);
+
     let mut seen = HashSet::new();
     let mut validated = Vec::new();
     let mut failures = Vec::new();
     let mut warnings = Vec::new();
 
-    for file in files {
-        match validate_url_strict(&file.url).await {
+    for (_, (file, result)) in sorted_results {
+        match result {
             Ok(url) => {
                 let normalized_key = url.normalized_cache_key().to_string();
                 if !seen.insert(normalized_key) {
@@ -348,15 +381,7 @@ fn render_summary(
             summary.push_str(&format!("\n- {warning}"));
         }
     }
-    if !failures.is_empty() {
-        summary.push_str("\nFailures:");
-        for failure in failures {
-            summary.push_str(&format!(
-                "\n- {} ({})",
-                failure.redacted_url, failure.reason
-            ));
-        }
-    }
+    append_failures(&mut summary, failures);
     summary
 }
 
@@ -366,14 +391,20 @@ fn render_failure_only_summary(failures: &[AttachmentFailure]) -> String {
     }
 
     let mut summary = "No URL files were attached.".to_string();
-    summary.push_str("\nFailures:");
-    for failure in failures {
-        summary.push_str(&format!(
-            "\n- {} ({})",
-            failure.redacted_url, failure.reason
-        ));
-    }
+    append_failures(&mut summary, failures);
     summary
+}
+
+fn append_failures(summary: &mut String, failures: &[AttachmentFailure]) {
+    if !failures.is_empty() {
+        summary.push_str("\nFailures:");
+        for failure in failures {
+            summary.push_str(&format!(
+                "\n- {} ({})",
+                failure.redacted_url, failure.reason
+            ));
+        }
+    }
 }
 
 fn user_message_response_input(content: Vec<ContentItem>) -> ResponseInputItem {
