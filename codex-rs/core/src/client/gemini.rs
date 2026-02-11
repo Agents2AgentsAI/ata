@@ -4,11 +4,11 @@ use codex_api::ProviderAdapter;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use tracing::debug;
 
 use super::ModelClientSession;
 use super::provider_streaming::ParseSseEventResult;
 use super::provider_streaming::build_reasoning_value;
+use super::provider_streaming::map_api_err_to_codex_err;
 use super::provider_streaming::serialize_input_items;
 use super::provider_streaming::spawn_provider_sse_stream;
 use crate::client_common::Prompt;
@@ -114,10 +114,7 @@ pub(super) async fn stream_gemini_api(
                         ParseSseEventResult::Emit(events)
                     }
                 }
-                Err(err) => {
-                    debug!("Gemini parse error (continuing): {err}");
-                    ParseSseEventResult::Continue
-                }
+                Err(err) => ParseSseEventResult::Fatal(map_api_err_to_codex_err(err)),
             }
         },
         |buffer, state| {
