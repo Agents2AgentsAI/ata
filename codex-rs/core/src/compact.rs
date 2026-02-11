@@ -29,6 +29,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 use futures::prelude::*;
 use tracing::error;
+use url::Url;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
@@ -314,6 +315,24 @@ fn sanitize_compaction_message_content(
                     prev_replaced_file = false;
                 }
             }
+            ContentItem::UrlFile {
+                url,
+                mime_type,
+                filename,
+            } => {
+                if should_replace_file_parts(Some(&url), mode) {
+                    sanitized.push(ContentItem::InputText {
+                        text: url_file_placeholder_text(filename.as_deref(), &url),
+                    });
+                } else {
+                    sanitized.push(ContentItem::UrlFile {
+                        url,
+                        mime_type,
+                        filename,
+                    });
+                }
+                prev_replaced_file = false;
+            }
             other => {
                 prev_replaced_file = false;
                 sanitized.push(other);
@@ -329,6 +348,7 @@ fn should_replace_file_item(item: &ContentItem, mode: FileSanitizeMode) -> bool 
         ContentItem::InputFile { file_data, .. } => {
             should_replace_file_parts(file_data.as_ref(), mode)
         }
+        ContentItem::UrlFile { .. } => matches!(mode, FileSanitizeMode::AllFiles),
         _ => false,
     }
 }
@@ -353,6 +373,18 @@ fn file_placeholder_text(
         }
         None => format!("[File: {name}, {mime_type}]"),
     }
+}
+
+fn url_file_placeholder_text(filename: Option<&str>, url: &str) -> String {
+    let name = filename.unwrap_or("unnamed");
+    let redacted = Url::parse(url)
+        .map(|mut parsed| {
+            parsed.set_query(None);
+            parsed.set_fragment(None);
+            parsed.to_string()
+        })
+        .unwrap_or_else(|_| "<invalid-url>".to_string());
+    format!("[File URL: {name}, {redacted}]")
 }
 
 fn estimate_base64_payload_size_bytes(data: &str) -> Option<u64> {
@@ -409,7 +441,9 @@ pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
                     pieces.push(text.as_str());
                 }
             }
-            ContentItem::InputImage { .. } | ContentItem::InputFile { .. } => {}
+            ContentItem::InputImage { .. }
+            | ContentItem::InputFile { .. }
+            | ContentItem::UrlFile { .. } => {}
         }
     }
     if pieces.is_empty() {

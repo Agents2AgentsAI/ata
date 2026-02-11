@@ -1,4 +1,5 @@
 pub mod apply_patch;
+pub(crate) mod attach_url_files;
 pub(crate) mod collab;
 mod dynamic;
 mod grep_files;

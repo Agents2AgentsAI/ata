@@ -3,6 +3,7 @@ use crate::common::ResponseStream;
 use crate::common::ResponsesApiRequest;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
+use crate::file_support::rewrite_openai_url_file_blocks_in_payload;
 use crate::provider::Provider;
 use crate::requests::headers::build_conversation_headers;
 use crate::requests::headers::insert_header;
@@ -70,6 +71,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
 
         let mut body = serde_json::to_value(&request)
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
+        rewrite_openai_url_file_blocks_in_payload(&mut body);
         if request.store && self.session.provider().is_azure_responses_endpoint() {
             attach_item_ids(&mut body, &request.input);
         }
