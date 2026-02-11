@@ -31,6 +31,15 @@ pub enum UserInput {
     },
     /// Explicit mention selected by the user (name + app://connector id).
     Mention { name: String, path: String },
+    /// Local file path (PDF, etc). Validated and encoded during request serialization.
+    LocalFile { path: std::path::PathBuf },
+    /// Pre-uploaded file reference produced during async file resolution.
+    UploadedFile {
+        file_id: String,
+        mime_type: String,
+        filename: String,
+        source_path: std::path::PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS, JsonSchema)]

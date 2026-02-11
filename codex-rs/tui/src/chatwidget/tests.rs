@@ -380,7 +380,10 @@ async fn submission_preserves_text_elements_and_local_images() {
         (0..placeholder.len()).into(),
         Some(placeholder.to_string()),
     )];
-    let local_images = vec![PathBuf::from("/tmp/submitted.png")];
+    let image_dir = tempdir().expect("tempdir");
+    let image_path = image_dir.path().join("submitted.png");
+    std::fs::write(&image_path, b"").expect("write test image");
+    let local_images = vec![image_path];
 
     chat.bottom_pane
         .set_composer_text(text.clone(), text_elements.clone(), local_images.clone());
@@ -424,6 +427,136 @@ async fn submission_preserves_text_elements_and_local_images() {
     assert_eq!(stored_message, text);
     assert_eq!(stored_elements, text_elements);
     assert_eq!(stored_images, local_images);
+}
+
+#[tokio::test]
+async fn submission_maps_pdf_attachment_to_local_file() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().expect("rollout file");
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(codex_core::protocol::SessionConfiguredEvent {
+            session_id: conversation_id,
+            forked_from_id: None,
+            thread_name: None,
+            model: "test-model".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            cwd: PathBuf::from("/home/user/project"),
+            reasoning_effort: Some(ReasoningEffortConfig::default()),
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            rollout_path: Some(rollout_file.path().to_path_buf()),
+        }),
+    });
+    drain_insert_history(&mut rx);
+
+    let dir = tempdir().expect("temp dir");
+    let pdf_path = dir.path().join("submitted.pdf");
+    std::fs::write(&pdf_path, b"%PDF-1.4\ntest").expect("write pdf");
+
+    let placeholder = "[File #1]";
+    let text = format!("{placeholder} submit");
+    let text_elements = vec![TextElement::new(
+        (0..placeholder.len()).into(),
+        Some(placeholder.to_string()),
+    )];
+    chat.bottom_pane
+        .set_composer_text(text.clone(), text_elements.clone(), vec![pdf_path.clone()]);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0], UserInput::LocalFile { path: pdf_path });
+    assert_eq!(
+        items[1],
+        UserInput::Text {
+            text,
+            text_elements,
+        }
+    );
+}
+
+#[tokio::test]
+async fn submission_rejects_unsupported_attachment_type() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().expect("rollout file");
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(codex_core::protocol::SessionConfiguredEvent {
+            session_id: conversation_id,
+            forked_from_id: None,
+            thread_name: None,
+            model: "test-model".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            cwd: PathBuf::from("/home/user/project"),
+            reasoning_effort: Some(ReasoningEffortConfig::default()),
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            rollout_path: Some(rollout_file.path().to_path_buf()),
+        }),
+    });
+    drain_insert_history(&mut rx);
+
+    let dir = tempdir().expect("temp dir");
+    let txt_path = dir.path().join("unsupported.txt");
+    std::fs::write(&txt_path, b"not an attachment").expect("write txt");
+
+    let placeholder = "[Image #1]";
+    let text = format!("{placeholder} submit");
+    let text_elements = vec![TextElement::new(
+        (0..placeholder.len()).into(),
+        Some(placeholder.to_string()),
+    )];
+    chat.bottom_pane
+        .set_composer_text(text.clone(), text_elements, vec![txt_path.clone()]);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::UserTurn { .. }) => panic!("expected no user turn op"),
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Disconnected) => panic!("op channel disconnected"),
+        }
+    }
+
+    assert_eq!(chat.bottom_pane.composer_text(), text);
+    assert_eq!(
+        chat.bottom_pane.composer_local_image_paths(),
+        vec![txt_path]
+    );
+
+    let warning = drain_insert_history(&mut rx)
+        .last()
+        .map(|lines| lines_to_single_string(lines))
+        .expect("expected warning cell");
+    assert!(
+        warning.contains("Unsupported attachment"),
+        "expected unsupported attachment warning, got: {warning}"
+    );
+    assert!(
+        warning.contains("Supported: PDF, PNG,"),
+        "expected supported-types prefix, got: {warning}"
+    );
+    assert!(
+        warning.contains("JPG, GIF, WebP."),
+        "expected supported-types suffix, got: {warning}"
+    );
 }
 
 #[tokio::test]
@@ -514,6 +647,7 @@ async fn blocked_image_restore_preserves_mention_bindings() {
     let local_images = vec![LocalImageAttachment {
         placeholder: placeholder.to_string(),
         path: PathBuf::from("/tmp/blocked.png"),
+        is_file: false,
     }];
     let mention_bindings = vec![MentionBinding {
         mention: "file".to_string(),
@@ -587,6 +721,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
         local_images: vec![LocalImageAttachment {
             placeholder: first_placeholder.to_string(),
             path: first_images[0].clone(),
+            is_file: false,
         }],
         text_elements: first_elements,
         mention_bindings: Vec::new(),
@@ -596,6 +731,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
         local_images: vec![LocalImageAttachment {
             placeholder: second_placeholder.to_string(),
             path: second_images[0].clone(),
+            is_file: false,
         }],
         text_elements: second_elements,
         mention_bindings: Vec::new(),
@@ -716,10 +852,12 @@ async fn remap_placeholders_uses_attachment_labels() {
         LocalImageAttachment {
             placeholder: placeholder_one.to_string(),
             path: PathBuf::from("/tmp/one.png"),
+            is_file: false,
         },
         LocalImageAttachment {
             placeholder: placeholder_two.to_string(),
             path: PathBuf::from("/tmp/two.png"),
+            is_file: false,
         },
     ];
     let message = UserMessage {
@@ -751,10 +889,12 @@ async fn remap_placeholders_uses_attachment_labels() {
             LocalImageAttachment {
                 placeholder: "[Image #3]".to_string(),
                 path: PathBuf::from("/tmp/one.png"),
+                is_file: false,
             },
             LocalImageAttachment {
                 placeholder: "[Image #4]".to_string(),
                 path: PathBuf::from("/tmp/two.png"),
+                is_file: false,
             },
         ]
     );
@@ -777,10 +917,12 @@ async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
         LocalImageAttachment {
             placeholder: placeholder_one.to_string(),
             path: PathBuf::from("/tmp/one.png"),
+            is_file: false,
         },
         LocalImageAttachment {
             placeholder: placeholder_two.to_string(),
             path: PathBuf::from("/tmp/two.png"),
+            is_file: false,
         },
     ];
     let message = UserMessage {
@@ -812,13 +954,70 @@ async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
             LocalImageAttachment {
                 placeholder: "[Image #3]".to_string(),
                 path: PathBuf::from("/tmp/one.png"),
+                is_file: false,
             },
             LocalImageAttachment {
                 placeholder: "[Image #4]".to_string(),
                 path: PathBuf::from("/tmp/two.png"),
+                is_file: false,
             },
         ]
     );
+}
+
+#[tokio::test]
+async fn remap_preserves_file_placeholders() {
+    let text = "[report.pdf] look at [Image #1]".to_string();
+    let elements = vec![
+        TextElement::new(
+            (0.."[report.pdf]".len()).into(),
+            Some("[report.pdf]".to_string()),
+        ),
+        TextElement::new(
+            ("[report.pdf] look at ".len().."[report.pdf] look at [Image #1]".len()).into(),
+            Some("[Image #1]".to_string()),
+        ),
+    ];
+    let attachments = vec![
+        LocalImageAttachment {
+            placeholder: "[report.pdf]".to_string(),
+            path: PathBuf::from("/tmp/report.pdf"),
+            is_file: true,
+        },
+        LocalImageAttachment {
+            placeholder: "[Image #1]".to_string(),
+            path: PathBuf::from("/tmp/screenshot.png"),
+            is_file: false,
+        },
+    ];
+    let message = UserMessage {
+        text,
+        text_elements: elements,
+        local_images: attachments,
+        mention_bindings: Vec::new(),
+    };
+    let mut next_label = 3usize;
+    let remapped = remap_placeholders_for_message(message, &mut next_label);
+
+    // File placeholder stays as-is; image gets renumbered to #3.
+    assert_eq!(remapped.text, "[report.pdf] look at [Image #3]");
+    assert_eq!(
+        remapped.local_images,
+        vec![
+            LocalImageAttachment {
+                placeholder: "[report.pdf]".to_string(),
+                path: PathBuf::from("/tmp/report.pdf"),
+                is_file: true,
+            },
+            LocalImageAttachment {
+                placeholder: "[Image #3]".to_string(),
+                path: PathBuf::from("/tmp/screenshot.png"),
+                is_file: false,
+            },
+        ]
+    );
+    // next_label only incremented for the image, not the file.
+    assert_eq!(next_label, 4);
 }
 
 /// Entering review mode uses the hint provided by the review request.

@@ -43,6 +43,7 @@ members = [
     "utils/git",
     "utils/cache",
     "utils/image",
+    "utils/file",
     "utils/json-to-toml",
     "utils/home-dir",
     "utils/pty",
@@ -52,6 +53,62 @@ members = [
     "codex-api",
     "codex-research-tools",
     "codex-research-tools-mcp",
+    "state",
+    "codex-experimental-api-macros",
+]
+# Exclude heavy research crates from default builds. Use `cargo build --workspace`
+# or target them explicitly (`cargo build -p codex-research-tools-mcp`) when needed.
+default-members = [
+    "backend-client",
+    "ansi-escape",
+    "async-utils",
+    "app-server",
+    "app-server-protocol",
+    "app-server-test-client",
+    "debug-client",
+    "apply-patch",
+    "arg0",
+    "feedback",
+    "codex-backend-openapi-models",
+    "cloud-requirements",
+    "cloud-tasks",
+    "cloud-tasks-client",
+    "cli",
+    "common",
+    "core",
+    "exec",
+    "exec-server",
+    "execpolicy",
+    "execpolicy-legacy",
+    "keyring-store",
+    "file-search",
+    "linux-sandbox",
+    "lmstudio",
+    "login",
+    "mcp-server",
+    "network-proxy",
+    "network-proxy-cli",
+    "ollama",
+    "process-hardening",
+    "protocol",
+    "rmcp-client",
+    "responses-api-proxy",
+    "stdio-to-uds",
+    "otel",
+    "tui",
+    "utils/absolute-path",
+    "utils/cargo-bin",
+    "utils/git",
+    "utils/cache",
+    "utils/image",
+    "utils/file",
+    "utils/json-to-toml",
+    "utils/home-dir",
+    "utils/pty",
+    "utils/readiness",
+    "utils/string",
+    "codex-client",
+    "codex-api",
     "state",
     "codex-experimental-api-macros",
 ]
@@ -111,6 +168,7 @@ codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-cache = { path = "utils/cache" }
 codex-utils-cargo-bin = { path = "utils/cargo-bin" }
 codex-utils-image = { path = "utils/image" }
+codex-utils-file = { path = "utils/file" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-home-dir = { path = "utils/home-dir" }
 codex-utils-pty = { path = "utils/pty" }

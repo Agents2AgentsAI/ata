@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -145,8 +146,12 @@ prefix_rule(
     Ok(())
 }
 
+static ATA_BIN: OnceLock<PathBuf> = OnceLock::new();
+
 fn ensure_codex_cli() -> Result<PathBuf> {
-    let codex_cli = codex_utils_cargo_bin::cargo_bin("ata")?;
+    let codex_cli = ATA_BIN
+        .get_or_init(|| codex_utils_cargo_bin::cargo_bin("ata").unwrap())
+        .clone();
 
     let metadata = codex_cli.metadata().with_context(|| {
         format!(

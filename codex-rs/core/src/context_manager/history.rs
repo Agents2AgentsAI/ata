@@ -402,6 +402,7 @@ pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
                 }
             }
             ContentItem::InputImage { .. } => {}
+            ContentItem::InputFile { .. } => {}
         }
     }
 

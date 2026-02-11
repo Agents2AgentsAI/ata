@@ -64,6 +64,14 @@ pub trait ProviderAdapter: Send + Sync {
         HeaderMap::new()
     }
 
+    /// Returns provider-specific headers for a specific input payload.
+    ///
+    /// Adapters can override this to gate optional beta headers based on the
+    /// request shape (for example, only when file inputs are present).
+    fn extra_headers_for_input(&self, _input: &[Value]) -> HeaderMap {
+        self.extra_headers()
+    }
+
     /// Returns the authentication header name for this provider.
     /// Defaults to "Authorization" with Bearer token scheme.
     fn auth_header_name(&self) -> &str {
@@ -73,6 +81,6 @@ pub trait ProviderAdapter: Send + Sync {
     /// Formats the API key for use in the auth header.
     /// Defaults to Bearer token format.
     fn format_auth_header(&self, api_key: &str) -> String {
-        format!("Bearer {}", api_key)
+        format!("Bearer {api_key}")
     }
 }

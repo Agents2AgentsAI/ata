@@ -149,6 +149,7 @@ use crate::style::user_message_style;
 use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
+use codex_protocol::models::local_file_label_text;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
@@ -160,6 +161,8 @@ use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
+use crate::clipboard_paste::AttachmentKind;
+use crate::clipboard_paste::detect_attachment_kind;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
@@ -201,6 +204,20 @@ pub enum InputResult {
 struct AttachedImage {
     placeholder: String,
     path: PathBuf,
+    /// When `true`, the attachment is a non-image file (e.g. PDF) and uses a
+    /// filename-based placeholder like `[report.pdf]` instead of `[Image #N]`.
+    is_file: bool,
+}
+
+/// Build a placeholder label from a file path, e.g. `[report.pdf]`.
+/// Falls back to `[File]` when the filename is missing or non-UTF-8.
+fn file_placeholder_for_path(path: &std::path::Path) -> String {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| !n.is_empty())
+        .unwrap_or("File");
+    format!("[{name}]")
 }
 
 enum PromptSelectionMode {
@@ -572,7 +589,7 @@ impl ChatComposer {
             self.pending_pastes.push((placeholder, pasted));
         } else if char_count > 1
             && self.image_paste_enabled()
-            && self.handle_paste_image_path(pasted.clone())
+            && self.handle_paste_attachment_path(pasted.clone())
         {
             self.textarea.insert_str(" ");
         } else {
@@ -584,24 +601,28 @@ impl ChatComposer {
         true
     }
 
-    pub fn handle_paste_image_path(&mut self, pasted: String) -> bool {
+    pub fn handle_paste_attachment_path(&mut self, pasted: String) -> bool {
         let Some(path_buf) = normalize_pasted_path(&pasted) else {
             return false;
         };
 
-        // normalize_pasted_path already handles Windows → WSL path conversion,
-        // so we can directly try to read the image dimensions.
-        match image::image_dimensions(&path_buf) {
-            Ok((width, height)) => {
-                tracing::info!("OK: {pasted}");
-                tracing::debug!("image dimensions={}x{}", width, height);
-                let format = pasted_image_format(&path_buf);
-                tracing::debug!("attached image format={}", format.label());
+        match detect_attachment_kind(&path_buf) {
+            AttachmentKind::Image => {
+                if let Ok((width, height)) = image::image_dimensions(&path_buf) {
+                    tracing::debug!("image dimensions={}x{}", width, height);
+                    let format = pasted_image_format(&path_buf);
+                    tracing::debug!("attached image format={}", format.label());
+                }
                 self.attach_image(path_buf);
                 true
             }
-            Err(err) => {
-                tracing::trace!("ERR: {err}");
+            AttachmentKind::File => {
+                tracing::debug!("attached file path={}", path_buf.display());
+                self.attach_file(path_buf);
+                true
+            }
+            AttachmentKind::Unsupported => {
+                tracing::trace!("unsupported pasted attachment path: {pasted}");
                 false
             }
         }
@@ -702,7 +723,7 @@ impl ChatComposer {
             self.textarea.insert_str(&text[idx..]);
         }
 
-        // Keep image placeholders normalized to [Image #1].. in attachment order.
+        // Keep attachment placeholders normalized to [Image #1].. / [File #1].. in order.
         self.relabel_attached_images_and_update_placeholders();
         self.textarea.set_cursor(self.textarea.text().len());
         self.sync_popups();
@@ -798,10 +819,30 @@ impl ChatComposer {
             .filter_map(|elem| elem.placeholder(&text).map(str::to_string))
             .collect();
         for (idx, path) in local_image_paths.into_iter().enumerate() {
-            let placeholder = local_image_label_text(idx + 1);
-            if image_placeholders.contains(&placeholder) {
-                self.attached_images
-                    .push(AttachedImage { placeholder, path });
+            let n = idx + 1;
+            let filename_ph = file_placeholder_for_path(&path);
+            let legacy_file_ph = local_file_label_text(n);
+            let image_ph = local_image_label_text(n);
+            if image_placeholders.contains(&filename_ph) {
+                // New-format filename placeholder (e.g. [report.pdf]).
+                self.attached_images.push(AttachedImage {
+                    placeholder: filename_ph,
+                    path,
+                    is_file: true,
+                });
+            } else if image_placeholders.contains(&legacy_file_ph) {
+                // Legacy [File #N] format (from older history entries).
+                self.attached_images.push(AttachedImage {
+                    placeholder: legacy_file_ph,
+                    path,
+                    is_file: true,
+                });
+            } else if image_placeholders.contains(&image_ph) {
+                self.attached_images.push(AttachedImage {
+                    placeholder: image_ph,
+                    path,
+                    is_file: false,
+                });
             }
         }
 
@@ -887,6 +928,7 @@ impl ChatComposer {
             .map(|img| LocalImageAttachment {
                 placeholder: img.placeholder.clone(),
                 path: img.path.clone(),
+                is_file: img.is_file,
             })
             .collect()
     }
@@ -911,15 +953,29 @@ impl ChatComposer {
             .retain(|img| image_placeholders.contains(img.placeholder.as_str()));
     }
 
-    /// Insert an attachment placeholder and track it for the next submission.
+    /// Insert an image attachment placeholder and track it for the next submission.
     pub fn attach_image(&mut self, path: PathBuf) {
-        let image_number = self.attached_images.len() + 1;
+        let image_number = self.attached_images.iter().filter(|a| !a.is_file).count() + 1;
         let placeholder = local_image_label_text(image_number);
         // Insert as an element to match large paste placeholder behavior:
         // styled distinctly and treated atomically for cursor/mutations.
         self.textarea.insert_element(&placeholder);
-        self.attached_images
-            .push(AttachedImage { placeholder, path });
+        self.attached_images.push(AttachedImage {
+            placeholder,
+            path,
+            is_file: false,
+        });
+    }
+
+    /// Insert a non-image file attachment placeholder (e.g. PDF) and track it.
+    pub fn attach_file(&mut self, path: PathBuf) {
+        let placeholder = file_placeholder_for_path(&path);
+        self.textarea.insert_element(&placeholder);
+        self.attached_images.push(AttachedImage {
+            placeholder,
+            path,
+            is_file: true,
+        });
     }
 
     #[cfg(test)]
@@ -935,6 +991,7 @@ impl ChatComposer {
             .map(|img| LocalImageAttachment {
                 placeholder: img.placeholder,
                 path: img.path,
+                is_file: img.is_file,
             })
             .collect()
     }
@@ -1410,52 +1467,33 @@ impl ChatComposer {
                 };
 
                 let sel_path = sel.to_string_lossy().to_string();
-                // If selected path looks like an image (png/jpeg), attach as image instead of inserting text.
-                let is_image = Self::is_image_path(&sel_path);
-                if is_image {
-                    // Determine dimensions; if that fails fall back to normal path insertion.
-                    let path_buf = PathBuf::from(&sel_path);
-                    match image::image_dimensions(&path_buf) {
-                        Ok((width, height)) => {
-                            tracing::debug!("selected image dimensions={}x{}", width, height);
-                            // Remove the current @token (mirror logic from insert_selected_path without inserting text)
-                            // using the flat text and byte-offset cursor API.
-                            let cursor_offset = self.textarea.cursor();
-                            let text = self.textarea.text();
-                            // Clamp to a valid char boundary to avoid panics when slicing.
-                            let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-                            let before_cursor = &text[..safe_cursor];
-                            let after_cursor = &text[safe_cursor..];
-
-                            // Determine token boundaries in the full text.
-                            let start_idx = before_cursor
-                                .char_indices()
-                                .rfind(|(_, c)| c.is_whitespace())
-                                .map(|(idx, c)| idx + c.len_utf8())
-                                .unwrap_or(0);
-                            let end_rel_idx = after_cursor
-                                .char_indices()
-                                .find(|(_, c)| c.is_whitespace())
-                                .map(|(idx, _)| idx)
-                                .unwrap_or(after_cursor.len());
-                            let end_idx = safe_cursor + end_rel_idx;
-
-                            self.textarea.replace_range(start_idx..end_idx, "");
-                            self.textarea.set_cursor(start_idx);
-
-                            self.attach_image(path_buf);
-                            // Add a trailing space to keep typing fluid.
-                            self.textarea.insert_str(" ");
-                        }
-                        Err(err) => {
-                            tracing::trace!("image dimensions lookup failed: {err}");
-                            // Fallback to plain path insertion if metadata read fails.
-                            self.insert_selected_path(&sel_path);
+                let path_buf = PathBuf::from(&sel_path);
+                match detect_attachment_kind(&path_buf) {
+                    AttachmentKind::Image => {
+                        // Determine dimensions; if that fails fall back to normal path insertion.
+                        match image::image_dimensions(&path_buf) {
+                            Ok((width, height)) => {
+                                tracing::debug!("selected image dimensions={width}x{height}");
+                                self.remove_current_at_token();
+                                self.attach_image(path_buf);
+                                self.textarea.insert_str(" ");
+                            }
+                            Err(err) => {
+                                tracing::trace!("image dimensions lookup failed: {err}");
+                                self.insert_selected_path(&sel_path);
+                            }
                         }
                     }
-                } else {
-                    // Non-image: inserting file path.
-                    self.insert_selected_path(&sel_path);
+                    AttachmentKind::File => {
+                        tracing::debug!("attached file from popup path={}", path_buf.display());
+                        self.remove_current_at_token();
+                        self.attach_file(path_buf);
+                        self.textarea.insert_str(" ");
+                    }
+                    AttachmentKind::Unsupported => {
+                        // Non-attachable file: insert path as plain text.
+                        self.insert_selected_path(&sel_path);
+                    }
                 }
                 // No selection: treat Enter as closing the popup/session.
                 self.active_popup = ActivePopup::None;
@@ -1536,11 +1574,6 @@ impl ChatComposer {
         }
 
         result
-    }
-
-    fn is_image_path(path: &str) -> bool {
-        let lower = path.to_ascii_lowercase();
-        lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg")
     }
 
     fn trim_text_elements(
@@ -1783,6 +1816,35 @@ impl ChatComposer {
             return None;
         }
         Self::current_prefixed_token(&self.textarea, '$', true)
+    }
+
+    /// Remove the active `@token` (the one under the cursor) from the text
+    /// area, leaving the cursor at the position where the token was.
+    ///
+    /// This is used when converting an `@token` into an attachment (image or
+    /// file) rather than inserting a plain text path.
+    fn remove_current_at_token(&mut self) {
+        let cursor_offset = self.textarea.cursor();
+        let text = self.textarea.text();
+        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
+
+        let before_cursor = &text[..safe_cursor];
+        let after_cursor = &text[safe_cursor..];
+
+        let start_idx = before_cursor
+            .char_indices()
+            .rfind(|(_, c)| c.is_whitespace())
+            .map(|(idx, c)| idx + c.len_utf8())
+            .unwrap_or(0);
+        let end_rel_idx = after_cursor
+            .char_indices()
+            .find(|(_, c)| c.is_whitespace())
+            .map(|(idx, _)| idx)
+            .unwrap_or(after_cursor.len());
+        let end_idx = safe_cursor + end_rel_idx;
+
+        self.textarea.replace_range(start_idx..end_idx, "");
+        self.textarea.set_cursor(start_idx);
     }
 
     /// Replace the active `@token` (the one under the cursor) with `path`.
@@ -2591,8 +2653,15 @@ impl ChatComposer {
     }
 
     fn relabel_attached_images_and_update_placeholders(&mut self) {
+        let mut image_counter = 0usize;
         for idx in 0..self.attached_images.len() {
-            let expected = local_image_label_text(idx + 1);
+            let expected = if self.attached_images[idx].is_file {
+                // File attachments use filename-based placeholders; no renumbering.
+                file_placeholder_for_path(&self.attached_images[idx].path)
+            } else {
+                image_counter += 1;
+                local_image_label_text(image_counter)
+            };
             let current = self.attached_images[idx].placeholder.clone();
             if current == expected {
                 continue;
@@ -5821,6 +5890,126 @@ mod tests {
     }
 
     #[test]
+    fn attach_file_uses_filename_placeholder() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        let path = PathBuf::from("/tmp/report.pdf");
+        composer.attach_file(path.clone());
+        let text = composer.current_text();
+        assert_eq!(text, "[report.pdf]");
+        let images = composer.local_images();
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].placeholder, "[report.pdf]");
+        assert!(images[0].is_file);
+        assert_eq!(images[0].path, path);
+    }
+
+    #[test]
+    fn mixed_image_file_numbering() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.attach_image(PathBuf::from("/tmp/a.png"));
+        composer.attach_file(PathBuf::from("/tmp/report.pdf"));
+        composer.attach_image(PathBuf::from("/tmp/b.png"));
+
+        let images = composer.local_images();
+        assert_eq!(images.len(), 3);
+        assert_eq!(images[0].placeholder, "[Image #1]");
+        assert!(!images[0].is_file);
+        assert_eq!(images[1].placeholder, "[report.pdf]");
+        assert!(images[1].is_file);
+        assert_eq!(images[2].placeholder, "[Image #2]");
+        assert!(!images[2].is_file);
+    }
+
+    #[test]
+    fn file_with_no_filename_falls_back() {
+        assert_eq!(file_placeholder_for_path(&PathBuf::from("/")), "[File]");
+    }
+
+    #[test]
+    fn relabel_after_delete_preserves_filename() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Attach image #1, file, image #2.
+        composer.attach_image(PathBuf::from("/tmp/a.png"));
+        composer.attach_file(PathBuf::from("/tmp/report.pdf"));
+        composer.attach_image(PathBuf::from("/tmp/b.png"));
+
+        // Verify initial state.
+        assert_eq!(composer.current_text(), "[Image #1][report.pdf][Image #2]");
+
+        // Position cursor after [Image #1] and delete it via backspace.
+        composer.textarea.set_cursor("[Image #1]".len());
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        // File label unchanged, image renumbered from #2 to #1.
+        assert_eq!(composer.current_text(), "[report.pdf][Image #1]");
+        let images = composer.local_images();
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].placeholder, "[report.pdf]");
+        assert!(images[0].is_file);
+        assert_eq!(images[1].placeholder, "[Image #1]");
+        assert!(!images[1].is_file);
+    }
+
+    #[test]
+    fn restore_reconstructs_filename_placeholder() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        let placeholder = "[report.pdf]";
+        let text = format!("{placeholder} check this");
+        let text_elements = vec![TextElement::new(
+            (0..placeholder.len()).into(),
+            Some(placeholder.to_string()),
+        )];
+        let local_image_paths = vec![PathBuf::from("/tmp/report.pdf")];
+        composer.set_text_content_with_mention_bindings(
+            text,
+            text_elements,
+            local_image_paths,
+            Vec::new(),
+        );
+        let images = composer.local_images();
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].placeholder, "[report.pdf]");
+        assert!(images[0].is_file);
+    }
+
+    #[test]
     fn submit_captures_recent_mention_bindings_before_clearing_textarea() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
@@ -6264,7 +6453,8 @@ mod tests {
         assert_eq!(
             vec![AttachedImage {
                 path: path2,
-                placeholder: "[Image #1]".to_string()
+                placeholder: "[Image #1]".to_string(),
+                is_file: false,
             }],
             composer.attached_images,
             "one image mapping remains"
@@ -6327,7 +6517,8 @@ mod tests {
         assert_eq!(
             vec![AttachedImage {
                 path: path2,
-                placeholder: placeholder1
+                placeholder: placeholder1,
+                is_file: false,
             }],
             composer.attached_images,
             "attachment renumbered after deletion"
@@ -7597,6 +7788,7 @@ mod tests {
         composer.attached_images.push(AttachedImage {
             placeholder: placeholder.clone(),
             path: PathBuf::from("img.png"),
+            is_file: false,
         });
         composer
             .pending_pastes
@@ -7631,6 +7823,7 @@ mod tests {
         composer.attached_images.push(AttachedImage {
             placeholder: placeholder.clone(),
             path: PathBuf::from("img.png"),
+            is_file: false,
         });
 
         composer.apply_external_edit("No images here".to_string());
@@ -7709,6 +7902,7 @@ mod tests {
         composer.attached_images.push(AttachedImage {
             placeholder: placeholder.clone(),
             path: PathBuf::from("img.png"),
+            is_file: false,
         });
 
         composer.apply_external_edit(format!("{placeholder} extra {placeholder}"));

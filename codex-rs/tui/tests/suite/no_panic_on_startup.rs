@@ -1,8 +1,12 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::select;
 use tokio::time::timeout;
+
+static ATA_BIN: OnceLock<PathBuf> = OnceLock::new();
 
 /// Regression test for https://github.com/openai/codex/issues/8803.
 #[tokio::test]
@@ -56,7 +60,7 @@ async fn run_codex_cli(
     codex_home: impl AsRef<Path>,
     cwd: impl AsRef<Path>,
 ) -> anyhow::Result<CodexCliOutput> {
-    let codex_cli = codex_utils_cargo_bin::cargo_bin("ata")?;
+    let codex_cli = ATA_BIN.get_or_init(|| codex_utils_cargo_bin::cargo_bin("ata").unwrap());
     let mut env = HashMap::new();
     env.insert(
         "CODEX_HOME".to_string(),

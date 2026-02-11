@@ -3174,7 +3174,7 @@ mod tests {
         );
         assert_eq!(
             summary.resume_command,
-            Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
+            Some("ata resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
     }
 
@@ -3192,7 +3192,7 @@ mod tests {
             .expect("summary");
         assert_eq!(
             summary.resume_command,
-            Some("codex resume my-session".to_string())
+            Some("ata resume my-session".to_string())
         );
     }
 }
