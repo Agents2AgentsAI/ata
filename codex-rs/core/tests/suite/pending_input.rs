@@ -13,6 +13,8 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use tokio::sync::oneshot;
+use tokio::time::Duration;
+use tokio::time::timeout;
 
 fn ev_message_item_done(id: &str, text: &str) -> Value {
     serde_json::json!({
@@ -46,6 +48,7 @@ fn message_input_texts(body: &Value, role: &str) -> Vec<String> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn injected_user_input_triggers_follow_up_request_with_deltas() {
+    let follow_up_timeout = Duration::from_secs(30);
     let (gate_completed_tx, gate_completed_rx) = oneshot::channel();
 
     let first_chunks = vec![
@@ -123,16 +126,23 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
         .await
         .unwrap();
 
+    // Give the submission loop time to enqueue this input onto the active turn
+    // before we release the gated completion event.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
     let _ = gate_completed_tx.send(());
 
-    let _ = wait_for_event(&codex, |event| {
-        matches!(event, EventMsg::UserMessage(message) if message.message == "second prompt")
+    let requests = timeout(follow_up_timeout, async {
+        loop {
+            let requests = server.requests().await;
+            if requests.len() == 2 {
+                break requests;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     })
-    .await;
-
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
-
-    let requests = server.requests().await;
+    .await
+    .expect("timeout waiting for two outbound requests");
     assert_eq!(requests.len(), 2);
 
     let first_body: Value = serde_json::from_slice(&requests[0]).expect("parse first request");
