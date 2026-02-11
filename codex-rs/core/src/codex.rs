@@ -173,6 +173,81 @@ fn file_capabilities_for_provider(
     )
 }
 
+/// Rewrite `LocalFile` inputs to `UploadedFile` when the cache has a valid
+/// entry for the same canonical path, provider, and mtime.
+fn dedup_local_files_from_cache(
+    inputs: &mut [UserInput],
+    cache: &FileReferenceCache,
+    provider_id: &str,
+    now: SystemTime,
+) {
+    for input in inputs.iter_mut() {
+        let UserInput::LocalFile { path } = input else {
+            continue;
+        };
+        let Ok(canonical) = std::fs::canonicalize(&*path) else {
+            continue;
+        };
+        let Ok(metadata) = std::fs::metadata(&canonical) else {
+            continue;
+        };
+        let Ok(mtime) = metadata.modified() else {
+            continue;
+        };
+
+        if let Some(hit) = cache.lookup_by_path(&canonical, mtime, provider_id, now) {
+            tracing::debug!(
+                path = %path.display(),
+                file_id = %hit.file_id,
+                "reusing previously uploaded file"
+            );
+            *input = UserInput::UploadedFile {
+                file_id: hit.file_id,
+                mime_type: hit.mime_type,
+                filename: hit.filename,
+                source_path: std::mem::take(path),
+            };
+        }
+    }
+}
+
+/// After a successful upload round, record path→file_id mappings for future dedup.
+fn record_upload_paths(cache: &mut FileReferenceCache, inputs: &[UserInput]) {
+    for input in inputs {
+        let UserInput::UploadedFile {
+            file_id,
+            mime_type,
+            filename,
+            source_path,
+        } = input
+        else {
+            continue;
+        };
+        let Ok(canonical) = std::fs::canonicalize(source_path) else {
+            continue;
+        };
+        let Ok(metadata) = std::fs::metadata(&canonical) else {
+            continue;
+        };
+        let Ok(mtime) = metadata.modified() else {
+            continue;
+        };
+        let (expires_at, provider) = match cache.get(file_id) {
+            Some(u) => (u.expires_at, u.provider.clone()),
+            None => (None, String::new()),
+        };
+        cache.record_path(
+            canonical,
+            file_id,
+            &provider,
+            mime_type.clone(),
+            filename.clone(),
+            mtime,
+            expires_at,
+        );
+    }
+}
+
 /// Convert a base64 payload budget into raw-byte budget using the 4:3 base64 expansion ratio.
 fn max_raw_inline_bytes(max_inline_payload_bytes: u64) -> u64 {
     max_inline_payload_bytes.saturating_mul(3).saturating_div(4)
@@ -3031,6 +3106,13 @@ impl Session {
                 Arc::clone(&state.session_configuration.original_config_do_not_use),
             )
         };
+        {
+            let (provider_id, _) =
+                file_capabilities_for_provider(&provider, config.model.as_deref());
+            let cache = self.file_reference_cache.lock().await;
+            dedup_local_files_from_cache(&mut input, &cache, &provider_id, SystemTime::now());
+        }
+
         let outcome = resolve_and_prepare_file_inputs(
             &mut input,
             &provider,
@@ -3045,6 +3127,7 @@ impl Session {
         if !outcome.uploaded_files.is_empty() {
             let mut cache = self.file_reference_cache.lock().await;
             cache.record_all(outcome.uploaded_files);
+            record_upload_paths(&mut cache, &input);
         }
 
         let mut active = self.active_turn.lock().await;
@@ -4341,6 +4424,16 @@ pub(crate) async fn run_turn(
     if input.is_empty() {
         return None;
     }
+
+    {
+        let (provider_id, _) = file_capabilities_for_provider(
+            &turn_context.provider,
+            turn_context.config.model.as_deref(),
+        );
+        let cache = sess.file_reference_cache.lock().await;
+        dedup_local_files_from_cache(&mut input, &cache, &provider_id, SystemTime::now());
+    }
+
     let outcome = match resolve_and_prepare_file_inputs(
         &mut input,
         &turn_context.provider,
@@ -4369,6 +4462,7 @@ pub(crate) async fn run_turn(
     if !outcome.uploaded_files.is_empty() {
         let mut cache = sess.file_reference_cache.lock().await;
         cache.record_all(outcome.uploaded_files);
+        record_upload_paths(&mut cache, &input);
     }
 
     let model_info = turn_context.model_info.clone();

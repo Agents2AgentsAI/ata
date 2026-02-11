@@ -23,11 +23,11 @@ pub fn wrap_responses_input_file_data_uris(input: &mut [ResponseItem]) {
                     ..
                 } = content_item
                 {
-                    if let Some(data) = file_data {
-                        if !data.starts_with("data:") {
-                            let mime = mime_type.as_deref().unwrap_or("application/pdf");
-                            *data = build_data_url(mime, data);
-                        }
+                    if let Some(data) = file_data
+                        && !data.starts_with("data:")
+                    {
+                        let mime = mime_type.as_deref().unwrap_or("application/pdf");
+                        *data = build_data_url(mime, data);
                     }
                     // Strip mime_type so it is not serialized for the OpenAI Responses API.
                     *mime_type = None;
