@@ -96,21 +96,10 @@ fn rewrite_url_file_block(block: &mut Value) {
         return;
     };
 
-    let filename = block
-        .get("filename")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|filename| !filename.is_empty())
-        .map(ToString::to_string);
-
-    let mut rewritten = serde_json::json!({
+    *block = serde_json::json!({
         "type": "input_file",
         "file_url": url,
     });
-    if let Some(filename) = filename {
-        rewritten["filename"] = serde_json::json!(filename);
-    }
-    *block = rewritten;
 }
 
 /// Wraps raw base64 `file_data` into a `data:<mime>;base64,...` URI and strips `mime_type`
@@ -126,9 +115,13 @@ fn normalize_input_file_block_for_openai(block: &mut Value) {
         let data_uri = build_data_url(mime, file_data);
         block["file_data"] = Value::String(data_uri);
     }
-    // OpenAI Responses API does not accept `mime_type` on `input_file` blocks.
     if let Some(obj) = block.as_object_mut() {
+        // OpenAI Responses API does not accept `mime_type` on `input_file` blocks.
         obj.remove("mime_type");
+        // `filename` is only valid alongside `file_data` (inline); strip it when `file_id` is present.
+        if obj.contains_key("file_id") {
+            obj.remove("filename");
+        }
     }
 }
 
@@ -298,8 +291,32 @@ mod tests {
             payload["input"][0]["content"][0],
             serde_json::json!({
                 "type": "input_file",
-                "file_url": "https://example.com/report.pdf",
-                "filename": "report.pdf"
+                "file_url": "https://example.com/report.pdf"
+            })
+        );
+    }
+
+    #[test]
+    fn strips_filename_when_file_id_present() {
+        let mut payload = serde_json::json!({
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_file",
+                    "file_id": "file-abc123",
+                    "filename": "report.pdf"
+                }]
+            }]
+        });
+
+        rewrite_openai_url_file_blocks_in_payload(&mut payload);
+
+        assert_eq!(
+            payload["input"][0]["content"][0],
+            serde_json::json!({
+                "type": "input_file",
+                "file_id": "file-abc123"
             })
         );
     }
