@@ -100,7 +100,11 @@ impl ResearchToolkit {
         if tool_id.starts_with("zotero_") {
             let has_library_id =
                 self.config.zotero_user_id.is_some() || self.config.zotero_group_id.is_some();
-            return self.config.zotero_api_key.is_some() && has_library_id;
+            if self.config.zotero_api_key.is_some() {
+                return has_library_id;
+            }
+
+            return self.config.uses_local_zotero_api();
         }
 
         if tool_id == "repo_get_health" {

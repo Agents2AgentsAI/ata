@@ -119,7 +119,7 @@ pub enum Feature {
     Collab,
     /// Enable apps.
     Apps,
-    /// Enable research tools and research workflow integration.
+    /// Enable research tool integrations and capability wiring.
     Research,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
@@ -570,9 +570,9 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::Research,
         key: "research",
         stage: Stage::Experimental {
-            name: "Research Agent",
-            menu_description: "Multi-agent research workflow with paper search, Zotero integration, and proposal synthesis.",
-            announcement: "Research agent support is available as an experimental feature.",
+            name: "Research Tools",
+            menu_description: "Enable research tool integrations (paper search, Zotero, repo analysis). Use `ata research` for the guided multi-phase workflow.",
+            announcement: "Research tools are available as an experimental feature. Use `ata research` to launch the full research workflow.",
         },
         default_enabled: false,
     },
