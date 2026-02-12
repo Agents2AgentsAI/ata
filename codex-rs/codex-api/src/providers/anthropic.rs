@@ -507,21 +507,21 @@ fn build_anthropic_messages(input: &[Value]) -> Result<Vec<Value>, ApiError> {
                 // Convert to Anthropic thinking/redacted_thinking content blocks
                 let summary = item.get("summary").and_then(Value::as_array);
                 let encrypted_content = item.get("encrypted_content").and_then(Value::as_str);
-
-                let has_summary_text = summary
-                    .as_ref()
-                    .is_some_and(|arr| arr.iter().any(|s| s.get("text").is_some()));
+                let thinking_text = summary.and_then(|arr| {
+                    let parts = arr
+                        .iter()
+                        .filter_map(|s| s.get("text").and_then(Value::as_str))
+                        .collect::<Vec<_>>();
+                    if parts.is_empty() {
+                        None
+                    } else {
+                        Some(parts.join("\n"))
+                    }
+                });
 
                 role = Some("assistant");
-                if has_summary_text {
+                if let Some(thinking_text) = thinking_text {
                     // Normal thinking block
-                    let thinking_text = summary
-                        .unwrap()
-                        .iter()
-                        .filter_map(|s| s.get("text").and_then(|t| t.as_str()))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-
                     let mut block = json!({
                         "type": "thinking",
                         "thinking": thinking_text
