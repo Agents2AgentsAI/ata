@@ -651,6 +651,11 @@ fn map_annotation(
     scope: &ZoteroLibraryScope,
 ) -> Option<ZoteroAnnotation> {
     if item.data.item_type.as_deref() != Some("annotation") {
+        tracing::warn!(
+            item_key = %item.key,
+            item_type = ?item.data.item_type,
+            "zotero annotation query returned non-annotation item; dropping record"
+        );
         return None;
     }
 
