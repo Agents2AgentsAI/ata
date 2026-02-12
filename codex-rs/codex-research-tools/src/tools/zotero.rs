@@ -1800,6 +1800,114 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_grep_text_warns_when_max_chars_per_item_truncates_segments() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("q", "topic"))
+            .and(query_param("sort", "relevance"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "ITEM1",
+                    "data": {
+                        "itemType": "journalArticle",
+                        "title": "Topic Paper",
+                        "creators": []
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let result = toolkit
+            .zotero_grep_text(ZoteroGrepParams {
+                pattern: "top".to_string(),
+                match_mode: Some(ZoteroGrepMatchMode::Literal),
+                case_sensitive: Some(false),
+                library_type: None,
+                library_id: None,
+                parent_item_key: None,
+                query_hint: Some("topic".to_string()),
+                item_type: None,
+                fields: Some(vec![ZoteroGrepField::Title]),
+                limit_items: Some(10),
+                limit_matches: Some(10),
+                max_matches_per_item: Some(10),
+                context_chars: Some(30),
+                max_chars_per_item: Some(3),
+            })
+            .await
+            .expect("zotero_grep_text should succeed");
+
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("max_chars_per_item=3 truncates text segments"))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_grep_text_warns_on_default_fulltext_cap() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("q", "topic"))
+            .and(query_param("sort", "relevance"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "ITEM1",
+                    "data": {
+                        "itemType": "journalArticle",
+                        "title": "Topic Paper",
+                        "creators": []
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/ITEM1/fulltext"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "content": "evidence appears in fulltext"
+            })))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let result = toolkit
+            .zotero_grep_text(ZoteroGrepParams {
+                pattern: "evidence".to_string(),
+                match_mode: Some(ZoteroGrepMatchMode::Literal),
+                case_sensitive: Some(false),
+                library_type: None,
+                library_id: None,
+                parent_item_key: None,
+                query_hint: Some("topic".to_string()),
+                item_type: None,
+                fields: Some(vec![ZoteroGrepField::Fulltext]),
+                limit_items: Some(10),
+                limit_matches: Some(10),
+                max_matches_per_item: Some(10),
+                context_chars: Some(30),
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_grep_text should succeed");
+
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("default 10000 character cap"))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn zotero_search_notes_reuses_note_and_annotation_matching() {
         let server = MockServer::start().await;
 
@@ -1975,6 +2083,65 @@ mod tests {
         assert_eq!(result.scanned_items, 2);
         assert_eq!(result.results.items.len(), 1);
         assert_eq!(result.results.items[0].key, "ITEM1");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_advanced_search_warns_on_default_fulltext_cap() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("sort", "dateModified"))
+            .and(query_param("direction", "desc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "ITEM1",
+                    "data": {
+                        "itemType": "journalArticle",
+                        "title": "Item One",
+                        "creators": []
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/ITEM1/fulltext"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "content": "fulltext signal appears here"
+            })))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let result = toolkit
+            .zotero_advanced_search(ZoteroAdvancedSearchParams {
+                conditions: vec![ZoteroSearchCondition {
+                    field: ZoteroSearchConditionField::Fulltext,
+                    operation: ZoteroSearchConditionOperation::Contains,
+                    value: Some("signal".to_string()),
+                    case_sensitive: Some(false),
+                }],
+                join_mode: None,
+                sort_by: None,
+                sort_direction: None,
+                library_type: None,
+                library_id: None,
+                offset: Some(0),
+                limit: Some(10),
+                item_type: None,
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_advanced_search should succeed");
+
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("default 10000 character cap"))
+        );
     }
 
     fn build_test_toolkit(zotero_base_url: String) -> ResearchToolkit {
