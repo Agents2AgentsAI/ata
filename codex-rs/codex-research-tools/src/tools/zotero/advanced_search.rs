@@ -189,7 +189,7 @@ pub(super) async fn zotero_advanced_search(
             .collect::<Vec<_>>();
         apply_items_budget(items.as_mut_slice(), normalized.max_chars_per_item);
 
-        let hints = if items.is_empty() {
+        let hints = if total == 0 {
             build_empty_advanced_hints(&normalized)
         } else {
             Vec::new()
@@ -935,5 +935,286 @@ fn format_operation(operation: &ZoteroSearchConditionOperation) -> &'static str 
         ZoteroSearchConditionOperation::AfterYear => "after_year",
         ZoteroSearchConditionOperation::IsEmpty => "is_empty",
         ZoteroSearchConditionOperation::IsNotEmpty => "is_not_empty",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    fn build_item(key: &str, title: &str, authors: &str, year: Option<&str>) -> ZoteroItem {
+        ZoteroItem {
+            key: key.to_string(),
+            title: title.to_string(),
+            authors: authors.to_string(),
+            year: year.map(ToString::to_string),
+            item_type: "journalArticle".to_string(),
+            doi: None,
+            abstract_snippet: None,
+            tags: Vec::new(),
+            source_meta: None,
+        }
+    }
+
+    fn normalized_condition(
+        field: ZoteroSearchConditionField,
+        operation: ZoteroSearchConditionOperation,
+        value: Option<&str>,
+        case_sensitive: Option<bool>,
+    ) -> NormalizedCondition {
+        normalize_advanced_condition(ZoteroSearchCondition {
+            field,
+            operation,
+            value: value.map(ToString::to_string),
+            case_sensitive,
+        })
+        .expect("condition normalization should succeed")
+    }
+
+    fn empty_collected() -> CollectedFieldText {
+        CollectedFieldText {
+            notes: Vec::new(),
+            annotations: Vec::new(),
+            fulltext: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn condition_missing_field_semantics_follow_contract() {
+        let item = build_item("I1", "Graph Models", "Alice Kim", Some("2024"));
+        let collected = empty_collected();
+
+        let contains = normalized_condition(
+            ZoteroSearchConditionField::Publication,
+            ZoteroSearchConditionOperation::Contains,
+            Some("neurips"),
+            None,
+        );
+        assert!(
+            !evaluate_condition(&contains, &item, None, None, &collected),
+            "contains on missing field should be false"
+        );
+
+        let not_contains = normalized_condition(
+            ZoteroSearchConditionField::Publication,
+            ZoteroSearchConditionOperation::NotContains,
+            Some("neurips"),
+            None,
+        );
+        assert!(
+            evaluate_condition(&not_contains, &item, None, None, &collected),
+            "not_contains on missing field should be true"
+        );
+
+        let equals = normalized_condition(
+            ZoteroSearchConditionField::Publication,
+            ZoteroSearchConditionOperation::Equals,
+            Some("neurips"),
+            None,
+        );
+        assert!(
+            !evaluate_condition(&equals, &item, None, None, &collected),
+            "equals on missing field should be false"
+        );
+
+        let not_equals = normalized_condition(
+            ZoteroSearchConditionField::Publication,
+            ZoteroSearchConditionOperation::NotEquals,
+            Some("neurips"),
+            None,
+        );
+        assert!(
+            evaluate_condition(&not_equals, &item, None, None, &collected),
+            "not_equals on missing field should be true"
+        );
+
+        let regex = normalized_condition(
+            ZoteroSearchConditionField::Publication,
+            ZoteroSearchConditionOperation::Regex,
+            Some("neur.*"),
+            None,
+        );
+        assert!(
+            !evaluate_condition(&regex, &item, None, None, &collected),
+            "regex on missing field should be false"
+        );
+
+        let is_empty = normalized_condition(
+            ZoteroSearchConditionField::Publication,
+            ZoteroSearchConditionOperation::IsEmpty,
+            None,
+            None,
+        );
+        assert!(
+            evaluate_condition(&is_empty, &item, None, None, &collected),
+            "is_empty on missing field should be true"
+        );
+
+        let is_not_empty = normalized_condition(
+            ZoteroSearchConditionField::Publication,
+            ZoteroSearchConditionOperation::IsNotEmpty,
+            None,
+            None,
+        );
+        assert!(
+            !evaluate_condition(&is_not_empty, &item, None, None, &collected),
+            "is_not_empty on missing field should be false"
+        );
+    }
+
+    #[test]
+    fn join_mode_all_and_any_behave_as_expected() {
+        let item = build_item("I1", "Transformer Models", "Alice Kim", Some("2023"));
+        let collected = empty_collected();
+        let conditions = vec![
+            normalized_condition(
+                ZoteroSearchConditionField::Title,
+                ZoteroSearchConditionOperation::Contains,
+                Some("transformer"),
+                Some(false),
+            ),
+            normalized_condition(
+                ZoteroSearchConditionField::Creator,
+                ZoteroSearchConditionOperation::Contains,
+                Some("bob"),
+                Some(false),
+            ),
+        ];
+
+        assert!(
+            !evaluate_joined_conditions(
+                &conditions,
+                &ZoteroAdvancedJoinMode::All,
+                &item,
+                None,
+                None,
+                &collected,
+            ),
+            "all join should fail when one condition does not match"
+        );
+        assert!(
+            evaluate_joined_conditions(
+                &conditions,
+                &ZoteroAdvancedJoinMode::Any,
+                &item,
+                None,
+                None,
+                &collected,
+            ),
+            "any join should pass when at least one condition matches"
+        );
+    }
+
+    #[test]
+    fn year_and_regex_conditions_respect_case_sensitivity() {
+        let item = build_item("I1", "Transformer Models", "Alice Kim", Some("2019-06-01"));
+        let collected = empty_collected();
+
+        let before_year = normalized_condition(
+            ZoteroSearchConditionField::Year,
+            ZoteroSearchConditionOperation::BeforeYear,
+            Some("2020"),
+            None,
+        );
+        assert!(evaluate_condition(
+            &before_year,
+            &item,
+            None,
+            None,
+            &collected
+        ));
+
+        let after_year = normalized_condition(
+            ZoteroSearchConditionField::Year,
+            ZoteroSearchConditionOperation::AfterYear,
+            Some("2020"),
+            None,
+        );
+        assert!(!evaluate_condition(
+            &after_year,
+            &item,
+            None,
+            None,
+            &collected
+        ));
+
+        let insensitive_regex = normalized_condition(
+            ZoteroSearchConditionField::Title,
+            ZoteroSearchConditionOperation::Regex,
+            Some("transformer"),
+            Some(false),
+        );
+        assert!(evaluate_condition(
+            &insensitive_regex,
+            &item,
+            None,
+            None,
+            &collected
+        ));
+
+        let sensitive_regex = normalized_condition(
+            ZoteroSearchConditionField::Title,
+            ZoteroSearchConditionOperation::Regex,
+            Some("transformer"),
+            Some(true),
+        );
+        assert!(!evaluate_condition(
+            &sensitive_regex,
+            &item,
+            None,
+            None,
+            &collected
+        ));
+    }
+
+    #[test]
+    fn apply_advanced_sort_orders_and_reverses_by_title() {
+        let mut items = vec![
+            build_item("3", "Zeta", "", None),
+            build_item("1", "Alpha", "", None),
+            build_item("2", "Beta", "", None),
+        ];
+        let mut warnings = Vec::new();
+        apply_advanced_sort(
+            &mut items,
+            &ZoteroAdvancedSortBy::Title,
+            &ZoteroSortDirection::Asc,
+            &mut warnings,
+        );
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.key.clone())
+                .collect::<Vec<_>>(),
+            vec!["1".to_string(), "2".to_string(), "3".to_string()]
+        );
+        assert!(warnings.is_empty());
+
+        apply_advanced_sort(
+            &mut items,
+            &ZoteroAdvancedSortBy::Title,
+            &ZoteroSortDirection::Desc,
+            &mut warnings,
+        );
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.key.clone())
+                .collect::<Vec<_>>(),
+            vec!["3".to_string(), "2".to_string(), "1".to_string()]
+        );
+    }
+
+    #[test]
+    fn normalize_condition_rejects_non_year_before_after() {
+        let condition = normalize_advanced_condition(ZoteroSearchCondition {
+            field: ZoteroSearchConditionField::Title,
+            operation: ZoteroSearchConditionOperation::BeforeYear,
+            value: Some("2020".to_string()),
+            case_sensitive: None,
+        });
+        assert!(condition.is_err());
     }
 }

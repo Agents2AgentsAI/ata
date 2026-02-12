@@ -2685,6 +2685,108 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_advanced_search_does_not_emit_empty_hints_for_pagination_gap() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("sort", "dateModified"))
+            .and(query_param("direction", "desc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "ITEM1",
+                    "data": {
+                        "itemType": "journalArticle",
+                        "title": "Transformer Models",
+                        "creators": []
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let result = toolkit
+            .zotero_advanced_search(ZoteroAdvancedSearchParams {
+                conditions: vec![ZoteroSearchCondition {
+                    field: ZoteroSearchConditionField::Title,
+                    operation: ZoteroSearchConditionOperation::Contains,
+                    value: Some("Transformer".to_string()),
+                    case_sensitive: Some(false),
+                }],
+                join_mode: None,
+                sort_by: None,
+                sort_direction: None,
+                library_type: Some("user".to_string()),
+                library_id: Some("123".to_string()),
+                offset: Some(10),
+                limit: Some(5),
+                item_type: None,
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_advanced_search should succeed");
+
+        assert_eq!(result.results.items.len(), 0);
+        assert_eq!(result.results.total_available, Some(1));
+        assert_eq!(result.results.has_more, false);
+        assert_eq!(result.hints, Vec::<String>::new());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_advanced_search_uses_server_filtered_strategy_for_tag_equals() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("tag", "ml"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "ITEM1",
+                    "data": {
+                        "itemType": "journalArticle",
+                        "title": "ML Systems",
+                        "creators": [],
+                        "tags": [{ "tag": "ml" }]
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let result = toolkit
+            .zotero_advanced_search(ZoteroAdvancedSearchParams {
+                conditions: vec![ZoteroSearchCondition {
+                    field: ZoteroSearchConditionField::Tag,
+                    operation: ZoteroSearchConditionOperation::Equals,
+                    value: Some("ml".to_string()),
+                    case_sensitive: Some(false),
+                }],
+                join_mode: None,
+                sort_by: None,
+                sort_direction: None,
+                library_type: Some("user".to_string()),
+                library_id: Some("123".to_string()),
+                offset: Some(0),
+                limit: Some(10),
+                item_type: None,
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_advanced_search should succeed");
+
+        assert_eq!(
+            result.candidate_strategy,
+            ZoteroAdvancedCandidateStrategy::ServerFiltered
+        );
+        assert_eq!(result.completeness, ZoteroAdvancedCompleteness::Exact);
+        assert_eq!(result.scanned_items, 1);
+        assert_eq!(result.results.items.len(), 1);
+        assert_eq!(result.results.items[0].key, "ITEM1");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn multi_scope_search_merges_user_and_group_results() {
         let server = MockServer::start().await;
 

@@ -72,8 +72,13 @@ impl ToolRouter {
         research_toolkit: Option<&Arc<SharedResearchToolkit>>,
         data_toolkit: Option<&Arc<SharedDataToolkit>>,
     ) -> Self {
-        if research_toolkit.is_none() && data_toolkit.is_none() {
-            return Self::from_config(config, mcp_tools, dynamic_tools);
+        if data_toolkit.is_none() {
+            return Self::from_config_with_research(
+                config,
+                mcp_tools,
+                dynamic_tools,
+                research_toolkit,
+            );
         }
 
         let builder = build_specs_with_toolkits(

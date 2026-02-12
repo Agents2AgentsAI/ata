@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_research_tools::config::ResearchConfig;
 use codex_research_tools::error::ResearchError;
+#[cfg(feature = "research-latex")]
 use codex_research_tools::types::LatexCompileParams;
 use codex_research_tools::types::PaginationParams;
 use codex_research_tools::types::PaperSearchParams;

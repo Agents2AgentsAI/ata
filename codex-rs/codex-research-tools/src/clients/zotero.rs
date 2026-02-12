@@ -955,7 +955,8 @@ where
     }
     match ParentCollection::deserialize(deserializer)? {
         ParentCollection::Str(s) if !s.is_empty() => Ok(Some(s)),
-        ParentCollection::Str(_) | ParentCollection::NotAString(_) => Ok(None),
+        ParentCollection::Str(_) => Ok(None),
+        ParentCollection::NotAString(_value) => Ok(None),
     }
 }
 
