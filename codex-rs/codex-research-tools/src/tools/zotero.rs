@@ -11,6 +11,7 @@ use crate::clients::zotero::ZoteroCollectionItemsRequest;
 use crate::clients::zotero::ZoteroCollectionsRequest;
 use crate::clients::zotero::ZoteroConfig;
 use crate::clients::zotero::ZoteroLibraryScope;
+use crate::clients::zotero::ZoteroListGroupsRequest;
 use crate::clients::zotero::ZoteroSearchRequest;
 use crate::error::ResearchError;
 use crate::error::Result;
@@ -24,9 +25,11 @@ use crate::types::ZoteroCollectionItemsParams;
 use crate::types::ZoteroCollectionsParams;
 use crate::types::ZoteroCollectionsResult;
 use crate::types::ZoteroFullTextResult;
+use crate::types::ZoteroGroupsResult;
 use crate::types::ZoteroItem;
 use crate::types::ZoteroItemDetail;
 use crate::types::ZoteroItemParams;
+use crate::types::ZoteroListGroupsParams;
 use crate::types::ZoteroNote;
 use crate::types::ZoteroNotesResult;
 use crate::types::ZoteroSearchParams;
@@ -35,9 +38,11 @@ use crate::types::ZoteroTagSearchParams;
 
 const DEFAULT_SEARCH_LIMIT: u32 = 25;
 const DEFAULT_COLLECTIONS_LIMIT: u32 = 100;
+const DEFAULT_GROUPS_LIMIT: u32 = 100;
 const DEFAULT_CHILDREN_LIMIT: u32 = 50;
 const DEFAULT_FULLTEXT_MAX_CHARS: u32 = 10_000;
 const ZOTERO_MAX_PAGE_SIZE: u32 = 100;
+const DEFAULT_LOCAL_USER_LIBRARY_ID: &str = "0";
 
 #[derive(Debug, Clone, Serialize)]
 struct NormalizedScope {
@@ -80,6 +85,13 @@ struct NormalizedCollectionsParams {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct NormalizedListGroupsParams {
+    user_id: String,
+    offset: u32,
+    limit: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct NormalizedCollectionItemsParams {
     collection_key: String,
     scope: NormalizedScope,
@@ -94,11 +106,11 @@ pub(crate) async fn zotero_search(
     params: ZoteroSearchParams,
 ) -> Result<ZoteroSearchResult> {
     let normalized = normalize_search_params(toolkit, params, "zotero_search")?;
-    let api_key = zotero_api_key(toolkit, "zotero_search")?.to_string();
     let key = CacheKey {
         tool_name: "zotero_search",
         params_hash: hash_cache_payload(&normalized)?,
     };
+    let config = zotero_config(toolkit);
 
     let mut result = get_or_fetch_typed(
         toolkit,
@@ -109,10 +121,7 @@ pub(crate) async fn zotero_search(
             async move {
                 zotero::search_items(
                     toolkit.http(),
-                    ZoteroConfig {
-                        base_url: &toolkit.config().zotero_base_url,
-                        api_key: &api_key,
-                    },
+                    config,
                     &scope,
                     &ZoteroSearchRequest {
                         query: Some(&normalized.query),
@@ -137,33 +146,25 @@ pub(crate) async fn zotero_get_item(
     params: ZoteroItemParams,
 ) -> Result<ZoteroItemDetail> {
     let normalized = normalize_item_params(toolkit, params, "zotero_get_item")?;
-    let api_key = zotero_api_key(toolkit, "zotero_get_item")?.to_string();
     let key = CacheKey {
         tool_name: "zotero_get_item",
         params_hash: hash_cache_payload(&normalized)?,
     };
+    let config = zotero_config(toolkit);
 
-    let mut item = get_or_fetch_typed(
-        toolkit,
-        key,
-        toolkit.config().cache_ttls.zotero_items,
-        || {
-            let scope = to_scope(&normalized.scope);
-            async move {
-                zotero::get_item(
-                    toolkit.http(),
-                    ZoteroConfig {
-                        base_url: &toolkit.config().zotero_base_url,
-                        api_key: &api_key,
-                    },
-                    &scope,
-                    &normalized.item_key,
-                )
-                .await
-            }
-        },
-    )
-    .await?;
+    let mut item =
+        get_or_fetch_typed(
+            toolkit,
+            key,
+            toolkit.config().cache_ttls.zotero_items,
+            || {
+                let scope = to_scope(&normalized.scope);
+                async move {
+                    zotero::get_item(toolkit.http(), config, &scope, &normalized.item_key).await
+                }
+            },
+        )
+        .await?;
 
     if let Some(max_chars) = normalized.max_chars_per_item {
         truncate_optional_string(&mut item.abstract_text, max_chars as usize);
@@ -178,11 +179,11 @@ pub(crate) async fn zotero_get_fulltext(
     params: ZoteroItemParams,
 ) -> Result<ZoteroFullTextResult> {
     let normalized = normalize_item_params(toolkit, params, "zotero_get_fulltext")?;
-    let api_key = zotero_api_key(toolkit, "zotero_get_fulltext")?.to_string();
     let key = CacheKey {
         tool_name: "zotero_get_fulltext",
         params_hash: hash_cache_payload(&normalized)?,
     };
+    let config = zotero_config(toolkit);
 
     let mut fulltext = get_or_fetch_typed(
         toolkit,
@@ -191,16 +192,7 @@ pub(crate) async fn zotero_get_fulltext(
         || {
             let scope = to_scope(&normalized.scope);
             async move {
-                zotero::get_fulltext(
-                    toolkit.http(),
-                    ZoteroConfig {
-                        base_url: &toolkit.config().zotero_base_url,
-                        api_key: &api_key,
-                    },
-                    &scope,
-                    &normalized.item_key,
-                )
-                .await
+                zotero::get_fulltext(toolkit.http(), config, &scope, &normalized.item_key).await
             }
         },
     )
@@ -219,11 +211,11 @@ pub(crate) async fn zotero_get_notes(
     params: ZoteroItemParams,
 ) -> Result<ZoteroNotesResult> {
     let normalized = normalize_item_params(toolkit, params, "zotero_get_notes")?;
-    let api_key = zotero_api_key(toolkit, "zotero_get_notes")?.to_string();
     let key = CacheKey {
         tool_name: "zotero_get_notes",
         params_hash: hash_cache_payload(&normalized)?,
     };
+    let config = zotero_config(toolkit);
 
     let mut notes = get_or_fetch_typed(
         toolkit,
@@ -234,10 +226,7 @@ pub(crate) async fn zotero_get_notes(
             async move {
                 zotero::get_notes(
                     toolkit.http(),
-                    ZoteroConfig {
-                        base_url: &toolkit.config().zotero_base_url,
-                        api_key: &api_key,
-                    },
+                    config,
                     &scope,
                     &ZoteroChildrenRequest {
                         item_key: &normalized.item_key,
@@ -263,11 +252,11 @@ pub(crate) async fn zotero_get_attachments(
     params: ZoteroItemParams,
 ) -> Result<ZoteroAttachmentsResult> {
     let normalized = normalize_item_params(toolkit, params, "zotero_get_attachments")?;
-    let api_key = zotero_api_key(toolkit, "zotero_get_attachments")?.to_string();
     let key = CacheKey {
         tool_name: "zotero_get_attachments",
         params_hash: hash_cache_payload(&normalized)?,
     };
+    let config = zotero_config(toolkit);
 
     let mut attachments = get_or_fetch_typed(
         toolkit,
@@ -278,10 +267,7 @@ pub(crate) async fn zotero_get_attachments(
             async move {
                 zotero::get_attachments(
                     toolkit.http(),
-                    ZoteroConfig {
-                        base_url: &toolkit.config().zotero_base_url,
-                        api_key: &api_key,
-                    },
+                    config,
                     &scope,
                     &ZoteroChildrenRequest {
                         item_key: &normalized.item_key,
@@ -307,11 +293,11 @@ pub(crate) async fn zotero_search_by_tag(
     params: ZoteroTagSearchParams,
 ) -> Result<ZoteroSearchResult> {
     let normalized = normalize_tag_search_params(toolkit, params)?;
-    let api_key = zotero_api_key(toolkit, "zotero_search_by_tag")?.to_string();
     let key = CacheKey {
         tool_name: "zotero_search_by_tag",
         params_hash: hash_cache_payload(&normalized)?,
     };
+    let config = zotero_config(toolkit);
 
     let tool_timeout = toolkit.config().tool_timeout;
     let timeout_ms = u64::try_from(tool_timeout.as_millis()).unwrap_or(u64::MAX);
@@ -334,10 +320,7 @@ pub(crate) async fn zotero_search_by_tag(
                         loop {
                             let page = zotero::search_items(
                                 toolkit.http(),
-                                ZoteroConfig {
-                                    base_url: &toolkit.config().zotero_base_url,
-                                    api_key: &api_key,
-                                },
+                                config,
                                 &scope,
                                 &ZoteroSearchRequest {
                                     query: None,
@@ -416,11 +399,11 @@ pub(crate) async fn zotero_get_collections(
     params: ZoteroCollectionsParams,
 ) -> Result<ZoteroCollectionsResult> {
     let normalized = normalize_collections_params(toolkit, params)?;
-    let api_key = zotero_api_key(toolkit, "zotero_get_collections")?.to_string();
     let key = CacheKey {
         tool_name: "zotero_get_collections",
         params_hash: hash_cache_payload(&normalized)?,
     };
+    let config = zotero_config(toolkit);
 
     get_or_fetch_typed(
         toolkit,
@@ -431,10 +414,7 @@ pub(crate) async fn zotero_get_collections(
             async move {
                 zotero::get_collections(
                     toolkit.http(),
-                    ZoteroConfig {
-                        base_url: &toolkit.config().zotero_base_url,
-                        api_key: &api_key,
-                    },
+                    config,
                     &scope,
                     ZoteroCollectionsRequest {
                         offset: normalized.offset,
@@ -448,16 +428,47 @@ pub(crate) async fn zotero_get_collections(
     .await
 }
 
+pub(crate) async fn zotero_list_groups(
+    toolkit: &ResearchToolkit,
+    params: ZoteroListGroupsParams,
+) -> Result<ZoteroGroupsResult> {
+    let normalized = normalize_list_groups_params(toolkit, params)?;
+    let key = CacheKey {
+        tool_name: "zotero_list_groups",
+        params_hash: hash_cache_payload(&normalized)?,
+    };
+    let config = zotero_config(toolkit);
+
+    get_or_fetch_typed(
+        toolkit,
+        key,
+        toolkit.config().cache_ttls.zotero_items,
+        || async move {
+            zotero::list_groups(
+                toolkit.http(),
+                config,
+                &normalized.user_id,
+                ZoteroListGroupsRequest {
+                    offset: normalized.offset,
+                    limit: normalized.limit,
+                },
+            )
+            .await
+        },
+    )
+    .await
+}
+
 pub(crate) async fn zotero_get_collection_items(
     toolkit: &ResearchToolkit,
     params: ZoteroCollectionItemsParams,
 ) -> Result<ZoteroSearchResult> {
     let normalized = normalize_collection_items_params(toolkit, params)?;
-    let api_key = zotero_api_key(toolkit, "zotero_get_collection_items")?.to_string();
     let key = CacheKey {
         tool_name: "zotero_get_collection_items",
         params_hash: hash_cache_payload(&normalized)?,
     };
+    let config = zotero_config(toolkit);
 
     let mut result = get_or_fetch_typed(
         toolkit,
@@ -468,10 +479,7 @@ pub(crate) async fn zotero_get_collection_items(
             async move {
                 zotero::get_collection_items(
                     toolkit.http(),
-                    ZoteroConfig {
-                        base_url: &toolkit.config().zotero_base_url,
-                        api_key: &api_key,
-                    },
+                    config,
                     &scope,
                     &ZoteroCollectionItemsRequest {
                         collection_key: &normalized.collection_key,
@@ -603,6 +611,33 @@ fn normalize_collections_params(
     })
 }
 
+fn normalize_list_groups_params(
+    toolkit: &ResearchToolkit,
+    params: ZoteroListGroupsParams,
+) -> Result<NormalizedListGroupsParams> {
+    let scope = resolve_scope(
+        toolkit,
+        Some("user"),
+        params.user_id.as_deref(),
+        "zotero_list_groups",
+    )?;
+
+    let user_id = match scope {
+        ZoteroLibraryScope::User(user_id) => user_id,
+        ZoteroLibraryScope::Group(_) => {
+            return Err(ResearchError::Internal(
+                "zotero_list_groups resolved a non-user scope".to_string(),
+            ));
+        }
+    };
+
+    Ok(NormalizedListGroupsParams {
+        user_id,
+        offset: params.offset.unwrap_or(0),
+        limit: params.limit.unwrap_or(DEFAULT_GROUPS_LIMIT).clamp(1, 100),
+    })
+}
+
 fn normalize_collection_items_params(
     toolkit: &ResearchToolkit,
     params: ZoteroCollectionItemsParams,
@@ -642,6 +677,17 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
     })
 }
 
+fn zotero_config(toolkit: &ResearchToolkit) -> ZoteroConfig<'_> {
+    ZoteroConfig {
+        base_url: &toolkit.config().zotero_base_url,
+        api_key: toolkit.config().zotero_api_key.as_deref(),
+    }
+}
+
+fn uses_local_zotero_api(toolkit: &ResearchToolkit) -> bool {
+    toolkit.config().uses_local_zotero_api()
+}
+
 fn resolve_scope(
     toolkit: &ResearchToolkit,
     library_type: Option<&str>,
@@ -669,6 +715,13 @@ fn resolve_scope(
         Some("user") => {
             let id = requested_id
                 .or_else(|| toolkit.config().zotero_user_id.clone())
+                .or_else(|| {
+                    if uses_local_zotero_api(toolkit) {
+                        Some(DEFAULT_LOCAL_USER_LIBRARY_ID.to_string())
+                    } else {
+                        None
+                    }
+                })
                 .ok_or_else(|| ResearchError::NotConfigured {
                     tool: tool_name,
                     reason: "missing Zotero user library id (set `zotero_user_id` or provide `library_id`)".to_string(),
@@ -694,6 +747,11 @@ fn resolve_scope(
             if let Some(group_id) = toolkit.config().zotero_group_id.clone() {
                 return Ok(ZoteroLibraryScope::Group(group_id));
             }
+            if uses_local_zotero_api(toolkit) {
+                return Ok(ZoteroLibraryScope::User(
+                    DEFAULT_LOCAL_USER_LIBRARY_ID.to_string(),
+                ));
+            }
 
             Err(ResearchError::NotConfigured {
                 tool: tool_name,
@@ -702,17 +760,6 @@ fn resolve_scope(
             })
         }
     }
-}
-
-fn zotero_api_key<'a>(toolkit: &'a ResearchToolkit, tool_name: &'static str) -> Result<&'a str> {
-    toolkit
-        .config()
-        .zotero_api_key
-        .as_deref()
-        .ok_or_else(|| ResearchError::NotConfigured {
-            tool: tool_name,
-            reason: "missing Zotero API key (set ZOTERO_API_KEY)".to_string(),
-        })
 }
 
 fn to_normalized_scope(scope: &ZoteroLibraryScope) -> NormalizedScope {
@@ -792,6 +839,7 @@ mod tests {
     use crate::types::ZoteroCollectionItemsParams;
     use crate::types::ZoteroCollectionsParams;
     use crate::types::ZoteroItemParams;
+    use crate::types::ZoteroListGroupsParams;
     use crate::types::ZoteroSearchParams;
     use crate::types::ZoteroTagSearchParams;
 
@@ -1217,6 +1265,96 @@ mod tests {
 
         assert_eq!(items.items.len(), 1);
         assert_eq!(items.items[0].key, "ITEM1");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_list_groups_uses_local_user_zero_in_local_mode() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/users/0/groups"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "id": 999,
+                    "data": {
+                        "name": "Research Lab",
+                        "description": "Shared papers"
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit_with_config(ResearchConfig {
+            zotero_api_key: None,
+            zotero_user_id: None,
+            zotero_group_id: None,
+            zotero_base_url: format!("{}/api/", server.uri()),
+            ..ResearchConfig::default()
+        });
+
+        let result = toolkit
+            .zotero_list_groups(ZoteroListGroupsParams {
+                user_id: None,
+                offset: Some(0),
+                limit: Some(20),
+            })
+            .await
+            .expect("local zotero list groups should succeed without API key");
+
+        assert_eq!(result.groups.len(), 1);
+        assert_eq!(result.groups[0].id, "999");
+        assert_eq!(result.groups[0].name, "Research Lab");
+        assert_eq!(
+            result.groups[0].description,
+            Some("Shared papers".to_string())
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_local_mode_defaults_to_user_zero_without_api_key() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/users/0/items"))
+            .and(query_param("q", "diffusion"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "ITEM_LOCAL",
+                    "data": {
+                        "itemType": "journalArticle",
+                        "title": "Local Zotero Item",
+                        "creators": [],
+                        "tags": [{"tag": "local"}]
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit_with_config(ResearchConfig {
+            zotero_api_key: None,
+            zotero_user_id: None,
+            zotero_group_id: None,
+            zotero_base_url: format!("{}/api/", server.uri()),
+            ..ResearchConfig::default()
+        });
+
+        let result = toolkit
+            .zotero_search(ZoteroSearchParams {
+                query: "diffusion".to_string(),
+                library_type: None,
+                library_id: None,
+                offset: Some(0),
+                limit: Some(10),
+                item_type: None,
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("local zotero search should succeed without API key");
+
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].key, "ITEM_LOCAL");
     }
 
     fn build_test_toolkit(zotero_base_url: String) -> ResearchToolkit {

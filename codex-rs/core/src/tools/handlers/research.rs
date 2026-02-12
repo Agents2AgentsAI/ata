@@ -12,6 +12,7 @@ use codex_research_tools::types::PaperSearchParams;
 use codex_research_tools::types::ZoteroCollectionItemsParams;
 use codex_research_tools::types::ZoteroCollectionsParams;
 use codex_research_tools::types::ZoteroItemParams;
+use codex_research_tools::types::ZoteroListGroupsParams;
 use codex_research_tools::types::ZoteroSearchParams;
 use codex_research_tools::types::ZoteroTagSearchParams;
 use codex_secrets::SecretName;
@@ -130,6 +131,9 @@ impl ResearchBridgeHandler {
                     .toolkit
                     .zotero_get_collections(params))
             }
+            "zotero_list_groups" => dispatch_with_params!(ZoteroListGroupsParams, |params| self
+                .toolkit
+                .zotero_list_groups(params)),
             "zotero_get_collection_items" => {
                 dispatch_with_params!(ZoteroCollectionItemsParams, |params| self
                     .toolkit
