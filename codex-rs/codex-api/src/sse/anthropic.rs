@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::str::FromStr;
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -30,18 +31,20 @@ pub enum AnthropicEventType {
     Error,
 }
 
-impl AnthropicEventType {
-    pub fn from_str(s: &str) -> Option<Self> {
+impl FromStr for AnthropicEventType {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "message_start" => Some(Self::MessageStart),
-            "content_block_start" => Some(Self::ContentBlockStart),
-            "content_block_delta" => Some(Self::ContentBlockDelta),
-            "content_block_stop" => Some(Self::ContentBlockStop),
-            "message_delta" => Some(Self::MessageDelta),
-            "message_stop" => Some(Self::MessageStop),
-            "ping" => Some(Self::Ping),
-            "error" => Some(Self::Error),
-            _ => None,
+            "message_start" => Ok(Self::MessageStart),
+            "content_block_start" => Ok(Self::ContentBlockStart),
+            "content_block_delta" => Ok(Self::ContentBlockDelta),
+            "content_block_stop" => Ok(Self::ContentBlockStop),
+            "message_delta" => Ok(Self::MessageDelta),
+            "message_stop" => Ok(Self::MessageStop),
+            "ping" => Ok(Self::Ping),
+            "error" => Ok(Self::Error),
+            _ => Err(()),
         }
     }
 }
@@ -315,8 +318,8 @@ pub fn parse_anthropic_event(
     state: &mut AnthropicStreamState,
 ) -> Result<Vec<ResponseEvent>, ApiError> {
     let parsed_event_type = match AnthropicEventType::from_str(event_type) {
-        Some(et) => et,
-        None => {
+        Ok(et) => et,
+        Err(()) => {
             tracing::debug!(event_type, "Skipping unknown Anthropic SSE event type");
             return Ok(vec![]);
         }
@@ -591,6 +594,7 @@ pub fn parse_anthropic_event(
             events.push(ResponseEvent::Completed {
                 response_id: state.response_id.clone(),
                 token_usage: Some(token_usage),
+                can_append: false,
             });
         }
 
@@ -768,6 +772,7 @@ mod tests {
             ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                ..
             } => {
                 assert_eq!(response_id, "msg_123");
                 assert!(token_usage.is_some());

@@ -1,5 +1,5 @@
+use crate::default_client::default_headers;
 use crate::default_client::get_codex_user_agent;
-use crate::default_client::originator;
 use crate::tools::url_validation::UrlValidationError;
 use crate::tools::url_validation::UrlValidationOptions;
 use crate::tools::url_validation::ValidatedUrl;
@@ -12,7 +12,6 @@ use http::header::ACCEPT;
 use http::header::LOCATION;
 use reqwest::Client;
 use reqwest::StatusCode;
-use reqwest::header::HeaderMap;
 use sha2::Digest;
 use sha2::Sha256;
 use std::path::Path;
@@ -59,6 +58,8 @@ pub(crate) enum UrlDownloadOutcome {
 pub(crate) enum UrlDownloadError {
     #[error(transparent)]
     Validation(#[from] UrlValidationError),
+    #[error("failed to initialize downloader HTTP client: {message}")]
+    ClientInit { message: String },
     #[error("request failed: {message}")]
     Request { message: String },
     #[error("HTTP {status} while fetching remote file")]
@@ -103,7 +104,21 @@ async fn download_url_files_to_cache_with_validation_options(
         return Vec::new();
     }
 
-    let client = build_downloader_client();
+    let client = match build_downloader_client() {
+        Ok(client) => client,
+        Err(error) => {
+            let reason = error.to_string();
+            return requests
+                .into_iter()
+                .map(|request| {
+                    UrlDownloadOutcome::Failure(UrlDownloadFailure {
+                        redacted_url: request.url.redacted_for_display(),
+                        reason: reason.clone(),
+                    })
+                })
+                .collect();
+        }
+    };
     let concurrency = max_concurrency.max(1);
 
     let mut results: Vec<(usize, UrlDownloadOutcome)> = futures::stream::iter(requests)
@@ -239,19 +254,19 @@ async fn download_one_url_to_cache(
     })
 }
 
-fn build_downloader_client() -> Client {
-    let mut headers = HeaderMap::new();
-    headers.insert("originator", originator().header_value);
+fn build_downloader_client() -> Result<Client, UrlDownloadError> {
     let user_agent = get_codex_user_agent();
 
     reqwest::Client::builder()
-        .default_headers(headers)
+        .default_headers(default_headers())
         .user_agent(user_agent)
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(REQUEST_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .expect("failed to build downloader HTTP client")
+        .map_err(|error| UrlDownloadError::ClientInit {
+            message: error.to_string(),
+        })
 }
 
 async fn is_cached_pdf_valid(path: &Path) -> Result<bool, UrlDownloadError> {

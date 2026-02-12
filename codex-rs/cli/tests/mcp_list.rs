@@ -15,8 +15,15 @@ use tempfile::TempDir;
 
 static ATA_BIN: OnceLock<PathBuf> = OnceLock::new();
 
+fn ata_bin() -> &'static PathBuf {
+    ATA_BIN.get_or_init(|| match codex_utils_cargo_bin::cargo_bin("ata") {
+        Ok(path) => path,
+        Err(error) => panic!("failed to locate ata binary: {error}"),
+    })
+}
+
 fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
-    let bin = ATA_BIN.get_or_init(|| codex_utils_cargo_bin::cargo_bin("ata").unwrap());
+    let bin = ata_bin();
     let mut cmd = assert_cmd::Command::new(bin);
     cmd.env("CODEX_HOME", codex_home);
     Ok(cmd)
