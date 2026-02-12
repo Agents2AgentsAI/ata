@@ -68,8 +68,7 @@ impl ToolGroups {
                 "repo_analysis" | "repo" => groups.repo_analysis = true,
                 _ => {
                     anyhow::bail!(
-                        "unsupported tool group '{}'; expected all|paper_search|zotero|repo_analysis",
-                        label
+                        "unsupported tool group '{label}'; expected all|paper_search|zotero|repo_analysis"
                     );
                 }
             }
