@@ -37,6 +37,8 @@ use types::RequirementsDiff;
 use types::SearchResult;
 use types::ZoteroAdvancedSearchParams;
 use types::ZoteroAdvancedSearchResult;
+use types::ZoteroAnnotationsParams;
+use types::ZoteroAnnotationsResult;
 use types::ZoteroAttachmentsResult;
 use types::ZoteroCollectionItemsParams;
 use types::ZoteroCollectionsParams;
@@ -280,6 +282,24 @@ impl ResearchToolkit {
     pub async fn zotero_get_notes(&self, _params: ZoteroItemParams) -> Result<ZoteroNotesResult> {
         Err(ResearchError::NotImplemented {
             tool: "zotero_get_notes",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_get_annotations(
+        &self,
+        params: ZoteroAnnotationsParams,
+    ) -> Result<ZoteroAnnotationsResult> {
+        tools::zotero::zotero_get_annotations(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_get_annotations(
+        &self,
+        _params: ZoteroAnnotationsParams,
+    ) -> Result<ZoteroAnnotationsResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_get_annotations",
         })
     }
 

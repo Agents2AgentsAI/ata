@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use futures::StreamExt;
+use futures::stream;
 use serde::Serialize;
 
 use crate::ResearchToolkit;
@@ -10,6 +12,7 @@ use crate::clients::zotero::ZoteroChildrenRequest;
 use crate::clients::zotero::ZoteroCollectionItemsRequest;
 use crate::clients::zotero::ZoteroCollectionsRequest;
 use crate::clients::zotero::ZoteroConfig;
+use crate::clients::zotero::ZoteroLibraryAnnotationsRequest;
 use crate::clients::zotero::ZoteroLibraryScope;
 use crate::clients::zotero::ZoteroListGroupsRequest;
 use crate::clients::zotero::ZoteroSearchRequest;
@@ -21,6 +24,9 @@ use crate::tools::cache_helpers::get_or_fetch_typed;
 use crate::tools::cache_helpers::hash_cache_payload;
 use crate::types::ZoteroAdvancedSearchParams;
 use crate::types::ZoteroAdvancedSearchResult;
+use crate::types::ZoteroAnnotation;
+use crate::types::ZoteroAnnotationsParams;
+use crate::types::ZoteroAnnotationsResult;
 use crate::types::ZoteroAttachment;
 use crate::types::ZoteroAttachmentsResult;
 use crate::types::ZoteroCollectionItemsParams;
@@ -57,9 +63,11 @@ const DEFAULT_SEARCH_LIMIT: u32 = 25;
 const DEFAULT_COLLECTIONS_LIMIT: u32 = 100;
 const DEFAULT_GROUPS_LIMIT: u32 = 100;
 const DEFAULT_CHILDREN_LIMIT: u32 = 50;
+const DEFAULT_ANNOTATIONS_LIMIT: u32 = 50;
 const DEFAULT_FULLTEXT_MAX_CHARS: u32 = 10_000;
 const ZOTERO_MAX_PAGE_SIZE: u32 = 100;
 const DEFAULT_LOCAL_USER_LIBRARY_ID: &str = "0";
+const DEFAULT_ANNOTATION_PARENT_FETCH_CONCURRENCY: usize = 6;
 
 #[derive(Debug, Clone, Serialize)]
 struct NormalizedScope {
@@ -81,6 +89,16 @@ struct NormalizedSearchParams {
 struct NormalizedItemParams {
     item_key: String,
     scope: NormalizedScope,
+    max_chars_per_item: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NormalizedAnnotationsParams {
+    item_key: Option<String>,
+    scope: NormalizedScope,
+    offset: u32,
+    limit: u32,
+    include_parent_context: bool,
     max_chars_per_item: Option<u32>,
 }
 
@@ -285,6 +303,131 @@ pub(crate) async fn zotero_get_notes(
     }
 
     Ok(notes)
+}
+
+pub(crate) async fn zotero_get_annotations(
+    toolkit: &ResearchToolkit,
+    params: ZoteroAnnotationsParams,
+) -> Result<ZoteroAnnotationsResult> {
+    let normalized = normalize_annotations_params(toolkit, params)?;
+    let key = CacheKey {
+        tool_name: "zotero_get_annotations",
+        params_hash: hash_cache_payload(&normalized)?,
+    };
+    let config = zotero_config(toolkit);
+
+    let mut annotations = get_or_fetch_typed(
+        toolkit,
+        key,
+        toolkit.config().cache_ttls.zotero_items,
+        || {
+            let scope = to_scope(&normalized.scope);
+            async move {
+                if let Some(item_key) = normalized.item_key.as_deref() {
+                    let response = zotero::get_annotations(
+                        toolkit.http(),
+                        config,
+                        &scope,
+                        &ZoteroChildrenRequest {
+                            item_key,
+                            offset: normalized.offset,
+                            limit: normalized.limit,
+                        },
+                    )
+                    .await?;
+                    return Ok(ZoteroAnnotationsResult {
+                        item_key: Some(response.item_key),
+                        annotations: response
+                            .annotations
+                            .into_iter()
+                            .map(map_zotero_annotation)
+                            .collect(),
+                        total_available: response.total_available,
+                        has_more: response.has_more,
+                    });
+                }
+
+                let response = zotero::get_library_annotations(
+                    toolkit.http(),
+                    config,
+                    &scope,
+                    ZoteroLibraryAnnotationsRequest {
+                        offset: normalized.offset,
+                        limit: normalized.limit,
+                    },
+                )
+                .await?;
+
+                Ok(ZoteroAnnotationsResult {
+                    item_key: None,
+                    annotations: response
+                        .annotations
+                        .into_iter()
+                        .map(map_zotero_annotation)
+                        .collect(),
+                    total_available: response.total_available,
+                    has_more: response.has_more,
+                })
+            }
+        },
+    )
+    .await?;
+
+    if normalized.include_parent_context {
+        let parent_item_keys = annotations
+            .annotations
+            .iter()
+            .filter_map(|annotation| annotation.parent_item.clone())
+            .collect::<HashSet<_>>();
+
+        if !parent_item_keys.is_empty() {
+            let scope = to_scope(&normalized.scope);
+            let parent_titles = stream::iter(parent_item_keys.into_iter())
+                .map(|parent_item_key| {
+                    let scope = scope.clone();
+                    async move {
+                        match zotero::get_item(
+                            toolkit.http(),
+                            config,
+                            &scope,
+                            parent_item_key.as_str(),
+                        )
+                        .await
+                        {
+                            Ok(parent_item) => Some((parent_item_key, parent_item.title)),
+                            Err(error) => {
+                                tracing::warn!(
+                                    parent_item_key = %parent_item_key,
+                                    %error,
+                                    "failed to resolve annotation parent item title"
+                                );
+                                None
+                            }
+                        }
+                    }
+                })
+                .buffer_unordered(DEFAULT_ANNOTATION_PARENT_FETCH_CONCURRENCY)
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .flatten()
+                .collect::<HashMap<_, _>>();
+
+            for annotation in &mut annotations.annotations {
+                if let Some(parent_item) = annotation.parent_item.as_deref()
+                    && let Some(parent_item_title) = parent_titles.get(parent_item)
+                {
+                    annotation.parent_item_title = Some(parent_item_title.clone());
+                }
+            }
+        }
+    }
+
+    if let Some(max_chars) = normalized.max_chars_per_item {
+        apply_annotations_budget(&mut annotations.annotations, max_chars as usize);
+    }
+
+    Ok(annotations)
 }
 
 pub(crate) async fn zotero_get_attachments(
@@ -595,6 +738,31 @@ fn normalize_item_params(
     })
 }
 
+fn normalize_annotations_params(
+    toolkit: &ResearchToolkit,
+    params: ZoteroAnnotationsParams,
+) -> Result<NormalizedAnnotationsParams> {
+    let item_key = normalize_optional_string(params.item_key);
+    let scope = resolve_scope(
+        toolkit,
+        params.library_type.as_deref(),
+        params.library_id.as_deref(),
+        "zotero_get_annotations",
+    )?;
+
+    Ok(NormalizedAnnotationsParams {
+        item_key,
+        scope: to_normalized_scope(&scope),
+        offset: params.offset.unwrap_or(0),
+        limit: params
+            .limit
+            .unwrap_or(DEFAULT_ANNOTATIONS_LIMIT)
+            .clamp(1, 100),
+        include_parent_context: params.include_parent_context.unwrap_or(false),
+        max_chars_per_item: params.max_chars_per_item,
+    })
+}
+
 fn normalize_tag_search_params(
     toolkit: &ResearchToolkit,
     params: ZoteroTagSearchParams,
@@ -825,6 +993,33 @@ fn to_scope(scope: &NormalizedScope) -> ZoteroLibraryScope {
     ZoteroLibraryScope::User(scope.library_id.clone())
 }
 
+fn map_zotero_annotation(annotation: zotero::ZoteroAnnotation) -> ZoteroAnnotation {
+    let annotation_type = annotation
+        .annotation_type
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .filter(|value| matches!(value.as_str(), "highlight" | "note" | "image"))
+        .unwrap_or_else(|| "unknown".to_string());
+
+    ZoteroAnnotation {
+        key: annotation.key,
+        parent_item: normalize_optional_string(annotation.parent_item),
+        annotation_type,
+        annotation_text: annotation
+            .annotation_text
+            .map(|text| match_engine::strip_html_to_text(text.as_str())),
+        annotation_comment: annotation
+            .annotation_comment
+            .map(|comment| match_engine::strip_html_to_text(comment.as_str())),
+        annotation_color: normalize_optional_string(annotation.annotation_color),
+        annotation_page_label: normalize_optional_string(annotation.annotation_page_label),
+        annotation_sort_index: normalize_optional_string(annotation.annotation_sort_index),
+        parent_item_title: None,
+        source_meta: annotation.source_meta,
+    }
+}
+
 fn apply_items_budget(items: &mut [ZoteroItem], max_chars_per_item: Option<u32>) {
     let max_chars = max_chars_per_item.map(|value| value as usize);
 
@@ -846,6 +1041,13 @@ fn apply_notes_budget(notes: &mut [ZoteroNote], max_chars: usize) {
     for note in notes {
         truncate_optional_string(&mut note.title, max_chars);
         truncate_optional_string(&mut note.note, max_chars);
+    }
+}
+
+fn apply_annotations_budget(annotations: &mut [ZoteroAnnotation], max_chars: usize) {
+    for annotation in annotations {
+        truncate_optional_string(&mut annotation.annotation_text, max_chars);
+        truncate_optional_string(&mut annotation.annotation_comment, max_chars);
     }
 }
 
@@ -883,6 +1085,8 @@ mod tests {
     use crate::types::ZoteroAdvancedCandidateStrategy;
     use crate::types::ZoteroAdvancedCompleteness;
     use crate::types::ZoteroAdvancedSearchParams;
+    use crate::types::ZoteroAnnotation;
+    use crate::types::ZoteroAnnotationsParams;
     use crate::types::ZoteroCollectionItemsParams;
     use crate::types::ZoteroCollectionsParams;
     use crate::types::ZoteroGrepCandidateStrategy;
@@ -1059,6 +1263,271 @@ mod tests {
             .expect("zotero_get_attachments should succeed");
         assert_eq!(attachments.attachments.len(), 1);
         assert_eq!(attachments.attachments[0].title, Some("pa...".to_string()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_get_annotations_item_scoped_parses_annotation_fields() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/ITEM1/children"))
+            .and(query_param("itemType", "annotation"))
+            .and(query_param("start", "0"))
+            .and(query_param("limit", "10"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Total-Results", "1")
+                    .set_body_json(serde_json::json!([
+                        {
+                            "key": "ANNO1",
+                            "data": {
+                                "itemType": "annotation",
+                                "parentItem": "ITEM1",
+                                "annotationType": "highlight",
+                                "annotationText": "<p>Important <b>finding</b></p>",
+                                "annotationComment": "<div>See <i>section 2</i></div>",
+                                "annotationColor": "#ffd400",
+                                "annotationPageLabel": "12",
+                                "annotationSortIndex": "00012|000001|00000"
+                            }
+                        }
+                    ])),
+            )
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let mut result = toolkit
+            .zotero_get_annotations(ZoteroAnnotationsParams {
+                item_key: Some("ITEM1".to_string()),
+                library_type: None,
+                library_id: None,
+                offset: Some(0),
+                limit: Some(10),
+                include_parent_context: Some(false),
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_get_annotations should succeed");
+
+        for annotation in &mut result.annotations {
+            annotation.source_meta = None;
+        }
+
+        assert_eq!(result.item_key, Some("ITEM1".to_string()));
+        assert_eq!(result.total_available, Some(1));
+        assert_eq!(result.has_more, false);
+        assert_eq!(
+            result.annotations,
+            vec![ZoteroAnnotation {
+                key: "ANNO1".to_string(),
+                parent_item: Some("ITEM1".to_string()),
+                annotation_type: "highlight".to_string(),
+                annotation_text: Some("Important finding".to_string()),
+                annotation_comment: Some("See section 2".to_string()),
+                annotation_color: Some("#ffd400".to_string()),
+                annotation_page_label: Some("12".to_string()),
+                annotation_sort_index: Some("00012|000001|00000".to_string()),
+                parent_item_title: None,
+                source_meta: None,
+            }]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_get_annotations_library_scope_exposes_pagination_headers() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("itemType", "annotation"))
+            .and(query_param("start", "1"))
+            .and(query_param("limit", "1"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Total-Results", "3")
+                    .set_body_json(serde_json::json!([
+                        {
+                            "key": "ANNO2",
+                            "data": {
+                                "itemType": "annotation",
+                                "parentItem": "ITEM2",
+                                "annotationType": "underline",
+                                "annotationText": "alpha"
+                            }
+                        }
+                    ])),
+            )
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let mut result = toolkit
+            .zotero_get_annotations(ZoteroAnnotationsParams {
+                item_key: None,
+                library_type: None,
+                library_id: None,
+                offset: Some(1),
+                limit: Some(1),
+                include_parent_context: Some(false),
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_get_annotations should succeed");
+
+        for annotation in &mut result.annotations {
+            annotation.source_meta = None;
+        }
+
+        assert_eq!(result.item_key, None);
+        assert_eq!(result.total_available, Some(3));
+        assert_eq!(result.has_more, true);
+        assert_eq!(
+            result.annotations,
+            vec![ZoteroAnnotation {
+                key: "ANNO2".to_string(),
+                parent_item: Some("ITEM2".to_string()),
+                annotation_type: "unknown".to_string(),
+                annotation_text: Some("alpha".to_string()),
+                annotation_comment: None,
+                annotation_color: None,
+                annotation_page_label: None,
+                annotation_sort_index: None,
+                parent_item_title: None,
+                source_meta: None,
+            }]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_get_annotations_can_enrich_parent_item_title() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/ITEM1/children"))
+            .and(query_param("itemType", "annotation"))
+            .and(query_param("start", "0"))
+            .and(query_param("limit", "50"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "ANNO3",
+                    "data": {
+                        "itemType": "annotation",
+                        "parentItem": "PARENT1",
+                        "annotationType": "note",
+                        "annotationComment": "memo"
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/PARENT1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "key": "PARENT1",
+                "data": {
+                    "itemType": "journalArticle",
+                    "title": "Parent Item Title",
+                    "creators": []
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let mut result = toolkit
+            .zotero_get_annotations(ZoteroAnnotationsParams {
+                item_key: Some("ITEM1".to_string()),
+                library_type: None,
+                library_id: None,
+                offset: Some(0),
+                limit: Some(50),
+                include_parent_context: Some(true),
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_get_annotations should succeed");
+
+        for annotation in &mut result.annotations {
+            annotation.source_meta = None;
+        }
+
+        assert_eq!(
+            result.annotations,
+            vec![ZoteroAnnotation {
+                key: "ANNO3".to_string(),
+                parent_item: Some("PARENT1".to_string()),
+                annotation_type: "note".to_string(),
+                annotation_text: None,
+                annotation_comment: Some("memo".to_string()),
+                annotation_color: None,
+                annotation_page_label: None,
+                annotation_sort_index: None,
+                parent_item_title: Some("Parent Item Title".to_string()),
+                source_meta: None,
+            }]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_get_annotations_truncates_text_and_comment_after_html_strip() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/ITEM1/children"))
+            .and(query_param("itemType", "annotation"))
+            .and(query_param("start", "0"))
+            .and(query_param("limit", "50"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "ANNO4",
+                    "data": {
+                        "itemType": "annotation",
+                        "parentItem": "ITEM1",
+                        "annotationType": "highlight",
+                        "annotationText": "<p>abcdefghi</p>",
+                        "annotationComment": "<div>123456789</div>"
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let mut result = toolkit
+            .zotero_get_annotations(ZoteroAnnotationsParams {
+                item_key: Some("ITEM1".to_string()),
+                library_type: None,
+                library_id: None,
+                offset: Some(0),
+                limit: Some(50),
+                include_parent_context: Some(false),
+                max_chars_per_item: Some(5),
+            })
+            .await
+            .expect("zotero_get_annotations should succeed");
+
+        for annotation in &mut result.annotations {
+            annotation.source_meta = None;
+        }
+
+        assert_eq!(
+            result.annotations,
+            vec![ZoteroAnnotation {
+                key: "ANNO4".to_string(),
+                parent_item: Some("ITEM1".to_string()),
+                annotation_type: "highlight".to_string(),
+                annotation_text: Some("ab...".to_string()),
+                annotation_comment: Some("12...".to_string()),
+                annotation_color: None,
+                annotation_page_label: None,
+                annotation_sort_index: None,
+                parent_item_title: None,
+                source_meta: None,
+            }]
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

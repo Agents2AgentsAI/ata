@@ -10,6 +10,7 @@ use codex_research_tools::error::ResearchError;
 use codex_research_tools::types::PaginationParams;
 use codex_research_tools::types::PaperSearchParams;
 use codex_research_tools::types::ZoteroAdvancedSearchParams;
+use codex_research_tools::types::ZoteroAnnotationsParams;
 use codex_research_tools::types::ZoteroCollectionItemsParams;
 use codex_research_tools::types::ZoteroCollectionsParams;
 use codex_research_tools::types::ZoteroGrepParams;
@@ -134,6 +135,11 @@ impl ResearchBridgeHandler {
             "zotero_get_notes" => dispatch_with_params!(ZoteroItemParams, |params| self
                 .toolkit
                 .zotero_get_notes(params)),
+            "zotero_get_annotations" => {
+                dispatch_with_params!(ZoteroAnnotationsParams, |params| self
+                    .toolkit
+                    .zotero_get_annotations(params))
+            }
             "zotero_get_attachments" => dispatch_with_params!(ZoteroItemParams, |params| self
                 .toolkit
                 .zotero_get_attachments(params)),
