@@ -41,6 +41,8 @@ use types::RequirementsDiff;
 use types::SearchResult;
 use types::ZoteroAdvancedSearchParams;
 use types::ZoteroAdvancedSearchResult;
+use types::ZoteroAnnotationsParams;
+use types::ZoteroAnnotationsResult;
 use types::ZoteroAttachmentsResult;
 use types::ZoteroCollectionItemsParams;
 use types::ZoteroCollectionsParams;
@@ -53,6 +55,7 @@ use types::ZoteroListGroupsParams;
 use types::ZoteroNotesResult;
 use types::ZoteroSearchParams;
 use types::ZoteroSearchResult;
+use types::ZoteroTagSearchParams;
 
 #[derive(Debug)]
 pub struct ResearchToolkit {
@@ -253,6 +256,24 @@ impl ResearchToolkit {
     }
 
     #[cfg(feature = "zotero")]
+    pub async fn zotero_get_annotations(
+        &self,
+        params: ZoteroAnnotationsParams,
+    ) -> Result<ZoteroAnnotationsResult> {
+        tools::zotero::zotero_get_annotations(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_get_annotations(
+        &self,
+        _params: ZoteroAnnotationsParams,
+    ) -> Result<ZoteroAnnotationsResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_get_annotations",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
     pub async fn zotero_get_attachments(
         &self,
         params: ZoteroItemParams,
@@ -267,6 +288,24 @@ impl ResearchToolkit {
     ) -> Result<ZoteroAttachmentsResult> {
         Err(ResearchError::NotImplemented {
             tool: "zotero_get_attachments",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_search_by_tag(
+        &self,
+        params: ZoteroTagSearchParams,
+    ) -> Result<ZoteroSearchResult> {
+        tools::zotero::zotero_search_by_tag(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_search_by_tag(
+        &self,
+        _params: ZoteroTagSearchParams,
+    ) -> Result<ZoteroSearchResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_search_by_tag",
         })
     }
 

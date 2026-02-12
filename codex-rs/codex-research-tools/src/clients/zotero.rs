@@ -113,6 +113,9 @@ pub(crate) struct ZoteroAnnotation {
     pub annotation_type: Option<String>,
     pub annotation_text: Option<String>,
     pub annotation_comment: Option<String>,
+    pub annotation_color: Option<String>,
+    pub annotation_page_label: Option<String>,
+    pub annotation_sort_index: Option<String>,
     pub source_meta: Option<SourceMeta>,
 }
 
@@ -657,6 +660,9 @@ fn map_annotation(
         annotation_type: item.data.annotation_type,
         annotation_text: item.data.annotation_text,
         annotation_comment: item.data.annotation_comment,
+        annotation_color: item.data.annotation_color,
+        annotation_page_label: item.data.annotation_page_label,
+        annotation_sort_index: item.data.annotation_sort_index,
         source_meta: Some(SourceMeta {
             source: "zotero".to_string(),
             api_url: api_url.to_string(),
@@ -847,6 +853,12 @@ struct ZoteroApiItemData {
     annotation_text: Option<String>,
     #[serde(rename = "annotationComment")]
     annotation_comment: Option<String>,
+    #[serde(rename = "annotationColor")]
+    annotation_color: Option<String>,
+    #[serde(rename = "annotationPageLabel")]
+    annotation_page_label: Option<String>,
+    #[serde(rename = "annotationSortIndex")]
+    annotation_sort_index: Option<String>,
     filename: Option<String>,
     #[serde(rename = "contentType")]
     content_type: Option<String>,

@@ -256,6 +256,28 @@ pub struct ZoteroNotesResult {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroAnnotation {
+    pub key: String,
+    pub parent_item: Option<String>,
+    pub annotation_type: String,
+    pub annotation_text: Option<String>,
+    pub annotation_comment: Option<String>,
+    pub annotation_color: Option<String>,
+    pub annotation_page_label: Option<String>,
+    pub annotation_sort_index: Option<String>,
+    pub parent_item_title: Option<String>,
+    pub source_meta: Option<SourceMeta>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroAnnotationsResult {
+    pub item_key: Option<String>,
+    pub annotations: Vec<ZoteroAnnotation>,
+    pub total_available: Option<u64>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroAttachment {
     pub key: String,
     pub title: Option<String>,
@@ -459,6 +481,28 @@ pub struct ZoteroItemParams {
     pub item_key: String,
     pub library_type: Option<String>,
     pub library_id: Option<String>,
+    pub max_chars_per_item: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroAnnotationsParams {
+    pub item_key: Option<String>,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+    pub include_parent_context: Option<bool>,
+    pub max_chars_per_item: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroTagSearchParams {
+    pub tags: Vec<String>,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+    pub item_type: Option<String>,
     pub max_chars_per_item: Option<u32>,
 }
 
