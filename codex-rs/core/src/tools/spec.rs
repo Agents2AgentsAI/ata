@@ -1821,7 +1821,8 @@ mod tests {
     #[cfg(feature = "research")]
     fn default_tools_config() -> ToolsConfig {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let features = Features::with_defaults();
         ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
@@ -2165,6 +2166,7 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "attach_url_files",
             ],
         );
     }
@@ -2187,6 +2189,7 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "attach_url_files",
             ],
         );
     }
@@ -2259,6 +2262,7 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "attach_url_files",
             ],
         );
     }
@@ -2281,6 +2285,7 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "attach_url_files",
             ],
         );
     }
@@ -2302,6 +2307,7 @@ mod tests {
                 "request_user_input",
                 "web_search",
                 "view_image",
+                "attach_url_files",
             ],
         );
     }
@@ -2324,6 +2330,7 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "attach_url_files",
             ],
         );
     }

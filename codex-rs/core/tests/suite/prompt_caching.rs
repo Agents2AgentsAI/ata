@@ -152,6 +152,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "apply_patch",
         "web_search",
         "view_image",
+        "attach_url_files",
     ]);
     let body0 = req1.single_request().body_json();
 

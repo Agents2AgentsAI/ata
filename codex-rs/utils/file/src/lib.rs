@@ -268,10 +268,10 @@ mod tests {
     use std::io::Write;
     use std::sync::Arc;
     use std::sync::LazyLock;
-    use std::sync::Mutex;
 
     use pretty_assertions::assert_eq;
     use tempfile::NamedTempFile;
+    use tokio::sync::Mutex;
 
     use super::*;
 
@@ -292,8 +292,8 @@ mod tests {
 
     static CACHE_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-    fn lock_cache_tests() -> std::sync::MutexGuard<'static, ()> {
-        CACHE_TEST_LOCK.lock().expect("cache test lock poisoned")
+    async fn lock_cache_tests() -> tokio::sync::MutexGuard<'static, ()> {
+        CACHE_TEST_LOCK.lock().await
     }
 
     #[test]
@@ -396,7 +396,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn cache_returns_same_result_for_unchanged_file() {
-        let _lock = lock_cache_tests();
+        let _lock = lock_cache_tests().await;
         FILE_CACHE.clear();
 
         let file = NamedTempFile::new().expect("temp file");
@@ -409,7 +409,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn cache_invalidates_on_file_change() {
-        let _lock = lock_cache_tests();
+        let _lock = lock_cache_tests().await;
         FILE_CACHE.clear();
 
         let file = NamedTempFile::new().expect("temp file");
@@ -447,7 +447,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn cache_handles_concurrent_reads_for_same_file() {
-        let _lock = lock_cache_tests();
+        let _lock = lock_cache_tests().await;
         FILE_CACHE.clear();
 
         let file = NamedTempFile::new().expect("temp file");
@@ -471,7 +471,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn cache_covers_all_processable_files() {
-        let _lock = lock_cache_tests();
+        let _lock = lock_cache_tests().await;
         FILE_CACHE.clear();
 
         // An 8 MB file produces ~10.7 MB base64 — previously exceeded the old 10 MB cache limit.
