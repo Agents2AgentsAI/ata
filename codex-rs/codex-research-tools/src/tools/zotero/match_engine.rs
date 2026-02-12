@@ -92,34 +92,78 @@ fn decode_basic_html_entities(value: &str) -> String {
 }
 
 pub(super) fn build_snippet(text: &str, start: usize, end: usize, context_chars: usize) -> String {
-    let total_chars = text.chars().count();
-    if total_chars == 0 {
+    if text.is_empty() {
         return String::new();
     }
 
-    let start_chars = text[..start].chars().count();
-    let end_chars = text[..end].chars().count();
-    let snippet_start_chars = start_chars.saturating_sub(context_chars);
-    let snippet_end_chars = end_chars.saturating_add(context_chars).min(total_chars);
+    let mut snippet_start = start.min(text.len());
+    while snippet_start > 0 && !text.is_char_boundary(snippet_start) {
+        snippet_start = snippet_start.saturating_sub(1);
+    }
 
-    let snippet_start = char_to_byte_index(text, snippet_start_chars);
-    let snippet_end = char_to_byte_index(text, snippet_end_chars);
+    for _ in 0..context_chars {
+        if snippet_start == 0 {
+            break;
+        }
+        snippet_start = snippet_start.saturating_sub(1);
+        while snippet_start > 0 && !text.is_char_boundary(snippet_start) {
+            snippet_start = snippet_start.saturating_sub(1);
+        }
+    }
+
+    let mut snippet_end = end.min(text.len());
+    while snippet_end < text.len() && !text.is_char_boundary(snippet_end) {
+        snippet_end = snippet_end.saturating_add(1);
+    }
+
+    for _ in 0..context_chars {
+        if snippet_end >= text.len() {
+            break;
+        }
+        let Some(ch) = text[snippet_end..].chars().next() else {
+            break;
+        };
+        snippet_end = snippet_end.saturating_add(ch.len_utf8());
+    }
+
+    let prefix_ellipsis = snippet_start > 0;
+    let suffix_ellipsis = snippet_end < text.len();
     let mut snippet = text[snippet_start..snippet_end].to_string();
-    if snippet_start_chars > 0 {
+
+    if prefix_ellipsis {
         snippet = format!("...{snippet}");
     }
-    if snippet_end_chars < total_chars {
+    if suffix_ellipsis {
         snippet.push_str("...");
     }
+
     snippet
 }
 
-fn char_to_byte_index(text: &str, char_index: usize) -> usize {
-    if char_index == 0 {
-        return 0;
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::build_snippet;
+
+    #[test]
+    fn build_snippet_handles_multibyte_boundaries() {
+        let text = "alpha 💡 beta élan 漢字 gamma";
+        let start = text
+            .find('é')
+            .expect("expected to find multibyte match start");
+        let end = start + 'é'.len_utf8();
+
+        let snippet = build_snippet(text, start, end, 3);
+        assert_eq!(snippet, "...ta élan...");
     }
-    text.char_indices()
-        .nth(char_index)
-        .map(|(byte_index, _)| byte_index)
-        .unwrap_or(text.len())
+
+    #[test]
+    fn build_snippet_supports_zero_length_matches() {
+        let text = "one two three";
+        let start = text.find("two").expect("expected match start");
+
+        let snippet = build_snippet(text, start, start, 2);
+        assert_eq!(snippet, "...e tw...");
+    }
 }
