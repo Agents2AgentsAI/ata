@@ -182,6 +182,61 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 }),
             },
             ToolDef {
+                id: "zotero_grep_text",
+                native_name: "zotero_grep_text",
+                mcp_name: "grep_library_text",
+                description: "Run bounded literal or regex matching across Zotero metadata, notes, annotations, and fulltext.",
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "pattern": { "type": "string" },
+                        "match_mode": { "type": "string", "enum": ["literal", "regex"] },
+                        "case_sensitive": { "type": "boolean" },
+                        "library_type": { "type": "string" },
+                        "library_id": { "type": "string" },
+                        "parent_item_key": { "type": "string" },
+                        "query_hint": { "type": "string" },
+                        "item_type": { "type": "string" },
+                        "fields": {
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "enum": ["title", "abstract", "extra", "note", "annotation", "fulltext", "tag"]
+                            }
+                        },
+                        "limit_items": { "type": "integer" },
+                        "limit_matches": { "type": "integer" },
+                        "max_matches_per_item": { "type": "integer" },
+                        "context_chars": { "type": "integer" },
+                        "max_chars_per_item": { "type": "integer" }
+                    },
+                    "required": ["pattern"],
+                    "additionalProperties": false
+                }),
+            },
+            ToolDef {
+                id: "zotero_search_notes",
+                native_name: "zotero_search_notes",
+                mcp_name: "search_notes",
+                description: "Search Zotero note and annotation text using grep-style matching.",
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" },
+                        "match_mode": { "type": "string", "enum": ["literal", "regex"] },
+                        "case_sensitive": { "type": "boolean" },
+                        "library_type": { "type": "string" },
+                        "library_id": { "type": "string" },
+                        "parent_item_key": { "type": "string" },
+                        "include_annotations": { "type": "boolean" },
+                        "limit": { "type": "integer" },
+                        "max_chars_per_item": { "type": "integer" }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }),
+            },
+            ToolDef {
                 id: "zotero_get_item",
                 native_name: "zotero_get_item",
                 mcp_name: "get_item_details",
@@ -567,6 +622,20 @@ mod tests {
         assert_schema_has_field("zotero_advanced_search", "conditions");
         assert_schema_has_field("zotero_advanced_search", "join_mode");
         assert_schema_has_field("zotero_advanced_search", "sort_by");
+    }
+
+    #[test]
+    fn zotero_grep_text_schema_exposes_matching_and_bounds() {
+        assert_schema_has_field("zotero_grep_text", "pattern");
+        assert_schema_has_field("zotero_grep_text", "fields");
+        assert_schema_has_field("zotero_grep_text", "limit_matches");
+    }
+
+    #[test]
+    fn zotero_search_notes_schema_exposes_note_controls() {
+        assert_schema_has_field("zotero_search_notes", "query");
+        assert_schema_has_field("zotero_search_notes", "include_annotations");
+        assert_schema_has_field("zotero_search_notes", "limit");
     }
 
     #[test]

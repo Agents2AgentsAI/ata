@@ -232,6 +232,24 @@ pub struct ZoteroGrepResult {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroSearchNotesMatch {
+    pub item_key: String,
+    pub parent_item: Option<String>,
+    pub field: String,
+    pub snippet: String,
+    pub source_meta: Option<SourceMeta>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroSearchNotesResult {
+    pub query: String,
+    pub notes: Vec<ZoteroSearchNotesMatch>,
+    pub total_available: Option<u64>,
+    pub has_more: bool,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroFullTextResult {
     pub item_key: String,
     pub content: String,
@@ -459,6 +477,19 @@ pub struct ZoteroGrepParams {
     pub limit_matches: Option<u32>,
     pub max_matches_per_item: Option<u32>,
     pub context_chars: Option<u32>,
+    pub max_chars_per_item: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroSearchNotesParams {
+    pub query: String,
+    pub match_mode: Option<ZoteroGrepMatchMode>,
+    pub case_sensitive: Option<bool>,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub parent_item_key: Option<String>,
+    pub include_annotations: Option<bool>,
+    pub limit: Option<u32>,
     pub max_chars_per_item: Option<u32>,
 }
 

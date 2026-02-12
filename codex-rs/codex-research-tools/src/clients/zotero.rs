@@ -81,6 +81,14 @@ pub(crate) struct ZoteroChildrenRequest<'a> {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct ZoteroChildrenItemsRequest<'a> {
+    pub item_key: &'a str,
+    pub offset: u32,
+    pub limit: u32,
+    pub item_type: Option<&'a str>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct ZoteroCollectionsRequest {
     pub offset: u32,
     pub limit: u32,
@@ -230,6 +238,39 @@ pub(crate) async fn get_fulltext(
             fetched_at: Utc::now(),
             canonical_id: Some(scope.canonical_item_id(item_key)),
         }),
+    })
+}
+
+pub(crate) async fn get_children_items(
+    http: &HttpClient,
+    config: ZoteroConfig<'_>,
+    scope: &ZoteroLibraryScope,
+    request: &ZoteroChildrenItemsRequest<'_>,
+) -> Result<ZoteroSearchResult> {
+    let mut url = format!(
+        "{root}/items/{item_key}/children?format=json&start={offset}&limit={limit}",
+        root = scope.root_url(config.base_url),
+        item_key = urlencoding::encode(request.item_key),
+        offset = request.offset,
+        limit = request.limit,
+    );
+
+    if let Some(item_type) = request.item_type {
+        url.push_str(&format!("&itemType={}", urlencoding::encode(item_type)));
+    }
+
+    let (response, total_available): (Vec<ZoteroApiItem>, Option<u64>) =
+        execute_json_with_total_results(http, config, &url).await?;
+
+    let items = response
+        .into_iter()
+        .map(|item| map_item_summary(item, &url, scope))
+        .collect::<Vec<_>>();
+
+    Ok(ZoteroSearchResult {
+        has_more: compute_has_more(request.offset, items.len(), request.limit, total_available),
+        total_available,
+        items,
     })
 }
 

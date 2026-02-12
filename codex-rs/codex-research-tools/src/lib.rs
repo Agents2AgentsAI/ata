@@ -48,11 +48,15 @@ use types::ZoteroCollectionItemsParams;
 use types::ZoteroCollectionsParams;
 use types::ZoteroCollectionsResult;
 use types::ZoteroFullTextResult;
+use types::ZoteroGrepParams;
+use types::ZoteroGrepResult;
 use types::ZoteroGroupsResult;
 use types::ZoteroItemDetail;
 use types::ZoteroItemParams;
 use types::ZoteroListGroupsParams;
 use types::ZoteroNotesResult;
+use types::ZoteroSearchNotesParams;
+use types::ZoteroSearchNotesResult;
 use types::ZoteroSearchParams;
 use types::ZoteroSearchResult;
 use types::ZoteroTagSearchParams;
@@ -210,6 +214,36 @@ impl ResearchToolkit {
     ) -> Result<ZoteroAdvancedSearchResult> {
         Err(ResearchError::NotImplemented {
             tool: "zotero_advanced_search",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_grep_text(&self, params: ZoteroGrepParams) -> Result<ZoteroGrepResult> {
+        tools::zotero::zotero_grep_text(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_grep_text(&self, _params: ZoteroGrepParams) -> Result<ZoteroGrepResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_grep_text",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_search_notes(
+        &self,
+        params: ZoteroSearchNotesParams,
+    ) -> Result<ZoteroSearchNotesResult> {
+        tools::zotero::zotero_search_notes(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_search_notes(
+        &self,
+        _params: ZoteroSearchNotesParams,
+    ) -> Result<ZoteroSearchNotesResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_search_notes",
         })
     }
 
