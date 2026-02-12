@@ -55,6 +55,9 @@ tracing = { workspace = true }
 [target.'cfg(target_os = "windows")'.dependencies]
 codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
 
+[features]
+data = ["codex-core/data"]
+
 [dev-dependencies]
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }

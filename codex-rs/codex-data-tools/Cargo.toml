@@ -1,0 +1,43 @@
+[package]
+name = "codex-data-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Data tools for Codex - dataset discovery, download, and management"
+
+[lints]
+workspace = true
+
+[features]
+default = ["huggingface", "kaggle"]
+huggingface = []
+kaggle = []
+isaac_sim = []
+cosmos = []
+all = ["huggingface", "kaggle", "isaac_sim", "cosmos"]
+
+[dependencies]
+chrono = { workspace = true, features = ["serde"] }
+dashmap = "6"
+lru = { workspace = true }
+rand = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "stream"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time", "fs", "io-util"] }
+tracing = { workspace = true }
+urlencoding = { workspace = true }
+dirs = { workspace = true }
+dotenvy = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+tokio-util = { version = "0.7", features = ["io"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+wiremock = { workspace = true }
+tempfile = { workspace = true }

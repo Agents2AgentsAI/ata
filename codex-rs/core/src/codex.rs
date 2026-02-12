@@ -126,6 +126,7 @@ pub enum SteerInputError {
     ExpectedTurnMismatch { expected: String, actual: String },
     EmptyInput,
 }
+use crate::data::SharedDataToolkit;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
 use crate::file_watcher::FileWatcher;
@@ -271,6 +272,7 @@ impl Codex {
         agent_control: AgentControl,
         dynamic_tools: Vec<DynamicToolSpec>,
         research_toolkit: Option<Arc<SharedResearchToolkit>>,
+        data_toolkit: Option<Arc<SharedDataToolkit>>,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -408,6 +410,7 @@ impl Codex {
             file_watcher,
             agent_control,
             research_toolkit,
+            data_toolkit,
         )
         .instrument(session_init_span)
         .await
@@ -686,13 +689,12 @@ impl SessionConfiguration {
             next_configuration.cwd = cwd;
         }
         // Switch provider if model_provider is specified
-        if let Some(provider_id) = &updates.model_provider {
-            if let Some(provider) = crate::model_provider_info::built_in_model_providers()
+        if let Some(provider_id) = &updates.model_provider
+            && let Some(provider) = crate::model_provider_info::built_in_model_providers()
                 .get(provider_id)
                 .cloned()
-            {
-                next_configuration.provider = provider;
-            }
+        {
+            next_configuration.provider = provider;
         }
         Ok(next_configuration)
     }
@@ -873,6 +875,7 @@ impl Session {
         file_watcher: Arc<FileWatcher>,
         agent_control: AgentControl,
         research_toolkit: Option<Arc<SharedResearchToolkit>>,
+        data_toolkit: Option<Arc<SharedDataToolkit>>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -1080,6 +1083,7 @@ impl Session {
             otel_manager,
             models_manager: Arc::clone(&models_manager),
             research_toolkit,
+            data_toolkit,
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             file_watcher,
@@ -4111,7 +4115,7 @@ async fn run_sampling_request(
     if let Some(connectors) = connectors_for_tools.as_ref() {
         mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, connectors);
     }
-    let router = Arc::new(ToolRouter::from_config_with_research(
+    let router = Arc::new(ToolRouter::from_config_with_toolkits(
         &turn_context.tools_config,
         Some(
             mcp_tools
@@ -4121,6 +4125,7 @@ async fn run_sampling_request(
         ),
         turn_context.dynamic_tools.as_slice(),
         sess.services.research_toolkit.as_ref(),
+        sess.services.data_toolkit.as_ref(),
     ));
 
     let model_supports_parallel = turn_context.model_info.supports_parallel_tool_calls;
@@ -5928,6 +5933,7 @@ mod tests {
             otel_manager: otel_manager.clone(),
             models_manager: Arc::clone(&models_manager),
             research_toolkit: None,
+            data_toolkit: None,
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             file_watcher,
@@ -6063,6 +6069,7 @@ mod tests {
             otel_manager: otel_manager.clone(),
             models_manager: Arc::clone(&models_manager),
             research_toolkit: None,
+            data_toolkit: None,
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             file_watcher,

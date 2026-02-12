@@ -9,7 +9,9 @@ use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
-#[cfg(feature = "research")]
+#[cfg(feature = "data")]
+use crate::data::SharedDataToolkit;
+#[cfg(any(feature = "research", feature = "data"))]
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -25,6 +27,8 @@ use crate::research::SharedResearchToolkit;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::skills::SkillsManager;
+#[cfg(feature = "data")]
+use crate::tools::handlers::data::build_data_config;
 #[cfg(feature = "research")]
 use crate::tools::handlers::research::build_research_config;
 use codex_protocol::ThreadId;
@@ -43,7 +47,7 @@ use tempfile::TempDir;
 use tokio::runtime::Handle;
 #[cfg(any(test, feature = "test-support"))]
 use tokio::runtime::RuntimeFlavor;
-#[cfg(feature = "research")]
+#[cfg(any(feature = "research", feature = "data"))]
 use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
@@ -118,6 +122,8 @@ pub(crate) struct ThreadManagerState {
     models_manager: Arc<ModelsManager>,
     #[cfg(feature = "research")]
     research_toolkit: OnceCell<Arc<SharedResearchToolkit>>,
+    #[cfg(feature = "data")]
+    data_toolkit: OnceCell<Arc<SharedDataToolkit>>,
     skills_manager: Arc<SkillsManager>,
     file_watcher: Arc<FileWatcher>,
     session_source: SessionSource,
@@ -143,6 +149,8 @@ impl ThreadManager {
                 models_manager: Arc::new(ModelsManager::new(codex_home, auth_manager.clone())),
                 #[cfg(feature = "research")]
                 research_toolkit: OnceCell::new(),
+                #[cfg(feature = "data")]
+                data_toolkit: OnceCell::new(),
                 skills_manager,
                 file_watcher,
                 auth_manager,
@@ -189,6 +197,8 @@ impl ThreadManager {
                 )),
                 #[cfg(feature = "research")]
                 research_toolkit: OnceCell::new(),
+                #[cfg(feature = "data")]
+                data_toolkit: OnceCell::new(),
                 skills_manager,
                 file_watcher,
                 auth_manager,
@@ -495,6 +505,32 @@ impl ThreadManagerState {
         } else {
             None
         };
+        let data_toolkit = if config.features.enabled(Feature::Data) {
+            #[cfg(feature = "data")]
+            {
+                Some(
+                    self.data_toolkit
+                        .get_or_init(|| async {
+                            let data_config = build_data_config(config.data.as_ref());
+                            Arc::new(codex_data_tools::DataToolkit::new(
+                                build_reqwest_client(),
+                                data_config,
+                            ))
+                        })
+                        .await
+                        .clone(),
+                )
+            }
+            #[cfg(not(feature = "data"))]
+            {
+                warn!(
+                    "data feature flag is enabled in config, but codex-core was built without `--features data`"
+                );
+                None
+            }
+        } else {
+            None
+        };
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(
@@ -508,6 +544,7 @@ impl ThreadManagerState {
             agent_control,
             dynamic_tools,
             research_toolkit,
+            data_toolkit,
         )
         .await?;
         self.finalize_thread_spawn(codex, thread_id).await

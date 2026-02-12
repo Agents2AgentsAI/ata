@@ -50,6 +50,7 @@ members = [
     "codex-client",
     "codex-api",
     "codex-research-tools",
+    "codex-data-tools",
     "state",
     "codex-experimental-api-macros",
 ]
@@ -99,6 +100,7 @@ codex-otel = { path = "otel" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-research-tools = { path = "codex-research-tools" }
+codex-data-tools = { path = "codex-data-tools" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-state = { path = "state" }

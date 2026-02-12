@@ -1,6 +1,9 @@
 use crate::agent::AgentRole;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
+use crate::data::SharedDataToolkit;
+#[cfg(feature = "data")]
+use crate::data::tool_names::find_mcp_tool_matches as find_mcp_data_tool_matches;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::research::SharedResearchToolkit;
@@ -25,7 +28,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
-#[cfg(feature = "research")]
+#[cfg(any(feature = "research", feature = "data"))]
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -1175,6 +1178,19 @@ fn research_tool_to_openai_tool(
     })
 }
 
+#[cfg(feature = "data")]
+fn data_tool_to_openai_tool(
+    tool: &codex_data_tools::tool_specs::ToolDef,
+) -> Result<ResponsesApiTool, serde_json::Error> {
+    let input_schema = parse_tool_input_schema(&tool.input_schema)?;
+    Ok(ResponsesApiTool {
+        name: tool.native_name.to_string(),
+        description: tool.description.to_string(),
+        strict: false,
+        parameters: input_schema,
+    })
+}
+
 /// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
 /// JsonSchema enum. This function:
 /// - Ensures every schema object has a "type". If missing, infers it from
@@ -1292,7 +1308,7 @@ pub(crate) fn build_specs(
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
-    build_specs_with_research(config, mcp_tools, dynamic_tools, None)
+    build_specs_with_toolkits(config, mcp_tools, dynamic_tools, None, None)
 }
 
 pub(crate) fn build_specs_with_research(
@@ -1301,11 +1317,25 @@ pub(crate) fn build_specs_with_research(
     dynamic_tools: &[DynamicToolSpec],
     research_toolkit: Option<&Arc<SharedResearchToolkit>>,
 ) -> ToolRegistryBuilder {
+    build_specs_with_toolkits(config, mcp_tools, dynamic_tools, research_toolkit, None)
+}
+
+pub(crate) fn build_specs_with_toolkits(
+    config: &ToolsConfig,
+    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
+    dynamic_tools: &[DynamicToolSpec],
+    research_toolkit: Option<&Arc<SharedResearchToolkit>>,
+    data_toolkit: Option<&Arc<SharedDataToolkit>>,
+) -> ToolRegistryBuilder {
     #[cfg(not(feature = "research"))]
     let _ = research_toolkit;
+    #[cfg(not(feature = "data"))]
+    let _ = data_toolkit;
 
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::CollabHandler;
+    #[cfg(feature = "data")]
+    use crate::tools::handlers::DataBridgeHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GetMemoryHandler;
     use crate::tools::handlers::GrepFilesHandler;
@@ -1513,6 +1543,45 @@ pub(crate) fn build_specs_with_research(
         }
     }
 
+    #[cfg(feature = "data")]
+    let mut suppressed_mcp_data_tool_names: BTreeSet<String> = BTreeSet::new();
+
+    #[cfg(feature = "data")]
+    if let Some(toolkit) = data_toolkit {
+        let data_handler = Arc::new(DataBridgeHandler::new(Arc::clone(toolkit)));
+        let discovered_mcp_tools: BTreeMap<String, rmcp::model::Tool> = mcp_tools
+            .as_ref()
+            .map(|tools| {
+                tools
+                    .iter()
+                    .map(|(name, tool)| (name.clone(), tool.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        for def in codex_data_tools::tool_specs::all_tool_defs() {
+            if !toolkit.is_tool_configured(def.id) {
+                continue;
+            }
+
+            let matching_mcp_tools =
+                find_mcp_data_tool_matches(def.mcp_name, &discovered_mcp_tools);
+            match data_tool_to_openai_tool(&def) {
+                Ok(converted_tool) => {
+                    builder.push_spec(ToolSpec::Function(converted_tool));
+                    builder.register_handler(def.native_name, data_handler.clone());
+                    suppressed_mcp_data_tool_names.extend(matching_mcp_tools);
+                }
+                Err(err) => {
+                    tracing::error!(
+                        tool_name = def.native_name,
+                        "failed to convert native data tool schema: {err}"
+                    );
+                }
+            }
+        }
+    }
+
     if let Some(mcp_tools) = mcp_tools {
         let mut entries: Vec<(String, rmcp::model::Tool)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1520,6 +1589,10 @@ pub(crate) fn build_specs_with_research(
         for (name, tool) in entries.into_iter() {
             #[cfg(feature = "research")]
             if suppressed_mcp_research_tool_names.contains(&name) {
+                continue;
+            }
+            #[cfg(feature = "data")]
+            if suppressed_mcp_data_tool_names.contains(&name) {
                 continue;
             }
             match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {

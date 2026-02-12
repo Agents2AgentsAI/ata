@@ -117,6 +117,8 @@ pub enum Feature {
     Apps,
     /// Enable research tools and research workflow integration.
     Research,
+    /// Enable data tools for dataset discovery and management.
+    Data,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Prompt for missing skill env var dependencies.
@@ -544,6 +546,16 @@ pub const FEATURES: &[FeatureSpec] = &[
             name: "Research Agent",
             menu_description: "Multi-agent research workflow with paper search, Zotero integration, and proposal synthesis.",
             announcement: "Research agent support is available as an experimental feature.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Data,
+        key: "data",
+        stage: Stage::Experimental {
+            name: "Data Tools",
+            menu_description: "Dataset discovery and management tools for HuggingFace, Kaggle, and more.",
+            announcement: "Data tools for dataset discovery are available as an experimental feature.",
         },
         default_enabled: false,
     },
