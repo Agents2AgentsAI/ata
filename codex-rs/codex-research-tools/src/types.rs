@@ -98,6 +98,157 @@ pub struct ZoteroSearchResult {
     pub has_more: bool,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroAdvancedJoinMode {
+    All,
+    Any,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroAdvancedSortBy {
+    Title,
+    Year,
+    DateAdded,
+    DateModified,
+    Relevance,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroSortDirection {
+    Asc,
+    Desc,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroSearchConditionField {
+    Title,
+    Creator,
+    Year,
+    Tag,
+    ItemType,
+    Publication,
+    Doi,
+    Note,
+    Annotation,
+    Fulltext,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroSearchConditionOperation {
+    Contains,
+    NotContains,
+    Equals,
+    NotEquals,
+    Regex,
+    BeforeYear,
+    AfterYear,
+    IsEmpty,
+    IsNotEmpty,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ZoteroSearchCondition {
+    pub field: ZoteroSearchConditionField,
+    pub operation: ZoteroSearchConditionOperation,
+    pub value: Option<String>,
+    pub case_sensitive: Option<bool>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroAdvancedCompleteness {
+    Exact,
+    Approximate,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroAdvancedCandidateStrategy {
+    ServerFiltered,
+    RecentModifiedFallback,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroAdvancedSearchResult {
+    pub completeness: ZoteroAdvancedCompleteness,
+    pub candidate_strategy: ZoteroAdvancedCandidateStrategy,
+    pub scanned_items: usize,
+    pub warnings: Vec<String>,
+    pub hints: Vec<String>,
+    pub results: ZoteroSearchResult,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroGrepMatchMode {
+    Literal,
+    Regex,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroGrepField {
+    Title,
+    Abstract,
+    Extra,
+    Note,
+    Annotation,
+    Fulltext,
+    Tag,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroGrepCandidateStrategy {
+    QueryFiltered,
+    RecentModified,
+    ParentScoped,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroGrepMatch {
+    pub item_key: String,
+    pub field: String,
+    pub match_text: String,
+    pub snippet: String,
+    pub parent_item_key: Option<String>,
+    pub source_meta: Option<SourceMeta>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroGrepResult {
+    pub candidate_strategy: ZoteroGrepCandidateStrategy,
+    pub scanned_items: usize,
+    pub returned_matches: usize,
+    pub truncated: bool,
+    pub warnings: Vec<String>,
+    pub hints: Vec<String>,
+    pub matches: Vec<ZoteroGrepMatch>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroSearchNoteMatch {
+    pub item_key: String,
+    pub parent_item: Option<String>,
+    pub field: String,
+    pub snippet: String,
+    pub source_meta: Option<SourceMeta>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroSearchNotesResult {
+    pub query: String,
+    pub notes: Vec<ZoteroSearchNoteMatch>,
+    pub total_available: Option<u64>,
+    pub has_more: bool,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroFullTextResult {
     pub item_key: String,
@@ -281,6 +432,51 @@ pub struct PaginationParams {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroSearchParams {
     pub query: String,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+    pub item_type: Option<String>,
+    pub max_chars_per_item: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroGrepParams {
+    pub pattern: String,
+    pub match_mode: Option<ZoteroGrepMatchMode>,
+    pub case_sensitive: Option<bool>,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub parent_item_key: Option<String>,
+    pub query_hint: Option<String>,
+    pub item_type: Option<String>,
+    pub fields: Option<Vec<ZoteroGrepField>>,
+    pub limit_items: Option<u32>,
+    pub limit_matches: Option<u32>,
+    pub max_matches_per_item: Option<u32>,
+    pub context_chars: Option<u32>,
+    pub max_chars_per_item: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroSearchNotesParams {
+    pub query: String,
+    pub match_mode: Option<ZoteroGrepMatchMode>,
+    pub case_sensitive: Option<bool>,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub parent_item_key: Option<String>,
+    pub include_annotations: Option<bool>,
+    pub limit: Option<u32>,
+    pub max_chars_per_item: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroAdvancedSearchParams {
+    pub conditions: Vec<ZoteroSearchCondition>,
+    pub join_mode: Option<ZoteroAdvancedJoinMode>,
+    pub sort_by: Option<ZoteroAdvancedSortBy>,
+    pub sort_direction: Option<ZoteroSortDirection>,
     pub library_type: Option<String>,
     pub library_id: Option<String>,
     pub offset: Option<u32>,
