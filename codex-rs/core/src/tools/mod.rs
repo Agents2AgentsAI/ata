@@ -1,5 +1,6 @@
 pub mod context;
 pub mod events;
+pub(crate) mod file_injection;
 pub(crate) mod handlers;
 pub mod orchestrator;
 pub mod parallel;
@@ -8,6 +9,8 @@ pub mod router;
 pub mod runtimes;
 pub mod sandboxing;
 pub mod spec;
+pub(crate) mod url_downloader;
+pub(crate) mod url_validation;
 
 use crate::exec::ExecToolCallOutput;
 use crate::truncate::TruncationPolicy;

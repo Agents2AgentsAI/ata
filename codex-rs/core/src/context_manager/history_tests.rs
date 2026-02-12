@@ -504,6 +504,136 @@ fn replace_last_turn_images_does_not_touch_user_images() {
 }
 
 #[test]
+fn drop_last_turn_url_files_removes_wrapped_url_files_and_tags() {
+    let items = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputText {
+                text: "before".to_string(),
+            },
+            ContentItem::InputText {
+                text: codex_protocol::models::local_file_open_tag_text_with_filename(
+                    1,
+                    Some("report.pdf"),
+                ),
+            },
+            ContentItem::UrlFile {
+                url: "https://example.com/report.pdf".to_string(),
+                mime_type: Some("application/pdf".to_string()),
+                filename: Some("report.pdf".to_string()),
+            },
+            ContentItem::InputText {
+                text: "<file_end></file_end>".to_string(),
+            },
+            ContentItem::InputText {
+                text: "after".to_string(),
+            },
+        ],
+        end_turn: None,
+        phase: None,
+    }];
+    let mut history = create_history_with_items(items);
+
+    assert_eq!(history.drop_last_turn_url_files(0), 1);
+    assert_eq!(
+        history.raw_items(),
+        vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: "before".to_string(),
+                },
+                ContentItem::InputText {
+                    text: "after".to_string(),
+                },
+            ],
+            end_turn: None,
+            phase: None,
+        }]
+    );
+}
+
+#[test]
+fn drop_last_turn_url_files_applies_to_multiple_user_messages_in_last_turn() {
+    let items = vec![
+        assistant_msg("prior turn"),
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::UrlFile {
+                url: "https://example.com/one.pdf".to_string(),
+                mime_type: Some("application/pdf".to_string()),
+                filename: Some("one.pdf".to_string()),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: codex_protocol::models::local_file_open_tag_text_with_filename(
+                        2,
+                        Some("two.pdf"),
+                    ),
+                },
+                ContentItem::UrlFile {
+                    url: "https://example.com/two.pdf".to_string(),
+                    mime_type: Some("application/pdf".to_string()),
+                    filename: Some("two.pdf".to_string()),
+                },
+                ContentItem::InputText {
+                    text: "<file_end></file_end>".to_string(),
+                },
+            ],
+            end_turn: None,
+            phase: None,
+        },
+    ];
+    let mut history = create_history_with_items(items);
+
+    assert_eq!(history.drop_last_turn_url_files(0), 2);
+    assert_eq!(history.raw_items(), vec![assistant_msg("prior turn")]);
+}
+
+#[test]
+fn drop_last_turn_url_files_removes_download_path_input_files_when_budget_is_known() {
+    let items = vec![
+        assistant_msg("prior turn"),
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: codex_protocol::models::local_file_open_tag_text_with_filename(
+                        1,
+                        Some("downloaded.pdf"),
+                    ),
+                },
+                ContentItem::InputFile {
+                    file_data: Some("JVBERi0xLjQ=".to_string()),
+                    file_id: None,
+                    mime_type: Some("application/pdf".to_string()),
+                    filename: Some("downloaded.pdf".to_string()),
+                },
+                ContentItem::InputText {
+                    text: "<file_end></file_end>".to_string(),
+                },
+            ],
+            end_turn: None,
+            phase: None,
+        },
+    ];
+    let mut history = create_history_with_items(items);
+
+    assert_eq!(history.drop_last_turn_url_files(1), 1);
+    assert_eq!(history.raw_items(), vec![assistant_msg("prior turn")]);
+}
+
+#[test]
 fn remove_first_item_handles_local_shell_pair() {
     let items = vec![
         ResponseItem::LocalShellCall {

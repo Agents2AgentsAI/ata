@@ -139,8 +139,18 @@ pub enum SteerInputError {
 }
 use crate::data::SharedDataToolkit;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UrlAttachmentInjectionError {
+    NoActiveTurn,
+    PerTurnLimitExceeded {
+        attempted: usize,
+        current: usize,
+        limit: usize,
+    },
+}
+
 #[derive(Debug, thiserror::Error)]
-enum FileInputPreparationError {
+pub(crate) enum FileInputPreparationError {
     #[error(transparent)]
     Processing(#[from] FileProcessingError),
     #[error(transparent)]
@@ -168,7 +178,7 @@ enum FileInputPreparationError {
     },
 }
 
-fn file_capabilities_for_provider(
+pub(crate) fn file_capabilities_for_provider(
     provider: &ModelProviderInfo,
     model: Option<&str>,
 ) -> (String, FileCapabilityConfig) {
@@ -185,7 +195,7 @@ fn file_capabilities_for_provider(
 
 /// Rewrite `LocalFile` inputs to `UploadedFile` when the cache has a valid
 /// entry for the same canonical path, provider, and mtime.
-fn dedup_local_files_from_cache(
+pub(crate) fn dedup_local_files_from_cache(
     inputs: &mut [UserInput],
     cache: &FileReferenceCache,
     provider_id: &str,
@@ -225,7 +235,7 @@ fn dedup_local_files_from_cache(
 }
 
 /// After a successful upload round, record path→file_id mappings for future dedup.
-fn record_upload_paths(cache: &mut FileReferenceCache, inputs: &[UserInput]) {
+pub(crate) fn record_upload_paths(cache: &mut FileReferenceCache, inputs: &[UserInput]) {
     for input in inputs {
         let UserInput::UploadedFile {
             file_id,
@@ -336,9 +346,9 @@ async fn delete_uploaded_files_best_effort(
 }
 
 #[derive(Debug)]
-struct FileUploadOutcome {
-    uploaded_files: Vec<codex_api::file_support::UploadedFile>,
-    warnings: Vec<String>,
+pub(crate) struct FileUploadOutcome {
+    pub(crate) uploaded_files: Vec<codex_api::file_support::UploadedFile>,
+    pub(crate) warnings: Vec<String>,
 }
 
 /// Maximum number of concurrent file uploads.
@@ -545,7 +555,7 @@ async fn prepare_file_inputs_async(
         .map_err(|error| FileInputPreparationError::Task(error.to_string()))?
 }
 
-async fn resolve_and_prepare_file_inputs(
+pub(crate) async fn resolve_and_prepare_file_inputs(
     inputs: &mut [UserInput],
     provider: &ModelProviderInfo,
     config: &Config,
@@ -3334,6 +3344,61 @@ impl Session {
         }
     }
 
+    /// Injects response items while atomically enforcing a per-turn URL attachment cap.
+    pub(crate) async fn inject_response_items_with_url_attachment_budget(
+        &self,
+        input: Vec<ResponseInputItem>,
+        url_attachments_to_add: usize,
+        per_turn_limit: usize,
+    ) -> Result<(), UrlAttachmentInjectionError> {
+        let mut active = self.active_turn.lock().await;
+        let Some(at) = active.as_mut() else {
+            return Err(UrlAttachmentInjectionError::NoActiveTurn);
+        };
+
+        let mut turn_state = at.turn_state.lock().await;
+        if let Err(current) =
+            turn_state.reserve_url_attachments(url_attachments_to_add, per_turn_limit)
+        {
+            return Err(UrlAttachmentInjectionError::PerTurnLimitExceeded {
+                attempted: url_attachments_to_add,
+                current,
+                limit: per_turn_limit,
+            });
+        }
+
+        for item in input {
+            turn_state.push_pending_input(item);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn file_upload_http_client(&self) -> &reqwest::Client {
+        &self.file_upload_http_client
+    }
+
+    pub(crate) async fn dedup_local_files_for_provider(
+        &self,
+        input: &mut [UserInput],
+        provider_id: &str,
+    ) {
+        let cache = self.file_reference_cache.lock().await;
+        dedup_local_files_from_cache(input, &cache, provider_id, SystemTime::now());
+    }
+
+    pub(crate) async fn record_uploaded_files_and_paths(
+        &self,
+        uploaded_files: Vec<codex_api::file_support::UploadedFile>,
+        input: &[UserInput],
+    ) {
+        if uploaded_files.is_empty() {
+            return;
+        }
+        let mut cache = self.file_reference_cache.lock().await;
+        cache.record_all(uploaded_files);
+        record_upload_paths(&mut cache, input);
+    }
+
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
@@ -4906,6 +4971,35 @@ pub(crate) async fn run_turn(
                 break;
             }
             Err(CodexErr::ContextWindowExceeded) => {
+                let url_attachments_in_turn = {
+                    let mut active = sess.active_turn.lock().await;
+                    match active.as_mut() {
+                        Some(active_turn) => {
+                            let turn_state = active_turn.turn_state.lock().await;
+                            turn_state.url_attachments_injected()
+                        }
+                        None => 0,
+                    }
+                };
+                let dropped_url_files = {
+                    let mut state = sess.state.lock().await;
+                    state
+                        .history
+                        .drop_last_turn_url_files(url_attachments_in_turn)
+                };
+                if dropped_url_files > 0 {
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::Warning(WarningEvent {
+                            message: format!(
+                                "Dropped {dropped_url_files} attachment(s) because the context window was exceeded."
+                            ),
+                        }),
+                    )
+                    .await;
+                    continue;
+                }
+
                 // Only attempt compaction if there's conversation history
                 // (assistant messages) to compress. On the first turn the
                 // initial input itself exceeds the limit and compaction
