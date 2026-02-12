@@ -25,8 +25,14 @@
 //!
 //! When recalling a local entry, the composer rehydrates text elements and image attachments.
 //! When recalling a persistent entry, only the text is restored.
+//! Recalled entries move the cursor to end-of-line so repeated Up/Down presses keep shell-like
+//! history traversal semantics instead of dropping to column 0.
 //!
 //! # Submission and Prompt Expansion
+//!
+//! When steer is enabled, `Enter` submits immediately. `Tab` requests queuing while a task is
+//! running; if no task is running, `Tab` submits just like Enter so input is never dropped.
+//! `Tab` does not submit when entering a `!` shell command.
 //!
 //! On submit/queue paths, the composer:
 //!
@@ -149,6 +155,7 @@ use crate::style::user_message_style;
 use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
+use codex_protocol::models::local_file_label_text;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
@@ -160,6 +167,8 @@ use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
+use crate::clipboard_paste::AttachmentKind;
+use crate::clipboard_paste::detect_attachment_kind;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
@@ -201,6 +210,20 @@ pub enum InputResult {
 struct AttachedImage {
     placeholder: String,
     path: PathBuf,
+    /// When `true`, the attachment is a non-image file (e.g. PDF) and uses a
+    /// filename-based placeholder like `[report.pdf]` instead of `[Image #N]`.
+    is_file: bool,
+}
+
+/// Build a placeholder label from a file path, e.g. `[report.pdf]`.
+/// Falls back to `[File]` when the filename is missing or non-UTF-8.
+fn file_placeholder_for_path(path: &std::path::Path) -> String {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| !n.is_empty())
+        .unwrap_or("File");
+    format!("[{name}]")
 }
 
 enum PromptSelectionMode {
@@ -421,6 +444,7 @@ impl ChatComposer {
 
     pub fn set_connector_mentions(&mut self, connectors_snapshot: Option<ConnectorsSnapshot>) {
         self.connectors_snapshot = connectors_snapshot;
+        self.sync_popups();
     }
 
     pub(crate) fn take_mention_bindings(&mut self) -> Vec<MentionBinding> {
@@ -443,7 +467,8 @@ impl ChatComposer {
     /// Enables or disables "Steer" behavior for submission keys.
     ///
     /// When steer is enabled, `Enter` produces [`InputResult::Submitted`] (send immediately) and
-    /// `Tab` produces [`InputResult::Queued`] (eligible to queue if a task is running).
+    /// `Tab` produces [`InputResult::Queued`] when a task is running; otherwise it submits
+    /// immediately. `Tab` does not submit when the input is a `!` shell command.
     /// When steer is disabled, `Enter` produces [`InputResult::Queued`], preserving the default
     /// "queue while a task is running" behavior.
     pub fn set_steer_enabled(&mut self, enabled: bool) {
@@ -526,9 +551,12 @@ impl ChatComposer {
         self.history.set_metadata(log_id, entry_count);
     }
 
-    /// Integrate an asynchronous response to an on-demand history lookup. If
-    /// the entry is present and the offset matches the current cursor we
-    /// immediately populate the textarea.
+    /// Integrate an asynchronous response to an on-demand history lookup.
+    ///
+    /// If the entry is present and the offset still matches the active history cursor, the
+    /// composer rehydrates the entry immediately. This path intentionally routes through
+    /// [`Self::apply_history_entry`] so cursor placement remains aligned with keyboard history
+    /// recall semantics.
     pub(crate) fn on_history_entry_response(
         &mut self,
         log_id: u64,
@@ -540,12 +568,7 @@ impl ChatComposer {
         };
         // Persistent ↑/↓ history is text-only (backwards-compatible and avoids persisting
         // attachments), but local in-session ↑/↓ history can rehydrate elements and image paths.
-        self.set_text_content_with_mention_bindings(
-            entry.text,
-            entry.text_elements,
-            entry.local_image_paths,
-            entry.mention_bindings,
-        );
+        self.apply_history_entry(entry);
         true
     }
 
@@ -576,7 +599,7 @@ impl ChatComposer {
             self.pending_pastes.push((placeholder, pasted));
         } else if char_count > 1
             && self.image_paste_enabled()
-            && self.handle_paste_image_path(pasted.clone())
+            && self.handle_paste_attachment_path(pasted.clone())
         {
             self.textarea.insert_str(" ");
         } else {
@@ -588,24 +611,28 @@ impl ChatComposer {
         true
     }
 
-    pub fn handle_paste_image_path(&mut self, pasted: String) -> bool {
+    pub fn handle_paste_attachment_path(&mut self, pasted: String) -> bool {
         let Some(path_buf) = normalize_pasted_path(&pasted) else {
             return false;
         };
 
-        // normalize_pasted_path already handles Windows → WSL path conversion,
-        // so we can directly try to read the image dimensions.
-        match image::image_dimensions(&path_buf) {
-            Ok((width, height)) => {
-                tracing::info!("OK: {pasted}");
-                tracing::debug!("image dimensions={}x{}", width, height);
-                let format = pasted_image_format(&path_buf);
-                tracing::debug!("attached image format={}", format.label());
+        match detect_attachment_kind(&path_buf) {
+            AttachmentKind::Image => {
+                if let Ok((width, height)) = image::image_dimensions(&path_buf) {
+                    tracing::debug!("image dimensions={}x{}", width, height);
+                    let format = pasted_image_format(&path_buf);
+                    tracing::debug!("attached image format={}", format.label());
+                }
                 self.attach_image(path_buf);
                 true
             }
-            Err(err) => {
-                tracing::trace!("ERR: {err}");
+            AttachmentKind::File => {
+                tracing::debug!("attached file path={}", path_buf.display());
+                self.attach_file(path_buf);
+                true
+            }
+            AttachmentKind::Unsupported => {
+                tracing::trace!("unsupported pasted attachment path: {pasted}");
                 false
             }
         }
@@ -706,7 +733,7 @@ impl ChatComposer {
             self.textarea.insert_str(&text[idx..]);
         }
 
-        // Keep image placeholders normalized to [Image #1].. in attachment order.
+        // Keep attachment placeholders normalized to [Image #1].. / [File #1].. in order.
         self.relabel_attached_images_and_update_placeholders();
         self.textarea.set_cursor(self.textarea.text().len());
         self.sync_popups();
@@ -782,6 +809,10 @@ impl ChatComposer {
     /// draft; if callers restore only text and images, mentions can appear
     /// intact to users while resolving to the wrong target or dropping on
     /// retry.
+    ///
+    /// This helper intentionally places the cursor at the start of the restored text. Callers
+    /// that need end-of-line restore behavior (for example shell-style history recall) should call
+    /// [`Self::move_cursor_to_end`] after this method.
     pub(crate) fn set_text_content_with_mention_bindings(
         &mut self,
         text: String,
@@ -802,10 +833,30 @@ impl ChatComposer {
             .filter_map(|elem| elem.placeholder(&text).map(str::to_string))
             .collect();
         for (idx, path) in local_image_paths.into_iter().enumerate() {
-            let placeholder = local_image_label_text(idx + 1);
-            if image_placeholders.contains(&placeholder) {
-                self.attached_images
-                    .push(AttachedImage { placeholder, path });
+            let n = idx + 1;
+            let filename_ph = file_placeholder_for_path(&path);
+            let legacy_file_ph = local_file_label_text(n);
+            let image_ph = local_image_label_text(n);
+            if image_placeholders.contains(&filename_ph) {
+                // New-format filename placeholder (e.g. [report.pdf]).
+                self.attached_images.push(AttachedImage {
+                    placeholder: filename_ph,
+                    path,
+                    is_file: true,
+                });
+            } else if image_placeholders.contains(&legacy_file_ph) {
+                // Legacy [File #N] format (from older history entries).
+                self.attached_images.push(AttachedImage {
+                    placeholder: legacy_file_ph,
+                    path,
+                    is_file: true,
+                });
+            } else if image_placeholders.contains(&image_ph) {
+                self.attached_images.push(AttachedImage {
+                    placeholder: image_ph,
+                    path,
+                    is_file: false,
+                });
             }
         }
 
@@ -837,6 +888,7 @@ impl ChatComposer {
             .iter()
             .map(|img| img.path.clone())
             .collect();
+        let pending_pastes = std::mem::take(&mut self.pending_pastes);
         let mention_bindings = self.snapshot_mention_bindings();
         self.set_text_content(String::new(), Vec::new(), Vec::new());
         self.history.reset_navigation();
@@ -845,6 +897,7 @@ impl ChatComposer {
             text_elements,
             local_image_paths,
             mention_bindings,
+            pending_pastes,
         });
         Some(previous)
     }
@@ -852,6 +905,31 @@ impl ChatComposer {
     /// Get the current composer text.
     pub(crate) fn current_text(&self) -> String {
         self.textarea.text().to_string()
+    }
+
+    /// Rehydrate a history entry into the composer with shell-like cursor placement.
+    ///
+    /// This path restores text, elements, images, mention bindings, and pending paste payloads,
+    /// then moves the cursor to end-of-line. If a caller reused
+    /// [`Self::set_text_content_with_mention_bindings`] directly for history recall and forgot the
+    /// final cursor move, repeated Up/Down would stop navigating history because cursor-gating
+    /// treats interior positions as normal editing mode.
+    fn apply_history_entry(&mut self, entry: HistoryEntry) {
+        let HistoryEntry {
+            text,
+            text_elements,
+            local_image_paths,
+            mention_bindings,
+            pending_pastes,
+        } = entry;
+        self.set_text_content_with_mention_bindings(
+            text,
+            text_elements,
+            local_image_paths,
+            mention_bindings,
+        );
+        self.set_pending_pastes(pending_pastes);
+        self.move_cursor_to_end();
     }
 
     pub(crate) fn text_elements(&self) -> Vec<TextElement> {
@@ -872,6 +950,7 @@ impl ChatComposer {
             .map(|img| LocalImageAttachment {
                 placeholder: img.placeholder.clone(),
                 path: img.path.clone(),
+                is_file: img.is_file,
             })
             .collect()
     }
@@ -896,15 +975,29 @@ impl ChatComposer {
             .retain(|img| image_placeholders.contains(img.placeholder.as_str()));
     }
 
-    /// Insert an attachment placeholder and track it for the next submission.
+    /// Insert an image attachment placeholder and track it for the next submission.
     pub fn attach_image(&mut self, path: PathBuf) {
-        let image_number = self.attached_images.len() + 1;
+        let image_number = self.attached_images.iter().filter(|a| !a.is_file).count() + 1;
         let placeholder = local_image_label_text(image_number);
         // Insert as an element to match large paste placeholder behavior:
         // styled distinctly and treated atomically for cursor/mutations.
         self.textarea.insert_element(&placeholder);
-        self.attached_images
-            .push(AttachedImage { placeholder, path });
+        self.attached_images.push(AttachedImage {
+            placeholder,
+            path,
+            is_file: false,
+        });
+    }
+
+    /// Insert a non-image file attachment placeholder (e.g. PDF) and track it.
+    pub fn attach_file(&mut self, path: PathBuf) {
+        let placeholder = file_placeholder_for_path(&path);
+        self.textarea.insert_element(&placeholder);
+        self.attached_images.push(AttachedImage {
+            placeholder,
+            path,
+            is_file: true,
+        });
     }
 
     #[cfg(test)]
@@ -920,6 +1013,7 @@ impl ChatComposer {
             .map(|img| LocalImageAttachment {
                 placeholder: img.placeholder,
                 path: img.path,
+                is_file: img.is_file,
             })
             .collect()
     }
@@ -1395,52 +1489,33 @@ impl ChatComposer {
                 };
 
                 let sel_path = sel.to_string_lossy().to_string();
-                // If selected path looks like an image (png/jpeg), attach as image instead of inserting text.
-                let is_image = Self::is_image_path(&sel_path);
-                if is_image {
-                    // Determine dimensions; if that fails fall back to normal path insertion.
-                    let path_buf = PathBuf::from(&sel_path);
-                    match image::image_dimensions(&path_buf) {
-                        Ok((width, height)) => {
-                            tracing::debug!("selected image dimensions={}x{}", width, height);
-                            // Remove the current @token (mirror logic from insert_selected_path without inserting text)
-                            // using the flat text and byte-offset cursor API.
-                            let cursor_offset = self.textarea.cursor();
-                            let text = self.textarea.text();
-                            // Clamp to a valid char boundary to avoid panics when slicing.
-                            let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-                            let before_cursor = &text[..safe_cursor];
-                            let after_cursor = &text[safe_cursor..];
-
-                            // Determine token boundaries in the full text.
-                            let start_idx = before_cursor
-                                .char_indices()
-                                .rfind(|(_, c)| c.is_whitespace())
-                                .map(|(idx, c)| idx + c.len_utf8())
-                                .unwrap_or(0);
-                            let end_rel_idx = after_cursor
-                                .char_indices()
-                                .find(|(_, c)| c.is_whitespace())
-                                .map(|(idx, _)| idx)
-                                .unwrap_or(after_cursor.len());
-                            let end_idx = safe_cursor + end_rel_idx;
-
-                            self.textarea.replace_range(start_idx..end_idx, "");
-                            self.textarea.set_cursor(start_idx);
-
-                            self.attach_image(path_buf);
-                            // Add a trailing space to keep typing fluid.
-                            self.textarea.insert_str(" ");
-                        }
-                        Err(err) => {
-                            tracing::trace!("image dimensions lookup failed: {err}");
-                            // Fallback to plain path insertion if metadata read fails.
-                            self.insert_selected_path(&sel_path);
+                let path_buf = PathBuf::from(&sel_path);
+                match detect_attachment_kind(&path_buf) {
+                    AttachmentKind::Image => {
+                        // Determine dimensions; if that fails fall back to normal path insertion.
+                        match image::image_dimensions(&path_buf) {
+                            Ok((width, height)) => {
+                                tracing::debug!("selected image dimensions={width}x{height}");
+                                self.remove_current_at_token();
+                                self.attach_image(path_buf);
+                                self.textarea.insert_str(" ");
+                            }
+                            Err(err) => {
+                                tracing::trace!("image dimensions lookup failed: {err}");
+                                self.insert_selected_path(&sel_path);
+                            }
                         }
                     }
-                } else {
-                    // Non-image: inserting file path.
-                    self.insert_selected_path(&sel_path);
+                    AttachmentKind::File => {
+                        tracing::debug!("attached file from popup path={}", path_buf.display());
+                        self.remove_current_at_token();
+                        self.attach_file(path_buf);
+                        self.textarea.insert_str(" ");
+                    }
+                    AttachmentKind::Unsupported => {
+                        // Non-attachable file: insert path as plain text.
+                        self.insert_selected_path(&sel_path);
+                    }
                 }
                 // No selection: treat Enter as closing the popup/session.
                 self.active_popup = ActivePopup::None;
@@ -1525,7 +1600,11 @@ impl ChatComposer {
 
     fn is_image_path(path: &str) -> bool {
         let lower = path.to_ascii_lowercase();
-        lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg")
+        lower.ends_with(".png")
+            || lower.ends_with(".jpg")
+            || lower.ends_with(".jpeg")
+            || lower.ends_with(".gif")
+            || lower.ends_with(".webp")
     }
 
     fn trim_text_elements(
@@ -1768,6 +1847,35 @@ impl ChatComposer {
             return None;
         }
         Self::current_prefixed_token(&self.textarea, '$', true)
+    }
+
+    /// Remove the active `@token` (the one under the cursor) from the text
+    /// area, leaving the cursor at the position where the token was.
+    ///
+    /// This is used when converting an `@token` into an attachment (image or
+    /// file) rather than inserting a plain text path.
+    fn remove_current_at_token(&mut self) {
+        let cursor_offset = self.textarea.cursor();
+        let text = self.textarea.text();
+        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
+
+        let before_cursor = &text[..safe_cursor];
+        let after_cursor = &text[safe_cursor..];
+
+        let start_idx = before_cursor
+            .char_indices()
+            .rfind(|(_, c)| c.is_whitespace())
+            .map(|(idx, c)| idx + c.len_utf8())
+            .unwrap_or(0);
+        let end_rel_idx = after_cursor
+            .char_indices()
+            .find(|(_, c)| c.is_whitespace())
+            .map(|(idx, _)| idx)
+            .unwrap_or(after_cursor.len());
+        let end_idx = safe_cursor + end_rel_idx;
+
+        self.textarea.replace_range(start_idx..end_idx, "");
+        self.textarea.set_cursor(start_idx);
     }
 
     /// Replace the active `@token` (the one under the cursor) with `path`.
@@ -2065,6 +2173,7 @@ impl ChatComposer {
                 text_elements: text_elements.clone(),
                 local_image_paths,
                 mention_bindings: original_mention_bindings,
+                pending_pastes: Vec::new(),
             });
         }
         self.pending_pastes.clear();
@@ -2352,12 +2461,7 @@ impl ChatComposer {
                         _ => unreachable!(),
                     };
                     if let Some(entry) = replace_entry {
-                        self.set_text_content_with_mention_bindings(
-                            entry.text,
-                            entry.text_elements,
-                            entry.local_image_paths,
-                            entry.mention_bindings,
-                        );
+                        self.apply_history_entry(entry);
                         return (InputResult::None, true);
                     }
                 }
@@ -2368,7 +2472,17 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 ..
-            } if self.is_task_running => self.handle_submission(true),
+            } if self.steer_enabled && !self.is_bang_shell_command() => {
+                self.handle_submission(self.is_task_running)
+            }
+            KeyEvent {
+                code: KeyCode::Tab,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            } if self.is_task_running && !self.is_bang_shell_command() => {
+                self.handle_submission(true)
+            }
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
@@ -2379,6 +2493,10 @@ impl ChatComposer {
             }
             input => self.handle_input_basic(input),
         }
+    }
+
+    fn is_bang_shell_command(&self) -> bool {
+        self.textarea.text().trim_start().starts_with('!')
     }
 
     /// Applies any due `PasteBurst` flush at time `now`.
@@ -2580,8 +2698,15 @@ impl ChatComposer {
     }
 
     fn relabel_attached_images_and_update_placeholders(&mut self) {
+        let mut image_counter = 0usize;
         for idx in 0..self.attached_images.len() {
-            let expected = local_image_label_text(idx + 1);
+            let expected = if self.attached_images[idx].is_file {
+                // File attachments use filename-based placeholders; no renumbering.
+                file_placeholder_for_path(&self.attached_images[idx].path)
+            } else {
+                image_counter += 1;
+                local_image_label_text(image_counter)
+            };
             let current = self.attached_images[idx].placeholder.clone();
             if current == expected {
                 continue;
@@ -3130,12 +3255,20 @@ impl ChatComposer {
         }
     }
 
-    pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
+    pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) -> bool {
+        if self.status_line_value == status_line {
+            return false;
+        }
         self.status_line_value = status_line;
+        true
     }
 
-    pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) {
+    pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) -> bool {
+        if self.status_line_enabled == enabled {
+            return false;
+        }
         self.status_line_enabled = enabled;
+        true
     }
 }
 
@@ -4057,8 +4190,118 @@ mod tests {
 
         assert_eq!(
             composer.history.navigate_up(&composer.app_event_tx),
-            Some(HistoryEntry::from_text("draft text".to_string()))
+            Some(HistoryEntry::new("draft text".to_string()))
         );
+    }
+
+    #[test]
+    fn clear_for_ctrl_c_preserves_pending_paste_history_entry() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let large = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5);
+        composer.handle_paste(large.clone());
+        let char_count = large.chars().count();
+        let placeholder = format!("[Pasted Content {char_count} chars]");
+        assert_eq!(composer.textarea.text(), placeholder);
+        assert_eq!(
+            composer.pending_pastes,
+            vec![(placeholder.clone(), large.clone())]
+        );
+
+        composer.clear_for_ctrl_c();
+        assert!(composer.is_empty());
+
+        let history_entry = composer
+            .history
+            .navigate_up(&composer.app_event_tx)
+            .expect("expected history entry");
+        let text_elements = vec![TextElement::new(
+            (0..placeholder.len()).into(),
+            Some(placeholder.clone()),
+        )];
+        assert_eq!(
+            history_entry,
+            HistoryEntry::with_pending(
+                placeholder.clone(),
+                text_elements,
+                Vec::new(),
+                vec![(placeholder.clone(), large.clone())]
+            )
+        );
+
+        composer.apply_history_entry(history_entry);
+        assert_eq!(composer.textarea.text(), placeholder);
+        assert_eq!(composer.pending_pastes, vec![(placeholder.clone(), large)]);
+        assert_eq!(composer.textarea.element_payloads(), vec![placeholder]);
+
+        composer.set_steer_enabled(true);
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted {
+                text,
+                text_elements,
+            } => {
+                assert_eq!(text, "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5));
+                assert!(text_elements.is_empty());
+            }
+            _ => panic!("expected Submitted"),
+        }
+    }
+
+    #[test]
+    fn clear_for_ctrl_c_preserves_image_draft_state() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let path = PathBuf::from("example.png");
+        composer.attach_image(path.clone());
+        let placeholder = local_image_label_text(1);
+
+        composer.clear_for_ctrl_c();
+        assert!(composer.is_empty());
+
+        let history_entry = composer
+            .history
+            .navigate_up(&composer.app_event_tx)
+            .expect("expected history entry");
+        let text_elements = vec![TextElement::new(
+            (0..placeholder.len()).into(),
+            Some(placeholder.clone()),
+        )];
+        assert_eq!(
+            history_entry,
+            HistoryEntry::with_pending(
+                placeholder.clone(),
+                text_elements,
+                vec![path.clone()],
+                Vec::new()
+            )
+        );
+
+        composer.apply_history_entry(history_entry);
+        assert_eq!(composer.textarea.text(), placeholder);
+        assert_eq!(composer.local_image_paths(), vec![path]);
+        assert_eq!(composer.textarea.element_payloads(), vec![placeholder]);
     }
 
     /// Behavior: `?` toggles the shortcut overlay only when the composer is otherwise empty. After
@@ -4147,6 +4390,43 @@ mod tests {
 
         assert_eq!(composer.textarea.text(), "hi?there");
         assert_ne!(composer.footer_mode, FooterMode::ShortcutOverlay);
+    }
+
+    #[test]
+    fn set_connector_mentions_refreshes_open_mention_popup() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_connectors_enabled(true);
+        composer.set_text_content("$".to_string(), Vec::new(), Vec::new());
+        assert!(matches!(composer.active_popup, ActivePopup::None));
+
+        let connectors = vec![AppInfo {
+            id: "connector_1".to_string(),
+            name: "Notion".to_string(),
+            description: Some("Workspace docs".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: Some("https://example.test/notion".to_string()),
+            is_accessible: true,
+        }];
+        composer.set_connector_mentions(Some(ConnectorsSnapshot { connectors }));
+
+        let ActivePopup::Skill(popup) = &composer.active_popup else {
+            panic!("expected mention popup to open after connectors update");
+        };
+        let mention = popup
+            .selected_mention()
+            .expect("expected connector mention to be selected");
+        assert_eq!(mention.insert_text, "$notion".to_string());
+        assert_eq!(mention.path, Some("app://connector_1".to_string()));
     }
 
     #[test]
@@ -5258,6 +5538,65 @@ mod tests {
     }
 
     #[test]
+    fn tab_submits_when_no_task_running_in_steer_mode() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        type_chars_humanlike(&mut composer, &['h', 'i']);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert!(matches!(
+            result,
+            InputResult::Submitted { ref text, .. } if text == "hi"
+        ));
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn tab_does_not_submit_for_bang_shell_command_in_steer_mode() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+        composer.set_task_running(false);
+
+        type_chars_humanlike(&mut composer, &['!', 'l', 's']);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::None));
+        assert!(
+            composer.textarea.text().starts_with("!ls"),
+            "expected Tab not to submit or clear a `!` command"
+        );
+    }
+
+    #[test]
     fn slash_mention_dispatches_command_and_inserts_at() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -5663,6 +6002,126 @@ mod tests {
     }
 
     #[test]
+    fn attach_file_uses_filename_placeholder() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        let path = PathBuf::from("/tmp/report.pdf");
+        composer.attach_file(path.clone());
+        let text = composer.current_text();
+        assert_eq!(text, "[report.pdf]");
+        let images = composer.local_images();
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].placeholder, "[report.pdf]");
+        assert!(images[0].is_file);
+        assert_eq!(images[0].path, path);
+    }
+
+    #[test]
+    fn mixed_image_file_numbering() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.attach_image(PathBuf::from("/tmp/a.png"));
+        composer.attach_file(PathBuf::from("/tmp/report.pdf"));
+        composer.attach_image(PathBuf::from("/tmp/b.png"));
+
+        let images = composer.local_images();
+        assert_eq!(images.len(), 3);
+        assert_eq!(images[0].placeholder, "[Image #1]");
+        assert!(!images[0].is_file);
+        assert_eq!(images[1].placeholder, "[report.pdf]");
+        assert!(images[1].is_file);
+        assert_eq!(images[2].placeholder, "[Image #2]");
+        assert!(!images[2].is_file);
+    }
+
+    #[test]
+    fn file_with_no_filename_falls_back() {
+        assert_eq!(file_placeholder_for_path(&PathBuf::from("/")), "[File]");
+    }
+
+    #[test]
+    fn relabel_after_delete_preserves_filename() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Attach image #1, file, image #2.
+        composer.attach_image(PathBuf::from("/tmp/a.png"));
+        composer.attach_file(PathBuf::from("/tmp/report.pdf"));
+        composer.attach_image(PathBuf::from("/tmp/b.png"));
+
+        // Verify initial state.
+        assert_eq!(composer.current_text(), "[Image #1][report.pdf][Image #2]");
+
+        // Position cursor after [Image #1] and delete it via backspace.
+        composer.textarea.set_cursor("[Image #1]".len());
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        // File label unchanged, image renumbered from #2 to #1.
+        assert_eq!(composer.current_text(), "[report.pdf][Image #1]");
+        let images = composer.local_images();
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].placeholder, "[report.pdf]");
+        assert!(images[0].is_file);
+        assert_eq!(images[1].placeholder, "[Image #1]");
+        assert!(!images[1].is_file);
+    }
+
+    #[test]
+    fn restore_reconstructs_filename_placeholder() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        let placeholder = "[report.pdf]";
+        let text = format!("{placeholder} check this");
+        let text_elements = vec![TextElement::new(
+            (0..placeholder.len()).into(),
+            Some(placeholder.to_string()),
+        )];
+        let local_image_paths = vec![PathBuf::from("/tmp/report.pdf")];
+        composer.set_text_content_with_mention_bindings(
+            text,
+            text_elements,
+            local_image_paths,
+            Vec::new(),
+        );
+        let images = composer.local_images();
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].placeholder, "[report.pdf]");
+        assert!(images[0].is_file);
+    }
+
+    #[test]
     fn submit_captures_recent_mention_bindings_before_clearing_textarea() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
@@ -5725,6 +6184,51 @@ mod tests {
         assert_eq!(text_elements.len(), 1);
         assert_eq!(text_elements[0].placeholder(&text), Some("[Image #1]"));
         assert_eq!(composer.local_image_paths(), vec![path]);
+        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+    }
+
+    #[test]
+    fn history_navigation_leaves_cursor_at_end_of_line() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        type_chars_humanlike(&mut composer, &['f', 'i', 'r', 's', 't']);
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::Submitted { .. }));
+
+        type_chars_humanlike(&mut composer, &['s', 'e', 'c', 'o', 'n', 'd']);
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::Submitted { .. }));
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(composer.textarea.text(), "second");
+        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(composer.textarea.text(), "first");
+        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(composer.textarea.text(), "second");
+        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert!(composer.textarea.is_empty());
+        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
     }
 
     #[test]
@@ -6106,7 +6610,8 @@ mod tests {
         assert_eq!(
             vec![AttachedImage {
                 path: path2,
-                placeholder: "[Image #1]".to_string()
+                placeholder: "[Image #1]".to_string(),
+                is_file: false,
             }],
             composer.attached_images,
             "one image mapping remains"
@@ -6169,7 +6674,8 @@ mod tests {
         assert_eq!(
             vec![AttachedImage {
                 path: path2,
-                placeholder: placeholder1
+                placeholder: placeholder1,
+                is_file: false,
             }],
             composer.attached_images,
             "attachment renumbered after deletion"
@@ -7439,6 +7945,7 @@ mod tests {
         composer.attached_images.push(AttachedImage {
             placeholder: placeholder.clone(),
             path: PathBuf::from("img.png"),
+            is_file: false,
         });
         composer
             .pending_pastes
@@ -7473,12 +7980,41 @@ mod tests {
         composer.attached_images.push(AttachedImage {
             placeholder: placeholder.clone(),
             path: PathBuf::from("img.png"),
+            is_file: false,
         });
 
         composer.apply_external_edit("No images here".to_string());
 
         assert_eq!(composer.current_text(), "No images here".to_string());
         assert!(composer.attached_images.is_empty());
+    }
+
+    #[test]
+    fn apply_external_edit_renumbers_image_placeholders() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let first_path = PathBuf::from("img1.png");
+        let second_path = PathBuf::from("img2.png");
+        composer.attach_image(first_path);
+        composer.attach_image(second_path.clone());
+
+        let placeholder2 = local_image_label_text(2);
+        composer.apply_external_edit(format!("Keep {placeholder2}"));
+
+        let placeholder1 = local_image_label_text(1);
+        assert_eq!(composer.current_text(), format!("Keep {placeholder1}"));
+        assert_eq!(composer.attached_images.len(), 1);
+        assert_eq!(composer.attached_images[0].placeholder, placeholder1);
+        assert_eq!(composer.local_image_paths(), vec![second_path]);
+        assert_eq!(composer.textarea.element_payloads(), vec![placeholder1]);
     }
 
     #[test]
@@ -7523,6 +8059,7 @@ mod tests {
         composer.attached_images.push(AttachedImage {
             placeholder: placeholder.clone(),
             path: PathBuf::from("img.png"),
+            is_file: false,
         });
 
         composer.apply_external_edit(format!("{placeholder} extra {placeholder}"));

@@ -87,7 +87,7 @@ struct ThreadEventEnvelope {
 }
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
-    if let Err(err) = set_default_originator("codex_exec".to_string()) {
+    if let Err(err) = set_default_originator("ata_exec".to_string()) {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
     }
 
@@ -442,7 +442,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // is using.
     event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
 
-    info!("Codex initialized with event: {session_configured:?}");
+    info!("Ata initialized with event: {session_configured:?}");
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ThreadEventEnvelope>();
     let attached_threads = Arc::new(Mutex::new(HashSet::from([primary_thread_id])));
@@ -530,6 +530,14 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             thread,
             event,
         } = envelope;
+        if matches!(event.msg, EventMsg::Error(_)) {
+            error_seen = true;
+        }
+        if shutdown_requested
+            && !matches!(&event.msg, EventMsg::ShutdownComplete | EventMsg::Error(_))
+        {
+            continue;
+        }
         if let EventMsg::ElicitationRequest(ev) = &event.msg {
             // Automatically cancel elicitation requests in exec mode.
             thread
@@ -553,9 +561,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 thread.submit(Op::Shutdown).await?;
                 shutdown_requested = true;
             }
-        }
-        if matches!(event.msg, EventMsg::Error(_)) {
-            error_seen = true;
         }
         if thread_id != primary_thread_id && matches!(&event.msg, EventMsg::TurnComplete(_)) {
             continue;
@@ -632,7 +637,7 @@ async fn resolve_resume_path(
             Some(config.cwd.as_path())
         };
         match codex_core::RolloutRecorder::find_latest_thread_path(
-            &config.codex_home,
+            config,
             1,
             None,
             codex_core::ThreadSortKey::UpdatedAt,

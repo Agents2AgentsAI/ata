@@ -115,11 +115,11 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
         .into_generator()
         .into_root_schema_for::<CodexToolCallParam>();
 
-    let input_schema = create_tool_input_schema(schema, "Codex tool schema should serialize");
+    let input_schema = create_tool_input_schema(schema, "Ata tool schema should serialize");
 
     Tool {
-        name: "codex".into(),
-        title: Some("Codex".to_string()),
+        name: "ata".into(),
+        title: Some("Ata".to_string()),
         input_schema,
         output_schema: Some(codex_tool_output_schema()),
         description: Some(
@@ -237,11 +237,11 @@ pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
         .into_generator()
         .into_root_schema_for::<CodexToolCallReplyParam>();
 
-    let input_schema = create_tool_input_schema(schema, "Codex reply tool schema should serialize");
+    let input_schema = create_tool_input_schema(schema, "Ata reply tool schema should serialize");
 
     Tool {
-        name: "codex-reply".into(),
-        title: Some("Codex Reply".to_string()),
+        name: "ata-reply".into(),
+        title: Some("Ata Reply".to_string()),
         input_schema,
         output_schema: Some(codex_tool_output_schema()),
         description: Some(
@@ -359,7 +359,7 @@ mod tests {
             ],
             "type": "object"
           },
-          "name": "codex",
+          "name": "ata",
           "outputSchema": {
             "properties": {
               "content": {
@@ -375,7 +375,7 @@ mod tests {
             ],
             "type": "object"
           },
-          "title": "Codex"
+          "title": "Ata"
         });
         assert_eq!(expected_tool_json, tool_json);
     }
@@ -406,7 +406,7 @@ mod tests {
             ],
             "type": "object",
           },
-          "name": "codex-reply",
+          "name": "ata-reply",
           "outputSchema": {
             "properties": {
               "content": {
@@ -422,7 +422,7 @@ mod tests {
             ],
             "type": "object"
           },
-          "title": "Codex Reply",
+          "title": "Ata Reply",
         });
         assert_eq!(expected_tool_json, tool_json);
     }

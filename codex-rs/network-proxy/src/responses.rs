@@ -70,15 +70,15 @@ pub fn blocked_header_value(reason: &str) -> &'static str {
 
 pub fn blocked_message(reason: &str) -> &'static str {
     match reason {
-        REASON_NOT_ALLOWED => "Codex blocked this request: domain not in allowlist.",
+        REASON_NOT_ALLOWED => "Ata blocked this request: domain not in allowlist.",
         REASON_NOT_ALLOWED_LOCAL => {
-            "Codex blocked this request: local/private addresses not allowed."
+            "Ata blocked this request: local/private addresses not allowed."
         }
-        REASON_DENIED => "Codex blocked this request: domain denied by policy.",
+        REASON_DENIED => "Ata blocked this request: domain denied by policy.",
         REASON_METHOD_NOT_ALLOWED => {
-            "Codex blocked this request: method not allowed in limited mode."
+            "Ata blocked this request: method not allowed in limited mode."
         }
-        _ => "Codex blocked this request by network policy.",
+        _ => "Ata blocked this request by network policy.",
     }
 }
 
@@ -160,7 +160,7 @@ mod tests {
         assert_eq!(
             message,
             r#"CODEX_NETWORK_POLICY_DECISION {"decision":"deny","reason":"not_allowed","source":"baseline_policy","protocol":"http","host":"api.example.com","port":80}
-Codex blocked this request: domain not in allowlist."#
+Ata blocked this request: domain not in allowlist."#
         );
     }
 }

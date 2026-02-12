@@ -12,7 +12,7 @@ use crate::config::Config;
 #[cfg(feature = "data")]
 use crate::data::SharedDataToolkit;
 #[cfg(any(feature = "research", feature = "data"))]
-use crate::default_client::build_reqwest_client;
+use crate::default_client::build_reqwest_client_with_timeouts;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
@@ -485,9 +485,16 @@ impl ThreadManagerState {
                 Some(
                     self.research_toolkit
                         .get_or_init(|| async {
-                            let research_config = build_research_config(config.research.as_ref());
+                            let research_config = build_research_config(
+                                config.research.as_ref(),
+                                config.codex_home.as_path(),
+                                config.cwd.as_path(),
+                            );
                             Arc::new(codex_research_tools::ResearchToolkit::new(
-                                build_reqwest_client(),
+                                build_reqwest_client_with_timeouts(
+                                    Some(research_config.connect_timeout),
+                                    Some(research_config.request_timeout),
+                                ),
                                 research_config,
                             ))
                         })
@@ -511,9 +518,16 @@ impl ThreadManagerState {
                 Some(
                     self.data_toolkit
                         .get_or_init(|| async {
-                            let data_config = build_data_config(config.data.as_ref());
+                            let data_config = build_data_config(
+                                config.data.as_ref(),
+                                config.codex_home.as_path(),
+                                config.cwd.as_path(),
+                            );
                             Arc::new(codex_data_tools::DataToolkit::new(
-                                build_reqwest_client(),
+                                build_reqwest_client_with_timeouts(
+                                    Some(data_config.connect_timeout),
+                                    Some(data_config.request_timeout),
+                                ),
                                 data_config,
                             ))
                         })

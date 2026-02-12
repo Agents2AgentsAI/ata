@@ -1,7 +1,8 @@
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::error::ApiError;
-use crate::rate_limits::parse_rate_limit;
+use crate::file_support::map_user_facing_file_error_from_message;
+use crate::rate_limits::parse_all_rate_limits;
 use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
 use codex_client::StreamResponse;
@@ -54,7 +55,7 @@ pub fn spawn_response_stream(
     telemetry: Option<Arc<dyn SseTelemetry>>,
     turn_state: Option<Arc<OnceLock<String>>>,
 ) -> ResponseStream {
-    let rate_limits = parse_rate_limit(&stream_response.headers);
+    let rate_limit_snapshots = parse_all_rate_limits(&stream_response.headers);
     let models_etag = stream_response
         .headers
         .get("X-Models-Etag")
@@ -74,7 +75,7 @@ pub fn spawn_response_stream(
     }
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
     tokio::spawn(async move {
-        if let Some(snapshot) = rate_limits {
+        for snapshot in rate_limit_snapshots {
             let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
         }
         if let Some(etag) = models_etag {
@@ -235,6 +236,17 @@ pub fn process_responses_event(
                     } else if is_usage_not_included(&error) {
                         response_error = ApiError::UsageNotIncluded;
                     } else if is_invalid_prompt_error(&error) {
+                        let message = error
+                            .message
+                            .unwrap_or_else(|| "Invalid request.".to_string());
+                        response_error = ApiError::InvalidRequest { message };
+                    } else if let Some(message) = error.message.as_deref()
+                        && let Some(mapped) = map_user_facing_file_error_from_message(message)
+                    {
+                        response_error = ApiError::InvalidRequest {
+                            message: mapped.user_message,
+                        };
+                    } else if is_invalid_request_error(&error) {
                         let message = error
                             .message
                             .unwrap_or_else(|| "Invalid request.".to_string());
@@ -420,6 +432,11 @@ fn is_usage_not_included(error: &Error) -> bool {
 
 fn is_invalid_prompt_error(error: &Error) -> bool {
     error.code.as_deref() == Some("invalid_prompt")
+}
+
+fn is_invalid_request_error(error: &Error) -> bool {
+    error.r#type.as_deref() == Some("invalid_request_error")
+        || error.code.as_deref() == Some("invalid_request_error")
 }
 
 fn rate_limit_regex() -> &'static regex_lite::Regex {
@@ -757,6 +774,27 @@ mod tests {
                 assert_eq!(
                     message,
                     "Invalid prompt: we've limited access to this content for safety reasons."
+                );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_request_error_is_invalid_request() {
+        let raw_error = r#"{"type":"response.failed","sequence_number":3,"response":{"id":"resp_invalid_request","object":"response","created_at":1759771629,"status":"failed","background":false,"error":{"type":"invalid_request_error","message":"This PDF is encrypted."},"incomplete_details":null}}"#;
+
+        let sse1 = format!("event: response.failed\ndata: {raw_error}\n\n");
+
+        let events = collect_events(&[sse1.as_bytes()]).await;
+
+        assert_eq!(events.len(), 1);
+
+        match &events[0] {
+            Err(ApiError::InvalidRequest { message }) => {
+                assert_eq!(
+                    message,
+                    "This PDF appears to be encrypted. Please remove the password protection and try again."
                 );
             }
             other => panic!("unexpected event: {other:?}"),

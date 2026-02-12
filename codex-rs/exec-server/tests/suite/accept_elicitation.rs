@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -15,9 +16,9 @@ use exec_server_test_support::write_default_execpolicy;
 use maplit::hashset;
 use pretty_assertions::assert_eq;
 use rmcp::ServiceExt;
-use rmcp::model::CallToolRequestParam;
+use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
-use rmcp::model::CreateElicitationRequestParam;
+use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::EmptyResult;
 use rmcp::model::ServerResult;
 use rmcp::model::object;
@@ -64,7 +65,7 @@ prefix_rule(
         git_path,
         project_root_path.display()
     );
-    let elicitation_requests: Arc<Mutex<Vec<CreateElicitationRequestParam>>> = Default::default();
+    let elicitation_requests: Arc<Mutex<Vec<CreateElicitationRequestParams>>> = Default::default();
     let client = InteractiveClient {
         elicitations_to_accept: hashset! { expected_elicitation_message.clone() },
         elicitation_requests: elicitation_requests.clone(),
@@ -96,7 +97,8 @@ prefix_rule(
     let CallToolResult {
         content, is_error, ..
     } = service
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
+            meta: None,
             name: Cow::Borrowed("shell"),
             arguments: Some(object(json!(
                 {
@@ -105,6 +107,7 @@ prefix_rule(
                     "workdir": project_root_path.to_string_lossy(),
                 }
             ))),
+            task: None,
         })
         .await?;
     let tool_call_content = content
@@ -143,8 +146,12 @@ prefix_rule(
     Ok(())
 }
 
+static ATA_BIN: OnceLock<PathBuf> = OnceLock::new();
+
 fn ensure_codex_cli() -> Result<PathBuf> {
-    let codex_cli = codex_utils_cargo_bin::cargo_bin("codex")?;
+    let codex_cli = ATA_BIN
+        .get_or_init(|| codex_utils_cargo_bin::cargo_bin("ata").unwrap())
+        .clone();
 
     let metadata = codex_cli.metadata().with_context(|| {
         format!(

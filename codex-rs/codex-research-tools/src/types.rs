@@ -63,39 +63,6 @@ pub struct CitationResult {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct SotaEntry {
-    pub task: String,
-    pub dataset: String,
-    pub metric: String,
-    pub best_method: String,
-    pub best_score: Option<f64>,
-    pub paper_title: Option<String>,
-    pub paper_url: Option<String>,
-    pub code_url: Option<String>,
-    pub source_meta: Option<SourceMeta>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct SotaResult {
-    pub entries: Vec<SotaEntry>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct CodeRepo {
-    pub url: String,
-    pub framework: Option<String>,
-    pub stars: Option<u32>,
-    pub is_official: Option<bool>,
-    pub description: Option<String>,
-    pub source_meta: Option<SourceMeta>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct RepoListResult {
-    pub repos: Vec<CodeRepo>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroItem {
     pub key: String,
     pub title: String,
@@ -191,6 +158,89 @@ pub struct ZoteroCollectionsResult {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RepoHealth {
+    pub license: Option<String>,
+    pub last_commit_date: Option<String>,
+    pub stars: u32,
+    pub open_issues: u32,
+    pub releases_count: u32,
+    pub ci_passing: Option<bool>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RepoSummary {
+    pub url: String,
+    pub commit_sha: Option<String>,
+    pub directory_tree: String,
+    pub readme_snippet: Option<String>,
+    pub key_files: Vec<String>,
+    pub total_files: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ModelDefinition {
+    pub file_path: String,
+    pub class_name: String,
+    pub line_number: usize,
+    pub context: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RepoRequirements {
+    pub repo_url: String,
+    pub dependencies: Vec<String>,
+    pub source_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RepoEntrypoint {
+    pub file_path: String,
+    pub kind: String,
+    pub cli_args_summary: Option<String>,
+    pub config_file: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RepoIoShape {
+    pub input_shapes: Option<String>,
+    pub output_shapes: Option<String>,
+    pub dtype: Option<String>,
+    pub source_file: String,
+    pub source_line: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RepoExportPath {
+    pub file_path: String,
+    pub target_format: String,
+    pub framework_version: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ConfigParam {
+    pub name: String,
+    pub default: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ConfigSchema {
+    pub config_file: String,
+    pub format: String,
+    pub key_params: Vec<ConfigParam>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RequirementsDiff {
+    pub repo_url: String,
+    pub conflicts: Vec<String>,
+    pub missing_locally: Vec<String>,
+    pub compatible: Vec<String>,
+    pub repo_total_deps: usize,
+    pub local_total_deps: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct PaperSearchParams {
     pub query: String,
     pub year_from: Option<u32>,
@@ -214,13 +264,6 @@ pub struct PaginationParams {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct SotaSearchParams {
-    pub task: String,
-    pub dataset: Option<String>,
-    pub limit: Option<u32>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroSearchParams {
     pub query: String,
     pub library_type: Option<String>,
@@ -228,7 +271,6 @@ pub struct ZoteroSearchParams {
     pub offset: Option<u32>,
     pub limit: Option<u32>,
     pub item_type: Option<String>,
-    pub fields: Option<Vec<String>>,
     pub max_chars_per_item: Option<u32>,
 }
 
@@ -267,6 +309,5 @@ pub struct ZoteroCollectionItemsParams {
     pub offset: Option<u32>,
     pub limit: Option<u32>,
     pub item_type: Option<String>,
-    pub fields: Option<Vec<String>>,
     pub max_chars_per_item: Option<u32>,
 }

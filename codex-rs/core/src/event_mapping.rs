@@ -10,6 +10,8 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::models::is_file_close_tag_text;
+use codex_protocol::models::is_file_open_tag_text;
 use codex_protocol::models::is_image_close_tag_text;
 use codex_protocol::models::is_image_open_tag_text;
 use codex_protocol::models::is_local_image_close_tag_text;
@@ -44,6 +46,14 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                 {
                     continue;
                 }
+                if is_file_open_tag_text(text)
+                    && (matches!(message.get(idx + 1), Some(ContentItem::InputFile { .. })))
+                    || (idx > 0
+                        && is_file_close_tag_text(text)
+                        && matches!(message.get(idx - 1), Some(ContentItem::InputFile { .. })))
+                {
+                    continue;
+                }
                 if is_session_prefix(text) || is_user_shell_command_text(text) {
                     return None;
                 }
@@ -58,6 +68,7 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                     image_url: image_url.clone(),
                 });
             }
+            ContentItem::InputFile { .. } => {}
             ContentItem::OutputText { text } => {
                 if is_session_prefix(text) {
                     return None;
@@ -286,6 +297,48 @@ mod tests {
                         text_elements: Vec::new(),
                     },
                 ];
+                assert_eq!(user.content, expected_content);
+            }
+            other => panic!("expected TurnItem::UserMessage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skips_local_file_label_text_and_file_item() {
+        let label =
+            codex_protocol::models::local_file_open_tag_text_with_filename(1, Some("report.pdf"));
+        let user_text = "Please summarize this file.".to_string();
+
+        let item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText { text: label },
+                ContentItem::InputFile {
+                    file_data: Some("JVBERi0xLjQ=".to_string()),
+                    file_id: None,
+                    mime_type: Some("application/pdf".to_string()),
+                    filename: Some("report.pdf".to_string()),
+                },
+                ContentItem::InputText {
+                    text: "<file_end></file_end>".to_string(),
+                },
+                ContentItem::InputText {
+                    text: user_text.clone(),
+                },
+            ],
+            end_turn: None,
+            phase: None,
+        };
+
+        let turn_item = parse_turn_item(&item).expect("expected user message turn item");
+
+        match turn_item {
+            TurnItem::UserMessage(user) => {
+                let expected_content = vec![UserInput::Text {
+                    text: user_text,
+                    text_elements: Vec::new(),
+                }];
                 assert_eq!(user.content, expected_content);
             }
             other => panic!("expected TurnItem::UserMessage, got {other:?}"),

@@ -81,6 +81,7 @@ use toml_edit::DocumentMut;
 
 mod constraint;
 pub mod edit;
+mod network_proxy_spec;
 pub mod profile;
 pub mod schema;
 pub mod service;
@@ -89,6 +90,8 @@ pub use constraint::Constrained;
 pub use constraint::ConstraintError;
 pub use constraint::ConstraintResult;
 
+pub use network_proxy_spec::NetworkProxySpec;
+pub use network_proxy_spec::StartedNetworkProxy;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
 
@@ -154,6 +157,9 @@ pub struct Config {
     /// using backend-specific headers or URLs to enforce this.
     pub enforce_residency: Constrained<Option<ResidencyRequirement>>,
 
+    /// Effective network configuration applied to all spawned processes.
+    pub network: Option<NetworkProxySpec>,
+
     /// True if the user passed in an override or set a value in config.toml
     /// for either of approval_policy or sandbox_mode.
     pub did_user_set_custom_approval_policy_or_sandbox_mode: bool,
@@ -195,13 +201,13 @@ pub struct Config {
     /// Example `~/.codex/config.toml` snippet:
     ///
     /// ```toml
-    /// notify = ["notify-send", "Codex"]
+    /// notify = ["notify-send", "Ata"]
     /// ```
     ///
     /// which will be invoked as:
     ///
     /// ```shell
-    /// notify-send Codex '{"type":"agent-turn-complete","turn-id":"12345"}'
+    /// notify-send Ata '{"type":"agent-turn-complete","turn-id":"12345"}'
     /// ```
     ///
     /// If unset the feature is disabled.
@@ -364,8 +370,8 @@ pub struct Config {
     /// Collection of various notices we show the user
     pub notices: Notice,
 
-    /// When `true`, checks for Codex updates on startup and surfaces update prompts.
-    /// Set to `false` only if your Codex updates are centrally managed.
+    /// When `true`, checks for Ata updates on startup and surfaces update prompts.
+    /// Set to `false` only if your Ata updates are centrally managed.
     /// Defaults to `true`.
     pub check_for_update_on_startup: bool,
 
@@ -1024,8 +1030,8 @@ pub struct ConfigToml {
     #[serde(default)]
     pub project_root_markers: Option<Vec<String>>,
 
-    /// When `true`, checks for Codex updates on startup and surfaces update prompts.
-    /// Set to `false` only if your Codex updates are centrally managed.
+    /// When `true`, checks for Ata updates on startup and surfaces update prompts.
+    /// Set to `false` only if your Ata updates are centrally managed.
     /// Defaults to `true`.
     pub check_for_update_on_startup: Option<bool>,
 
@@ -1713,6 +1719,7 @@ impl Config {
             mcp_servers,
             exec_policy: _,
             enforce_residency,
+            network: network_requirements,
         } = requirements;
 
         apply_requirement_constrained_value(
@@ -1737,6 +1744,20 @@ impl Config {
         let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
+        let network = match network_requirements {
+            Some(Sourced { value, source }) => {
+                let network = NetworkProxySpec::from_constraints(&config_layer_stack, value)
+                    .map_err(|err| {
+                        std::io::Error::new(
+                            err.kind(),
+                            format!("failed to build managed network proxy from {source}: {err}"),
+                        )
+                    })?;
+                Some(network)
+            }
+            None => None,
+        };
+
         let config = Self {
             model,
             review_model,
@@ -1749,6 +1770,7 @@ impl Config {
             approval_policy: constrained_approval_policy.value,
             sandbox_policy: constrained_sandbox_policy.value,
             enforce_residency: enforce_residency.value,
+            network,
             did_user_set_custom_approval_policy_or_sandbox_mode,
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
@@ -1864,12 +1886,13 @@ impl Config {
                     .unwrap_or(DEFAULT_OTEL_ENVIRONMENT.to_string());
                 let exporter = t.exporter.unwrap_or(OtelExporterKind::None);
                 let trace_exporter = t.trace_exporter.unwrap_or_else(|| exporter.clone());
+                let metrics_exporter = t.metrics_exporter.unwrap_or(OtelExporterKind::Statsig);
                 OtelConfig {
                     log_user_prompt,
                     environment,
                     exporter,
                     trace_exporter,
-                    metrics_exporter: OtelExporterKind::Statsig,
+                    metrics_exporter,
                 }
             },
         };
@@ -4065,6 +4088,7 @@ model_verbosity = "high"
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 enforce_residency: Constrained::allow_any(None),
+                network: None,
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 forced_auto_mode_downgraded_on_windows: false,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -4132,6 +4156,23 @@ model_verbosity = "high"
     }
 
     #[test]
+    fn metrics_exporter_defaults_to_statsig_when_missing() -> std::io::Result<()> {
+        let fixture = create_test_fixture()?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            fixture.cfg.clone(),
+            ConfigOverrides {
+                cwd: Some(fixture.cwd()),
+                ..Default::default()
+            },
+            fixture.codex_home(),
+        )?;
+
+        assert_eq!(config.otel.metrics_exporter, OtelExporterKind::Statsig);
+        Ok(())
+    }
+
+    #[test]
     fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         let fixture = create_test_fixture()?;
 
@@ -4155,6 +4196,7 @@ model_verbosity = "high"
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             enforce_residency: Constrained::allow_any(None),
+            network: None,
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -4260,6 +4302,7 @@ model_verbosity = "high"
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             enforce_residency: Constrained::allow_any(None),
+            network: None,
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -4351,6 +4394,7 @@ model_verbosity = "high"
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             enforce_residency: Constrained::allow_any(None),
+            network: None,
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -4450,6 +4494,7 @@ model_verbosity = "high"
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
+            network: None,
         };
         let requirement_source = crate::config_loader::RequirementSource::Unknown;
         let requirement_source_for_error = requirement_source.clone();
@@ -5007,6 +5052,7 @@ mcp_oauth_callback_port = 5678
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
+            network: None,
         };
 
         let config = ConfigBuilder::default()

@@ -97,7 +97,10 @@ pub(crate) enum AppEvent {
     RateLimitSnapshotFetched(RateLimitSnapshot),
 
     /// Result of prefetching connectors.
-    ConnectorsLoaded(Result<ConnectorsSnapshot, String>),
+    ConnectorsLoaded {
+        result: Result<ConnectorsSnapshot, String>,
+        is_final: bool,
+    },
 
     /// Result of computing a `/diff` command.
     DiffResult(String),
@@ -111,7 +114,26 @@ pub(crate) enum AppEvent {
         is_installed: bool,
     },
 
+    /// Open the provided URL in the user's browser.
+    OpenUrlInBrowser {
+        url: String,
+    },
+
+    /// Refresh app connector state and mention bindings.
+    RefreshConnectors {
+        force_refetch: bool,
+    },
+
     InsertHistoryCell(Box<dyn HistoryCell>),
+
+    /// Apply rollback semantics to local transcript cells.
+    ///
+    /// This is emitted when rollback was not initiated by the current
+    /// backtrack flow so trimming occurs in AppEvent queue order relative to
+    /// inserted history cells.
+    ApplyThreadRollback {
+        num_turns: u32,
+    },
 
     StartCommitAnimation,
     StopCommitAnimation,

@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::SystemTime;
 
 use crate::AuthManager;
 use crate::CodexAuth;
@@ -14,6 +16,7 @@ use crate::agent::MAX_THREAD_SPAWN_DEPTH;
 use crate::agent::agent_status_from_event;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::build_track_events_context;
+use crate::apps::render_apps_section;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
@@ -24,13 +27,11 @@ use crate::features::FEATURES;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::features::maybe_push_unstable_features_warning;
-use crate::hooks::HookEvent;
-use crate::hooks::HookEventAfterAgent;
-use crate::hooks::Hooks;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::rollout::session_index;
+use crate::sandbox_tags::sandbox_tag;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -42,6 +43,11 @@ use crate::turn_metadata::resolve_turn_metadata_header_with_timeout;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
+use codex_hooks::HookEvent;
+use codex_hooks::HookEventAfterAgent;
+use codex_hooks::HookPayload;
+use codex_hooks::Hooks;
+use codex_network_proxy::NetworkProxy;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::config_types::ModeKind;
@@ -77,8 +83,8 @@ use futures::prelude::*;
 use futures::stream::FuturesOrdered;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
-use rmcp::model::PaginatedRequestParam;
-use rmcp::model::ReadResourceRequestParam;
+use rmcp::model::PaginatedRequestParams;
+use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use serde_json;
@@ -87,6 +93,7 @@ use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::debug;
@@ -98,6 +105,7 @@ use tracing::instrument;
 use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::ModelProviderInfo;
 use crate::client::ModelClient;
@@ -110,10 +118,12 @@ use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
+use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
+use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -125,8 +135,658 @@ pub enum SteerInputError {
     NoActiveTurn(Vec<UserInput>),
     ExpectedTurnMismatch { expected: String, actual: String },
     EmptyInput,
+    InvalidFileInput(String),
 }
 use crate::data::SharedDataToolkit;
+
+#[derive(Debug, thiserror::Error)]
+enum FileInputPreparationError {
+    #[error(transparent)]
+    Processing(#[from] FileProcessingError),
+    #[error(transparent)]
+    Routing(#[from] FileRoutingError),
+    #[error("failed to prepare local file attachments: {0}")]
+    Task(String),
+    #[error("provider `{provider}` does not support PDF attachments")]
+    UnsupportedProvider { provider: String },
+    #[error(
+        "file `{path}` is {size_mb:.1} MB and exceeds the inline limit of {max_mb:.1} MB for provider `{provider}`"
+    )]
+    InlineFileTooLarge {
+        provider: String,
+        path: String,
+        size_mb: f64,
+        max_mb: f64,
+    },
+    #[error(
+        "total local file payload is {total_mb:.1} MB and exceeds the inline budget of {max_mb:.1} MB for provider `{provider}`"
+    )]
+    InlinePayloadTooLarge {
+        provider: String,
+        total_mb: f64,
+        max_mb: f64,
+    },
+}
+
+fn file_capabilities_for_provider(
+    provider: &ModelProviderInfo,
+    model: Option<&str>,
+) -> (String, FileCapabilityConfig) {
+    let provider_id = match provider.wire_api {
+        WireApi::Responses => "openai",
+        WireApi::AnthropicMessages => "anthropic",
+        WireApi::GeminiGenerate => "gemini",
+    };
+    (
+        provider_id.to_string(),
+        file_capabilities_for(provider_id, model),
+    )
+}
+
+/// Rewrite `LocalFile` inputs to `UploadedFile` when the cache has a valid
+/// entry for the same canonical path, provider, and mtime.
+fn dedup_local_files_from_cache(
+    inputs: &mut [UserInput],
+    cache: &FileReferenceCache,
+    provider_id: &str,
+    now: SystemTime,
+) {
+    for input in inputs.iter_mut() {
+        let UserInput::LocalFile { path } = input else {
+            continue;
+        };
+        let Ok(canonical) = std::fs::canonicalize(&*path) else {
+            tracing::debug!(path = %path.display(), "file dedup: canonicalize failed");
+            continue;
+        };
+        let Ok(metadata) = std::fs::metadata(&canonical) else {
+            tracing::debug!(path = %canonical.display(), "file dedup: metadata failed");
+            continue;
+        };
+        let Ok(mtime) = metadata.modified() else {
+            tracing::debug!(path = %canonical.display(), "file dedup: mtime failed");
+            continue;
+        };
+
+        if let Some(hit) = cache.lookup_by_path(&canonical, mtime, provider_id, now) {
+            tracing::debug!(
+                path = %path.display(),
+                file_id = %hit.file_id,
+                "reusing previously uploaded file"
+            );
+            *input = UserInput::UploadedFile {
+                file_id: hit.file_id,
+                mime_type: hit.mime_type,
+                filename: hit.filename,
+                source_path: std::mem::take(path),
+            };
+        }
+    }
+}
+
+/// After a successful upload round, record path→file_id mappings for future dedup.
+fn record_upload_paths(cache: &mut FileReferenceCache, inputs: &[UserInput]) {
+    for input in inputs {
+        let UserInput::UploadedFile {
+            file_id,
+            mime_type,
+            filename,
+            source_path,
+        } = input
+        else {
+            continue;
+        };
+        let Ok(canonical) = std::fs::canonicalize(source_path) else {
+            tracing::debug!(path = %source_path.display(), "record_upload_paths: canonicalize failed");
+            continue;
+        };
+        let Ok(metadata) = std::fs::metadata(&canonical) else {
+            tracing::debug!(path = %canonical.display(), "record_upload_paths: metadata failed");
+            continue;
+        };
+        let Ok(mtime) = metadata.modified() else {
+            tracing::debug!(path = %canonical.display(), "record_upload_paths: mtime failed");
+            continue;
+        };
+        let Some(uploaded) = cache.get(file_id) else {
+            tracing::warn!(
+                file_id,
+                "skipping path record: file_id not found in cache entries"
+            );
+            continue;
+        };
+        let (expires_at, provider) = (uploaded.expires_at, uploaded.provider.clone());
+        cache.record_path(
+            canonical.clone(),
+            file_id,
+            &provider,
+            mime_type.clone(),
+            filename.clone(),
+            mtime,
+            expires_at,
+        );
+        tracing::debug!(
+            path = %canonical.display(),
+            file_id,
+            provider,
+            "recorded file upload path in cache"
+        );
+    }
+}
+
+/// Convert a base64 payload budget into raw-byte budget using the 4:3 base64 expansion ratio.
+fn max_raw_inline_bytes(max_inline_payload_bytes: u64) -> u64 {
+    max_inline_payload_bytes.saturating_mul(3).saturating_div(4)
+}
+
+fn upload_base_url_for_provider(provider_id: &str, provider: &ModelProviderInfo) -> String {
+    let fallback = match provider_id {
+        "openai" => "https://api.openai.com",
+        "anthropic" => "https://api.anthropic.com",
+        "gemini" => "https://generativelanguage.googleapis.com",
+        _ => "",
+    };
+    let base = provider
+        .base_url
+        .as_deref()
+        .unwrap_or(fallback)
+        .trim_end_matches('/');
+
+    match provider_id {
+        "openai" | "anthropic" => base.strip_suffix("/v1").unwrap_or(base).to_string(),
+        "gemini" => base.strip_suffix("/v1beta").unwrap_or(base).to_string(),
+        _ => base.to_string(),
+    }
+}
+
+fn upload_service_for_provider(provider_id: &str) -> Option<Box<dyn FileUploadService>> {
+    match provider_id {
+        "openai" => Some(Box::new(OpenAiFileUpload)),
+        "anthropic" => Some(Box::new(AnthropicFileUpload)),
+        "gemini" => Some(Box::new(GeminiFileUpload)),
+        _ => None,
+    }
+}
+
+async fn delete_uploaded_files_best_effort(
+    uploaded_files: &[codex_api::file_support::UploadedFile],
+    upload_service: &dyn FileUploadService,
+    http_client: &reqwest::Client,
+    api_key: &str,
+    base_url: &str,
+) {
+    let mut seen = HashSet::new();
+    for uploaded in uploaded_files {
+        if !seen.insert(uploaded.file_id.as_str()) {
+            continue;
+        }
+
+        if let Err(error) = upload_service
+            .delete_file(http_client, &uploaded.file_id, api_key, base_url)
+            .await
+        {
+            warn!(
+                file_id = %uploaded.file_id,
+                provider = %uploaded.provider,
+                %error,
+                "failed to delete orphaned uploaded file"
+            );
+        }
+    }
+}
+
+#[derive(Debug)]
+struct FileUploadOutcome {
+    uploaded_files: Vec<codex_api::file_support::UploadedFile>,
+    warnings: Vec<String>,
+}
+
+/// Maximum number of concurrent file uploads.
+const MAX_CONCURRENT_FILE_UPLOADS: usize = 4;
+
+async fn resolve_file_inputs_for_uploads(
+    inputs: &mut [UserInput],
+    provider: &ModelProviderInfo,
+    config: &Config,
+    http_client: &reqwest::Client,
+) -> std::result::Result<FileUploadOutcome, FileInputPreparationError> {
+    let empty = Ok(FileUploadOutcome {
+        uploaded_files: Vec::new(),
+        warnings: Vec::new(),
+    });
+
+    let (provider_id, capabilities) =
+        file_capabilities_for_provider(provider, config.model.as_deref());
+    if !capabilities.supports_pdf {
+        tracing::debug!("skipping file uploads: provider does not support PDF");
+        return empty;
+    }
+
+    let Some(api_key) = provider
+        .api_key_with_auth(&config.codex_home, config.cli_auth_credentials_store_mode)
+        .ok()
+        .flatten()
+    else {
+        tracing::debug!("skipping file uploads: no API key available for file upload");
+        return empty;
+    };
+    let Some(upload_service) = upload_service_for_provider(&provider_id) else {
+        tracing::debug!(
+            provider_id,
+            "skipping file uploads: no upload service for provider"
+        );
+        return empty;
+    };
+    let base_url = upload_base_url_for_provider(&provider_id, provider);
+
+    // Collect (index, path) for all LocalFile entries.
+    let file_entries: Vec<(usize, PathBuf)> = inputs
+        .iter()
+        .enumerate()
+        .filter_map(|(i, input)| match input {
+            UserInput::LocalFile { path } => Some((i, path.clone())),
+            _ => None,
+        })
+        .collect();
+
+    if file_entries.is_empty() {
+        return empty;
+    }
+
+    // Upload concurrently with bounded parallelism.
+    use futures::stream::StreamExt;
+    type UploadResult = (
+        usize,
+        PathBuf,
+        Result<codex_api::file_support::MaybeUploadResult, FileRoutingError>,
+    );
+
+    let mut results: Vec<UploadResult> = futures::stream::iter(file_entries)
+        .map(|(idx, path)| {
+            let capabilities = &capabilities;
+            let upload_service = upload_service.as_ref();
+            let api_key = &api_key;
+            let base_url = &base_url;
+            async move {
+                let result = maybe_upload_file(
+                    &path,
+                    capabilities,
+                    Some(upload_service),
+                    http_client,
+                    api_key,
+                    base_url,
+                )
+                .await;
+                (idx, path, result)
+            }
+        })
+        .buffer_unordered(MAX_CONCURRENT_FILE_UPLOADS)
+        .collect()
+        .await;
+
+    // Sort by original index so outputs are deterministic regardless of completion order.
+    results.sort_by_key(|(idx, _, _)| *idx);
+
+    // Process results: collect uploads, warnings, and check for errors.
+    let mut uploaded_files = Vec::new();
+    let mut warnings = Vec::new();
+    let mut first_error: Option<FileRoutingError> = None;
+
+    for (idx, path, result) in results {
+        match result {
+            Ok(upload_result) => {
+                tracing::debug!(
+                    path = %path.display(),
+                    uploaded = upload_result.uploaded.is_some(),
+                    has_warning = upload_result.warning.is_some(),
+                    "file upload result"
+                );
+                if let Some(warning) = upload_result.warning {
+                    warnings.push(warning);
+                }
+                if let Some((uploaded, metadata)) = upload_result.uploaded {
+                    let file_id = uploaded.file_id.clone();
+                    uploaded_files.push(uploaded);
+                    inputs[idx] = UserInput::UploadedFile {
+                        file_id,
+                        mime_type: metadata.mime_type,
+                        filename: metadata.filename,
+                        source_path: path,
+                    };
+                }
+            }
+            Err(error) => {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+    }
+
+    if let Some(error) = first_error {
+        delete_uploaded_files_best_effort(
+            &uploaded_files,
+            upload_service.as_ref(),
+            http_client,
+            &api_key,
+            &base_url,
+        )
+        .await;
+        return Err(error.into());
+    }
+
+    Ok(FileUploadOutcome {
+        uploaded_files,
+        warnings,
+    })
+}
+
+fn prepare_file_inputs(
+    inputs: &[UserInput],
+    provider: &ModelProviderInfo,
+    model: Option<&str>,
+) -> std::result::Result<(), FileInputPreparationError> {
+    let (provider_id, capabilities) = file_capabilities_for_provider(provider, model);
+    let has_file_input = inputs.iter().any(|input| {
+        matches!(
+            input,
+            UserInput::LocalFile { .. } | UserInput::UploadedFile { .. }
+        )
+    });
+    if has_file_input && !capabilities.supports_pdf {
+        return Err(FileInputPreparationError::UnsupportedProvider {
+            provider: provider_id,
+        });
+    }
+
+    let max_total_raw_bytes = max_raw_inline_bytes(capabilities.max_inline_payload_bytes);
+    let mut total_raw_bytes = 0_u64;
+
+    // UploadedFile entries already reference provider-side file IDs and do not consume inline
+    // request payload budget.
+    for input in inputs {
+        if let UserInput::LocalFile { path } = input {
+            let metadata = analyze_file(path)?;
+            if metadata.size_bytes > capabilities.max_inline_file_size {
+                return Err(FileInputPreparationError::InlineFileTooLarge {
+                    provider: provider_id,
+                    path: path.display().to_string(),
+                    size_mb: bytes_to_megabytes(metadata.size_bytes),
+                    max_mb: bytes_to_megabytes(capabilities.max_inline_file_size),
+                });
+            }
+
+            total_raw_bytes = total_raw_bytes.saturating_add(metadata.size_bytes);
+            if total_raw_bytes > max_total_raw_bytes {
+                return Err(FileInputPreparationError::InlinePayloadTooLarge {
+                    provider: provider_id,
+                    total_mb: bytes_to_megabytes(total_raw_bytes),
+                    max_mb: bytes_to_megabytes(max_total_raw_bytes),
+                });
+            }
+
+            encode_inline_cached(path)?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn prepare_file_inputs_async(
+    inputs: &[UserInput],
+    provider: &ModelProviderInfo,
+    model: Option<&str>,
+) -> std::result::Result<(), FileInputPreparationError> {
+    let inputs = inputs.to_vec();
+    let provider = provider.clone();
+    let model = model.map(str::to_string);
+    tokio::task::spawn_blocking(move || prepare_file_inputs(&inputs, &provider, model.as_deref()))
+        .await
+        .map_err(|error| FileInputPreparationError::Task(error.to_string()))?
+}
+
+async fn resolve_and_prepare_file_inputs(
+    inputs: &mut [UserInput],
+    provider: &ModelProviderInfo,
+    config: &Config,
+    http_client: &reqwest::Client,
+) -> std::result::Result<FileUploadOutcome, FileInputPreparationError> {
+    // Upload-step errors are handled inside `resolve_file_inputs_for_uploads`, which already
+    // performs best-effort cleanup of any earlier uploads.
+    let outcome = resolve_file_inputs_for_uploads(inputs, provider, config, http_client).await?;
+
+    if let Err(error) = prepare_file_inputs_async(inputs, provider, config.model.as_deref()).await {
+        if !outcome.uploaded_files.is_empty() {
+            let (provider_id, _capabilities) =
+                file_capabilities_for_provider(provider, config.model.as_deref());
+            if let Some(api_key) = provider
+                .api_key_with_auth(&config.codex_home, config.cli_auth_credentials_store_mode)
+                .ok()
+                .flatten()
+                && let Some(upload_service) = upload_service_for_provider(&provider_id)
+            {
+                let base_url = upload_base_url_for_provider(&provider_id, provider);
+                delete_uploaded_files_best_effort(
+                    &outcome.uploaded_files,
+                    upload_service.as_ref(),
+                    http_client,
+                    &api_key,
+                    &base_url,
+                )
+                .await;
+            }
+        }
+
+        return Err(error);
+    }
+
+    Ok(outcome)
+}
+
+#[derive(Debug, thiserror::Error)]
+enum FileReferenceRefreshError {
+    #[error(
+        "cannot refresh uploaded file attachments without an API key for provider `{provider}`"
+    )]
+    MissingApiKey { provider: String },
+    #[error("provider `{provider}` does not support file uploads")]
+    MissingUploadService { provider: String },
+    #[error("failed to refresh file attachment `{filename}`: {error}")]
+    RefreshFailed {
+        filename: String,
+        #[source]
+        error: FileUploadError,
+    },
+}
+
+fn collect_referenced_upload_file_ids(
+    items: &[ResponseItem],
+) -> (Vec<String>, HashMap<String, Option<String>>) {
+    let mut referenced_file_ids = Vec::new();
+    let mut referenced_mime_types = HashMap::new();
+
+    for item in items {
+        let ResponseItem::Message { content, .. } = item else {
+            continue;
+        };
+
+        for content_item in content {
+            let ContentItem::InputFile {
+                file_id: Some(file_id),
+                mime_type,
+                ..
+            } = content_item
+            else {
+                continue;
+            };
+
+            referenced_file_ids.push(file_id.clone());
+            referenced_mime_types
+                .entry(file_id.clone())
+                .or_insert_with(|| mime_type.clone());
+        }
+    }
+
+    (referenced_file_ids, referenced_mime_types)
+}
+
+fn rewrite_uploaded_file_ids(items: &mut [ResponseItem], replacements: &HashMap<String, String>) {
+    for item in items {
+        let ResponseItem::Message { content, .. } = item else {
+            continue;
+        };
+
+        for content_item in content {
+            let ContentItem::InputFile {
+                file_id: Some(file_id),
+                ..
+            } = content_item
+            else {
+                continue;
+            };
+
+            if let Some(new_file_id) = replacements.get(file_id) {
+                *file_id = new_file_id.clone();
+            }
+        }
+    }
+}
+
+async fn refresh_uploaded_file_references(
+    sess: &Session,
+    turn_context: &TurnContext,
+) -> Result<(), FileReferenceRefreshError> {
+    let (provider_id, _capabilities) = file_capabilities_for_provider(
+        &turn_context.provider,
+        turn_context.config.model.as_deref(),
+    );
+
+    let (referenced_file_ids, referenced_mime_types) = {
+        let state = sess.state.lock().await;
+        collect_referenced_upload_file_ids(state.history.raw_items())
+    };
+    if referenced_file_ids.is_empty() {
+        return Ok(());
+    }
+
+    let now = SystemTime::now();
+    let refresh_candidates = {
+        let cache = sess.file_reference_cache.lock().await;
+        cache.refresh_candidates(
+            referenced_file_ids.iter().map(String::as_str),
+            &provider_id,
+            now,
+        )
+    };
+    if refresh_candidates.is_empty() {
+        return Ok(());
+    }
+
+    let requires_provider_switch_refresh = refresh_candidates
+        .iter()
+        .any(|entry| entry.provider != provider_id);
+
+    let Some(api_key) = turn_context
+        .provider
+        .api_key_with_auth(
+            &turn_context.config.codex_home,
+            turn_context.config.cli_auth_credentials_store_mode,
+        )
+        .ok()
+        .flatten()
+    else {
+        if requires_provider_switch_refresh {
+            return Err(FileReferenceRefreshError::MissingApiKey {
+                provider: provider_id,
+            });
+        }
+        warn!(
+            provider_id = %provider_id,
+            "skipping uploaded file refresh because no API key is configured"
+        );
+        return Ok(());
+    };
+
+    let Some(upload_service) = upload_service_for_provider(&provider_id) else {
+        if requires_provider_switch_refresh {
+            return Err(FileReferenceRefreshError::MissingUploadService {
+                provider: provider_id,
+            });
+        }
+        warn!(
+            provider_id = %provider_id,
+            "skipping uploaded file refresh because upload service is unavailable"
+        );
+        return Ok(());
+    };
+
+    let base_url = upload_base_url_for_provider(&provider_id, &turn_context.provider);
+    let http_client = &sess.file_upload_http_client;
+
+    let mut updated_file_ids = HashMap::new();
+    let mut refreshed_uploads = Vec::new();
+    let mut stale_file_ids = Vec::new();
+
+    for candidate in refresh_candidates {
+        let is_provider_switch = candidate.provider != provider_id;
+        let mime_type = referenced_mime_types
+            .get(&candidate.file_id)
+            .and_then(|m| m.as_deref())
+            .unwrap_or("application/pdf");
+
+        match upload_service
+            .upload_file(
+                http_client,
+                &candidate.source_path,
+                mime_type,
+                &api_key,
+                &base_url,
+            )
+            .await
+        {
+            Ok(uploaded) => {
+                updated_file_ids.insert(candidate.file_id.clone(), uploaded.file_id.clone());
+                stale_file_ids.push(candidate.file_id);
+                refreshed_uploads.push(uploaded);
+            }
+            Err(error) if is_provider_switch => {
+                return Err(FileReferenceRefreshError::RefreshFailed {
+                    filename: file_name_or_default(&candidate.source_path, "file"),
+                    error,
+                });
+            }
+            Err(error) => {
+                warn!(
+                    file_id = %candidate.file_id,
+                    path = %candidate.source_path.display(),
+                    %error,
+                    "failed to refresh near-expiry uploaded file; continuing with existing reference"
+                );
+            }
+        }
+    }
+
+    if updated_file_ids.is_empty() {
+        return Ok(());
+    }
+
+    {
+        let mut state = sess.state.lock().await;
+        let mut items = state.history.raw_items().to_vec();
+        rewrite_uploaded_file_ids(&mut items, &updated_file_ids);
+        state.replace_history(items);
+    }
+
+    {
+        let mut cache = sess.file_reference_cache.lock().await;
+        for file_id in &stale_file_ids {
+            cache.remove(file_id);
+        }
+        cache.record_all(refreshed_uploads);
+    }
+
+    Ok(())
+}
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
 use crate::file_watcher::FileWatcher;
@@ -139,9 +799,12 @@ use crate::mcp::effective_mcp_servers;
 use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_connection_manager::filter_codex_apps_mcp_tools_only;
+use crate::mcp_connection_manager::filter_mcp_tools_by_name;
+use crate::memories;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
-use crate::mentions::collect_explicit_app_paths;
+use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::project_doc::get_user_instructions;
 use crate::proposed_plan_parser::ProposedPlanParser;
@@ -167,6 +830,7 @@ use crate::protocol::RequestUserInputEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
+use crate::protocol::SessionNetworkProxyRuntime;
 use crate::protocol::SkillDependencies as ProtocolSkillDependencies;
 use crate::protocol::SkillErrorInfo;
 use crate::protocol::SkillInterface as ProtocolSkillInterface;
@@ -188,6 +852,7 @@ use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
 use crate::skills::SkillInjections;
+use crate::skills::SkillLoadOutcome;
 use crate::skills::SkillMetadata;
 use crate::skills::SkillsManager;
 use crate::skills::build_skill_injections;
@@ -202,6 +867,7 @@ use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state_db;
 use crate::tasks::GhostSnapshotTask;
+use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
@@ -215,6 +881,16 @@ use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
+use codex_api::file_support::FileCapabilityConfig;
+use codex_api::file_support::FileReferenceCache;
+use codex_api::file_support::FileRoutingError;
+use codex_api::file_support::FileUploadError;
+use codex_api::file_support::file_capabilities_for;
+use codex_api::file_support::maybe_upload_file;
+use codex_api::file_support::upload::AnthropicFileUpload;
+use codex_api::file_support::upload::FileUploadService;
+use codex_api::file_support::upload::GeminiFileUpload;
+use codex_api::file_support::upload::OpenAiFileUpload;
 use codex_async_utils::OrCancelExt;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
@@ -230,14 +906,19 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
+use codex_utils_file::FileProcessingError;
+use codex_utils_file::analyze_file;
+use codex_utils_file::bytes_to_megabytes;
+use codex_utils_file::encode_inline_cached;
+use codex_utils_file::file_name_or_default;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
-use tokio::sync::watch;
+
+use crate::model_provider_info::WireApi;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
 pub struct Codex {
-    pub(crate) next_id: AtomicU64,
     pub(crate) tx_sub: Sender<Submission>,
     pub(crate) rx_event: Receiver<Event>,
     // Last known status of the agent.
@@ -293,8 +974,10 @@ impl Codex {
             config.features.disable(Feature::Collab);
         }
 
-        let enabled_skills = loaded_skills.enabled_skills();
-        let user_instructions = get_user_instructions(&config, Some(&enabled_skills)).await;
+        let allowed_skills_for_implicit_invocation =
+            loaded_skills.allowed_skills_for_implicit_invocation();
+        let user_instructions =
+            get_user_instructions(&config, Some(&allowed_skills_for_implicit_invocation)).await;
 
         let exec_policy = ExecPolicyManager::load(&config.config_layer_stack)
             .await
@@ -318,7 +1001,7 @@ impl Codex {
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
         // 2. conversation history => session_meta.base_instructions
-        // 3. base_intructions for current model
+        // 3. base_instructions for current model
         let model_info = models_manager.get_model_info(model.as_str(), &config).await;
         let base_instructions = config
             .base_instructions
@@ -338,11 +1021,7 @@ impl Codex {
             };
             match thread_id {
                 Some(thread_id) => {
-                    let state_db_ctx = state_db::open_if_present(
-                        config.codex_home.as_path(),
-                        config.model_provider_id.as_str(),
-                    )
-                    .await;
+                    let state_db_ctx = state_db::get_state_db(&config, None).await;
                     state_db::get_dynamic_tools(state_db_ctx.as_deref(), thread_id, "codex_spawn")
                         .await
                 }
@@ -426,7 +1105,6 @@ impl Codex {
             submission_loop(Arc::clone(&session), config, rx_sub).instrument(session_loop_span),
         );
         let codex = Codex {
-            next_id: AtomicU64::new(0),
             tx_sub,
             rx_event,
             agent_status: agent_status_rx,
@@ -443,10 +1121,7 @@ impl Codex {
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
-        let id = self
-            .next_id
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-            .to_string();
+        let id = Uuid::now_v7().to_string();
         let sub = Submission { id: id.clone(), op };
         self.submit_with_id(sub).await?;
         Ok(id)
@@ -491,6 +1166,10 @@ impl Codex {
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.session.state_db()
     }
+
+    pub(crate) fn enabled(&self, feature: Feature) -> bool {
+        self.session.enabled(feature)
+    }
 }
 
 /// Context for an initialized model agent
@@ -501,6 +1180,8 @@ pub(crate) struct Session {
     tx_event: Sender<Event>,
     agent_status: watch::Sender<AgentStatus>,
     state: Mutex<SessionState>,
+    file_reference_cache: Mutex<FileReferenceCache>,
+    file_upload_http_client: reqwest::Client,
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     features: Features,
@@ -509,6 +1190,9 @@ pub(crate) struct Session {
     pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
 }
+
+const SEARCH_TOOL_DEVELOPER_INSTRUCTIONS: &str =
+    include_str!("../templates/search_tool/developer_instructions.md");
 
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
@@ -533,6 +1217,7 @@ pub(crate) struct TurnContext {
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: AskForApproval,
     pub(crate) sandbox_policy: SandboxPolicy,
+    pub(crate) network: Option<NetworkProxy>,
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
@@ -566,16 +1251,19 @@ impl TurnContext {
     }
 
     async fn build_turn_metadata_header(&self) -> Option<String> {
+        let sandbox = sandbox_tag(&self.sandbox_policy, self.windows_sandbox_level);
         self.turn_metadata_header
-            .get_or_init(|| async { build_turn_metadata_header(self.cwd.as_path()).await })
+            .get_or_init(|| async {
+                build_turn_metadata_header(self.cwd.as_path(), Some(sandbox)).await
+            })
             .await
             .clone()
     }
 
     /// Resolves the per-turn metadata header under a shared timeout policy.
     ///
-    /// This uses the same timeout helper as websocket startup preconnect so both turn execution
-    /// and background preconnect observe identical "timeout means best-effort fallback" behavior.
+    /// This uses the same timeout helper as websocket startup prewarm so both turn execution and
+    /// background prewarm observe identical "timeout means best-effort fallback" behavior.
     pub async fn resolve_turn_metadata_header(&self) -> Option<String> {
         resolve_turn_metadata_header_with_timeout(
             self.build_turn_metadata_header(),
@@ -587,7 +1275,7 @@ impl TurnContext {
     /// Starts best-effort background computation of turn metadata.
     ///
     /// This warms the cached value used by [`TurnContext::resolve_turn_metadata_header`] so turns
-    /// and websocket preconnect are less likely to pay metadata construction latency on demand.
+    /// and websocket prewarm are less likely to pay metadata construction latency on demand.
     pub fn spawn_turn_metadata_header_task(self: &Arc<Self>) {
         let context = Arc::clone(self);
         tokio::spawn(async move {
@@ -807,6 +1495,7 @@ impl Session {
         session_configuration: &SessionConfiguration,
         per_turn_config: Config,
         model_info: ModelInfo,
+        network: Option<NetworkProxy>,
         sub_id: String,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
@@ -846,6 +1535,7 @@ impl Session {
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.value(),
             sandbox_policy: session_configuration.sandbox_policy.get().clone(),
+            network,
             windows_sandbox_level: session_configuration.windows_sandbox_level,
             shell_environment_policy: per_turn_config.shell_environment_policy.clone(),
             tools_config,
@@ -1046,14 +1736,19 @@ impl Session {
 
         let mut default_shell = shell::default_user_shell();
         // Create the mutable state for the Session.
-        if config.features.enabled(Feature::ShellSnapshot) {
+        let shell_snapshot_tx = if config.features.enabled(Feature::ShellSnapshot) {
             ShellSnapshot::start_snapshotting(
                 config.codex_home.clone(),
                 conversation_id,
+                session_configuration.cwd.clone(),
                 &mut default_shell,
                 otel_manager.clone(),
-            );
-        }
+            )
+        } else {
+            let (tx, rx) = watch::channel(None);
+            default_shell.shell_snapshot = rx;
+            tx
+        };
         let thread_name =
             match session_index::find_thread_name_by_id(&config.codex_home, &conversation_id).await
             {
@@ -1064,7 +1759,22 @@ impl Session {
                 }
             };
         session_configuration.thread_name = thread_name.clone();
-        let state = SessionState::new(session_configuration.clone());
+        let mut state = SessionState::new(session_configuration.clone());
+        let network_proxy =
+            match config.network.as_ref() {
+                Some(spec) => Some(spec.start_proxy().await.map_err(|err| {
+                    anyhow::anyhow!("failed to start managed network proxy: {err}")
+                })?),
+                None => None,
+            };
+        let session_network_proxy = network_proxy.as_ref().map(|started| {
+            let proxy = started.proxy();
+            SessionNetworkProxyRuntime {
+                http_addr: proxy.http_addr().to_string(),
+                socks_addr: proxy.socks_addr().to_string(),
+                admin_addr: proxy.admin_addr().to_string(),
+            }
+        });
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -1074,9 +1784,10 @@ impl Session {
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
             ),
-            hooks: Hooks::new(config.as_ref()),
+            hooks: Hooks::new(config.notify.clone()),
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
+            shell_snapshot_tx,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
             auth_manager: Arc::clone(&auth_manager),
@@ -1088,6 +1799,7 @@ impl Session {
             skills_manager,
             file_watcher,
             agent_control,
+            network_proxy,
             state_db: state_db_ctx.clone(),
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
@@ -1106,25 +1818,36 @@ impl Session {
             ),
         };
 
+        let prewarm_model_info = models_manager
+            .get_model_info(session_configuration.collaboration_mode.model(), &config)
+            .await;
+        let prewarm_cwd = session_configuration.cwd.clone();
+        let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
+            async move { build_turn_metadata_header(prewarm_cwd.as_path(), None).await },
+            None,
+        )
+        .boxed();
+        let startup_regular_task = RegularTask::with_startup_prewarm(
+            services.model_client.clone(),
+            services.otel_manager.clone(),
+            prewarm_model_info,
+            turn_metadata_header,
+        );
+        state.set_startup_regular_task(startup_regular_task);
+
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
             agent_status,
             state: Mutex::new(state),
+            file_reference_cache: Mutex::new(FileReferenceCache::default()),
+            file_upload_http_client: reqwest::Client::new(),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
         });
-
-        // Warm a websocket in the background so the first turn can reuse it.
-        // This performs only connection setup; user input is still sent later via response.create
-        // when submit_turn() runs.
-        sess.services.model_client.pre_establish_connection(
-            sess.services.otel_manager.clone(),
-            session_configuration.cwd.clone(),
-        );
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
@@ -1144,6 +1867,7 @@ impl Session {
                 history_log_id,
                 history_entry_count,
                 initial_messages,
+                network_proxy: session_network_proxy,
                 rollout_path,
             }),
         })
@@ -1207,6 +1931,12 @@ impl Session {
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
 
+        memories::start_memories_startup_task(
+            &sess,
+            Arc::clone(&config),
+            &session_configuration.session_source,
+        );
+
         Ok(sess)
     }
 
@@ -1231,6 +1961,18 @@ impl Session {
         }
     }
 
+    pub(crate) async fn ensure_rollout_materialized(&self) {
+        let recorder = {
+            let guard = self.services.rollout.lock().await;
+            guard.clone()
+        };
+        if let Some(rec) = recorder
+            && let Err(e) = rec.persist().await
+        {
+            warn!("failed to materialize rollout recorder: {e}");
+        }
+    }
+
     fn next_internal_sub_id(&self) -> String {
         let id = self
             .next_internal_sub_id
@@ -1238,12 +1980,20 @@ impl Session {
         format!("auto-compact-{id}")
     }
 
-    async fn get_total_token_usage(&self) -> i64 {
+    pub(crate) async fn get_total_token_usage(&self) -> i64 {
         let state = self.state.lock().await;
         state.get_total_token_usage(state.server_reasoning_included())
     }
 
-    async fn get_estimated_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
+    pub(crate) async fn get_total_token_usage_breakdown(&self) -> TotalTokenUsageBreakdown {
+        let state = self.state.lock().await;
+        state.history.get_total_token_usage_breakdown()
+    }
+
+    pub(crate) async fn get_estimated_token_count(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Option<i64> {
         let state = self.state.lock().await;
         state.history.estimate_token_count(turn_context)
     }
@@ -1253,6 +2003,21 @@ impl Session {
         BaseInstructions {
             text: state.session_configuration.base_instructions.clone(),
         }
+    }
+
+    pub(crate) async fn merge_mcp_tool_selection(&self, tool_names: Vec<String>) -> Vec<String> {
+        let mut state = self.state.lock().await;
+        state.merge_mcp_tool_selection(tool_names)
+    }
+
+    pub(crate) async fn get_mcp_tool_selection(&self) -> Option<Vec<String>> {
+        let state = self.state.lock().await;
+        state.get_mcp_tool_selection()
+    }
+
+    pub(crate) async fn clear_mcp_tool_selection(&self) {
+        let mut state = self.state.lock().await;
+        state.clear_mcp_tool_selection();
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
@@ -1346,6 +2111,10 @@ impl Session {
                     let mut state = self.state.lock().await;
                     state.initial_context_seeded = true;
                 }
+
+                // Forked threads should remain file-backed immediately after startup.
+                self.ensure_rollout_materialized().await;
+
                 // Flush after seeding history and any persisted rollout copy.
                 self.flush_rollout().await;
             }
@@ -1379,6 +2148,30 @@ impl Session {
         state.pending_resume_previous_model.take()
     }
 
+    fn maybe_refresh_shell_snapshot_for_cwd(
+        &self,
+        previous_cwd: &Path,
+        next_cwd: &Path,
+        codex_home: &Path,
+    ) {
+        if previous_cwd == next_cwd {
+            return;
+        }
+
+        if !self.features.enabled(Feature::ShellSnapshot) {
+            return;
+        }
+
+        ShellSnapshot::refresh_snapshot(
+            codex_home.to_path_buf(),
+            self.conversation_id,
+            next_cwd.to_path_buf(),
+            self.services.user_shell.as_ref().clone(),
+            self.services.shell_snapshot_tx.clone(),
+            self.services.otel_manager.clone(),
+        );
+    }
+
     pub(crate) async fn update_settings(
         &self,
         updates: SessionSettingsUpdate,
@@ -1387,7 +2180,14 @@ impl Session {
 
         match state.session_configuration.apply(&updates) {
             Ok(updated) => {
+                let previous_cwd = state.session_configuration.cwd.clone();
+                let next_cwd = updated.cwd.clone();
+                let codex_home = updated.codex_home.clone();
                 state.session_configuration = updated;
+                drop(state);
+
+                self.maybe_refresh_shell_snapshot_for_cwd(&previous_cwd, &next_cwd, &codex_home);
+
                 Ok(())
             }
             Err(err) => {
@@ -1402,14 +2202,16 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<Arc<TurnContext>> {
-        let (session_configuration, sandbox_policy_changed) = {
+        let (session_configuration, sandbox_policy_changed, previous_cwd, codex_home) = {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
+                    let previous_cwd = state.session_configuration.cwd.clone();
                     let sandbox_policy_changed =
                         state.session_configuration.sandbox_policy != next.sandbox_policy;
+                    let codex_home = next.codex_home.clone();
                     state.session_configuration = next.clone();
-                    (next, sandbox_policy_changed)
+                    (next, sandbox_policy_changed, previous_cwd, codex_home)
                 }
                 Err(err) => {
                     drop(state);
@@ -1425,6 +2227,12 @@ impl Session {
                 }
             }
         };
+
+        self.maybe_refresh_shell_snapshot_for_cwd(
+            &previous_cwd,
+            &session_configuration.cwd,
+            &codex_home,
+        );
 
         Ok(self
             .new_turn_from_configuration(
@@ -1481,6 +2289,10 @@ impl Session {
             &session_configuration,
             per_turn_config,
             model_info,
+            self.services
+                .network_proxy
+                .as_ref()
+                .map(StartedNetworkProxy::proxy),
             sub_id,
         );
 
@@ -1495,6 +2307,11 @@ impl Session {
     pub(crate) async fn new_default_turn(&self) -> Arc<TurnContext> {
         self.new_default_turn_with_sub_id(self.next_internal_sub_id())
             .await
+    }
+
+    pub(crate) async fn take_startup_regular_task(&self) -> Option<RegularTask> {
+        let mut state = self.state.lock().await;
+        state.take_startup_regular_task()
     }
 
     async fn get_config(&self) -> std::sync::Arc<Config> {
@@ -1821,7 +2638,7 @@ impl Session {
 
     /// Emit an exec approval request event and await the user's decision.
     ///
-    /// The request is keyed by `sub_id`/`call_id` so matching responses are delivered
+    /// The request is keyed by `call_id` so matching responses are delivered
     /// to the correct in-flight turn. If the task is aborted, this returns the
     /// default `ReviewDecision` (`Denied`).
     #[allow(clippy::too_many_arguments)]
@@ -1834,22 +2651,21 @@ impl Session {
         reason: Option<String>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     ) -> ReviewDecision {
-        let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
-        let event_id = sub_id.clone();
+        let approval_id = call_id.clone();
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(sub_id, tx_approve)
+                    ts.insert_pending_approval(approval_id.clone(), tx_approve)
                 }
                 None => None,
             }
         };
         if prev_entry.is_some() {
-            warn!("Overwriting existing pending approval for sub_id: {event_id}");
+            warn!("Overwriting existing pending approval for call_id: {approval_id}");
         }
 
         let parsed_cmd = parse_command(&command);
@@ -1874,22 +2690,21 @@ impl Session {
         reason: Option<String>,
         grant_root: Option<PathBuf>,
     ) -> oneshot::Receiver<ReviewDecision> {
-        let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
-        let event_id = sub_id.clone();
+        let approval_id = call_id.clone();
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(sub_id, tx_approve)
+                    ts.insert_pending_approval(approval_id.clone(), tx_approve)
                 }
                 None => None,
             }
         };
         if prev_entry.is_some() {
-            warn!("Overwriting existing pending approval for sub_id: {event_id}");
+            warn!("Overwriting existing pending approval for call_id: {approval_id}");
         }
 
         let event = EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
@@ -1981,13 +2796,13 @@ impl Session {
         }
     }
 
-    pub async fn notify_approval(&self, sub_id: &str, decision: ReviewDecision) {
+    pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
         let entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.remove_pending_approval(sub_id)
+                    ts.remove_pending_approval(approval_id)
                 }
                 None => None,
             }
@@ -1997,7 +2812,7 @@ impl Session {
                 tx_approve.send(decision).ok();
             }
             None => {
-                warn!("No pending approval found for sub_id: {sub_id}");
+                warn!("No pending approval found for call_id: {approval_id}");
             }
         }
     }
@@ -2171,6 +2986,11 @@ impl Session {
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
             items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
         }
+        if turn_context.tools_config.search_tool {
+            items.push(
+                DeveloperInstructions::new(SEARCH_TOOL_DEVELOPER_INSTRUCTIONS.to_string()).into(),
+            );
+        }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         let (collaboration_mode, base_instructions) = {
             let state = self.state.lock().await;
@@ -2199,6 +3019,9 @@ impl Session {
                 );
             }
         }
+        if turn_context.features.enabled(Feature::Apps) {
+            items.push(DeveloperInstructions::new(render_apps_section()).into());
+        }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             items.push(
                 UserInstructions {
@@ -2208,9 +3031,9 @@ impl Session {
                 .into(),
             );
         }
-        items.push(ResponseItem::from(EnvironmentContext::new(
-            Some(turn_context.cwd.clone()),
-            shell.as_ref().clone(),
+        items.push(ResponseItem::from(EnvironmentContext::from_turn_context(
+            turn_context,
+            shell.as_ref(),
         )));
         items
     }
@@ -2367,6 +3190,7 @@ impl Session {
         let turn_item = TurnItem::UserMessage(UserMessageItem::new(input));
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
+        self.ensure_rollout_materialized().await;
     }
 
     pub(crate) async fn notify_background_event(
@@ -2431,11 +3255,42 @@ impl Session {
     /// Returns the active turn id when accepted.
     pub async fn steer_input(
         &self,
-        input: Vec<UserInput>,
+        mut input: Vec<UserInput>,
         expected_turn_id: Option<&str>,
     ) -> Result<String, SteerInputError> {
         if input.is_empty() {
             return Err(SteerInputError::EmptyInput);
+        }
+
+        let (provider, config) = {
+            let state = self.state.lock().await;
+            (
+                state.session_configuration.provider.clone(),
+                Arc::clone(&state.session_configuration.original_config_do_not_use),
+            )
+        };
+        {
+            let (provider_id, _) =
+                file_capabilities_for_provider(&provider, config.model.as_deref());
+            let cache = self.file_reference_cache.lock().await;
+            dedup_local_files_from_cache(&mut input, &cache, &provider_id, SystemTime::now());
+        }
+
+        let outcome = resolve_and_prepare_file_inputs(
+            &mut input,
+            &provider,
+            config.as_ref(),
+            &self.file_upload_http_client,
+        )
+        .await
+        .map_err(|error| SteerInputError::InvalidFileInput(error.to_string()))?;
+        for warning in &outcome.warnings {
+            tracing::warn!("{warning}");
+        }
+        if !outcome.uploaded_files.is_empty() {
+            let mut cache = self.file_reference_cache.lock().await;
+            cache.record_all(outcome.uploaded_files);
+            record_upload_paths(&mut cache, &input);
         }
 
         let mut active = self.active_turn.lock().await;
@@ -2504,7 +3359,7 @@ impl Session {
     pub async fn list_resources(
         &self,
         server: &str,
-        params: Option<PaginatedRequestParam>,
+        params: Option<PaginatedRequestParams>,
     ) -> anyhow::Result<ListResourcesResult> {
         self.services
             .mcp_connection_manager
@@ -2517,7 +3372,7 @@ impl Session {
     pub async fn list_resource_templates(
         &self,
         server: &str,
-        params: Option<PaginatedRequestParam>,
+        params: Option<PaginatedRequestParams>,
     ) -> anyhow::Result<ListResourceTemplatesResult> {
         self.services
             .mcp_connection_manager
@@ -2530,7 +3385,7 @@ impl Session {
     pub async fn read_resource(
         &self,
         server: &str,
-        params: ReadResourceRequestParam,
+        params: ReadResourceRequestParams,
     ) -> anyhow::Result<ReadResourceResult> {
         self.services
             .mcp_connection_manager
@@ -2703,6 +3558,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::Interrupt => {
                 handlers::interrupt(&sess).await;
             }
+            Op::CleanBackgroundTerminals => {
+                handlers::clean_background_terminals(&sess).await;
+            }
             Op::OverrideTurnContext {
                 cwd,
                 approval_policy,
@@ -2746,8 +3604,12 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op, &mut previous_context)
                     .await;
             }
-            Op::ExecApproval { id, decision } => {
-                handlers::exec_approval(&sess, id, decision).await;
+            Op::ExecApproval {
+                id: approval_id,
+                turn_id,
+                decision,
+            } => {
+                handlers::exec_approval(&sess, approval_id, turn_id, decision).await;
             }
             Op::PatchApproval { id, decision } => {
                 handlers::patch_approval(&sess, id, decision).await;
@@ -2851,7 +3713,6 @@ mod handlers {
     use crate::review_prompts::resolve_review_request;
     use crate::rollout::session_index;
     use crate::tasks::CompactTask;
-    use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
@@ -2893,6 +3754,10 @@ mod handlers {
 
     pub async fn interrupt(sess: &Arc<Session>) {
         sess.interrupt_task().await;
+    }
+
+    pub async fn clean_background_terminals(sess: &Arc<Session>) {
+        sess.close_unified_exec_processes().await;
     }
 
     pub async fn override_turn_context(
@@ -2976,24 +3841,45 @@ mod handlers {
         current_context.otel_manager.user_prompt(&items);
 
         // Attempt to inject input into current task.
-        if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
-            sess.seed_initial_context_if_needed(&current_context).await;
-            let resumed_model = sess.take_pending_resume_previous_model().await;
-            let update_items = sess.build_settings_update_items(
-                previous_context.as_ref(),
-                resumed_model.as_deref(),
-                &current_context,
-            );
-            if !update_items.is_empty() {
-                sess.record_conversation_items(&current_context, &update_items)
-                    .await;
-            }
+        match sess.steer_input(items, None).await {
+            Ok(_) => {}
+            Err(SteerInputError::NoActiveTurn(items)) => {
+                sess.seed_initial_context_if_needed(&current_context).await;
+                let resumed_model = sess.take_pending_resume_previous_model().await;
+                let update_items = sess.build_settings_update_items(
+                    previous_context.as_ref(),
+                    resumed_model.as_deref(),
+                    &current_context,
+                );
+                if !update_items.is_empty() {
+                    sess.record_conversation_items(&current_context, &update_items)
+                        .await;
+                }
 
-            sess.refresh_mcp_servers_if_requested(&current_context)
-                .await;
-            sess.spawn_task(Arc::clone(&current_context), items, RegularTask)
-                .await;
-            *previous_context = Some(current_context);
+                sess.refresh_mcp_servers_if_requested(&current_context)
+                    .await;
+                let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
+                sess.spawn_task(Arc::clone(&current_context), items, regular_task)
+                    .await;
+                *previous_context = Some(current_context);
+            }
+            Err(SteerInputError::InvalidFileInput(message)) => {
+                let event = EventMsg::Error(ErrorEvent {
+                    message,
+                    codex_error_info: Some(CodexErrorInfo::BadRequest),
+                });
+                sess.send_event(&current_context, event).await;
+            }
+            Err(SteerInputError::ExpectedTurnMismatch { expected, actual }) => {
+                warn!(
+                    expected_turn_id = expected,
+                    active_turn_id = actual,
+                    "unexpected active turn mismatch while steering user input"
+                );
+            }
+            Err(SteerInputError::EmptyInput) => {
+                warn!("unexpected empty user input while steering active turn");
+            }
         }
     }
 
@@ -3067,7 +3953,13 @@ mod handlers {
 
     /// Propagate a user's exec approval decision to the session.
     /// Also optionally applies an execpolicy amendment.
-    pub async fn exec_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
+    pub async fn exec_approval(
+        sess: &Arc<Session>,
+        approval_id: String,
+        turn_id: Option<String>,
+        decision: ReviewDecision,
+    ) {
+        let event_turn_id = turn_id.unwrap_or_else(|| approval_id.clone());
         if let ReviewDecision::ApprovedExecpolicyAmendment {
             proposed_execpolicy_amendment,
         } = &decision
@@ -3077,15 +3969,18 @@ mod handlers {
                 .await
             {
                 Ok(()) => {
-                    sess.record_execpolicy_amendment_message(&id, proposed_execpolicy_amendment)
-                        .await;
+                    sess.record_execpolicy_amendment_message(
+                        &event_turn_id,
+                        proposed_execpolicy_amendment,
+                    )
+                    .await;
                 }
                 Err(err) => {
                     let message = format!("Failed to apply execpolicy amendment: {err}");
                     tracing::warn!("{message}");
                     let warning = EventMsg::Warning(WarningEvent { message });
                     sess.send_event_raw(Event {
-                        id: id.clone(),
+                        id: event_turn_id.clone(),
                         msg: warning,
                     })
                     .await;
@@ -3096,7 +3991,7 @@ mod handlers {
             ReviewDecision::Abort => {
                 sess.interrupt_task().await;
             }
-            other => sess.notify_approval(&id, other).await,
+            other => sess.notify_approval(&approval_id, other).await,
         }
     }
 
@@ -3606,6 +4501,7 @@ async fn spawn_review_thread(
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
+        network: parent_turn_context.network.clone(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         cwd: parent_turn_context.cwd.clone(),
@@ -3706,11 +4602,52 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
 pub(crate) async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    input: Vec<UserInput>,
+    mut input: Vec<UserInput>,
+    prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
     if input.is_empty() {
         return None;
+    }
+
+    {
+        let (provider_id, _) = file_capabilities_for_provider(
+            &turn_context.provider,
+            turn_context.config.model.as_deref(),
+        );
+        let cache = sess.file_reference_cache.lock().await;
+        dedup_local_files_from_cache(&mut input, &cache, &provider_id, SystemTime::now());
+    }
+
+    let outcome = match resolve_and_prepare_file_inputs(
+        &mut input,
+        &turn_context.provider,
+        turn_context.config.as_ref(),
+        &sess.file_upload_http_client,
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let event = EventMsg::Error(ErrorEvent {
+                message: error.to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            });
+            sess.send_event(&turn_context, event).await;
+            return None;
+        }
+    };
+    for warning in outcome.warnings {
+        sess.send_event(
+            &turn_context,
+            EventMsg::Warning(WarningEvent { message: warning }),
+        )
+        .await;
+    }
+    if !outcome.uploaded_files.is_empty() {
+        let mut cache = sess.file_reference_cache.lock().await;
+        cache.record_all(outcome.uploaded_files);
+        record_upload_paths(&mut cache, &input);
     }
 
     let model_info = turn_context.model_info.clone();
@@ -3718,6 +4655,7 @@ pub(crate) async fn run_turn(
     let total_usage_tokens = sess.get_total_token_usage().await;
 
     let event = EventMsg::TurnStarted(TurnStartedEvent {
+        turn_id: turn_context.sub_id.clone(),
         model_context_window: turn_context.model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
@@ -3735,10 +4673,6 @@ pub(crate) async fn run_turn(
             .await,
     );
 
-    let (skill_name_counts, skill_name_counts_lower) = skills_outcome.as_ref().map_or_else(
-        || (HashMap::new(), HashMap::new()),
-        |outcome| build_skill_name_counts(&outcome.skills, &outcome.disabled_paths),
-    );
     let connector_slug_counts = if turn_context.config.features.enabled(Feature::Apps) {
         let mcp_tools = match sess
             .services
@@ -3762,12 +4696,10 @@ pub(crate) async fn run_turn(
             &input,
             &outcome.skills,
             &outcome.disabled_paths,
-            &skill_name_counts,
             &connector_slug_counts,
         )
     });
-    let explicit_app_paths = collect_explicit_app_paths(&input);
-
+    let explicitly_enabled_connectors = collect_explicit_app_ids(&input);
     let config = turn_context.config.clone();
     if config
         .features
@@ -3824,7 +4756,8 @@ pub(crate) async fn run_turn(
     let turn_metadata_header = turn_context.resolve_turn_metadata_header().await;
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
-    let mut client_session = sess.services.model_client.new_session();
+    let mut client_session =
+        prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -3857,8 +4790,23 @@ pub(crate) async fn run_turn(
             }
         }
 
+        if let Err(error) =
+            refresh_uploaded_file_references(sess.as_ref(), turn_context.as_ref()).await
+        {
+            let event = EventMsg::Error(ErrorEvent {
+                message: error.to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            });
+            sess.send_event(&turn_context, event).await;
+            break;
+        }
+
         // Construct the input that we will send to the model.
-        let sampling_request_input: Vec<ResponseItem> = { sess.clone_history().await.for_prompt() };
+        let sampling_request_input: Vec<ResponseItem> = {
+            sess.clone_history()
+                .await
+                .for_prompt(&turn_context.model_info.input_modalities)
+        };
 
         let sampling_request_input_messages = sampling_request_input
             .iter()
@@ -3868,10 +4816,6 @@ pub(crate) async fn run_turn(
             })
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
-        let tool_selection = SamplingRequestToolSelection {
-            explicit_app_paths: &explicit_app_paths,
-            skill_name_counts_lower: &skill_name_counts_lower,
-        };
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
@@ -3879,16 +4823,23 @@ pub(crate) async fn run_turn(
             &mut client_session,
             turn_metadata_header.as_deref(),
             sampling_request_input,
-            tool_selection,
+            &explicitly_enabled_connectors,
+            skills_outcome.as_ref(),
             cancellation_token.child_token(),
         )
         .await
         {
             Ok(sampling_request_output) => {
                 let SamplingRequestResult {
-                    needs_follow_up,
+                    mut needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
                 } = sampling_request_output;
+                // Narrow race window: user input can be injected right after sampling
+                // reports completion but before we decide whether to break out of the
+                // task loop. Re-check pending input here so we do not drop that input.
+                if !needs_follow_up {
+                    needs_follow_up = sess.has_pending_input().await;
+                }
                 let total_usage_tokens = sess.get_total_token_usage().await;
                 let token_limit_reached = total_usage_tokens >= auto_compact_limit;
 
@@ -3916,7 +4867,7 @@ pub(crate) async fn run_turn(
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
                     sess.hooks()
-                        .dispatch(crate::hooks::HookPayload {
+                        .dispatch(HookPayload {
                             session_id: sess.conversation_id,
                             cwd: turn_context.cwd.clone(),
                             triggered_at: chrono::Utc::now(),
@@ -3954,6 +4905,35 @@ pub(crate) async fn run_turn(
                 sess.send_event(&turn_context, event).await;
                 break;
             }
+            Err(CodexErr::ContextWindowExceeded) => {
+                // Only attempt compaction if there's conversation history
+                // (assistant messages) to compress. On the first turn the
+                // initial input itself exceeds the limit and compaction
+                // can't help.
+                let has_compactable_history = sess
+                    .clone_history()
+                    .await
+                    .raw_items()
+                    .iter()
+                    .any(|item| {
+                        matches!(item, ResponseItem::Message { role, .. } if role == "assistant")
+                    });
+
+                if has_compactable_history {
+                    info!("Context window exceeded; attempting auto-compaction");
+                    sess.set_total_tokens_full(&turn_context).await;
+                    if run_auto_compact(&sess, &turn_context).await.is_err() {
+                        return None;
+                    }
+                    continue;
+                }
+
+                // No history to compact — surface clear error.
+                info!("Context window exceeded on initial input; no history to compact");
+                let event = EventMsg::Error(CodexErr::ContextWindowExceeded.to_error_event(None));
+                sess.send_event(&turn_context, event).await;
+                break;
+            }
             Err(e) => {
                 info!("Turn error: {e:#}");
                 let event = EventMsg::Error(e.to_error_event(None));
@@ -3979,11 +4959,11 @@ async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) 
 fn filter_connectors_for_input(
     connectors: Vec<connectors::AppInfo>,
     input: &[ResponseItem],
-    explicit_app_paths: &[String],
+    explicitly_enabled_connectors: &HashSet<String>,
     skill_name_counts_lower: &HashMap<String, usize>,
 ) -> Vec<connectors::AppInfo> {
     let user_messages = collect_user_messages(input);
-    if user_messages.is_empty() && explicit_app_paths.is_empty() {
+    if user_messages.is_empty() && explicitly_enabled_connectors.is_empty() {
         return Vec::new();
     }
 
@@ -3995,10 +4975,10 @@ fn filter_connectors_for_input(
         .collect::<HashSet<String>>();
 
     let connector_slug_counts = build_connector_slug_counts(&connectors);
-    let mut allowed_connector_ids: HashSet<String> = HashSet::new();
-    for path in explicit_app_paths
+    let mut allowed_connector_ids = explicitly_enabled_connectors.clone();
+    for path in mentions
+        .paths
         .iter()
-        .chain(mentions.paths.iter())
         .filter(|path| tool_kind_for_path(path) == ToolMentionKind::App)
     {
         if let Some(connector_id) = app_id_from_path(path) {
@@ -4069,11 +5049,6 @@ fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Op
     tool.connector_id.as_deref()
 }
 
-struct SamplingRequestToolSelection<'a> {
-    explicit_app_paths: &'a [String],
-    skill_name_counts_lower: &'a HashMap<String, usize>,
-}
-
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace",
     skip_all,
@@ -4090,43 +5065,19 @@ async fn run_sampling_request(
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
-    tool_selection: SamplingRequestToolSelection<'_>,
+    explicitly_enabled_connectors: &HashSet<String>,
+    skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
-    let mut mcp_tools = sess
-        .services
-        .mcp_connection_manager
-        .read()
-        .await
-        .list_all_tools()
-        .or_cancel(&cancellation_token)
-        .await?;
-    let connectors_for_tools = if turn_context.config.features.enabled(Feature::Apps) {
-        let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
-        Some(filter_connectors_for_input(
-            connectors,
-            &input,
-            tool_selection.explicit_app_paths,
-            tool_selection.skill_name_counts_lower,
-        ))
-    } else {
-        None
-    };
-    if let Some(connectors) = connectors_for_tools.as_ref() {
-        mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, connectors);
-    }
-    let router = Arc::new(ToolRouter::from_config_with_toolkits(
-        &turn_context.tools_config,
-        Some(
-            mcp_tools
-                .into_iter()
-                .map(|(name, tool)| (name, tool.tool))
-                .collect(),
-        ),
-        turn_context.dynamic_tools.as_slice(),
-        sess.services.research_toolkit.as_ref(),
-        sess.services.data_toolkit.as_ref(),
-    ));
+    let router = built_tools(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        &input,
+        explicitly_enabled_connectors,
+        skills_outcome,
+        &cancellation_token,
+    )
+    .await?;
 
     let model_supports_parallel = turn_context.model_info.supports_parallel_tool_calls;
 
@@ -4165,7 +5116,7 @@ async fn run_sampling_request(
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
                 if let Some(rate_limits) = rate_limits {
-                    sess.update_rate_limits(&turn_context, rate_limits).await;
+                    sess.update_rate_limits(&turn_context, *rate_limits).await;
                 }
                 return Err(CodexErr::UsageLimitReached(e));
             }
@@ -4179,7 +5130,8 @@ async fn run_sampling_request(
         // Use the configured provider-specific stream retry budget.
         let max_retries = turn_context.provider.stream_max_retries();
         if retries >= max_retries
-            && client_session.try_switch_fallback_transport(&turn_context.otel_manager)
+            && client_session
+                .try_switch_fallback_transport(&turn_context.otel_manager, &turn_context.model_info)
         {
             sess.send_event(
                 &turn_context,
@@ -4218,6 +5170,70 @@ async fn run_sampling_request(
             return Err(err);
         }
     }
+}
+
+async fn built_tools(
+    sess: &Session,
+    turn_context: &TurnContext,
+    input: &[ResponseItem],
+    explicitly_enabled_connectors: &HashSet<String>,
+    skills_outcome: Option<&SkillLoadOutcome>,
+    cancellation_token: &CancellationToken,
+) -> CodexResult<Arc<ToolRouter>> {
+    let mut mcp_tools = sess
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .list_all_tools()
+        .or_cancel(cancellation_token)
+        .await?;
+
+    let connectors_for_tools = if turn_context.config.features.enabled(Feature::Apps) {
+        let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
+            build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
+        });
+        let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+        Some(filter_connectors_for_input(
+            connectors,
+            input,
+            explicitly_enabled_connectors,
+            &skill_name_counts_lower,
+        ))
+    } else {
+        None
+    };
+
+    if turn_context.config.features.enabled(Feature::SearchTool) {
+        let mut selected_mcp_tools =
+            if let Some(selected_tools) = sess.get_mcp_tool_selection().await {
+                filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tools)
+            } else {
+                HashMap::new()
+            };
+
+        if let Some(connectors) = connectors_for_tools.as_ref() {
+            let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, connectors);
+            selected_mcp_tools.extend(apps_mcp_tools);
+        }
+
+        mcp_tools = selected_mcp_tools;
+    } else if let Some(connectors) = connectors_for_tools.as_ref() {
+        mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, connectors);
+    }
+
+    Ok(Arc::new(ToolRouter::from_config_with_toolkits(
+        &turn_context.tools_config,
+        Some(
+            mcp_tools
+                .into_iter()
+                .map(|(name, tool)| (name, tool.tool))
+                .collect(),
+        ),
+        turn_context.dynamic_tools.as_slice(),
+        sess.services.research_toolkit.as_ref(),
+        sess.services.data_toolkit.as_ref(),
+    )))
 }
 
 #[derive(Debug)]
@@ -4641,6 +5657,7 @@ async fn try_run_sampling_request(
 ) -> CodexResult<SamplingRequestResult> {
     let collaboration_mode = sess.current_collaboration_mode().await;
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
+        turn_id: Some(turn_context.sub_id.clone()),
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
         sandbox_policy: turn_context.sandbox_policy.clone(),
@@ -4960,15 +5977,22 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
 pub(crate) use tests::make_session_and_context;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context_with_rx;
+#[cfg(test)]
+pub(crate) use tests::make_session_configuration_for_tests;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::CodexAuth;
+    use crate::auth::AuthCredentialsStoreMode;
+    use crate::auth::PROVIDER_OPENAI;
+    use crate::auth::login_with_provider_api_key;
     use crate::config::ConfigBuilder;
     use crate::config::test_config;
     use crate::exec::ExecToolCallOutput;
     use crate::function_tool::FunctionCallError;
+    use crate::mcp_connection_manager::ToolInfo;
+    use crate::models_manager::model_info;
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
 
@@ -5002,17 +6026,26 @@ mod tests {
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseInputItem;
     use codex_protocol::models::ResponseItem;
+    use codex_protocol::openai_models::ModelsResponse;
     use std::path::Path;
     use std::time::Duration;
     use tokio::time::sleep;
 
     use codex_protocol::mcp::CallToolResult as McpCallToolResult;
     use pretty_assertions::assert_eq;
+    use rmcp::model::JsonObject;
+    use rmcp::model::Tool;
     use serde::Deserialize;
     use serde_json::json;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::header;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
 
     struct InstructionsTestCase {
         slug: &'static str,
@@ -5044,37 +6077,52 @@ mod tests {
         }
     }
 
+    fn make_mcp_tool(
+        server_name: &str,
+        tool_name: &str,
+        connector_id: Option<&str>,
+        connector_name: Option<&str>,
+    ) -> ToolInfo {
+        ToolInfo {
+            server_name: server_name.to_string(),
+            tool_name: tool_name.to_string(),
+            tool: Tool {
+                name: tool_name.to_string().into(),
+                title: None,
+                description: Some(format!("Test tool: {tool_name}").into()),
+                input_schema: Arc::new(JsonObject::default()),
+                output_schema: None,
+                annotations: None,
+                icons: None,
+                meta: None,
+            },
+            connector_id: connector_id.map(str::to_string),
+            connector_name: connector_name.map(str::to_string),
+        }
+    }
+
     #[tokio::test]
     async fn get_base_instructions_no_user_content() {
         let prompt_with_apply_patch_instructions =
             include_str!("../prompt_with_apply_patch_instructions.md");
+        let models_response: ModelsResponse =
+            serde_json::from_str(include_str!("../models.json")).expect("valid models.json");
+        let model_info_for_slug = |slug: &str, config: &Config| {
+            let model = models_response
+                .models
+                .iter()
+                .find(|candidate| candidate.slug == slug)
+                .cloned()
+                .unwrap_or_else(|| panic!("model slug {slug} is missing from models.json"));
+            model_info::with_config_overrides(model, config)
+        };
         let test_cases = vec![
             InstructionsTestCase {
-                slug: "gpt-3.5",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
-                slug: "gpt-4.1",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
-                slug: "gpt-4o",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
                 slug: "gpt-5",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
-                slug: "gpt-5.1",
                 expects_apply_patch_instructions: false,
             },
             InstructionsTestCase {
-                slug: "codex-mini-latest",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
-                slug: "gpt-oss:120b",
+                slug: "gpt-5.1",
                 expects_apply_patch_instructions: false,
             },
             InstructionsTestCase {
@@ -5091,7 +6139,7 @@ mod tests {
 
         for test_case in test_cases {
             let config = test_config();
-            let model_info = ModelsManager::construct_model_info_offline(test_case.slug, &config);
+            let model_info = model_info_for_slug(test_case.slug, &config);
             if test_case.expects_apply_patch_instructions {
                 assert_eq!(
                     model_info.base_instructions.as_str(),
@@ -5117,13 +6165,13 @@ mod tests {
             make_connector("two", "Foo-Bar"),
         ];
         let input = vec![user_message("use $foo-bar")];
-        let explicit_app_paths = Vec::new();
+        let explicitly_enabled_connectors = HashSet::new();
         let skill_name_counts_lower = HashMap::new();
 
         let selected = filter_connectors_for_input(
             connectors,
             &input,
-            &explicit_app_paths,
+            &explicitly_enabled_connectors,
             &skill_name_counts_lower,
         );
 
@@ -5134,17 +6182,106 @@ mod tests {
     fn filter_connectors_for_input_skips_when_skill_name_conflicts() {
         let connectors = vec![make_connector("one", "Todoist")];
         let input = vec![user_message("use $todoist")];
-        let explicit_app_paths = Vec::new();
+        let explicitly_enabled_connectors = HashSet::new();
         let skill_name_counts_lower = HashMap::from([("todoist".to_string(), 1)]);
 
         let selected = filter_connectors_for_input(
             connectors,
             &input,
-            &explicit_app_paths,
+            &explicitly_enabled_connectors,
             &skill_name_counts_lower,
         );
 
         assert_eq!(selected, Vec::new());
+    }
+
+    #[test]
+    fn search_tool_selection_keeps_codex_apps_tools_without_mentions() {
+        let selected_tool_names = vec![
+            "mcp__codex_apps__calendar_create_event".to_string(),
+            "mcp__rmcp__echo".to_string(),
+        ];
+        let mcp_tools = HashMap::from([
+            (
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                make_mcp_tool(
+                    CODEX_APPS_MCP_SERVER_NAME,
+                    "calendar_create_event",
+                    Some("calendar"),
+                    Some("Calendar"),
+                ),
+            ),
+            (
+                "mcp__rmcp__echo".to_string(),
+                make_mcp_tool("rmcp", "echo", None, None),
+            ),
+        ]);
+
+        let mut selected_mcp_tools =
+            filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tool_names);
+        let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+        let explicitly_enabled_connectors = HashSet::new();
+        let connectors = filter_connectors_for_input(
+            connectors,
+            &[user_message("run the selected tools")],
+            &explicitly_enabled_connectors,
+            &HashMap::new(),
+        );
+        let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, &connectors);
+        selected_mcp_tools.extend(apps_mcp_tools);
+
+        let mut tool_names: Vec<String> = selected_mcp_tools.into_keys().collect();
+        tool_names.sort();
+        assert_eq!(
+            tool_names,
+            vec![
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                "mcp__rmcp__echo".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn apps_mentions_add_codex_apps_tools_to_search_selected_set() {
+        let selected_tool_names = vec!["mcp__rmcp__echo".to_string()];
+        let mcp_tools = HashMap::from([
+            (
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                make_mcp_tool(
+                    CODEX_APPS_MCP_SERVER_NAME,
+                    "calendar_create_event",
+                    Some("calendar"),
+                    Some("Calendar"),
+                ),
+            ),
+            (
+                "mcp__rmcp__echo".to_string(),
+                make_mcp_tool("rmcp", "echo", None, None),
+            ),
+        ]);
+
+        let mut selected_mcp_tools =
+            filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tool_names);
+        let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+        let explicitly_enabled_connectors = HashSet::new();
+        let connectors = filter_connectors_for_input(
+            connectors,
+            &[user_message("use $calendar and then echo the response")],
+            &explicitly_enabled_connectors,
+            &HashMap::new(),
+        );
+        let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, &connectors);
+        selected_mcp_tools.extend(apps_mcp_tools);
+
+        let mut tool_names: Vec<String> = selected_mcp_tools.into_keys().collect();
+        tool_names.sort();
+        assert_eq!(
+            tool_names,
+            vec![
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                "mcp__rmcp__echo".to_string(),
+            ]
+        );
     }
 
     #[tokio::test]
@@ -5152,8 +6289,9 @@ mod tests {
         let (session, turn_context) = make_session_and_context().await;
         let (rollout_items, expected) = sample_rollout(&session, &turn_context).await;
 
+        let reconstruction_turn = session.new_default_turn().await;
         let reconstructed = session
-            .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+            .reconstruct_history_from_rollout(reconstruction_turn.as_ref(), &rollout_items)
             .await;
 
         assert_eq!(expected, reconstructed);
@@ -5364,7 +6502,12 @@ mod tests {
             .record_initial_history(InitialHistory::Forked(rollout_items))
             .await;
 
-        expected.extend(session.build_initial_context(&turn_context).await);
+        let reconstruction_turn = session.new_default_turn().await;
+        expected.extend(
+            session
+                .build_initial_context(reconstruction_turn.as_ref())
+                .await,
+        );
         let history = session.state.lock().await.clone_history();
         assert_eq!(expected, history.raw_items());
     }
@@ -5545,6 +6688,8 @@ mod tests {
 
         let mut state = SessionState::new(session_configuration);
         let initial = RateLimitSnapshot {
+            limit_id: None,
+            limit_name: None,
             primary: Some(RateLimitWindow {
                 used_percent: 10.0,
                 window_minutes: Some(15),
@@ -5561,6 +6706,8 @@ mod tests {
         state.set_rate_limits(initial.clone());
 
         let update = RateLimitSnapshot {
+            limit_id: Some("codex_other".to_string()),
+            limit_name: Some("codex_other".to_string()),
             primary: Some(RateLimitWindow {
                 used_percent: 40.0,
                 window_minutes: Some(30),
@@ -5579,6 +6726,8 @@ mod tests {
         assert_eq!(
             state.latest_rate_limits,
             Some(RateLimitSnapshot {
+                limit_id: Some("codex_other".to_string()),
+                limit_name: Some("codex_other".to_string()),
                 primary: update.primary.clone(),
                 secondary: update.secondary,
                 credits: initial.credits,
@@ -5628,6 +6777,8 @@ mod tests {
 
         let mut state = SessionState::new(session_configuration);
         let initial = RateLimitSnapshot {
+            limit_id: None,
+            limit_name: None,
             primary: Some(RateLimitWindow {
                 used_percent: 15.0,
                 window_minutes: Some(20),
@@ -5648,6 +6799,8 @@ mod tests {
         state.set_rate_limits(initial.clone());
 
         let update = RateLimitSnapshot {
+            limit_id: None,
+            limit_name: None,
             primary: Some(RateLimitWindow {
                 used_percent: 35.0,
                 window_minutes: Some(25),
@@ -5662,6 +6815,8 @@ mod tests {
         assert_eq!(
             state.latest_rate_limits,
             Some(RateLimitSnapshot {
+                limit_id: Some("codex".to_string()),
+                limit_name: None,
                 primary: update.primary,
                 secondary: update.secondary,
                 credits: initial.credits,
@@ -5851,6 +7006,47 @@ mod tests {
         )
     }
 
+    pub(crate) async fn make_session_configuration_for_tests() -> SessionConfiguration {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let config = build_test_config(codex_home.path()).await;
+        let config = Arc::new(config);
+        let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+        let reasoning_effort = config.model_reasoning_effort;
+        let collaboration_mode = CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model,
+                reasoning_effort,
+                developer_instructions: None,
+            },
+        };
+
+        SessionConfiguration {
+            provider: config.model_provider.clone(),
+            collaboration_mode,
+            model_reasoning_summary: config.model_reasoning_summary,
+            developer_instructions: config.developer_instructions.clone(),
+            user_instructions: config.user_instructions.clone(),
+            personality: config.personality,
+            base_instructions: config
+                .base_instructions
+                .clone()
+                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            compact_prompt: config.compact_prompt.clone(),
+            approval_policy: config.approval_policy.clone(),
+            sandbox_policy: config.sandbox_policy.clone(),
+            windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+            cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
+            thread_name: None,
+            original_config_do_not_use: Arc::clone(&config),
+            session_source: SessionSource::Exec,
+            dynamic_tools: Vec::new(),
+        }
+    }
+
+    // todo: use online model info
     pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         let (tx_event, _rx_event) = async_channel::unbounded();
         let codex_home = tempfile::tempdir().expect("create temp dir");
@@ -5924,9 +7120,10 @@ mod tests {
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
             ),
-            hooks: Hooks::new(&config),
+            hooks: Hooks::new(config.notify.clone()),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
+            shell_snapshot_tx: watch::channel(None).0,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
             auth_manager: auth_manager.clone(),
@@ -5938,6 +7135,7 @@ mod tests {
             skills_manager,
             file_watcher,
             agent_control,
+            network_proxy: None,
             state_db: None,
             model_client: ModelClient::new(
                 Some(auth_manager.clone()),
@@ -5945,7 +7143,8 @@ mod tests {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                config.features.enabled(Feature::ResponsesWebsockets)
+                model_info.prefer_websockets
+                    || config.features.enabled(Feature::ResponsesWebsockets)
                     || config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::EnableRequestCompression),
@@ -5963,6 +7162,7 @@ mod tests {
             &session_configuration,
             per_turn_config,
             model_info,
+            None,
             "turn_id".to_string(),
         );
 
@@ -5971,6 +7171,8 @@ mod tests {
             tx_event,
             agent_status: agent_status_tx,
             state: Mutex::new(state),
+            file_reference_cache: Mutex::new(FileReferenceCache::default()),
+            file_upload_http_client: reqwest::Client::new(),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
@@ -6060,9 +7262,10 @@ mod tests {
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
             ),
-            hooks: Hooks::new(&config),
+            hooks: Hooks::new(config.notify.clone()),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
+            shell_snapshot_tx: watch::channel(None).0,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
             auth_manager: Arc::clone(&auth_manager),
@@ -6074,6 +7277,7 @@ mod tests {
             skills_manager,
             file_watcher,
             agent_control,
+            network_proxy: None,
             state_db: None,
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
@@ -6081,7 +7285,8 @@ mod tests {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                config.features.enabled(Feature::ResponsesWebsockets)
+                model_info.prefer_websockets
+                    || config.features.enabled(Feature::ResponsesWebsockets)
                     || config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::EnableRequestCompression),
@@ -6099,6 +7304,7 @@ mod tests {
             &session_configuration,
             per_turn_config,
             model_info,
+            None,
             "turn_id".to_string(),
         ));
 
@@ -6107,6 +7313,8 @@ mod tests {
             tx_event,
             agent_status: agent_status_tx,
             state: Mutex::new(state),
+            file_reference_cache: Mutex::new(FileReferenceCache::default()),
+            file_upload_http_client: reqwest::Client::new(),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
@@ -6332,6 +7540,501 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn steer_input_surfaces_file_prepare_errors() {
+        let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+        let dir = tempfile::tempdir().expect("temp dir");
+        let missing = dir.path().join("missing.pdf");
+
+        let err = sess
+            .steer_input(vec![UserInput::LocalFile { path: missing }], None)
+            .await
+            .expect_err("missing local file should fail");
+
+        assert!(matches!(err, SteerInputError::InvalidFileInput(_)));
+    }
+
+    #[test]
+    fn prepare_file_inputs_rejects_file_over_provider_inline_limit() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("large.pdf");
+        std::fs::write(&path, b"%PDF-1.4\n").expect("write pdf header");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("open pdf")
+            .set_len(21 * 1024 * 1024)
+            .expect("grow file");
+
+        let provider = ModelProviderInfo::create_gemini_provider();
+        let err = prepare_file_inputs(&[UserInput::LocalFile { path }], &provider, None)
+            .expect_err("gemini inline limit should reject 21MB file");
+        assert!(matches!(
+            err,
+            FileInputPreparationError::InlineFileTooLarge { .. }
+        ));
+    }
+
+    #[test]
+    fn prepare_file_inputs_rejects_total_inline_payload_budget_overflow() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let first = dir.path().join("first.pdf");
+        let second = dir.path().join("second.pdf");
+
+        for path in [&first, &second] {
+            std::fs::write(path, b"%PDF-1.4\n").expect("write pdf header");
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .expect("open pdf")
+                .set_len(8 * 1024 * 1024)
+                .expect("grow file");
+        }
+
+        let provider = ModelProviderInfo::create_gemini_provider();
+        let err = prepare_file_inputs(
+            &[
+                UserInput::LocalFile { path: first },
+                UserInput::LocalFile { path: second },
+            ],
+            &provider,
+            None,
+        )
+        .expect_err("gemini inline payload budget should reject 16MB raw payload");
+        assert!(matches!(
+            err,
+            FileInputPreparationError::InlinePayloadTooLarge { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn resolve_file_inputs_for_uploads_rewrites_to_uploaded_file() {
+        let codex_home = tempfile::tempdir().expect("codex home");
+        login_with_provider_api_key(
+            codex_home.path(),
+            PROVIDER_OPENAI,
+            "sk-test-key",
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store api key");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/files"))
+            .and(header("authorization", "Bearer sk-test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "file-123",
+                "object": "file",
+                "filename": "mid.pdf",
+                "purpose": "user_data",
+                "bytes": 10
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut provider = ModelProviderInfo::create_openai_provider();
+        provider.base_url = Some(format!("{}/v1", server.uri()));
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("mid.pdf");
+        std::fs::write(&path, b"%PDF-1.4\n").expect("write pdf header");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("open pdf")
+            .set_len(3 * 1024 * 1024)
+            .expect("grow file");
+
+        let mut inputs = vec![UserInput::LocalFile { path: path.clone() }];
+        let http_client = reqwest::Client::new();
+        let outcome =
+            resolve_file_inputs_for_uploads(&mut inputs, &provider, &config, &http_client)
+                .await
+                .expect("resolve files");
+
+        assert_eq!(
+            inputs,
+            vec![UserInput::UploadedFile {
+                file_id: "file-123".to_string(),
+                mime_type: "application/pdf".to_string(),
+                filename: "mid.pdf".to_string(),
+                source_path: path.clone(),
+            }]
+        );
+        assert_eq!(
+            outcome.uploaded_files,
+            vec![codex_api::file_support::UploadedFile {
+                file_id: "file-123".to_string(),
+                provider: "openai".to_string(),
+                expires_at: None,
+                source_path: path,
+            }]
+        );
+        assert!(outcome.warnings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn resolve_file_inputs_for_uploads_routes_multiple_files() {
+        let codex_home = tempfile::tempdir().expect("codex home");
+        login_with_provider_api_key(
+            codex_home.path(),
+            PROVIDER_OPENAI,
+            "sk-test-key",
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store api key");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/files"))
+            .and(header("authorization", "Bearer sk-test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "file-123",
+                "object": "file",
+                "filename": "uploaded.pdf",
+                "purpose": "user_data",
+                "bytes": 10
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let mut provider = ModelProviderInfo::create_openai_provider();
+        provider.base_url = Some(format!("{}/v1", server.uri()));
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let first = dir.path().join("first.pdf");
+        let second = dir.path().join("second.pdf");
+        for path in [&first, &second] {
+            std::fs::write(path, b"%PDF-1.4\n").expect("write pdf header");
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .expect("open pdf")
+                .set_len(3 * 1024 * 1024)
+                .expect("grow file");
+        }
+
+        let mut inputs = vec![
+            UserInput::LocalFile {
+                path: first.clone(),
+            },
+            UserInput::LocalFile {
+                path: second.clone(),
+            },
+        ];
+        let http_client = reqwest::Client::new();
+        let outcome =
+            resolve_file_inputs_for_uploads(&mut inputs, &provider, &config, &http_client)
+                .await
+                .expect("resolve files");
+
+        assert_eq!(
+            inputs,
+            vec![
+                UserInput::UploadedFile {
+                    file_id: "file-123".to_string(),
+                    mime_type: "application/pdf".to_string(),
+                    filename: "first.pdf".to_string(),
+                    source_path: first.clone(),
+                },
+                UserInput::UploadedFile {
+                    file_id: "file-123".to_string(),
+                    mime_type: "application/pdf".to_string(),
+                    filename: "second.pdf".to_string(),
+                    source_path: second.clone(),
+                },
+            ]
+        );
+        assert_eq!(
+            outcome.uploaded_files,
+            vec![
+                codex_api::file_support::UploadedFile {
+                    file_id: "file-123".to_string(),
+                    provider: "openai".to_string(),
+                    expires_at: None,
+                    source_path: first,
+                },
+                codex_api::file_support::UploadedFile {
+                    file_id: "file-123".to_string(),
+                    provider: "openai".to_string(),
+                    expires_at: None,
+                    source_path: second,
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_file_inputs_for_uploads_cleans_up_orphaned_uploads_on_error() {
+        let codex_home = tempfile::tempdir().expect("codex home");
+        login_with_provider_api_key(
+            codex_home.path(),
+            PROVIDER_OPENAI,
+            "sk-test-key",
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store api key");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/files"))
+            .and(header("authorization", "Bearer sk-test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "file-123",
+                "object": "file",
+                "filename": "uploaded.pdf",
+                "purpose": "user_data",
+                "bytes": 10
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/v1/files/file-123"))
+            .and(header("authorization", "Bearer sk-test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "file-123",
+                "object": "file",
+                "deleted": true
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut provider = ModelProviderInfo::create_openai_provider();
+        provider.base_url = Some(format!("{}/v1", server.uri()));
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let uploaded_path = dir.path().join("uploaded.pdf");
+        std::fs::write(&uploaded_path, b"%PDF-1.4\n").expect("write pdf header");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&uploaded_path)
+            .expect("open pdf")
+            .set_len(3 * 1024 * 1024)
+            .expect("grow file");
+
+        let too_large_path = dir.path().join("too_large.pdf");
+        std::fs::write(&too_large_path, b"%PDF-1.4\n").expect("write pdf header");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&too_large_path)
+            .expect("open pdf")
+            .set_len(codex_utils_file::MAX_FILE_SIZE + 1)
+            .expect("grow file");
+
+        let mut inputs = vec![
+            UserInput::LocalFile {
+                path: uploaded_path,
+            },
+            UserInput::LocalFile {
+                path: too_large_path,
+            },
+        ];
+        let http_client = reqwest::Client::new();
+        let err = resolve_file_inputs_for_uploads(&mut inputs, &provider, &config, &http_client)
+            .await
+            .expect_err("oversized file should fail routing");
+        assert!(matches!(
+            err,
+            FileInputPreparationError::Routing(FileRoutingError::Processing(
+                FileProcessingError::TooLarge { .. }
+            ))
+        ));
+    }
+
+    #[tokio::test]
+    async fn resolve_file_inputs_for_uploads_dedupes_orphan_cleanup_across_three_files() {
+        let codex_home = tempfile::tempdir().expect("codex home");
+        login_with_provider_api_key(
+            codex_home.path(),
+            PROVIDER_OPENAI,
+            "sk-test-key",
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store api key");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/files"))
+            .and(header("authorization", "Bearer sk-test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "file-123",
+                "object": "file",
+                "filename": "uploaded.pdf",
+                "purpose": "user_data",
+                "bytes": 10
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        // `delete_uploaded_files_best_effort` should only delete each file id once even if the
+        // upstream upload endpoint returned duplicates.
+        Mock::given(method("DELETE"))
+            .and(path("/v1/files/file-123"))
+            .and(header("authorization", "Bearer sk-test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "file-123",
+                "object": "file",
+                "deleted": true
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut provider = ModelProviderInfo::create_openai_provider();
+        provider.base_url = Some(format!("{}/v1", server.uri()));
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let first = dir.path().join("first.pdf");
+        let second = dir.path().join("second.pdf");
+        for path in [&first, &second] {
+            std::fs::write(path, b"%PDF-1.4\n").expect("write pdf header");
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .expect("open pdf")
+                .set_len(3 * 1024 * 1024)
+                .expect("grow file");
+        }
+
+        let too_large = dir.path().join("too_large.pdf");
+        std::fs::write(&too_large, b"%PDF-1.4\n").expect("write pdf header");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&too_large)
+            .expect("open pdf")
+            .set_len(codex_utils_file::MAX_FILE_SIZE + 1)
+            .expect("grow file");
+
+        let mut inputs = vec![
+            UserInput::LocalFile { path: first },
+            UserInput::LocalFile { path: second },
+            UserInput::LocalFile { path: too_large },
+        ];
+
+        let http_client = reqwest::Client::new();
+        let err = resolve_file_inputs_for_uploads(&mut inputs, &provider, &config, &http_client)
+            .await
+            .expect_err("oversized file should fail routing");
+        assert!(matches!(
+            err,
+            FileInputPreparationError::Routing(FileRoutingError::Processing(
+                FileProcessingError::TooLarge { .. }
+            ))
+        ));
+    }
+
+    #[tokio::test]
+    async fn refresh_uploaded_file_references_reuploads_near_expiry_and_rewrites_history() {
+        let (sess, mut turn_context) = make_session_and_context().await;
+        login_with_provider_api_key(
+            turn_context.config.codex_home.as_path(),
+            PROVIDER_OPENAI,
+            "sk-test-key",
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store api key");
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/files"))
+            .and(header("authorization", "Bearer sk-test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "file-999",
+                "object": "file",
+                "filename": "report.pdf",
+                "purpose": "user_data",
+                "bytes": 10
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        turn_context.provider = ModelProviderInfo::create_openai_provider();
+        turn_context.provider.base_url = Some(format!("{}/v1", server.uri()));
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("report.pdf");
+        std::fs::write(&path, b"%PDF-1.4\npayload").expect("write pdf");
+
+        let old_file_id = "file-old";
+        {
+            let mut state = sess.state.lock().await;
+            state.replace_history(vec![ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputFile {
+                    file_data: None,
+                    file_id: Some(old_file_id.to_string()),
+                    mime_type: Some("application/pdf".to_string()),
+                    filename: Some("report.pdf".to_string()),
+                }],
+                end_turn: None,
+                phase: None,
+            }]);
+        }
+        {
+            let mut cache = sess.file_reference_cache.lock().await;
+            cache.record(codex_api::file_support::UploadedFile {
+                file_id: old_file_id.to_string(),
+                provider: "openai".to_string(),
+                expires_at: Some(std::time::SystemTime::now() + StdDuration::from_secs(30)),
+                source_path: path,
+            });
+        }
+
+        refresh_uploaded_file_references(&sess, &turn_context)
+            .await
+            .expect("refresh should succeed");
+
+        {
+            let state = sess.state.lock().await;
+            assert_eq!(
+                state.history.raw_items(),
+                &[ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputFile {
+                        file_data: None,
+                        file_id: Some("file-999".to_string()),
+                        mime_type: Some("application/pdf".to_string()),
+                        filename: Some("report.pdf".to_string()),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                }]
+            );
+        }
+        {
+            let cache = sess.file_reference_cache.lock().await;
+            assert!(!cache.contains(old_file_id));
+            assert!(cache.contains("file-999"));
+        }
+    }
+
+    #[tokio::test]
     async fn steer_input_requires_active_turn() {
         let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
         let input = vec![UserInput::Text {
@@ -6544,16 +8247,50 @@ mod tests {
 
     async fn sample_rollout(
         session: &Session,
-        turn_context: &TurnContext,
+        _turn_context: &TurnContext,
     ) -> (Vec<RolloutItem>, Vec<ResponseItem>) {
         let mut rollout_items = Vec::new();
         let mut live_history = ContextManager::new();
 
-        let initial_context = session.build_initial_context(turn_context).await;
+        // Use the same turn_context source as record_initial_history so model_info (and thus
+        // personality_spec) matches reconstruction.
+        let reconstruction_turn = session.new_default_turn().await;
+        let mut initial_context = session
+            .build_initial_context(reconstruction_turn.as_ref())
+            .await;
+        // Ensure personality_spec is present when Personality is enabled, so expected matches
+        // what reconstruction produces (build_initial_context may omit it when baked into model).
+        if !initial_context.iter().any(|m| {
+            matches!(m, ResponseItem::Message { role, content, .. }
+                if role == "developer"
+                    && content.iter().any(|c| {
+                        matches!(c, ContentItem::InputText { text } if text.contains("<personality_spec>"))
+                    }))
+        })
+            && let Some(p) = reconstruction_turn.personality
+            && session.features.enabled(Feature::Personality)
+            && let Some(personality_message) = reconstruction_turn
+                .model_info
+                .model_messages
+                .as_ref()
+                .and_then(|m| m.get_personality_message(Some(p)).filter(|s| !s.is_empty()))
+        {
+            let msg =
+                DeveloperInstructions::personality_spec_message(personality_message).into();
+            let insert_at = initial_context
+                .iter()
+                .position(|m| matches!(m, ResponseItem::Message { role, .. } if role == "developer"))
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            initial_context.insert(insert_at, msg);
+        }
         for item in &initial_context {
             rollout_items.push(RolloutItem::ResponseItem(item.clone()));
         }
-        live_history.record_items(initial_context.iter(), turn_context.truncation_policy);
+        live_history.record_items(
+            initial_context.iter(),
+            reconstruction_turn.truncation_policy,
+        );
 
         let user1 = ResponseItem::Message {
             id: None,
@@ -6564,7 +8301,10 @@ mod tests {
             end_turn: None,
             phase: None,
         };
-        live_history.record_items(std::iter::once(&user1), turn_context.truncation_policy);
+        live_history.record_items(
+            std::iter::once(&user1),
+            reconstruction_turn.truncation_policy,
+        );
         rollout_items.push(RolloutItem::ResponseItem(user1.clone()));
 
         let assistant1 = ResponseItem::Message {
@@ -6576,17 +8316,19 @@ mod tests {
             end_turn: None,
             phase: None,
         };
-        live_history.record_items(std::iter::once(&assistant1), turn_context.truncation_policy);
+        live_history.record_items(
+            std::iter::once(&assistant1),
+            reconstruction_turn.truncation_policy,
+        );
         rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
 
         let summary1 = "summary one";
-        let snapshot1 = live_history.clone().for_prompt();
+        let snapshot1 = live_history
+            .clone()
+            .for_prompt(&reconstruction_turn.model_info.input_modalities);
         let user_messages1 = collect_user_messages(&snapshot1);
-        let rebuilt1 = compact::build_compacted_history(
-            session.build_initial_context(turn_context).await,
-            &user_messages1,
-            summary1,
-        );
+        let rebuilt1 =
+            compact::build_compacted_history(initial_context.clone(), &user_messages1, summary1);
         live_history.replace(rebuilt1);
         rollout_items.push(RolloutItem::Compacted(CompactedItem {
             message: summary1.to_string(),
@@ -6602,7 +8344,10 @@ mod tests {
             end_turn: None,
             phase: None,
         };
-        live_history.record_items(std::iter::once(&user2), turn_context.truncation_policy);
+        live_history.record_items(
+            std::iter::once(&user2),
+            reconstruction_turn.truncation_policy,
+        );
         rollout_items.push(RolloutItem::ResponseItem(user2.clone()));
 
         let assistant2 = ResponseItem::Message {
@@ -6614,17 +8359,19 @@ mod tests {
             end_turn: None,
             phase: None,
         };
-        live_history.record_items(std::iter::once(&assistant2), turn_context.truncation_policy);
+        live_history.record_items(
+            std::iter::once(&assistant2),
+            reconstruction_turn.truncation_policy,
+        );
         rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
 
         let summary2 = "summary two";
-        let snapshot2 = live_history.clone().for_prompt();
+        let snapshot2 = live_history
+            .clone()
+            .for_prompt(&reconstruction_turn.model_info.input_modalities);
         let user_messages2 = collect_user_messages(&snapshot2);
-        let rebuilt2 = compact::build_compacted_history(
-            session.build_initial_context(turn_context).await,
-            &user_messages2,
-            summary2,
-        );
+        let rebuilt2 =
+            compact::build_compacted_history(initial_context.clone(), &user_messages2, summary2);
         live_history.replace(rebuilt2);
         rollout_items.push(RolloutItem::Compacted(CompactedItem {
             message: summary2.to_string(),
@@ -6640,7 +8387,10 @@ mod tests {
             end_turn: None,
             phase: None,
         };
-        live_history.record_items(std::iter::once(&user3), turn_context.truncation_policy);
+        live_history.record_items(
+            std::iter::once(&user3),
+            reconstruction_turn.truncation_policy,
+        );
         rollout_items.push(RolloutItem::ResponseItem(user3));
 
         let assistant3 = ResponseItem::Message {
@@ -6652,10 +8402,16 @@ mod tests {
             end_turn: None,
             phase: None,
         };
-        live_history.record_items(std::iter::once(&assistant3), turn_context.truncation_policy);
+        live_history.record_items(
+            std::iter::once(&assistant3),
+            reconstruction_turn.truncation_policy,
+        );
         rollout_items.push(RolloutItem::ResponseItem(assistant3));
 
-        (rollout_items, live_history.for_prompt())
+        (
+            rollout_items,
+            live_history.for_prompt(&reconstruction_turn.model_info.input_modalities),
+        )
     }
 
     #[tokio::test]
@@ -6692,6 +8448,7 @@ mod tests {
             cwd: turn_context.cwd.clone(),
             expiration: timeout_ms.into(),
             env: HashMap::new(),
+            network: None,
             sandbox_permissions,
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: Some("test".to_string()),
@@ -6704,6 +8461,7 @@ mod tests {
             cwd: params.cwd.clone(),
             expiration: timeout_ms.into(),
             env: HashMap::new(),
+            network: None,
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: params.justification.clone(),
             arg0: None,

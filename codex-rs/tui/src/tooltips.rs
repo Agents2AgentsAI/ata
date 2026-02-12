@@ -8,13 +8,13 @@ const ANNOUNCEMENT_TIP_URL: &str =
 
 const IS_MACOS: bool = cfg!(target_os = "macos");
 
-const PAID_TOOLTIP: &str = "*New* Try the **Codex App** with 2x rate limits until *April 2nd*. Run 'codex app' or visit https://chatgpt.com/codex";
+const PAID_TOOLTIP: &str = "*New* Try the **Ata App** with 2x rate limits until *April 2nd*. Run 'ata app' or visit https://chatgpt.com/codex";
 const PAID_TOOLTIP_NON_MAC: &str = "*New* 2x rate limits until *April 2nd*.";
 const OTHER_TOOLTIP: &str =
-    "*New* Build faster with the **Codex App**. Run 'codex app' or visit https://chatgpt.com/codex";
-const OTHER_TOOLTIP_NON_MAC: &str = "*New* Build faster with Codex.";
+    "*New* Build faster with the **Ata App**. Run 'ata app' or visit https://agents2agents.ai/ata";
+const OTHER_TOOLTIP_NON_MAC: &str = "*New* Build faster with Ata.";
 const FREE_GO_TOOLTIP: &str =
-    "*New* Codex is included in your plan for free through *March 2nd* – let’s build together.";
+    "*New* Ata is included in your plan for free through *March 2nd* – let's build together.";
 
 const RAW_TOOLTIPS: &str = include_str!("../tooltips.txt");
 
@@ -26,7 +26,7 @@ lazy_static! {
             if line.is_empty() || line.starts_with('#') {
                 return false;
             }
-            if !IS_MACOS && line.contains("codex app") {
+            if !IS_MACOS && line.contains("ata app") {
                 return false;
             }
             true
@@ -47,7 +47,7 @@ fn experimental_tooltips() -> Vec<&'static str> {
         .collect()
 }
 
-/// Pick a random tooltip to show to the user when starting Codex.
+/// Pick a random tooltip to show to the user when starting Ata.
 pub(crate) fn get_tooltip(plan: Option<PlanType>) -> Option<String> {
     let mut rng = rand::rng();
 
@@ -112,6 +112,9 @@ pub(crate) mod announcement {
 
     /// Prewarm the cache of the announcement tip.
     pub(crate) fn prewarm() {
+        // Remote fetch disabled for ata fork.
+        return;
+        #[allow(unreachable_code)]
         let _ = thread::spawn(|| ANNOUNCEMENT_TIP.get_or_init(init_announcement_tip_in_thread));
     }
 
@@ -349,7 +352,7 @@ from_date = "2000-01-01"
 # target_app specify which app should display the announcement (cli, vsce, ...).
 
 [[announcements]]
-content = "Welcome to Codex! Check out the new onboarding flow."
+content = "Welcome to Ata! Check out the new onboarding flow."
 from_date = "2024-10-01"
 to_date = "2024-10-15"
 target_app = "cli"

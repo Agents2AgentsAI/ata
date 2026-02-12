@@ -17,8 +17,8 @@ pub struct ResearchConfig {
     pub semantic_scholar_base_url: String,
     pub arxiv_base_url: String,
     pub openalex_base_url: String,
-    pub papers_with_code_base_url: String,
     pub zotero_base_url: String,
+    pub github_api_base_url: String,
 
     pub connect_timeout: Duration,
     pub request_timeout: Duration,
@@ -35,7 +35,7 @@ pub struct CacheTtls {
     pub paper_search: Duration,
     pub citations: Duration,
     pub zotero_items: Duration,
-    pub sota: Duration,
+    pub repo_analysis: Duration,
     pub repo_health: Duration,
     pub negative: Duration,
 }
@@ -52,7 +52,6 @@ pub struct RateLimitOverrides {
     pub semantic_scholar: Option<ApiRateLimit>,
     pub arxiv: Option<ApiRateLimit>,
     pub openalex: Option<ApiRateLimit>,
-    pub papers_with_code: Option<ApiRateLimit>,
     pub zotero: Option<ApiRateLimit>,
     pub github: Option<ApiRateLimit>,
 }
@@ -63,7 +62,7 @@ impl Default for CacheTtls {
             paper_search: Duration::from_secs(5 * 60),
             citations: Duration::from_secs(10 * 60),
             zotero_items: Duration::from_secs(2 * 60),
-            sota: Duration::from_secs(30 * 60),
+            repo_analysis: Duration::from_secs(60 * 60),
             repo_health: Duration::from_secs(15 * 60),
             negative: Duration::from_secs(30),
         }
@@ -93,8 +92,8 @@ impl Default for ResearchConfig {
             semantic_scholar_base_url: "https://api.semanticscholar.org/graph/v1".to_string(),
             arxiv_base_url: "https://export.arxiv.org".to_string(),
             openalex_base_url: "https://api.openalex.org".to_string(),
-            papers_with_code_base_url: "https://paperswithcode.com/api/v1".to_string(),
             zotero_base_url: "https://api.zotero.org".to_string(),
+            github_api_base_url: "https://api.github.com".to_string(),
             connect_timeout: Duration::from_secs(10),
             request_timeout: Duration::from_secs(30),
             tool_timeout: Duration::from_secs(60),
@@ -123,10 +122,10 @@ impl ResearchConfig {
                 .unwrap_or_else(|_| "https://export.arxiv.org".to_string()),
             openalex_base_url: std::env::var("OPENALEX_BASE_URL")
                 .unwrap_or_else(|_| "https://api.openalex.org".to_string()),
-            papers_with_code_base_url: std::env::var("PAPERS_WITH_CODE_BASE_URL")
-                .unwrap_or_else(|_| "https://paperswithcode.com/api/v1".to_string()),
             zotero_base_url: std::env::var("ZOTERO_BASE_URL")
                 .unwrap_or_else(|_| "https://api.zotero.org".to_string()),
+            github_api_base_url: std::env::var("GITHUB_API_BASE_URL")
+                .unwrap_or_else(|_| "https://api.github.com".to_string()),
             ..Self::default()
         };
 
@@ -159,10 +158,6 @@ impl ResearchConfig {
                 ApiRateLimit::new(10, Duration::from_secs(1), 5),
             ),
             (
-                ResearchApi::PapersWithCode,
-                ApiRateLimit::new(5, Duration::from_secs(1), 3),
-            ),
-            (
                 ResearchApi::Zotero,
                 ApiRateLimit::new(10, Duration::from_secs(1), 3),
             ),
@@ -183,10 +178,6 @@ impl ResearchConfig {
             ),
             (ResearchApi::Arxiv, self.rate_limit_overrides.arxiv),
             (ResearchApi::OpenAlex, self.rate_limit_overrides.openalex),
-            (
-                ResearchApi::PapersWithCode,
-                self.rate_limit_overrides.papers_with_code,
-            ),
             (ResearchApi::Zotero, self.rate_limit_overrides.zotero),
             (ResearchApi::GitHub, self.rate_limit_overrides.github),
         ] {
@@ -215,8 +206,8 @@ impl fmt::Debug for ResearchConfig {
             .field("semantic_scholar_base_url", &self.semantic_scholar_base_url)
             .field("arxiv_base_url", &self.arxiv_base_url)
             .field("openalex_base_url", &self.openalex_base_url)
-            .field("papers_with_code_base_url", &self.papers_with_code_base_url)
             .field("zotero_base_url", &self.zotero_base_url)
+            .field("github_api_base_url", &self.github_api_base_url)
             .field("connect_timeout", &self.connect_timeout)
             .field("request_timeout", &self.request_timeout)
             .field("tool_timeout", &self.tool_timeout)

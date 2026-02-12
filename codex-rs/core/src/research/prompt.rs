@@ -1,5 +1,6 @@
 use std::cmp::min;
 
+use super::research_output_schema;
 use crate::research::tool_names::ResearchToolNames;
 
 #[derive(Debug, Clone)]
@@ -36,6 +37,7 @@ pub fn build_research_prompt(params: &ResearchPromptParams) -> String {
     }
 
     prompt.push_str(&build_phase_3_prompt(params.num_solutions));
+    prompt.push_str(&build_phase_3b_prompt());
 
     if params.generate_code {
         prompt.push_str(&build_phase_4_prompt(
@@ -62,34 +64,32 @@ fn build_phase_2_prompt(params: &ResearchPromptParams) -> String {
     let tool = &params.tool_names;
     let mut phase = String::from(
         "### Phase 2: Literature and SOTA Survey\n\n\
-For each sub-problem, gather evidence and summarize key findings.\n\n",
+For each sub-problem, gather evidence and summarize key findings.\n\
+Use sub-agents when available. Each sub-agent should write one artifact to \
+`{output_path}/.research_state/subfinding_N.json` using `apply_patch`, then return a compact summary.\n\n",
     );
+    phase = phase.replace("{output_path}", params.output_path.as_str());
 
     if params.has_zotero {
         phase.push_str(&format!(
-            "1. Search user library via `{}` and inspect relevant collections via `{}`.\n",
+            "- Search user library via `{}` and inspect relevant collections via `{}`.\n",
             tool.zotero_search, tool.zotero_get_collections,
         ));
     }
     if params.has_paper_search {
         phase.push_str(&format!(
-            "2. Run academic search via `{}`.\n\
-3. Track benchmark leaders via `{}`.\n\
-4. Expand graph via `{}` and `{}`.\n\
-5. Find implementations via `{}`.\n",
-            tool.paper_search,
-            tool.paper_search_sota,
-            tool.paper_citations,
-            tool.paper_references,
-            tool.paper_find_repos,
+            "- Run academic search via `{}`.\n\
+- Expand graph via `{}` and `{}`.\n",
+            tool.paper_search, tool.paper_citations, tool.paper_references,
         ));
     }
     if params.has_web_search {
-        phase.push_str("6. Use web search for recent practical deployments and tutorials.\n");
+        phase.push_str("- Use web search for recent practical deployments and tutorials.\n");
     }
 
     phase.push_str(
-        "\nTarget at least 15 relevant papers overall and return ranked findings with citations.\n\n",
+        "\nTarget at least 15 relevant papers overall and return ranked findings with citations.\n\
+Missing `.research_state/subfinding_N.json` files must not block completion; treat them as best-effort artifacts.\n\n",
     );
     phase
 }
@@ -127,9 +127,13 @@ Select top {k} candidate approaches with code repositories. For each candidate:\
             .push_str("- Produce a generic integration plan with placeholder module boundaries.\n");
     }
 
-    phase.push_str(
-        "\nWrite per-candidate repo assessments to `.research_state/` and return compact summaries.\n\n",
-    );
+    phase.push_str(&format!(
+        "\nWrite per-candidate repo assessments to `{}/.research_state/repo_assessment_N.json` using `apply_patch` and return compact summaries.\n\
+Each assessment should include adoption strategy, provenance pinning (commit/license), and repo feasibility.\n\
+If cloning/inspection fails, set `repo_unavailable=true` and include a blocked reason.\n\
+Missing repo assessment artifacts are best-effort and must not block final output.\n\n",
+        params.output_path
+    ));
     phase
 }
 
@@ -142,9 +146,19 @@ Generate exactly {num_solutions} ranked proposals. Each proposal must include:\n
 - risk register\n\
 - instrumentation requirements\n\
 - champion/challenger status\n\
-- implementation packet (adoption strategy, provenance, reproduction, integration plan)\n\n\
-Then run a skeptic pass: verify claim-to-evidence traceability and mark unverifiable claims `[UNVERIFIED]`.\n\n"
+- implementation packet (adoption strategy, provenance, reproduction, integration plan)\n\n"
     )
+}
+
+fn build_phase_3b_prompt() -> String {
+    "### Phase 3b: Skeptic Pass\n\n\
+Before finalizing outputs, verify:\n\
+- every key claim maps to explicit evidence\n\
+- benchmark numbers match retrieved sources\n\
+- unverifiable claims are marked `[UNVERIFIED]`\n\
+- strengths/weaknesses are evidence-backed\n\
+- there are no citation contradictions across proposals\n\n"
+        .to_string()
 }
 
 fn build_phase_4_prompt(num_solutions: usize, framework: &str, output_path: &str) -> String {
@@ -177,12 +191,21 @@ This is iteration {}. Incorporate prior evidence and downstream feedback.\n",
 }
 
 fn build_output_format_prompt(output_path: &str) -> String {
+    let output_schema = serde_json::to_string_pretty(&research_output_schema())
+        .unwrap_or_else(|error| format!(r#"{{"schema_serialization_error":"{error}"}}"#));
+
     format!(
         "### Output Format\n\n\
-Write:\n\
-1. `{output_path}/RESEARCH_REPORT.md`\n\
-2. `{output_path}/research_results.json`\n\
-3. `{output_path}/proposal_N/` scaffold folders when Phase 4 runs.\n\n"
+Write these files with `apply_patch`:\n\
+1. `{output_path}/research_results.json`\n\
+2. `{output_path}/RESEARCH_REPORT.md`\n\
+3. `{output_path}/.research_state/subfinding_N.json` and `{output_path}/.research_state/repo_assessment_N.json` (best-effort)\n\
+4. `{output_path}/proposal_N/` scaffold folders when Phase 4 runs.\n\n\
+`{output_path}/research_results.json` must conform to this JSON Schema:\n\
+```json\n\
+{output_schema}\n\
+```\n\n\
+If `.research_state/*` artifacts are missing, continue and complete the final output files.\n\n"
     )
 }
 
@@ -215,9 +238,10 @@ mod tests {
         let rendered = build_research_prompt(&params());
         assert!(rendered.contains("`zotero_search`"));
         assert!(rendered.contains("`paper_search`"));
-        assert!(rendered.contains("`paper_search_sota`"));
         assert!(rendered.contains("`repo_find_entrypoints`"));
         assert!(rendered.contains("### Phase 4: Reproducible Pipeline Scaffolding"));
+        assert!(rendered.contains("### Phase 3b: Skeptic Pass"));
+        assert!(rendered.contains(".research_state/subfinding_N.json"));
     }
 
     #[test]
@@ -245,5 +269,13 @@ mod tests {
         let rendered = build_phase_4_prompt(8, "pytorch", "./out");
         assert!(rendered.contains("For the top 2 proposal"));
         assert!(!rendered.contains("top 8"));
+    }
+
+    #[test]
+    fn output_format_includes_embedded_json_schema() {
+        let rendered = build_output_format_prompt("./out");
+        assert!(rendered.contains("must conform to this JSON Schema"));
+        assert!(rendered.contains("\"title\": \"ResearchOutput\""));
+        assert!(rendered.contains("\"$defs\":"));
     }
 }

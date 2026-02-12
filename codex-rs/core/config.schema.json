@@ -140,7 +140,7 @@
           "type": "string"
         },
         {
-          "description": "Use keyring when available; otherwise, fall back to a file in CODEX_HOME. More secure - stores credentials in OS keyring. If keyring access fails once, it automatically falls back to file storage for the session to avoid repeated prompts.",
+          "description": "NOTE: default changed from `File` to `Auto`. Keep this comment so upstream merges can spot semantic conflicts quickly. Use keyring when available; otherwise, fall back to a file in CODEX_HOME. More secure - stores credentials in OS keyring. If keyring access fails once, it automatically falls back to file storage for the session to avoid repeated prompts.",
           "enum": [
             "auto"
           ],
@@ -200,6 +200,9 @@
             "connectors": {
               "type": "boolean"
             },
+            "data": {
+              "type": "boolean"
+            },
             "elevated_windows_sandbox": {
               "type": "boolean"
             },
@@ -246,6 +249,9 @@
               "type": "boolean"
             },
             "runtime_metrics": {
+              "type": "boolean"
+            },
+            "search_tool": {
               "type": "boolean"
             },
             "shell_snapshot": {
@@ -331,6 +337,21 @@
         },
         "web_search": {
           "$ref": "#/definitions/WebSearchMode"
+        }
+      },
+      "type": "object"
+    },
+    "DataToolsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "huggingface_token": {
+          "type": "string"
+        },
+        "kaggle_key": {
+          "type": "string"
+        },
+        "kaggle_username": {
+          "type": "string"
         }
       },
       "type": "object"
@@ -610,6 +631,14 @@
         "log_user_prompt": {
           "description": "Log user prompt in traces",
           "type": "boolean"
+        },
+        "metrics_exporter": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/OtelExporterKind"
+            }
+          ],
+          "description": "Optional metrics exporter"
         },
         "trace_exporter": {
           "allOf": [
@@ -1222,7 +1251,7 @@
       "type": "string"
     },
     "check_for_update_on_startup": {
-      "description": "When `true`, checks for Codex updates on startup and surfaces update prompts. Set to `false` only if your Codex updates are centrally managed. Defaults to `true`.",
+      "description": "When `true`, checks for Ata updates on startup and surfaces update prompts. Set to `false` only if your Ata updates are centrally managed. Defaults to `true`.",
       "type": "boolean"
     },
     "cli_auth_credentials_store": {
@@ -1237,6 +1266,15 @@
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
       "type": "string"
+    },
+    "data": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/DataToolsToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional non-secret data tool settings."
     },
     "developer_instructions": {
       "default": null,
@@ -1277,6 +1315,9 @@
           "type": "boolean"
         },
         "connectors": {
+          "type": "boolean"
+        },
+        "data": {
           "type": "boolean"
         },
         "elevated_windows_sandbox": {
@@ -1325,6 +1366,9 @@
           "type": "boolean"
         },
         "runtime_metrics": {
+          "type": "boolean"
+        },
+        "search_tool": {
           "type": "boolean"
         },
         "shell_snapshot": {

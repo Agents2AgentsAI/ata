@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use codex_utils_file::encode_inline_cached;
+use codex_utils_file::into_owned_processed_file;
 use codex_utils_image::load_and_resize_to_fit;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -65,11 +67,110 @@ pub enum ResponseInputItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    try_from = "UncheckedContentItem"
+)]
 pub enum ContentItem {
-    InputText { text: String },
-    InputImage { image_url: String },
-    OutputText { text: String },
+    InputText {
+        text: String,
+    },
+    InputImage {
+        image_url: String,
+    },
+    InputFile {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_data: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_id: Option<String>,
+        /// MIME type for the file. Stored internally for provider adapters (Anthropic, Gemini)
+        /// that need it when converting to their native format. Skipped during serialization
+        /// because the OpenAI Responses API does not accept this field on `input_file` blocks;
+        /// the MIME type is already embedded in the `file_data` data-URI.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(skip)]
+        mime_type: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+    },
+    OutputText {
+        text: String,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum UncheckedContentItem {
+    InputText {
+        text: String,
+    },
+    InputImage {
+        image_url: String,
+    },
+    InputFile {
+        file_data: Option<String>,
+        file_id: Option<String>,
+        mime_type: Option<String>,
+        filename: Option<String>,
+    },
+    OutputText {
+        text: String,
+    },
+}
+
+impl TryFrom<UncheckedContentItem> for ContentItem {
+    type Error = &'static str;
+
+    fn try_from(value: UncheckedContentItem) -> Result<Self, Self::Error> {
+        match value {
+            UncheckedContentItem::InputText { text } => Ok(Self::InputText { text }),
+            UncheckedContentItem::InputImage { image_url } => Ok(Self::InputImage { image_url }),
+            UncheckedContentItem::InputFile {
+                file_data,
+                file_id,
+                mime_type,
+                filename,
+            } => {
+                let file_data = file_data.filter(|value| !value.trim().is_empty());
+                let file_id = file_id.filter(|value| !value.trim().is_empty());
+                let has_file_data = file_data.is_some();
+                let has_file_id = file_id.is_some();
+                // Both present or both absent is invalid; exactly one is required.
+                if has_file_data == has_file_id {
+                    return Err("input_file must include exactly one of `file_data` or `file_id`");
+                }
+
+                Ok(Self::InputFile {
+                    file_data,
+                    file_id,
+                    mime_type,
+                    filename,
+                })
+            }
+            UncheckedContentItem::OutputText { text } => Ok(Self::OutputText { text }),
+        }
+    }
+}
+
+impl ContentItem {
+    pub fn inline_file(base64_data: String, mime_type: String, filename: Option<String>) -> Self {
+        Self::InputFile {
+            file_data: Some(base64_data),
+            file_id: None,
+            mime_type: Some(mime_type),
+            filename,
+        }
+    }
+
+    pub fn file_ref(file_id: String, mime_type: String, filename: Option<String>) -> Self {
+        Self::InputFile {
+            file_data: None,
+            file_id: Some(file_id),
+            mime_type: Some(mime_type),
+            filename,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
@@ -502,7 +603,7 @@ fn local_image_error_placeholder(
 ) -> ContentItem {
     ContentItem::InputText {
         text: format!(
-            "Codex could not read the local image at `{}`: {}",
+            "Ata could not read the local image at `{}`: {}",
             path.display(),
             error
         ),
@@ -516,6 +617,10 @@ const IMAGE_CLOSE_TAG: &str = "</image>";
 const LOCAL_IMAGE_OPEN_TAG_PREFIX: &str = "<image name=";
 const LOCAL_IMAGE_OPEN_TAG_SUFFIX: &str = ">";
 const LOCAL_IMAGE_CLOSE_TAG: &str = IMAGE_CLOSE_TAG;
+const FILE_OPEN_TAG_BARE: &str = "<file_start>";
+const FILE_OPEN_TAG_PREFIX: &str = "<file_start";
+const FILE_OPEN_TAG_SUFFIX: &str = "</file_start>";
+const FILE_CLOSE_TAG: &str = "<file_end></file_end>";
 
 pub fn image_open_tag_text() -> String {
     IMAGE_OPEN_TAG.to_string()
@@ -529,9 +634,33 @@ pub fn local_image_label_text(label_number: usize) -> String {
     format!("[Image #{label_number}]")
 }
 
+pub fn local_file_label_text(label_number: usize) -> String {
+    format!("[File #{label_number}]")
+}
+
 pub fn local_image_open_tag_text(label_number: usize) -> String {
     let label = local_image_label_text(label_number);
     format!("{LOCAL_IMAGE_OPEN_TAG_PREFIX}{label}{LOCAL_IMAGE_OPEN_TAG_SUFFIX}")
+}
+
+pub fn local_file_open_tag_text(label_number: usize) -> String {
+    local_file_open_tag_text_with_filename(label_number, None)
+}
+
+pub fn local_file_open_tag_text_with_filename(
+    label_number: usize,
+    filename: Option<&str>,
+) -> String {
+    let label = local_file_label_text(label_number);
+    match filename.filter(|name| !name.is_empty()) {
+        Some(filename) => {
+            let escaped_filename = escape_tag_attribute_value(filename);
+            format!(
+                r#"{FILE_OPEN_TAG_PREFIX} name="{escaped_filename}">{label}{FILE_OPEN_TAG_SUFFIX}"#
+            )
+        }
+        None => format!("{FILE_OPEN_TAG_BARE}{label}{FILE_OPEN_TAG_SUFFIX}"),
+    }
 }
 
 pub fn is_local_image_open_tag_text(text: &str) -> bool {
@@ -539,16 +668,49 @@ pub fn is_local_image_open_tag_text(text: &str) -> bool {
         .is_some_and(|rest| rest.ends_with(LOCAL_IMAGE_OPEN_TAG_SUFFIX))
 }
 
+pub fn is_local_file_open_tag_text(text: &str) -> bool {
+    let Some(rest) = text.strip_prefix(FILE_OPEN_TAG_PREFIX) else {
+        return false;
+    };
+    let Some((attributes, tail)) = rest.split_once('>') else {
+        return false;
+    };
+    if !attributes.is_empty() && !attributes.starts_with(' ') {
+        return false;
+    }
+    tail.ends_with(FILE_OPEN_TAG_SUFFIX)
+}
+
 pub fn is_local_image_close_tag_text(text: &str) -> bool {
     is_image_close_tag_text(text)
+}
+
+pub fn is_local_file_close_tag_text(text: &str) -> bool {
+    is_file_close_tag_text(text)
 }
 
 pub fn is_image_open_tag_text(text: &str) -> bool {
     text == IMAGE_OPEN_TAG
 }
 
+pub fn is_file_open_tag_text(text: &str) -> bool {
+    text == FILE_OPEN_TAG_BARE || is_local_file_open_tag_text(text)
+}
+
 pub fn is_image_close_tag_text(text: &str) -> bool {
     text == IMAGE_CLOSE_TAG
+}
+
+pub fn is_file_close_tag_text(text: &str) -> bool {
+    text == FILE_CLOSE_TAG
+}
+
+fn escape_tag_attribute_value(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn invalid_image_error_placeholder(
@@ -567,7 +729,7 @@ fn invalid_image_error_placeholder(
 fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> ContentItem {
     ContentItem::InputText {
         text: format!(
-            "Codex cannot attach image at `{}`: unsupported image format `{}`.",
+            "Ata cannot attach image at `{}`: unsupported image format `{}`.",
             path.display(),
             mime
         ),
@@ -619,6 +781,54 @@ pub fn local_image_content_items_with_label_number(
             }
         }
     }
+}
+
+pub fn local_file_content_items(path: &Path, label_number: Option<usize>) -> Vec<ContentItem> {
+    match encode_inline_cached(path) {
+        Ok(processed) => {
+            let processed = into_owned_processed_file(processed);
+            let filename = processed.filename.clone();
+            let file_item = ContentItem::inline_file(
+                processed.base64,
+                processed.mime_type,
+                Some(filename.clone()),
+            );
+            wrap_file_content_items(file_item, label_number, Some(filename.as_str()))
+        }
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                %error,
+                "local file encoding failed; inserting error placeholder"
+            );
+            vec![ContentItem::InputText {
+                text: format!(
+                    "Codex could not read the local file at `{}`: {error}",
+                    path.display()
+                ),
+            }]
+        }
+    }
+}
+
+fn wrap_file_content_items(
+    file_item: ContentItem,
+    label_number: Option<usize>,
+    filename: Option<&str>,
+) -> Vec<ContentItem> {
+    let mut items = Vec::with_capacity(if label_number.is_some() { 3 } else { 1 });
+    if let Some(label_number) = label_number {
+        items.push(ContentItem::InputText {
+            text: local_file_open_tag_text_with_filename(label_number, filename),
+        });
+    }
+    items.push(file_item);
+    if label_number.is_some() {
+        items.push(ContentItem::InputText {
+            text: FILE_CLOSE_TAG.to_string(),
+        });
+    }
+    items
 }
 
 impl From<ResponseInputItem> for ResponseItem {
@@ -718,7 +928,9 @@ pub enum ReasoningItemContent {
 
 impl From<Vec<UserInput>> for ResponseInputItem {
     fn from(items: Vec<UserInput>) -> Self {
-        let mut image_index = 0;
+        // Use a single attachment counter so images and files share the same
+        // numbering sequence, matching the composer's combined label counter.
+        let mut attachment_index = 0;
         Self::Message {
             role: "user".to_string(),
             content: items
@@ -735,8 +947,27 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                         },
                     ],
                     UserInput::LocalImage { path } => {
-                        image_index += 1;
-                        local_image_content_items_with_label_number(&path, Some(image_index))
+                        attachment_index += 1;
+                        local_image_content_items_with_label_number(&path, Some(attachment_index))
+                    }
+                    UserInput::LocalFile { path } => {
+                        attachment_index += 1;
+                        local_file_content_items(&path, Some(attachment_index))
+                    }
+                    UserInput::UploadedFile {
+                        file_id,
+                        mime_type,
+                        filename,
+                        ..
+                    } => {
+                        attachment_index += 1;
+                        let file_item =
+                            ContentItem::file_ref(file_id, mime_type, Some(filename.clone()));
+                        wrap_file_content_items(
+                            file_item,
+                            Some(attachment_index),
+                            Some(filename.as_str()),
+                        )
                     }
                     UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(), // Tool bodies are injected later in core
                 })
@@ -1697,7 +1928,7 @@ mod tests {
             ResponseInputItem::Message { content, .. } => {
                 assert_eq!(content.len(), 1);
                 let expected = format!(
-                    "Codex cannot attach image at `{}`: unsupported image format `image/svg+xml`.",
+                    "Ata cannot attach image at `{}`: unsupported image format `image/svg+xml`.",
                     svg_path.display()
                 );
                 match &content[0] {
@@ -1709,5 +1940,234 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn input_file_inline_has_file_data_only() {
+        let item = ContentItem::inline_file(
+            "JVBERi0xLjQ=".to_string(),
+            "application/pdf".to_string(),
+            Some("report.pdf".to_string()),
+        );
+
+        match item {
+            ContentItem::InputFile {
+                file_data,
+                file_id,
+                mime_type,
+                filename,
+            } => {
+                assert_eq!(file_data, Some("JVBERi0xLjQ=".to_string()));
+                assert_eq!(file_id, None);
+                assert_eq!(mime_type, Some("application/pdf".to_string()));
+                assert_eq!(filename, Some("report.pdf".to_string()));
+            }
+            other => panic!("expected input file but found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn input_file_ref_has_file_id_only() {
+        let item = ContentItem::file_ref(
+            "file-123".to_string(),
+            "application/pdf".to_string(),
+            Some("report.pdf".to_string()),
+        );
+
+        match item {
+            ContentItem::InputFile {
+                file_data,
+                file_id,
+                mime_type,
+                filename,
+            } => {
+                assert_eq!(file_data, None);
+                assert_eq!(file_id, Some("file-123".to_string()));
+                assert_eq!(mime_type, Some("application/pdf".to_string()));
+                assert_eq!(filename, Some("report.pdf".to_string()));
+            }
+            other => panic!("expected input file but found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn local_file_open_tag_with_filename_is_detected() {
+        let tag = local_file_open_tag_text_with_filename(1, Some("report.pdf"));
+        assert!(is_local_file_open_tag_text(&tag));
+        assert!(is_file_open_tag_text(&tag));
+    }
+
+    #[test]
+    fn input_file_deserialization_rejects_both_file_data_and_file_id() {
+        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "input_file",
+            "file_data": "JVBERi0xLjQ=",
+            "file_id": "file-123",
+            "mime_type": "application/pdf",
+            "filename": "report.pdf",
+        }))
+        .expect_err("deserialization should fail");
+
+        assert!(
+            err.to_string()
+                .contains("input_file must include exactly one of `file_data` or `file_id`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn input_file_deserialization_rejects_missing_file_data_and_file_id() {
+        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "input_file",
+            "mime_type": "application/pdf",
+            "filename": "report.pdf",
+        }))
+        .expect_err("deserialization should fail");
+
+        assert!(
+            err.to_string()
+                .contains("input_file must include exactly one of `file_data` or `file_id`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn input_file_deserialization_rejects_empty_file_data() {
+        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "input_file",
+            "file_data": "",
+            "mime_type": "application/pdf",
+            "filename": "report.pdf",
+        }))
+        .expect_err("deserialization should fail");
+
+        assert!(
+            err.to_string()
+                .contains("input_file must include exactly one of `file_data` or `file_id`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn input_file_deserialization_rejects_empty_file_id() {
+        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "input_file",
+            "file_id": "",
+            "mime_type": "application/pdf",
+            "filename": "report.pdf",
+        }))
+        .expect_err("deserialization should fail");
+
+        assert!(
+            err.to_string()
+                .contains("input_file must include exactly one of `file_data` or `file_id`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn wraps_local_file_user_input_with_tags() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("report.pdf");
+        std::fs::write(&path, b"%PDF-1.4\nhello")?;
+
+        let item = ResponseInputItem::from(vec![UserInput::LocalFile { path }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                assert_eq!(content.len(), 3);
+                assert_eq!(
+                    content[0],
+                    ContentItem::InputText {
+                        text: local_file_open_tag_text_with_filename(1, Some("report.pdf")),
+                    }
+                );
+                match &content[1] {
+                    ContentItem::InputFile {
+                        file_data,
+                        file_id,
+                        mime_type,
+                        filename,
+                    } => {
+                        assert!(file_data.is_some(), "inline file should include file_data");
+                        assert_eq!(file_id, &None);
+                        assert_eq!(mime_type, &Some("application/pdf".to_string()));
+                        assert_eq!(filename, &Some("report.pdf".to_string()));
+                    }
+                    other => panic!("expected input file content but found {other:?}"),
+                }
+                assert_eq!(
+                    content[2],
+                    ContentItem::InputText {
+                        text: FILE_CLOSE_TAG.to_string(),
+                    }
+                );
+            }
+            other => panic!("expected message response but got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn local_file_read_error_inserts_error_placeholder() {
+        let dir = tempdir().expect("temp dir");
+        let missing = dir.path().join("missing-report.pdf");
+        let item = ResponseInputItem::from(vec![UserInput::LocalFile {
+            path: missing.clone(),
+        }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                assert_eq!(content.len(), 1, "should have exactly one placeholder item");
+                match &content[0] {
+                    ContentItem::InputText { text } => {
+                        assert!(
+                            text.contains(&missing.display().to_string()),
+                            "placeholder should mention the file path"
+                        );
+                        assert!(
+                            text.starts_with("Codex could not read"),
+                            "placeholder should start with error prefix"
+                        );
+                    }
+                    other => panic!("expected InputText placeholder but got {other:?}"),
+                }
+            }
+            other => panic!("expected message response but got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn uploaded_file_user_input_produces_tagged_file_ref_content_item() {
+        let item = ResponseInputItem::from(vec![UserInput::UploadedFile {
+            file_id: "file-abc".to_string(),
+            mime_type: "application/pdf".to_string(),
+            filename: "report.pdf".to_string(),
+            source_path: PathBuf::from("/tmp/report.pdf"),
+        }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                assert_eq!(
+                    content,
+                    vec![
+                        ContentItem::InputText {
+                            text: local_file_open_tag_text_with_filename(1, Some("report.pdf")),
+                        },
+                        ContentItem::InputFile {
+                            file_data: None,
+                            file_id: Some("file-abc".to_string()),
+                            mime_type: Some("application/pdf".to_string()),
+                            filename: Some("report.pdf".to_string()),
+                        },
+                        ContentItem::InputText {
+                            text: FILE_CLOSE_TAG.to_string(),
+                        }
+                    ]
+                );
+            }
+            other => panic!("expected message response but got {other:?}"),
+        }
     }
 }

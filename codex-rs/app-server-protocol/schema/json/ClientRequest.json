@@ -21,6 +21,7 @@
       "type": "object"
     },
     "AppsListParams": {
+      "description": "EXPERIMENTAL - list available apps/connectors.",
       "properties": {
         "cursor": {
           "description": "Opaque pagination cursor returned by a previous call.",
@@ -29,12 +30,23 @@
             "null"
           ]
         },
+        "forceRefetch": {
+          "description": "When true, bypass app caches and fetch the latest data from sources.",
+          "type": "boolean"
+        },
         "limit": {
           "description": "Optional page size; defaults to a reasonable server-side value.",
           "format": "uint32",
           "minimum": 0.0,
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "threadId": {
+          "description": "Optional thread id used to evaluate app feature gating from that thread's config.",
+          "type": [
+            "string",
             "null"
           ]
         }
@@ -343,6 +355,47 @@
             "type"
           ],
           "title": "InputImageContentItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "file_data": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "file_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "filename": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mime_type": {
+              "description": "MIME type for the file. Stored internally for provider adapters (Anthropic, Gemini) that need it when converting to their native format. Skipped during serialization because the OpenAI Responses API does not accept this field on `input_file` blocks; the MIME type is already embedded in the `file_data` data-URI.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "input_file"
+              ],
+              "title": "InputFileContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "InputFileContentItem",
           "type": "object"
         },
         {
@@ -706,6 +759,16 @@
           "default": false,
           "description": "Opt into receiving experimental API methods and fields.",
           "type": "boolean"
+        },
+        "optOutNotificationMethods": {
+          "description": "Exact notification method names that should be suppressed for this connection (for example `codex/event/session_configured`).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -993,12 +1056,19 @@
           "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE. The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.",
           "properties": {
             "accessToken": {
-              "description": "Access token (JWT) supplied by the client. This token is used for backend API requests.",
+              "description": "Access token (JWT) supplied by the client. This token is used for backend API requests and email extraction.",
               "type": "string"
             },
-            "idToken": {
-              "description": "ID token (JWT) supplied by the client.\n\nThis token is used for identity and account metadata (email, plan type, workspace id).",
+            "chatgptAccountId": {
+              "description": "Workspace/account identifier supplied by the client.",
               "type": "string"
+            },
+            "chatgptPlanType": {
+              "description": "Optional plan type supplied by the client.\n\nWhen `null`, Codex attempts to derive the plan type from access-token claims. If unavailable, the plan defaults to `unknown`.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "enum": [
@@ -1010,7 +1080,7 @@
           },
           "required": [
             "accessToken",
-            "idToken",
+            "chatgptAccountId",
             "type"
           ],
           "title": "ChatgptAuthTokensLoginAccountParams",
@@ -1222,7 +1292,8 @@
         "low",
         "medium",
         "high",
-        "xhigh"
+        "xhigh",
+        "adaptive"
       ],
       "type": "string"
     },
@@ -2212,6 +2283,24 @@
       ],
       "type": "object"
     },
+    "SkillsListExtraRootsForCwd": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "extraUserRoots": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "cwd",
+        "extraUserRoots"
+      ],
+      "type": "object"
+    },
     "SkillsListParams": {
       "properties": {
         "cwds": {
@@ -2224,6 +2313,17 @@
         "forceReload": {
           "description": "When true, bypass the skills cache and re-scan skills from disk.",
           "type": "boolean"
+        },
+        "perCwdExtraUserRoots": {
+          "default": null,
+          "description": "Optional per-cwd extra roots to scan as user-scoped skills.",
+          "items": {
+            "$ref": "#/definitions/SkillsListExtraRootsForCwd"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "type": "object"
