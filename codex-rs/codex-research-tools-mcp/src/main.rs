@@ -12,6 +12,7 @@ use codex_research_tools::types::PaperSearchParams;
 use codex_research_tools::types::ZoteroCollectionItemsParams;
 use codex_research_tools::types::ZoteroCollectionsParams;
 use codex_research_tools::types::ZoteroItemParams;
+use codex_research_tools::types::ZoteroListGroupsParams;
 use codex_research_tools::types::ZoteroSearchParams;
 use codex_research_tools::types::ZoteroTagSearchParams;
 use rmcp::ErrorData as McpError;
@@ -250,6 +251,13 @@ impl ServerHandler for ResearchMcpServer {
                 let params: ZoteroCollectionsParams = parse_arguments(request.arguments)?;
                 self.toolkit
                     .zotero_get_collections(params)
+                    .await
+                    .map(serialize_tool_result)
+            }
+            "list_groups" => {
+                let params: ZoteroListGroupsParams = parse_arguments(request.arguments)?;
+                self.toolkit
+                    .zotero_list_groups(params)
                     .await
                     .map(serialize_tool_result)
             }

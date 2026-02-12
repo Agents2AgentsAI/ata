@@ -158,6 +158,21 @@ pub struct ZoteroCollectionsResult {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroGroup {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub source_meta: Option<SourceMeta>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroGroupsResult {
+    pub groups: Vec<ZoteroGroup>,
+    pub total_available: Option<u64>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct RepoHealth {
     pub license: Option<String>,
     pub last_commit_date: Option<String>,
@@ -297,6 +312,13 @@ pub struct ZoteroTagSearchParams {
 pub struct ZoteroCollectionsParams {
     pub library_type: Option<String>,
     pub library_id: Option<String>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroListGroupsParams {
+    pub user_id: Option<String>,
     pub offset: Option<u32>,
     pub limit: Option<u32>,
 }

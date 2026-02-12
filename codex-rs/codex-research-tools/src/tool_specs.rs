@@ -220,6 +220,21 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 }),
             },
             ToolDef {
+                id: "zotero_list_groups",
+                native_name: "zotero_list_groups",
+                mcp_name: "list_groups",
+                description: "List Zotero groups accessible to the user.",
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "user_id": { "type": "string" },
+                        "offset": { "type": "integer" },
+                        "limit": { "type": "integer" }
+                    },
+                    "additionalProperties": false
+                }),
+            },
+            ToolDef {
                 id: "zotero_get_collection_items",
                 native_name: "zotero_get_collection_items",
                 mcp_name: "get_collection_items",
