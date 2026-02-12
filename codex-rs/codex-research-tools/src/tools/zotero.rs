@@ -1354,7 +1354,12 @@ fn map_zotero_annotation(annotation: zotero::ZoteroAnnotation) -> ZoteroAnnotati
         .as_deref()
         .map(str::trim)
         .map(str::to_ascii_lowercase)
-        .filter(|value| matches!(value.as_str(), "highlight" | "note" | "image"))
+        .filter(|value| {
+            matches!(
+                value.as_str(),
+                "highlight" | "note" | "image" | "underline" | "strikethrough" | "ink"
+            )
+        })
         .unwrap_or_else(|| "unknown".to_string());
 
     ZoteroAnnotation {
@@ -1735,7 +1740,7 @@ mod tests {
             vec![ZoteroAnnotation {
                 key: "ANNO2".to_string(),
                 parent_item: Some("ITEM2".to_string()),
-                annotation_type: "unknown".to_string(),
+                annotation_type: "underline".to_string(),
                 annotation_text: Some("alpha".to_string()),
                 annotation_comment: None,
                 annotation_color: None,
@@ -1744,6 +1749,79 @@ mod tests {
                 parent_item_title: None,
                 source_meta: None,
             }]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_get_annotations_preserves_extended_annotation_types() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("itemType", "annotation"))
+            .and(query_param("start", "0"))
+            .and(query_param("limit", "10"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "ANNO_STRIKE",
+                    "data": {
+                        "itemType": "annotation",
+                        "parentItem": "ITEM1",
+                        "annotationType": "strikethrough",
+                        "annotationText": "x"
+                    }
+                },
+                {
+                    "key": "ANNO_INK",
+                    "data": {
+                        "itemType": "annotation",
+                        "parentItem": "ITEM1",
+                        "annotationType": "ink",
+                        "annotationComment": "pen"
+                    }
+                },
+                {
+                    "key": "ANNO_UNKNOWN",
+                    "data": {
+                        "itemType": "annotation",
+                        "parentItem": "ITEM1",
+                        "annotationType": "weird-new-type",
+                        "annotationComment": "fallback"
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let mut result = toolkit
+            .zotero_get_annotations(ZoteroAnnotationsParams {
+                item_key: None,
+                library_type: None,
+                library_id: None,
+                offset: Some(0),
+                limit: Some(10),
+                include_parent_context: Some(false),
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_get_annotations should succeed");
+
+        for annotation in &mut result.annotations {
+            annotation.source_meta = None;
+        }
+
+        assert_eq!(
+            result
+                .annotations
+                .iter()
+                .map(|annotation| annotation.annotation_type.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                "strikethrough".to_string(),
+                "ink".to_string(),
+                "unknown".to_string()
+            ]
         );
     }
 
