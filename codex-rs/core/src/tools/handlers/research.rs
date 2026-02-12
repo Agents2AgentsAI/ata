@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_research_tools::config::ResearchConfig;
 use codex_research_tools::error::ResearchError;
+use codex_research_tools::types::LatexCompileParams;
 use codex_research_tools::types::PaginationParams;
 use codex_research_tools::types::PaperSearchParams;
 use codex_research_tools::types::ZoteroAdvancedSearchParams;
@@ -153,6 +154,10 @@ impl ResearchBridgeHandler {
                     .toolkit
                     .zotero_get_collection_items(params))
             }
+            #[cfg(feature = "research-latex")]
+            "latex_compile" => dispatch_with_params!(LatexCompileParams, |params| self
+                .toolkit
+                .latex_compile(params)),
             #[cfg(feature = "research-repo")]
             "repo_clone_and_summarize" => dispatch_with_params!(RepoCloneArgs, |params| self
                 .toolkit

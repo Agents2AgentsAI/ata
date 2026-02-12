@@ -529,3 +529,20 @@ pub struct ZoteroCollectionItemsParams {
     pub item_type: Option<String>,
     pub max_chars_per_item: Option<u32>,
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct LatexCompileParams {
+    pub content: String,
+    pub output_dir: String,
+    pub filename: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct LatexCompileResult {
+    pub success: bool,
+    pub pdf_path: Option<String>,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+    pub num_pages: Option<usize>,
+    pub compilation_log_snippet: Option<String>,
+}

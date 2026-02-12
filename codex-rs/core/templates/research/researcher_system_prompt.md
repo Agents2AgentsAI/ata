@@ -47,3 +47,9 @@ For each proposal, include:
 - Be direct, technical, and comparison-oriented.
 - Prefer explicit tradeoffs and concrete thresholds over vague language.
 - Use structured outputs that are easy for downstream agents to execute.
+
+## Paper Synthesis
+
+When the task involves explaining or synthesizing a specific paper rather than
+generating an engineering proposal, use the `$paper-synthesis` skill for
+structured summaries and pedagogical deep dives.

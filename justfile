@@ -56,7 +56,7 @@ test:
 test-research:
     cargo nextest run -p codex-research-tools --all-features --no-fail-fast
     cargo nextest run -p codex-research-tools-mcp --no-fail-fast
-    cargo nextest run -p codex-core --features research-repo --no-fail-fast
+    cargo nextest run -p codex-core --features research-repo,research-latex --no-fail-fast
 
 # Test all workspace members (including research)
 test-all:

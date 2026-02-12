@@ -23,6 +23,8 @@ use paper_id::PaperIdResolver;
 use rate_limiter::RateLimiter;
 use types::CitationResult;
 use types::ConfigSchema;
+use types::LatexCompileParams;
+use types::LatexCompileResult;
 use types::ModelDefinition;
 use types::PaginationParams;
 use types::PaperDetail;
@@ -370,6 +372,18 @@ impl ResearchToolkit {
     ) -> Result<ZoteroSearchResult> {
         Err(ResearchError::NotImplemented {
             tool: "zotero_get_collection_items",
+        })
+    }
+
+    #[cfg(feature = "latex")]
+    pub async fn latex_compile(&self, params: LatexCompileParams) -> Result<LatexCompileResult> {
+        tools::latex::latex_compile(params).await
+    }
+
+    #[cfg(not(feature = "latex"))]
+    pub async fn latex_compile(&self, _params: LatexCompileParams) -> Result<LatexCompileResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "latex_compile",
         })
     }
 
