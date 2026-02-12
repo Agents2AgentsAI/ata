@@ -4,6 +4,7 @@ use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
 use crate::error::ApiError;
+use crate::file_support::rewrite_openai_url_file_blocks_in_payload;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
 use crate::sse::responses::ResponsesStreamEvent;
@@ -90,6 +91,8 @@ impl ResponsesWebsocketConnection {
         let request_body = serde_json::to_value(&request).map_err(|err| {
             ApiError::Stream(format!("failed to encode websocket request: {err}"))
         })?;
+        let mut request_body = request_body;
+        rewrite_openai_url_file_blocks_in_payload(&mut request_body);
 
         tokio::spawn(async move {
             if let Some(etag) = models_etag {

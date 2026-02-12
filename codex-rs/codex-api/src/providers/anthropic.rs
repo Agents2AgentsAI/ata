@@ -430,6 +430,33 @@ fn build_anthropic_messages(input: &[Value]) -> Result<Vec<Value>, ApiError> {
                                     });
                                 }
                             }
+                            "url_file" => {
+                                let title = block
+                                    .get("filename")
+                                    .and_then(Value::as_str)
+                                    .filter(|filename| !filename.is_empty());
+                                let url = block
+                                    .get("url")
+                                    .and_then(Value::as_str)
+                                    .map(str::trim)
+                                    .filter(|url| !url.is_empty())
+                                    .ok_or_else(|| ApiError::InvalidRequest {
+                                        message: "url_file block requires a non-empty `url`"
+                                            .to_string(),
+                                    })?;
+
+                                let mut document = json!({
+                                    "type": "document",
+                                    "source": {
+                                        "type": "url",
+                                        "url": url,
+                                    }
+                                });
+                                if let Some(title) = title {
+                                    document["title"] = json!(title);
+                                }
+                                blocks.push(document);
+                            }
                             _ => {}
                         }
                     }
@@ -891,6 +918,35 @@ mod tests {
 
         let error = build_anthropic_messages(&input).expect_err("missing file data/id should fail");
         assert!(matches!(error, ApiError::InvalidRequest { .. }));
+    }
+
+    #[test]
+    fn test_build_anthropic_messages_with_url_file() {
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "url_file",
+                "url": "https://example.com/report.pdf",
+                "filename": "report.pdf"
+            }]
+        })];
+
+        let messages = build_anthropic_messages(&input).expect("build messages");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"][0]["type"], "document");
+        assert_eq!(messages[0]["content"][0]["source"]["type"], "url");
+        assert_eq!(
+            messages[0]["content"][0]["source"]["url"],
+            "https://example.com/report.pdf"
+        );
+        assert_eq!(messages[0]["content"][0]["title"], "report.pdf");
+        assert!(
+            messages[0]["content"][0]["source"]
+                .get("media_type")
+                .is_none()
+        );
     }
 
     #[test]

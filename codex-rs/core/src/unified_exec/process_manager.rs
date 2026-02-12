@@ -5,7 +5,6 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
