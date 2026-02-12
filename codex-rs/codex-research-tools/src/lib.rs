@@ -40,8 +40,10 @@ use types::ZoteroCollectionItemsParams;
 use types::ZoteroCollectionsParams;
 use types::ZoteroCollectionsResult;
 use types::ZoteroFullTextResult;
+use types::ZoteroGroupsResult;
 use types::ZoteroItemDetail;
 use types::ZoteroItemParams;
+use types::ZoteroListGroupsParams;
 use types::ZoteroNotesResult;
 use types::ZoteroSearchParams;
 use types::ZoteroSearchResult;
@@ -98,9 +100,7 @@ impl ResearchToolkit {
     #[must_use]
     pub fn is_tool_configured(&self, tool_id: &str) -> bool {
         if tool_id.starts_with("zotero_") {
-            let has_library_id =
-                self.config.zotero_user_id.is_some() || self.config.zotero_group_id.is_some();
-            return self.config.zotero_api_key.is_some() && has_library_id;
+            return self.config.zotero_api_key.is_some() || self.config.uses_local_zotero_api();
         }
 
         if tool_id == "repo_get_health" {
@@ -280,6 +280,24 @@ impl ResearchToolkit {
     ) -> Result<ZoteroCollectionsResult> {
         Err(ResearchError::NotImplemented {
             tool: "zotero_get_collections",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_list_groups(
+        &self,
+        params: ZoteroListGroupsParams,
+    ) -> Result<ZoteroGroupsResult> {
+        tools::zotero::zotero_list_groups(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_list_groups(
+        &self,
+        _params: ZoteroListGroupsParams,
+    ) -> Result<ZoteroGroupsResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_list_groups",
         })
     }
 

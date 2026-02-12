@@ -72,8 +72,9 @@ Use sub-agents when available. Each sub-agent should write one artifact to \
 
     if params.has_zotero {
         phase.push_str(&format!(
-            "- Search user library via `{}` and inspect relevant collections via `{}`.\n",
-            tool.zotero_search, tool.zotero_get_collections,
+            "- Discover accessible Zotero groups via `{}`.\n\
+- Search My Library or a selected group via `{}` and inspect relevant collections via `{}`.\n",
+            tool.zotero_list_groups, tool.zotero_search, tool.zotero_get_collections,
         ));
     }
     if params.has_paper_search {
@@ -237,6 +238,7 @@ mod tests {
     fn prompt_includes_selected_tools_and_phases() {
         let rendered = build_research_prompt(&params());
         assert!(rendered.contains("`zotero_search`"));
+        assert!(rendered.contains("`zotero_list_groups`"));
         assert!(rendered.contains("`paper_search`"));
         assert!(rendered.contains("`repo_find_entrypoints`"));
         assert!(rendered.contains("### Phase 4: Reproducible Pipeline Scaffolding"));

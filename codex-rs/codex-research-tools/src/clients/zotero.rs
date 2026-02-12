@@ -13,6 +13,8 @@ use crate::types::ZoteroAttachmentsResult;
 use crate::types::ZoteroCollection;
 use crate::types::ZoteroCollectionsResult;
 use crate::types::ZoteroFullTextResult;
+use crate::types::ZoteroGroup;
+use crate::types::ZoteroGroupsResult;
 use crate::types::ZoteroItem;
 use crate::types::ZoteroItemDetail;
 use crate::types::ZoteroNote;
@@ -22,7 +24,7 @@ use crate::types::ZoteroSearchResult;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ZoteroConfig<'a> {
     pub base_url: &'a str,
-    pub api_key: &'a str,
+    pub api_key: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -34,6 +36,7 @@ pub(crate) enum ZoteroLibraryScope {
 
 impl ZoteroLibraryScope {
     fn root_url(&self, base_url: &str) -> String {
+        let base_url = base_url.trim_end_matches('/');
         match self {
             Self::User(user_id) => format!("{base_url}/users/{user_id}"),
             Self::Group(group_id) => format!("{base_url}/groups/{group_id}"),
@@ -77,6 +80,12 @@ pub(crate) struct ZoteroChildrenRequest<'a> {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ZoteroCollectionsRequest {
+    pub offset: u32,
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ZoteroListGroupsRequest {
     pub offset: u32,
     pub limit: u32,
 }
@@ -275,6 +284,35 @@ pub(crate) async fn get_collections(
     })
 }
 
+pub(crate) async fn list_groups(
+    http: &HttpClient,
+    config: ZoteroConfig<'_>,
+    user_id: &str,
+    request: ZoteroListGroupsRequest,
+) -> Result<ZoteroGroupsResult> {
+    let scope = ZoteroLibraryScope::User(user_id.to_string());
+    let url = format!(
+        "{root}/groups?format=json&start={offset}&limit={limit}",
+        root = scope.root_url(config.base_url),
+        offset = request.offset,
+        limit = request.limit,
+    );
+
+    let (response, total_available): (Vec<ZoteroApiGroup>, Option<u64>) =
+        execute_json_with_total_results(http, config, &url).await?;
+
+    let groups = response
+        .into_iter()
+        .map(|group| map_group(group, &url))
+        .collect::<Vec<_>>();
+
+    Ok(ZoteroGroupsResult {
+        has_more: compute_has_more(request.offset, groups.len(), request.limit, total_available),
+        total_available,
+        groups,
+    })
+}
+
 pub(crate) async fn get_collection_items(
     http: &HttpClient,
     config: ZoteroConfig<'_>,
@@ -313,10 +351,14 @@ fn zotero_request(
     config: ZoteroConfig<'_>,
     url: &str,
 ) -> reqwest::RequestBuilder {
-    http.client()
-        .get(url)
-        .header("Zotero-API-Key", config.api_key)
-        .header("Zotero-API-Version", "3")
+    let mut request = http.client().get(url).header("Zotero-API-Version", "3");
+    if let Some(api_key) = config.api_key.filter(|value| !value.trim().is_empty()) {
+        request = request.header("Zotero-API-Key", api_key);
+    } else {
+        // Local Zotero API accepts this header for non-browser clients.
+        request = request.header("Zotero-Allowed-Request", "1");
+    }
+    request
 }
 
 async fn execute_json_with_total_results<T>(
@@ -498,6 +540,38 @@ fn map_collection(
     }
 }
 
+fn map_group(group: ZoteroApiGroup, api_url: &str) -> ZoteroGroup {
+    let ZoteroApiGroup { id, data } = group;
+    let ZoteroApiGroupData {
+        id: data_id,
+        name,
+        description,
+    } = data;
+
+    let id = id
+        .or(data_id)
+        .map(ZoteroApiGroupId::into_string)
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    ZoteroGroup {
+        id: id.clone(),
+        name: name
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "Untitled Group".to_string()),
+        description: description
+            .map(|description| description.trim().to_string())
+            .filter(|description| !description.is_empty()),
+        source_meta: Some(SourceMeta {
+            source: "zotero".to_string(),
+            api_url: api_url.to_string(),
+            fetched_at: Utc::now(),
+            canonical_id: Some(format!("zotero:group/{id}")),
+        }),
+    }
+}
+
 fn creator_display_names(creators: &[ZoteroApiCreator]) -> Vec<String> {
     creators
         .iter()
@@ -661,4 +735,34 @@ struct ZoteroApiCollectionData {
     name: Option<String>,
     #[serde(rename = "parentCollection")]
     parent_collection: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ZoteroApiGroupId {
+    Numeric(u64),
+    Text(String),
+}
+
+impl ZoteroApiGroupId {
+    fn into_string(self) -> String {
+        match self {
+            Self::Numeric(id) => id.to_string(),
+            Self::Text(id) => id.trim().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ZoteroApiGroup {
+    id: Option<ZoteroApiGroupId>,
+    #[serde(default)]
+    data: ZoteroApiGroupData,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ZoteroApiGroupData {
+    id: Option<ZoteroApiGroupId>,
+    name: Option<String>,
+    description: Option<String>,
 }
