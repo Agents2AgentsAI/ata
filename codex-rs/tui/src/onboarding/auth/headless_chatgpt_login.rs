@@ -11,7 +11,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::RwLock;
 use tokio::sync::Notify;
@@ -245,7 +245,7 @@ fn set_device_code_success_message_for_active_attempt(
     sign_in_state: &Arc<RwLock<SignInState>>,
     request_frame: &FrameRequester,
     auth_manager: &AuthManager,
-    codex_home: &PathBuf,
+    codex_home: &Path,
     cancel: &Arc<Notify>,
 ) -> bool {
     let mut guard = sign_in_state.write().unwrap();
