@@ -20,6 +20,7 @@ use crate::types::ZoteroGrepParams;
 use crate::types::ZoteroGrepResult;
 
 use super::DEFAULT_CHILDREN_LIMIT;
+use super::DEFAULT_FULLTEXT_MAX_CHARS;
 use super::NormalizedScope;
 use super::content_collector::collect_grep_segments;
 use super::match_engine::build_grep_matcher;
@@ -97,6 +98,7 @@ pub(super) async fn zotero_grep_text(
 
     tokio::time::timeout(tool_timeout, async move {
         let (candidates, mut warnings) = load_grep_candidates(toolkit, &normalized).await?;
+        append_truncation_warnings(&normalized, &mut warnings);
         if normalized.candidate_strategy == ZoteroGrepCandidateStrategy::RecentModified {
             warnings.push(
                 "candidate_strategy=recent_modified scans only a bounded recent set; results may be incomplete"
@@ -360,6 +362,21 @@ fn normalize_grep_fields(fields: Option<Vec<ZoteroGrepField>>) -> Result<Vec<Zot
     }
 
     Ok(deduped)
+}
+
+fn append_truncation_warnings(normalized: &NormalizedGrepParams, warnings: &mut Vec<String>) {
+    if let Some(max_chars) = normalized.max_chars_per_item {
+        warnings.push(format!(
+            "max_chars_per_item={max_chars} truncates text segments before matching; matches beyond this boundary may be missed"
+        ));
+        return;
+    }
+
+    if field_enabled(&normalized.fields, ZoteroGrepField::Fulltext) {
+        warnings.push(format!(
+            "fulltext search uses default {DEFAULT_FULLTEXT_MAX_CHARS} character cap per item; matches beyond this cap may be missed. Set max_chars_per_item to adjust."
+        ));
+    }
 }
 
 fn build_empty_grep_hints(normalized: &NormalizedGrepParams) -> Vec<String> {

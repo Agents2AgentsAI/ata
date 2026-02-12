@@ -27,6 +27,7 @@ use crate::types::ZoteroSearchConditionOperation;
 use crate::types::ZoteroSearchResult;
 use crate::types::ZoteroSortDirection;
 
+use super::DEFAULT_FULLTEXT_MAX_CHARS;
 use super::NormalizedScope;
 use super::apply_items_budget;
 use super::content_collector::collect_grep_segments;
@@ -109,6 +110,7 @@ pub(super) async fn zotero_advanced_search(
         let (candidate_items, candidate_truncated, mut warnings) =
             load_advanced_candidates(toolkit, &normalized).await?;
         let scanned_items = candidate_items.len();
+        append_truncation_warnings(&normalized, &mut warnings);
 
         if normalized.candidate_strategy == ZoteroAdvancedCandidateStrategy::RecentModifiedFallback {
             warnings.push(
@@ -444,6 +446,31 @@ fn derive_collector_fields(conditions: &[NormalizedCondition]) -> Vec<ZoteroGrep
         }
     }
     fields
+}
+
+fn append_truncation_warnings(normalized: &NormalizedAdvancedParams, warnings: &mut Vec<String>) {
+    let truncation_relevant = !normalized.collector_fields.is_empty()
+        || normalized.requires_publication_detail
+        || normalized.requires_doi_detail;
+    if !truncation_relevant {
+        return;
+    }
+
+    if let Some(max_chars) = normalized.max_chars_per_item {
+        warnings.push(format!(
+            "max_chars_per_item={max_chars} truncates fetched text before condition evaluation; matches beyond this boundary may be missed"
+        ));
+        return;
+    }
+
+    if normalized
+        .collector_fields
+        .contains(&ZoteroGrepField::Fulltext)
+    {
+        warnings.push(format!(
+            "fulltext conditions use default {DEFAULT_FULLTEXT_MAX_CHARS} character cap per item; matches beyond this cap may be missed. Set max_chars_per_item to adjust."
+        ));
+    }
 }
 
 async fn load_advanced_candidates(
