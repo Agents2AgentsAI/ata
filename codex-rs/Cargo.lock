@@ -2156,6 +2156,7 @@ version = "0.0.0"
 dependencies = [
  "chrono",
  "dashmap",
+ "futures",
  "lru 0.16.3",
  "pretty_assertions",
  "quick-xml",

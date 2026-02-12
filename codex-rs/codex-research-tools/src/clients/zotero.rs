@@ -69,6 +69,8 @@ pub(crate) struct ZoteroSearchRequest<'a> {
     pub offset: u32,
     pub limit: u32,
     pub item_type: Option<&'a str>,
+    pub sort: Option<&'a str>,
+    pub direction: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +100,37 @@ pub(crate) struct ZoteroCollectionItemsRequest<'a> {
     pub item_type: Option<&'a str>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ZoteroLibraryAnnotationsRequest {
+    pub offset: u32,
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub(crate) struct ZoteroAnnotation {
+    pub key: String,
+    pub parent_item: Option<String>,
+    pub annotation_type: Option<String>,
+    pub annotation_text: Option<String>,
+    pub annotation_comment: Option<String>,
+    pub source_meta: Option<SourceMeta>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub(crate) struct ZoteroAnnotationsResult {
+    pub item_key: String,
+    pub annotations: Vec<ZoteroAnnotation>,
+    pub total_available: Option<u64>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub(crate) struct ZoteroLibraryAnnotationsPage {
+    pub annotations: Vec<ZoteroAnnotation>,
+    pub total_available: Option<u64>,
+    pub has_more: bool,
+}
+
 pub(crate) async fn search_items(
     http: &HttpClient,
     config: ZoteroConfig<'_>,
@@ -113,7 +146,6 @@ pub(crate) async fn search_items(
 
     if let Some(query) = request.query {
         url.push_str(&format!("&q={}", urlencoding::encode(query)));
-        url.push_str("&sort=relevance");
     }
 
     if let Some(tag) = request.tag {
@@ -122,6 +154,16 @@ pub(crate) async fn search_items(
 
     if let Some(item_type) = request.item_type {
         url.push_str(&format!("&itemType={}", urlencoding::encode(item_type)));
+    }
+
+    if let Some(sort) = request.sort {
+        url.push_str(&format!("&sort={}", urlencoding::encode(sort)));
+    } else if request.query.is_some() {
+        url.push_str("&sort=relevance");
+    }
+
+    if let Some(direction) = request.direction {
+        url.push_str(&format!("&direction={}", urlencoding::encode(direction)));
     }
 
     let (response, total_available): (Vec<ZoteroApiItem>, Option<u64>) =
@@ -214,6 +256,146 @@ pub(crate) async fn get_notes(
         total_available,
         notes,
     })
+}
+
+pub(crate) async fn get_annotations(
+    http: &HttpClient,
+    config: ZoteroConfig<'_>,
+    scope: &ZoteroLibraryScope,
+    request: &ZoteroChildrenRequest<'_>,
+) -> Result<ZoteroAnnotationsResult> {
+    let url = format!(
+        "{root}/items/{item_key}/children?format=json&itemType=annotation&start={offset}&limit={limit}",
+        root = scope.root_url(config.base_url),
+        item_key = urlencoding::encode(request.item_key),
+        offset = request.offset,
+        limit = request.limit,
+    );
+
+    let (response, total_available): (Vec<ZoteroApiItem>, Option<u64>) =
+        execute_json_with_total_results(http, config, &url).await?;
+
+    let annotations = response
+        .into_iter()
+        .filter_map(|item| map_annotation(item, &url, scope))
+        .collect::<Vec<_>>();
+
+    Ok(ZoteroAnnotationsResult {
+        item_key: request.item_key.to_string(),
+        has_more: compute_has_more(
+            request.offset,
+            annotations.len(),
+            request.limit,
+            total_available,
+        ),
+        total_available,
+        annotations,
+    })
+}
+
+pub(crate) async fn get_library_annotations(
+    http: &HttpClient,
+    config: ZoteroConfig<'_>,
+    scope: &ZoteroLibraryScope,
+    request: ZoteroLibraryAnnotationsRequest,
+) -> Result<ZoteroLibraryAnnotationsPage> {
+    let url = format!(
+        "{root}/items?format=json&itemType=annotation&start={offset}&limit={limit}",
+        root = scope.root_url(config.base_url),
+        offset = request.offset,
+        limit = request.limit,
+    );
+
+    let (response, total_available): (Vec<ZoteroApiItem>, Option<u64>) =
+        execute_json_with_total_results(http, config, &url).await?;
+
+    let annotations = response
+        .into_iter()
+        .filter_map(|item| map_annotation(item, &url, scope))
+        .collect::<Vec<_>>();
+
+    Ok(ZoteroLibraryAnnotationsPage {
+        has_more: compute_has_more(
+            request.offset,
+            annotations.len(),
+            request.limit,
+            total_available,
+        ),
+        total_available,
+        annotations,
+    })
+}
+
+pub(crate) async fn get_children_items(
+    http: &HttpClient,
+    config: ZoteroConfig<'_>,
+    scope: &ZoteroLibraryScope,
+    request: &ZoteroChildrenRequest<'_>,
+    item_type: Option<&str>,
+) -> Result<ZoteroSearchResult> {
+    let mut url = format!(
+        "{root}/items/{item_key}/children?format=json&start={offset}&limit={limit}",
+        root = scope.root_url(config.base_url),
+        item_key = urlencoding::encode(request.item_key),
+        offset = request.offset,
+        limit = request.limit,
+    );
+
+    if let Some(item_type) = item_type {
+        url.push_str(&format!("&itemType={}", urlencoding::encode(item_type)));
+    }
+
+    let (response, total_available): (Vec<ZoteroApiItem>, Option<u64>) =
+        execute_json_with_total_results(http, config, &url).await?;
+
+    let items = response
+        .into_iter()
+        .map(|item| map_item_summary(item, &url, scope))
+        .collect::<Vec<_>>();
+
+    Ok(ZoteroSearchResult {
+        has_more: compute_has_more(request.offset, items.len(), request.limit, total_available),
+        total_available,
+        items,
+    })
+}
+
+pub(crate) async fn get_note_item(
+    http: &HttpClient,
+    config: ZoteroConfig<'_>,
+    scope: &ZoteroLibraryScope,
+    item_key: &str,
+) -> Result<Option<ZoteroNote>> {
+    let url = format!(
+        "{root}/items/{item_key}?format=json",
+        root = scope.root_url(config.base_url),
+        item_key = urlencoding::encode(item_key),
+    );
+
+    let response: ZoteroApiItem = http
+        .execute_json(ResearchApi::Zotero, || zotero_request(http, config, &url))
+        .await?;
+
+    Ok(map_note(response, &url, scope))
+}
+
+pub(crate) async fn get_annotation_item(
+    http: &HttpClient,
+    config: ZoteroConfig<'_>,
+    scope: &ZoteroLibraryScope,
+    item_key: &str,
+) -> Result<Option<ZoteroAnnotation>> {
+    let url = format!(
+        "{root}/items/{item_key}?format=json",
+        root = scope.root_url(config.base_url),
+        item_key = urlencoding::encode(item_key),
+    );
+
+    let response: ZoteroApiItem = http
+        .execute_json(ResearchApi::Zotero, || zotero_request(http, config, &url))
+        .await?;
+
+    Ok(map_annotation(response, &url, scope))
 }
 
 pub(crate) async fn get_attachments(
@@ -492,6 +674,30 @@ fn map_note(item: ZoteroApiItem, api_url: &str, scope: &ZoteroLibraryScope) -> O
     })
 }
 
+fn map_annotation(
+    item: ZoteroApiItem,
+    api_url: &str,
+    scope: &ZoteroLibraryScope,
+) -> Option<ZoteroAnnotation> {
+    if item.data.item_type.as_deref() != Some("annotation") {
+        return None;
+    }
+
+    Some(ZoteroAnnotation {
+        key: item.key.clone(),
+        parent_item: item.data.parent_item,
+        annotation_type: item.data.annotation_type,
+        annotation_text: item.data.annotation_text,
+        annotation_comment: item.data.annotation_comment,
+        source_meta: Some(SourceMeta {
+            source: "zotero".to_string(),
+            api_url: api_url.to_string(),
+            fetched_at: Utc::now(),
+            canonical_id: Some(scope.canonical_item_id(&item.key)),
+        }),
+    })
+}
+
 fn map_attachment(
     item: ZoteroApiItem,
     api_url: &str,
@@ -667,6 +873,12 @@ struct ZoteroApiItemData {
     note: Option<String>,
     #[serde(rename = "parentItem")]
     parent_item: Option<String>,
+    #[serde(rename = "annotationType")]
+    annotation_type: Option<String>,
+    #[serde(rename = "annotationText")]
+    annotation_text: Option<String>,
+    #[serde(rename = "annotationComment")]
+    annotation_comment: Option<String>,
     filename: Option<String>,
     #[serde(rename = "contentType")]
     content_type: Option<String>,
