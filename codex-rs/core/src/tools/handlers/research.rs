@@ -10,15 +10,14 @@ use codex_research_tools::error::ResearchError;
 use codex_research_tools::types::LatexCompileParams;
 use codex_research_tools::types::PaginationParams;
 use codex_research_tools::types::PaperSearchParams;
+#[cfg(feature = "research-pdf-images")]
+use codex_research_tools::types::PdfExtractFiguresParams;
 use codex_research_tools::types::ZoteroAdvancedSearchParams;
 use codex_research_tools::types::ZoteroCollectionItemsParams;
 use codex_research_tools::types::ZoteroCollectionsParams;
-use codex_research_tools::types::ZoteroGrepParams;
 use codex_research_tools::types::ZoteroItemParams;
 use codex_research_tools::types::ZoteroListGroupsParams;
-use codex_research_tools::types::ZoteroSearchNotesParams;
 use codex_research_tools::types::ZoteroSearchParams;
-use codex_research_tools::types::ZoteroTagSearchParams;
 use codex_secrets::SecretName;
 use codex_secrets::SecretScope;
 use codex_secrets::SecretsBackendKind;
@@ -115,12 +114,6 @@ impl ResearchBridgeHandler {
             "zotero_search" => dispatch_with_params!(ZoteroSearchParams, |params| self
                 .toolkit
                 .zotero_search(params)),
-            "zotero_grep_text" => dispatch_with_params!(ZoteroGrepParams, |params| self
-                .toolkit
-                .zotero_grep_text(params)),
-            "zotero_search_notes" => dispatch_with_params!(ZoteroSearchNotesParams, |params| self
-                .toolkit
-                .zotero_search_notes(params)),
             "zotero_advanced_search" => {
                 dispatch_with_params!(ZoteroAdvancedSearchParams, |params| self
                     .toolkit
@@ -138,9 +131,6 @@ impl ResearchBridgeHandler {
             "zotero_get_attachments" => dispatch_with_params!(ZoteroItemParams, |params| self
                 .toolkit
                 .zotero_get_attachments(params)),
-            "zotero_search_by_tag" => dispatch_with_params!(ZoteroTagSearchParams, |params| self
-                .toolkit
-                .zotero_search_by_tag(params)),
             "zotero_get_collections" => {
                 dispatch_with_params!(ZoteroCollectionsParams, |params| self
                     .toolkit
@@ -158,6 +148,12 @@ impl ResearchBridgeHandler {
             "latex_compile" => dispatch_with_params!(LatexCompileParams, |params| self
                 .toolkit
                 .latex_compile(params)),
+            #[cfg(feature = "research-pdf-images")]
+            "pdf_extract_figures" => {
+                dispatch_with_params!(PdfExtractFiguresParams, |params| self
+                    .toolkit
+                    .pdf_extract_figures(params))
+            }
             #[cfg(feature = "research-repo")]
             "repo_clone_and_summarize" => dispatch_with_params!(RepoCloneArgs, |params| self
                 .toolkit

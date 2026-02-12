@@ -16,14 +16,11 @@ macro_rules! set_tool_name_for_id {
             "paper_citations" => $self.paper_citations = $resolved_name,
             "paper_references" => $self.paper_references = $resolved_name,
             "zotero_search" => $self.zotero_search = $resolved_name,
-            "zotero_grep_text" => $self.zotero_grep_text = $resolved_name,
-            "zotero_search_notes" => $self.zotero_search_notes = $resolved_name,
             "zotero_advanced_search" => $self.zotero_advanced_search = $resolved_name,
             "zotero_get_item" => $self.zotero_get_item = $resolved_name,
             "zotero_get_fulltext" => $self.zotero_get_fulltext = $resolved_name,
             "zotero_get_notes" => $self.zotero_get_notes = $resolved_name,
             "zotero_get_attachments" => $self.zotero_get_attachments = $resolved_name,
-            "zotero_search_by_tag" => $self.zotero_search_by_tag = $resolved_name,
             "zotero_get_collections" => $self.zotero_get_collections = $resolved_name,
             "zotero_list_groups" => $self.zotero_list_groups = $resolved_name,
             "zotero_get_collection_items" => $self.zotero_get_collection_items = $resolved_name,
@@ -36,6 +33,7 @@ macro_rules! set_tool_name_for_id {
             "repo_find_export_paths" => $self.repo_find_export_paths = $resolved_name,
             "repo_extract_config_schema" => $self.repo_extract_config_schema = $resolved_name,
             "repo_diff_requirements" => $self.repo_diff_requirements = $resolved_name,
+            "pdf_extract_figures" => $self.pdf_extract_figures = $resolved_name,
             _ => {}
         }
     };
@@ -61,14 +59,11 @@ pub struct ResearchToolNames {
     pub paper_citations: String,
     pub paper_references: String,
     pub zotero_search: String,
-    pub zotero_grep_text: String,
-    pub zotero_search_notes: String,
     pub zotero_advanced_search: String,
     pub zotero_get_item: String,
     pub zotero_get_fulltext: String,
     pub zotero_get_notes: String,
     pub zotero_get_attachments: String,
-    pub zotero_search_by_tag: String,
     pub zotero_get_collections: String,
     pub zotero_list_groups: String,
     pub zotero_get_collection_items: String,
@@ -81,6 +76,7 @@ pub struct ResearchToolNames {
     pub repo_find_export_paths: String,
     pub repo_extract_config_schema: String,
     pub repo_diff_requirements: String,
+    pub pdf_extract_figures: String,
 }
 
 impl Default for ResearchToolNames {
@@ -91,14 +87,11 @@ impl Default for ResearchToolNames {
             paper_citations: "paper_citations".to_string(),
             paper_references: "paper_references".to_string(),
             zotero_search: "zotero_search".to_string(),
-            zotero_grep_text: "zotero_grep_text".to_string(),
-            zotero_search_notes: "zotero_search_notes".to_string(),
             zotero_advanced_search: "zotero_advanced_search".to_string(),
             zotero_get_item: "zotero_get_item".to_string(),
             zotero_get_fulltext: "zotero_get_fulltext".to_string(),
             zotero_get_notes: "zotero_get_notes".to_string(),
             zotero_get_attachments: "zotero_get_attachments".to_string(),
-            zotero_search_by_tag: "zotero_search_by_tag".to_string(),
             zotero_get_collections: "zotero_get_collections".to_string(),
             zotero_list_groups: "zotero_list_groups".to_string(),
             zotero_get_collection_items: "zotero_get_collection_items".to_string(),
@@ -111,6 +104,7 @@ impl Default for ResearchToolNames {
             repo_find_export_paths: "repo_find_export_paths".to_string(),
             repo_extract_config_schema: "repo_extract_config_schema".to_string(),
             repo_diff_requirements: "repo_diff_requirements".to_string(),
+            pdf_extract_figures: "pdf_extract_figures".to_string(),
         }
     }
 }

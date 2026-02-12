@@ -832,8 +832,6 @@ fn to_grep_candidate(item: &ZoteroItem) -> GrepCandidate {
         title: item.title.clone(),
         item_type: item.item_type.clone(),
         tags: item.tags.clone(),
-        parent_item_key: None,
-        source_meta: item.source_meta.clone(),
     }
 }
 

@@ -29,6 +29,8 @@ use types::ModelDefinition;
 use types::PaginationParams;
 use types::PaperDetail;
 use types::PaperSearchParams;
+use types::PdfExtractFiguresParams;
+use types::PdfExtractFiguresResult;
 use types::RepoEntrypoint;
 use types::RepoExportPath;
 use types::RepoHealth;
@@ -44,18 +46,13 @@ use types::ZoteroCollectionItemsParams;
 use types::ZoteroCollectionsParams;
 use types::ZoteroCollectionsResult;
 use types::ZoteroFullTextResult;
-use types::ZoteroGrepParams;
-use types::ZoteroGrepResult;
 use types::ZoteroGroupsResult;
 use types::ZoteroItemDetail;
 use types::ZoteroItemParams;
 use types::ZoteroListGroupsParams;
 use types::ZoteroNotesResult;
-use types::ZoteroSearchNotesParams;
-use types::ZoteroSearchNotesResult;
 use types::ZoteroSearchParams;
 use types::ZoteroSearchResult;
-use types::ZoteroTagSearchParams;
 
 #[derive(Debug)]
 pub struct ResearchToolkit {
@@ -196,36 +193,6 @@ impl ResearchToolkit {
     }
 
     #[cfg(feature = "zotero")]
-    pub async fn zotero_grep_text(&self, params: ZoteroGrepParams) -> Result<ZoteroGrepResult> {
-        tools::zotero::zotero_grep_text(self, params).await
-    }
-
-    #[cfg(not(feature = "zotero"))]
-    pub async fn zotero_grep_text(&self, _params: ZoteroGrepParams) -> Result<ZoteroGrepResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "zotero_grep_text",
-        })
-    }
-
-    #[cfg(feature = "zotero")]
-    pub async fn zotero_search_notes(
-        &self,
-        params: ZoteroSearchNotesParams,
-    ) -> Result<ZoteroSearchNotesResult> {
-        tools::zotero::zotero_search_notes(self, params).await
-    }
-
-    #[cfg(not(feature = "zotero"))]
-    pub async fn zotero_search_notes(
-        &self,
-        _params: ZoteroSearchNotesParams,
-    ) -> Result<ZoteroSearchNotesResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "zotero_search_notes",
-        })
-    }
-
-    #[cfg(feature = "zotero")]
     pub async fn zotero_advanced_search(
         &self,
         params: ZoteroAdvancedSearchParams,
@@ -304,24 +271,6 @@ impl ResearchToolkit {
     }
 
     #[cfg(feature = "zotero")]
-    pub async fn zotero_search_by_tag(
-        &self,
-        params: ZoteroTagSearchParams,
-    ) -> Result<ZoteroSearchResult> {
-        tools::zotero::zotero_search_by_tag(self, params).await
-    }
-
-    #[cfg(not(feature = "zotero"))]
-    pub async fn zotero_search_by_tag(
-        &self,
-        _params: ZoteroTagSearchParams,
-    ) -> Result<ZoteroSearchResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "zotero_search_by_tag",
-        })
-    }
-
-    #[cfg(feature = "zotero")]
     pub async fn zotero_get_collections(
         &self,
         params: ZoteroCollectionsParams,
@@ -384,6 +333,24 @@ impl ResearchToolkit {
     pub async fn latex_compile(&self, _params: LatexCompileParams) -> Result<LatexCompileResult> {
         Err(ResearchError::NotImplemented {
             tool: "latex_compile",
+        })
+    }
+
+    #[cfg(feature = "pdf_images")]
+    pub async fn pdf_extract_figures(
+        &self,
+        params: PdfExtractFiguresParams,
+    ) -> Result<PdfExtractFiguresResult> {
+        tools::pdf_images::pdf_extract_figures(params).await
+    }
+
+    #[cfg(not(feature = "pdf_images"))]
+    pub async fn pdf_extract_figures(
+        &self,
+        _params: PdfExtractFiguresParams,
+    ) -> Result<PdfExtractFiguresResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "pdf_extract_figures",
         })
     }
 

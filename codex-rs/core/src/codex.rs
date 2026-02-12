@@ -1207,6 +1207,10 @@ pub(crate) struct Session {
 const SEARCH_TOOL_DEVELOPER_INSTRUCTIONS: &str =
     include_str!("../templates/search_tool/developer_instructions.md");
 
+#[cfg(feature = "research")]
+const ZOTERO_DEVELOPER_INSTRUCTIONS: &str =
+    include_str!("../templates/research/zotero_developer_instructions.md");
+
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
 pub(crate) struct TurnContext {
@@ -3094,6 +3098,15 @@ impl Session {
             items.push(
                 DeveloperInstructions::new(SEARCH_TOOL_DEVELOPER_INSTRUCTIONS.to_string()).into(),
             );
+        }
+        // Add developer instructions for Zotero when configured.
+        #[cfg(feature = "research")]
+        if let Some(ref toolkit) = self.services.research_toolkit {
+            if toolkit.is_tool_configured("zotero_search") {
+                items.push(
+                    DeveloperInstructions::new(ZOTERO_DEVELOPER_INSTRUCTIONS.to_string()).into(),
+                );
+            }
         }
         // Add developer instructions for memories.
         if let Some(memory_prompt) =

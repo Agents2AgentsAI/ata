@@ -124,6 +124,7 @@ deterministic_process_ids = []
 data = ["dep:codex-data-tools", "dep:codex-secrets"]
 research = ["dep:codex-research-tools", "dep:codex-secrets"]
 research-latex = ["research", "codex-research-tools/latex"]
+research-pdf-images = ["research", "codex-research-tools/pdf_images"]
 research-repo = ["research", "codex-research-tools/repo_analysis"]
 test-support = []
 
