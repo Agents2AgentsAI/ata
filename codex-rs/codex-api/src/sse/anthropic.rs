@@ -591,6 +591,7 @@ pub fn parse_anthropic_event(
             events.push(ResponseEvent::Completed {
                 response_id: state.response_id.clone(),
                 token_usage: Some(token_usage),
+                can_append: false,
             });
         }
 
@@ -768,6 +769,7 @@ mod tests {
             ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                ..
             } => {
                 assert_eq!(response_id, "msg_123");
                 assert!(token_usage.is_some());

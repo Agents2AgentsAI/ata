@@ -1,5 +1,4 @@
 use codex_app_server_protocol::AuthMode;
-use codex_common::CliConfigOverrides;
 use codex_core::CodexAuth;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CLIENT_ID;
@@ -20,6 +19,7 @@ use codex_login::ServerOptions;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_utils_cli::CliConfigOverrides;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
@@ -372,17 +372,13 @@ pub async fn run_logout_provider(
                 config.cli_auth_credentials_store_mode,
             )
             .is_some()
+                && let Some(env_var) = provider_env_var(provider_id)
+                && std::env::var(env_var).is_ok()
             {
-                if let Some(env_var) = provider_env_var(provider_id) {
-                    if std::env::var(env_var).is_ok() {
-                        eprintln!(
-                            "Note: {provider_id} API key is set via ${env_var} environment variable."
-                        );
-                        eprintln!(
-                            "Removing stored credentials will not affect the environment variable."
-                        );
-                    }
-                }
+                eprintln!(
+                    "Note: {provider_id} API key is set via ${env_var} environment variable."
+                );
+                eprintln!("Removing stored credentials will not affect the environment variable.");
             }
 
             match logout_provider(
