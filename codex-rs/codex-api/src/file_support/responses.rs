@@ -96,6 +96,8 @@ fn rewrite_url_file_block(block: &mut Value) {
         return;
     };
 
+    // OpenAI treats `filename` as mutually exclusive with `file_url` (and `file_id`),
+    // so we only emit `type` + `file_url` here.
     *block = serde_json::json!({
         "type": "input_file",
         "file_url": url,

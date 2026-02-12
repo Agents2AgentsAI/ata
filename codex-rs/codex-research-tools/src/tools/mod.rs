@@ -1,5 +1,7 @@
 pub(crate) mod cache_helpers;
 
+#[cfg(feature = "latex")]
+pub(crate) mod latex;
 #[cfg(feature = "paper_search")]
 pub(crate) mod paper_search;
 #[cfg(feature = "repo_analysis")]

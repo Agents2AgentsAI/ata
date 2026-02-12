@@ -1680,6 +1680,7 @@ dependencies = [
  "codex-async-utils",
  "codex-client",
  "codex-config",
+ "codex-data-tools",
  "codex-execpolicy",
  "codex-file-search",
  "codex-git",
@@ -1765,6 +1766,33 @@ dependencies = [
  "wiremock",
  "zip",
  "zstd",
+]
+
+[[package]]
+name = "codex-data-tools"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "dashmap",
+ "dirs",
+ "dotenvy",
+ "futures",
+ "lru 0.16.3",
+ "pretty_assertions",
+ "rand 0.9.2",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+ "wiremock",
 ]
 
 [[package]]
@@ -1944,6 +1972,35 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "codex-kb"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "pretty_assertions",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "codex-kb-mcp"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-kb",
+ "rmcp",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
@@ -2156,6 +2213,7 @@ version = "0.0.0"
 dependencies = [
  "chrono",
  "dashmap",
+ "flate2",
  "futures",
  "lru 0.16.3",
  "pretty_assertions",
@@ -2165,6 +2223,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

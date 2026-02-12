@@ -515,6 +515,35 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
         ]);
     }
 
+    #[cfg(feature = "latex")]
+    {
+        defs.push(ToolDef {
+            id: "latex_compile",
+            native_name: "latex_compile",
+            mcp_name: "compile_latex",
+            description: "Write LaTeX source to a file and compile it to PDF using pdflatex. Runs multiple passes to resolve references. Returns structured result with errors/warnings parsed from the log.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "LaTeX source content"
+                    },
+                    "output_dir": {
+                        "type": "string",
+                        "description": "Directory to write .tex and .pdf files"
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": "Base name without extension (defaults to 'document')"
+                    }
+                },
+                "required": ["content", "output_dir"],
+                "additionalProperties": false
+            }),
+        });
+    }
+
     defs
 }
 
