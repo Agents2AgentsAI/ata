@@ -87,7 +87,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     ])
     .await?;
 
-    // Send a "codex" tool request, which should hit the responses endpoint.
+    // Send an "ata" tool request, which should hit the responses endpoint.
     // In turn, it should reply with a tool call, which the MCP should forward
     // as an elicitation.
     let codex_request_id = mcp_process
@@ -144,7 +144,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     .expect("task_complete_notification timeout")
     .expect("task_complete_notification resp");
 
-    // Verify the original `codex` tool call completes and that the file was created.
+    // Verify the original `ata` tool call completes and that the file was created.
     let codex_response = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp_process.read_stream_until_response_message(RequestId::Number(codex_request_id)),
@@ -245,7 +245,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
     ])
     .await?;
 
-    // Send a "codex" tool request that will trigger the apply_patch command
+    // Send an "ata" tool request that will trigger the apply_patch command
     let codex_request_id = mcp_process
         .send_codex_tool_call(CodexToolCallParam {
             cwd: Some(cwd.path().to_string_lossy().to_string()),
@@ -302,7 +302,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         )
         .await?;
 
-    // Verify the original `codex` tool call completes
+    // Verify the original `ata` tool call completes
     let codex_response = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp_process.read_stream_until_response_message(RequestId::Number(codex_request_id)),
@@ -358,7 +358,7 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
     let mut mcp_process = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
 
-    // Send a "codex" tool request, which should hit the responses endpoint.
+    // Send an "ata" tool request, which should hit the responses endpoint.
     let codex_request_id = mcp_process
         .send_codex_tool_call(CodexToolCallParam {
             prompt: "How are you?".to_string(),
@@ -390,7 +390,7 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
                     .get("structuredContent")
                     .and_then(|v| v.get("threadId"))
                     .and_then(serde_json::Value::as_str)
-                    .expect("codex tool response should include structuredContent.threadId"),
+                    .expect("ata tool response should include structuredContent.threadId"),
                 "content": "Enjoy!"
             }
         })

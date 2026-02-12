@@ -7,6 +7,7 @@ use reqwest::header::HeaderValue;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::sync::RwLock;
+use std::time::Duration;
 
 /// Set this to add a suffix to the User-Agent string.
 ///
@@ -24,7 +25,7 @@ use std::sync::RwLock;
 /// The full user agent string is returned from the mcp initialize response.
 /// Parenthesis will be added by Codex. This should only specify what goes inside of the parenthesis.
 pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
-pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
+pub const DEFAULT_ORIGINATOR: &str = "ata_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
 
@@ -110,8 +111,8 @@ pub fn originator() -> Originator {
 
 pub fn is_first_party_originator(originator_value: &str) -> bool {
     originator_value == DEFAULT_ORIGINATOR
-        || originator_value == "codex_vscode"
-        || originator_value.starts_with("Codex ")
+        || originator_value == "ata_vscode"
+        || originator_value.starts_with("Ata ")
 }
 
 pub fn get_codex_user_agent() -> String {
@@ -179,6 +180,13 @@ pub fn create_client() -> CodexHttpClient {
 }
 
 pub fn build_reqwest_client() -> reqwest::Client {
+    build_reqwest_client_with_timeouts(None, None)
+}
+
+pub fn build_reqwest_client_with_timeouts(
+    connect_timeout: Option<Duration>,
+    request_timeout: Option<Duration>,
+) -> reqwest::Client {
     let mut headers = HeaderMap::new();
     headers.insert("originator", originator().header_value);
     if let Ok(guard) = REQUIREMENTS_RESIDENCY.read()
@@ -196,6 +204,12 @@ pub fn build_reqwest_client() -> reqwest::Client {
         // Set UA via dedicated helper to avoid header validation pitfalls
         .user_agent(ua)
         .default_headers(headers);
+    if let Some(connect_timeout) = connect_timeout {
+        builder = builder.connect_timeout(connect_timeout);
+    }
+    if let Some(request_timeout) = request_timeout {
+        builder = builder.timeout(request_timeout);
+    }
     if is_sandboxed() {
         builder = builder.no_proxy();
     }
@@ -224,8 +238,8 @@ mod tests {
     #[test]
     fn is_first_party_originator_matches_known_values() {
         assert_eq!(is_first_party_originator(DEFAULT_ORIGINATOR), true);
-        assert_eq!(is_first_party_originator("codex_vscode"), true);
-        assert_eq!(is_first_party_originator("Codex Something Else"), true);
+        assert_eq!(is_first_party_originator("ata_vscode"), true);
+        assert_eq!(is_first_party_originator("Ata Something Else"), true);
         assert_eq!(is_first_party_originator("codex_cli"), false);
         assert_eq!(is_first_party_originator("Other"), false);
     }
@@ -289,23 +303,23 @@ mod tests {
 
     #[test]
     fn test_invalid_suffix_is_sanitized() {
-        let prefix = "codex_cli_rs/0.0.0";
+        let prefix = "ata_cli_rs/0.0.0";
         let suffix = "bad\rsuffix";
 
         assert_eq!(
             sanitize_user_agent(format!("{prefix} ({suffix})"), prefix),
-            "codex_cli_rs/0.0.0 (bad_suffix)"
+            "ata_cli_rs/0.0.0 (bad_suffix)"
         );
     }
 
     #[test]
     fn test_invalid_suffix_is_sanitized2() {
-        let prefix = "codex_cli_rs/0.0.0";
+        let prefix = "ata_cli_rs/0.0.0";
         let suffix = "bad\0suffix";
 
         assert_eq!(
             sanitize_user_agent(format!("{prefix} ({suffix})"), prefix),
-            "codex_cli_rs/0.0.0 (bad_suffix)"
+            "ata_cli_rs/0.0.0 (bad_suffix)"
         );
     }
 
@@ -320,5 +334,33 @@ mod tests {
         ))
         .unwrap();
         assert!(re.is_match(&user_agent));
+    }
+
+    #[tokio::test]
+    async fn build_reqwest_client_with_timeouts_applies_request_timeout() {
+        use wiremock::Mock;
+        use wiremock::MockServer;
+        use wiremock::ResponseTemplate;
+        use wiremock::matchers::method;
+        use wiremock::matchers::path;
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/slow"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(100)))
+            .mount(&server)
+            .await;
+
+        let client = build_reqwest_client_with_timeouts(
+            Some(Duration::from_secs(10)),
+            Some(Duration::from_millis(25)),
+        );
+
+        let err = client
+            .get(format!("{}/slow", server.uri()))
+            .send()
+            .await
+            .expect_err("request should time out");
+        assert!(err.is_timeout(), "unexpected error: {err}");
     }
 }

@@ -646,6 +646,17 @@ impl App {
         }
     }
 
+    fn open_url_in_browser(&mut self, url: String) {
+        if let Err(err) = webbrowser::open(&url) {
+            self.chat_widget
+                .add_error_message(format!("Failed to open browser for {url}: {err}"));
+            return;
+        }
+
+        self.chat_widget
+            .add_info_message(format!("Opened {url} in your browser."), None);
+    }
+
     async fn shutdown_current_thread(&mut self) {
         if let Some(thread_id) = self.chat_widget.thread_id() {
             // Clear any in-flight rollback guard when switching threads.
@@ -772,7 +783,14 @@ impl App {
         Ok(())
     }
 
-    fn open_agent_picker(&mut self) {
+    async fn open_agent_picker(&mut self) {
+        let thread_ids: Vec<ThreadId> = self.thread_event_channels.keys().cloned().collect();
+        for thread_id in thread_ids {
+            if self.server.get_thread(thread_id).await.is_err() {
+                self.thread_event_channels.remove(&thread_id);
+            }
+        }
+
         if self.thread_event_channels.is_empty() {
             self.chat_widget
                 .add_info_message("No agents available yet.".to_string(), None);
@@ -1340,14 +1358,7 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenResumePicker => {
-                match crate::resume_picker::run_resume_picker(
-                    tui,
-                    &self.config.codex_home,
-                    &self.config.model_provider_id,
-                    false,
-                )
-                .await?
-                {
+                match crate::resume_picker::run_resume_picker(tui, &self.config, false).await? {
                     SessionSelection::Resume(path) => {
                         let current_cwd = self.config.cwd.clone();
                         let resume_cwd = match crate::resolve_cwd_for_resume_or_fork(
@@ -1446,46 +1457,57 @@ impl App {
                 self.chat_widget
                     .add_plain_history_lines(vec!["/fork".magenta().into()]);
                 if let Some(path) = self.chat_widget.rollout_path() {
-                    match self
-                        .server
-                        .fork_thread(usize::MAX, self.config.clone(), path.clone())
-                        .await
-                    {
-                        Ok(forked) => {
-                            self.shutdown_current_thread().await;
-                            let init = self.chatwidget_init_for_forked_or_resumed_thread(
-                                tui,
-                                self.config.clone(),
-                            );
-                            self.chat_widget = ChatWidget::new_from_existing(
-                                init,
-                                forked.thread,
-                                forked.session_configured,
-                            );
-                            self.reset_thread_event_state();
-                            if let Some(summary) = summary {
-                                let mut lines: Vec<Line<'static>> =
-                                    vec![summary.usage_line.clone().into()];
-                                if let Some(command) = summary.resume_command {
-                                    let spans = vec![
-                                        "To continue this session, run ".into(),
-                                        command.cyan(),
-                                    ];
-                                    lines.push(spans.into());
+                    // Fresh threads expose a precomputed path, but the file is
+                    // materialized lazily on first user message.
+                    if path.exists() {
+                        match self
+                            .server
+                            .fork_thread(usize::MAX, self.config.clone(), path.clone())
+                            .await
+                        {
+                            Ok(forked) => {
+                                self.shutdown_current_thread().await;
+                                let init = self.chatwidget_init_for_forked_or_resumed_thread(
+                                    tui,
+                                    self.config.clone(),
+                                );
+                                self.chat_widget = ChatWidget::new_from_existing(
+                                    init,
+                                    forked.thread,
+                                    forked.session_configured,
+                                );
+                                self.reset_thread_event_state();
+                                if let Some(summary) = summary {
+                                    let mut lines: Vec<Line<'static>> =
+                                        vec![summary.usage_line.clone().into()];
+                                    if let Some(command) = summary.resume_command {
+                                        let spans = vec![
+                                            "To continue this session, run ".into(),
+                                            command.cyan(),
+                                        ];
+                                        lines.push(spans.into());
+                                    }
+                                    self.chat_widget.add_plain_history_lines(lines);
                                 }
-                                self.chat_widget.add_plain_history_lines(lines);
+                            }
+                            Err(err) => {
+                                let path_display = path.display();
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to fork current session from {path_display}: {err}"
+                                ));
                             }
                         }
-                        Err(err) => {
-                            let path_display = path.display();
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to fork current session from {path_display}: {err}"
-                            ));
-                        }
+                    } else {
+                        self.chat_widget.add_error_message(
+                            "A thread must contain at least one turn before it can be forked."
+                                .to_string(),
+                        );
                     }
                 } else {
-                    self.chat_widget
-                        .add_error_message("Current session is not ready to fork yet.".to_string());
+                    self.chat_widget.add_error_message(
+                        "A thread must contain at least one turn before it can be forked."
+                            .to_string(),
+                    );
                 }
 
                 tui.frame_requester().schedule_frame();
@@ -1514,6 +1536,11 @@ impl App {
                     } else {
                         tui.insert_history_lines(display);
                     }
+                }
+            }
+            AppEvent::ApplyThreadRollback { num_turns } => {
+                if self.apply_non_pending_thread_rollback(num_turns) {
+                    tui.frame_requester().schedule_frame();
                 }
             }
             AppEvent::StartCommitAnimation => {
@@ -1584,6 +1611,12 @@ impl App {
                     is_installed,
                 );
             }
+            AppEvent::OpenUrlInBrowser { url } => {
+                self.open_url_in_browser(url);
+            }
+            AppEvent::RefreshConnectors { force_refetch } => {
+                self.chat_widget.refresh_connectors(force_refetch);
+            }
             AppEvent::StartFileSearch(query) => {
                 self.file_search.on_user_query(query);
             }
@@ -1593,8 +1626,8 @@ impl App {
             AppEvent::RateLimitSnapshotFetched(snapshot) => {
                 self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
             }
-            AppEvent::ConnectorsLoaded(result) => {
-                self.chat_widget.on_connectors_loaded(result);
+            AppEvent::ConnectorsLoaded { result, is_final } => {
+                self.chat_widget.on_connectors_loaded(result, is_final);
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
@@ -2157,7 +2190,7 @@ impl App {
                 self.chat_widget.open_approvals_popup();
             }
             AppEvent::OpenAgentPicker => {
-                self.open_agent_picker();
+                self.open_agent_picker().await;
             }
             AppEvent::SelectAgentThread(thread_id) => {
                 self.select_agent_thread(tui, thread_id).await?;
@@ -2304,7 +2337,6 @@ impl App {
     }
 
     fn handle_codex_event_replay(&mut self, event: Event) {
-        self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event_replay(event);
     }
 
@@ -2343,6 +2375,7 @@ impl App {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
+                network_proxy: None,
                 rollout_path: thread.rollout_path(),
             }),
         };
@@ -2612,6 +2645,8 @@ mod tests {
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_core::protocol::SessionSource;
+    use codex_core::protocol::ThreadRolledBackEvent;
+    use codex_core::protocol::UserMessageEvent;
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
     use codex_protocol::user_input::TextElement;
@@ -2681,6 +2716,19 @@ mod tests {
             .expect("timed out waiting for second event")
             .expect("channel closed unexpectedly");
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn open_agent_picker_prunes_missing_threads() -> Result<()> {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.thread_event_channels
+            .insert(thread_id, ThreadEventChannel::new(1));
+
+        app.open_agent_picker().await;
+
+        assert_eq!(app.thread_event_channels.contains_key(&thread_id), false);
         Ok(())
     }
 
@@ -3020,6 +3068,7 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
+                network_proxy: None,
                 rollout_path: Some(PathBuf::new()),
             };
             Arc::new(new_session_info(
@@ -3075,6 +3124,7 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
+                network_proxy: None,
                 rollout_path: Some(PathBuf::new()),
             }),
         });
@@ -3104,6 +3154,211 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replayed_initial_messages_apply_rollback_in_queue_order() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        let session_id = ThreadId::new();
+        app.handle_codex_event_replay(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: Some(vec![
+                    EventMsg::UserMessage(UserMessageEvent {
+                        message: "first prompt".to_string(),
+                        images: None,
+                        local_images: Vec::new(),
+                        text_elements: Vec::new(),
+                    }),
+                    EventMsg::UserMessage(UserMessageEvent {
+                        message: "second prompt".to_string(),
+                        images: None,
+                        local_images: Vec::new(),
+                        text_elements: Vec::new(),
+                    }),
+                    EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
+                    EventMsg::UserMessage(UserMessageEvent {
+                        message: "third prompt".to_string(),
+                        images: None,
+                        local_images: Vec::new(),
+                        text_elements: Vec::new(),
+                    }),
+                ]),
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        let mut saw_rollback = false;
+        while let Ok(event) = app_event_rx.try_recv() {
+            match event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    let cell: Arc<dyn HistoryCell> = cell.into();
+                    app.transcript_cells.push(cell);
+                }
+                AppEvent::ApplyThreadRollback { num_turns } => {
+                    saw_rollback = true;
+                    crate::app_backtrack::trim_transcript_cells_drop_last_n_user_turns(
+                        &mut app.transcript_cells,
+                        num_turns,
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        assert!(saw_rollback);
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+        assert_eq!(
+            user_messages,
+            vec!["first prompt".to_string(), "third prompt".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn live_rollback_during_replay_is_applied_in_app_event_order() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        let session_id = ThreadId::new();
+        app.handle_codex_event_replay(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: Some(vec![
+                    EventMsg::UserMessage(UserMessageEvent {
+                        message: "first prompt".to_string(),
+                        images: None,
+                        local_images: Vec::new(),
+                        text_elements: Vec::new(),
+                    }),
+                    EventMsg::UserMessage(UserMessageEvent {
+                        message: "second prompt".to_string(),
+                        images: None,
+                        local_images: Vec::new(),
+                        text_elements: Vec::new(),
+                    }),
+                ]),
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        // Simulate a live rollback arriving before queued replay inserts are drained.
+        app.handle_codex_event_now(Event {
+            id: "live-rollback".to_string(),
+            msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
+        });
+
+        let mut saw_rollback = false;
+        while let Ok(event) = app_event_rx.try_recv() {
+            match event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    let cell: Arc<dyn HistoryCell> = cell.into();
+                    app.transcript_cells.push(cell);
+                }
+                AppEvent::ApplyThreadRollback { num_turns } => {
+                    saw_rollback = true;
+                    crate::app_backtrack::trim_transcript_cells_drop_last_n_user_turns(
+                        &mut app.transcript_cells,
+                        num_turns,
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        assert!(saw_rollback);
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+        assert_eq!(user_messages, vec!["first prompt".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn queued_rollback_syncs_overlay_and_clears_deferred_history() {
+        let mut app = make_test_app().await;
+        app.transcript_cells = vec![
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("after first")],
+                false,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "second".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("after second")],
+                false,
+            )) as Arc<dyn HistoryCell>,
+        ];
+        app.overlay = Some(Overlay::new_transcript(app.transcript_cells.clone()));
+        app.deferred_history_lines = vec![Line::from("stale buffered line")];
+        app.backtrack.overlay_preview_active = true;
+        app.backtrack.nth_user_message = 1;
+
+        let changed = app.apply_non_pending_thread_rollback(1);
+
+        assert!(changed);
+        assert!(app.backtrack_render_pending);
+        assert!(app.deferred_history_lines.is_empty());
+        assert_eq!(app.backtrack.nth_user_message, 0);
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+        assert_eq!(user_messages, vec!["first".to_string()]);
+        let overlay_cell_count = match app.overlay.as_ref() {
+            Some(Overlay::Transcript(t)) => t.committed_cell_count(),
+            _ => panic!("expected transcript overlay"),
+        };
+        assert_eq!(overlay_cell_count, app.transcript_cells.len());
+    }
+
+    #[tokio::test]
     async fn new_session_requests_shutdown_for_previous_conversation() {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
@@ -3121,6 +3376,7 @@ mod tests {
             history_log_id: 0,
             history_entry_count: 0,
             initial_messages: None,
+            network_proxy: None,
             rollout_path: Some(PathBuf::new()),
         };
 
@@ -3163,7 +3419,7 @@ mod tests {
         );
         assert_eq!(
             summary.resume_command,
-            Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
+            Some("ata resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
     }
 
@@ -3181,7 +3437,7 @@ mod tests {
             .expect("summary");
         assert_eq!(
             summary.resume_command,
-            Some("codex resume my-session".to_string())
+            Some("ata resume my-session".to_string())
         );
     }
 }

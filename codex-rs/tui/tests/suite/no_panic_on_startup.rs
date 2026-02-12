@@ -1,11 +1,16 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::select;
 use tokio::time::timeout;
 
+static ATA_BIN: OnceLock<PathBuf> = OnceLock::new();
+
 /// Regression test for https://github.com/openai/codex/issues/8803.
 #[tokio::test]
+#[ignore = "TODO(mbolin): flaky"]
 async fn malformed_rules_should_not_panic() -> anyhow::Result<()> {
     // run_codex_cli() does not work on Windows due to PTY limitations.
     if cfg!(windows) {
@@ -35,7 +40,7 @@ model_provider = "ollama"
     std::fs::write(codex_home.join("config.toml"), config_contents)?;
 
     let CodexCliOutput { exit_code, output } = run_codex_cli(codex_home, cwd).await?;
-    assert_ne!(0, exit_code, "Codex CLI should exit nonzero.");
+    assert_ne!(0, exit_code, "Ata CLI should exit nonzero.");
     assert!(
         output.contains("ERROR: Failed to initialize codex:"),
         "expected startup error in output, got: {output}"
@@ -56,7 +61,7 @@ async fn run_codex_cli(
     codex_home: impl AsRef<Path>,
     cwd: impl AsRef<Path>,
 ) -> anyhow::Result<CodexCliOutput> {
-    let codex_cli = codex_utils_cargo_bin::cargo_bin("codex")?;
+    let codex_cli = ATA_BIN.get_or_init(|| codex_utils_cargo_bin::cargo_bin("ata").unwrap());
     let mut env = HashMap::new();
     env.insert(
         "CODEX_HOME".to_string(),

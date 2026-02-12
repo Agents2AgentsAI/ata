@@ -15,13 +15,16 @@ In the codex-rs folder where the rust code lives:
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
 - When making a change that adds or changes an API, ensure that the documentation in the `docs/` folder is up to date if applicable.
 - If you change `ConfigToml` or nested config types, run `just write-config-schema` to update `codex-rs/core/config.schema.json`.
+- Do not create small helper methods that are referenced only once.
 
 Run `just fmt` (in `codex-rs` directory) automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
 
 1. Run the test for the specific project that was changed. For example, if changes were made in `codex-rs/tui`, run `cargo test -p codex-tui`.
-2. Once those pass, if any changes were made in common, core, or protocol, run the complete test suite with `cargo test --all-features`. project-specific or individual tests can be run without asking the user, but do ask the user before running the complete test suite.
+2. Once those pass, if any changes were made in common, core, or protocol, run the complete test suite with `just test`. Use `--all-features` only when you changed research-feature-gated code; for research crate changes use `just test-research`. project-specific or individual tests can be run without asking the user, but do ask the user before running the complete test suite.
 
-Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates.
+Before finalizing a large change to `codex-rs`, run `just fix-fast -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds. Use `just fix -p <project>` (with `--all-features`) only when you changed research-feature-gated code. Do not re-run tests after running `fix` or `fmt`.
+
+The repo will not be merged with upstream repo. However, upstream repo will be merged frequently to this repo. When designing new features or performing new implementations or bug fixes, try your best to minimize potential merge conflicts. If needed, compare the current branch with upstream branch in `upstream/main` before making decision.
 
 ## TUI style conventions
 
@@ -56,11 +59,6 @@ See `codex-rs/tui/styles.md`.
 - If you have a list of lines and you need to prefix them all with some prefix (optionally different on the first vs subsequent lines), use the `prefix_lines` helper from line_utils.
 
 ## Tests
-
-### Run tests in parallel:
-
-- Use `cargo nextest` instead of `cargo test` if possible to run tests in parallel.
-- If you don't have the tool: `cargo install --locked cargo-nextest`
 
 ### Snapshot tests
 

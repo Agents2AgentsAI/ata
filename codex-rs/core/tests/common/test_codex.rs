@@ -2,6 +2,7 @@ use std::mem::swap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use anyhow::Result;
 use codex_core::CodexAuth;
@@ -32,6 +33,22 @@ use wiremock::matchers::path_regex;
 
 type ConfigMutator = dyn FnOnce(&mut Config) + Send;
 type PreBuildHook = dyn FnOnce(&Path) + Send + 'static;
+
+/// Cache the resolved `ata` binary path so we don't invoke `cargo build --bin ata`
+/// (via `assert_cmd`/`escargot`) on every single test harness creation.
+static ATA_BIN_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Returns the cached path to the `ata` binary, resolving it at most once.
+pub fn cached_ata_bin() -> Result<PathBuf, codex_utils_cargo_bin::CargoBinError> {
+    ATA_BIN_PATH
+        .get_or_init(|| codex_utils_cargo_bin::cargo_bin("ata").ok())
+        .clone()
+        .ok_or_else(|| codex_utils_cargo_bin::CargoBinError::NotFound {
+            name: "ata".to_owned(),
+            env_keys: vec![],
+            fallback: "cached lookup failed".to_owned(),
+        })
+}
 
 /// A collection of different ways the model can output an apply_patch call
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -213,7 +230,7 @@ impl TestCodexBuilder {
         for hook in self.pre_build_hooks.drain(..) {
             hook(home.path());
         }
-        if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
+        if let Ok(path) = cached_ata_bin() {
             config.codex_linux_sandbox_exe = Some(path);
         }
 

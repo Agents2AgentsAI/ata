@@ -3,15 +3,52 @@ use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::config::Config;
 use codex_core::config_loader::ConfigLayerStack;
 use codex_core::config_loader::ConfigLayerStackOrdering;
+use codex_core::config_loader::NetworkConstraints;
 use codex_core::config_loader::RequirementSource;
 use codex_core::config_loader::ResidencyRequirement;
 use codex_core::config_loader::SandboxModeRequirement;
 use codex_core::config_loader::WebSearchModeRequirement;
+use codex_core::protocol::SessionNetworkProxyRuntime;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 
-pub(crate) fn new_debug_config_output(config: &Config) -> PlainHistoryCell {
-    PlainHistoryCell::new(render_debug_config_lines(&config.config_layer_stack))
+pub(crate) fn new_debug_config_output(
+    config: &Config,
+    session_network_proxy: Option<&SessionNetworkProxyRuntime>,
+) -> PlainHistoryCell {
+    let mut lines = render_debug_config_lines(&config.config_layer_stack);
+
+    if let Some(proxy) = session_network_proxy {
+        lines.push("".into());
+        lines.push("Session runtime:".bold().into());
+        lines.push("  - network_proxy".into());
+        let SessionNetworkProxyRuntime {
+            http_addr,
+            socks_addr,
+            admin_addr,
+        } = proxy;
+        let all_proxy = session_all_proxy_url(
+            http_addr,
+            socks_addr,
+            config
+                .network
+                .as_ref()
+                .is_some_and(codex_core::config::NetworkProxySpec::socks_enabled),
+        );
+        lines.push(format!("    - HTTP_PROXY  = http://{http_addr}").into());
+        lines.push(format!("    - ALL_PROXY   = {all_proxy}").into());
+        lines.push(format!("    - ADMIN_PROXY = http://{admin_addr}").into());
+    }
+
+    PlainHistoryCell::new(lines)
+}
+
+fn session_all_proxy_url(http_addr: &str, socks_addr: &str, socks_enabled: bool) -> String {
+    if socks_enabled {
+        format!("socks5h://{socks_addr}")
+    } else {
+        format!("http://{http_addr}")
+    }
 }
 
 fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
@@ -115,6 +152,14 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
         ));
     }
 
+    if let Some(network) = requirements.network.as_ref() {
+        requirement_lines.push(requirement_line(
+            "experimental_network",
+            format_network_constraints(&network.value),
+            Some(&network.source),
+        ));
+    }
+
     if requirement_lines.is_empty() {
         lines.push("  <none>".dim().into());
     } else {
@@ -199,9 +244,67 @@ fn format_residency_requirement(requirement: ResidencyRequirement) -> String {
     }
 }
 
+fn format_network_constraints(network: &NetworkConstraints) -> String {
+    let mut parts = Vec::new();
+
+    let NetworkConstraints {
+        enabled,
+        http_port,
+        socks_port,
+        allow_upstream_proxy,
+        dangerously_allow_non_loopback_proxy,
+        dangerously_allow_non_loopback_admin,
+        allowed_domains,
+        denied_domains,
+        allow_unix_sockets,
+        allow_local_binding,
+    } = network;
+
+    if let Some(enabled) = enabled {
+        parts.push(format!("enabled={enabled}"));
+    }
+    if let Some(http_port) = http_port {
+        parts.push(format!("http_port={http_port}"));
+    }
+    if let Some(socks_port) = socks_port {
+        parts.push(format!("socks_port={socks_port}"));
+    }
+    if let Some(allow_upstream_proxy) = allow_upstream_proxy {
+        parts.push(format!("allow_upstream_proxy={allow_upstream_proxy}"));
+    }
+    if let Some(dangerously_allow_non_loopback_proxy) = dangerously_allow_non_loopback_proxy {
+        parts.push(format!(
+            "dangerously_allow_non_loopback_proxy={dangerously_allow_non_loopback_proxy}"
+        ));
+    }
+    if let Some(dangerously_allow_non_loopback_admin) = dangerously_allow_non_loopback_admin {
+        parts.push(format!(
+            "dangerously_allow_non_loopback_admin={dangerously_allow_non_loopback_admin}"
+        ));
+    }
+    if let Some(allowed_domains) = allowed_domains {
+        parts.push(format!("allowed_domains=[{}]", allowed_domains.join(", ")));
+    }
+    if let Some(denied_domains) = denied_domains {
+        parts.push(format!("denied_domains=[{}]", denied_domains.join(", ")));
+    }
+    if let Some(allow_unix_sockets) = allow_unix_sockets {
+        parts.push(format!(
+            "allow_unix_sockets=[{}]",
+            allow_unix_sockets.join(", ")
+        ));
+    }
+    if let Some(allow_local_binding) = allow_local_binding {
+        parts.push(format!("allow_local_binding={allow_local_binding}"));
+    }
+
+    join_or_empty(parts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::render_debug_config_lines;
+    use super::session_all_proxy_url;
     use codex_app_server_protocol::ConfigLayerSource;
     use codex_core::config::Constrained;
     use codex_core::config_loader::ConfigLayerEntry;
@@ -211,6 +314,7 @@ mod tests {
     use codex_core::config_loader::ConstrainedWithSource;
     use codex_core::config_loader::McpServerIdentity;
     use codex_core::config_loader::McpServerRequirement;
+    use codex_core::config_loader::NetworkConstraints;
     use codex_core::config_loader::RequirementSource;
     use codex_core::config_loader::ResidencyRequirement;
     use codex_core::config_loader::SandboxModeRequirement;
@@ -289,7 +393,7 @@ mod tests {
     #[test]
     fn debug_config_output_lists_requirement_sources() {
         let requirements_file = if cfg!(windows) {
-            absolute_path("C:\\etc\\codex\\requirements.toml")
+            absolute_path("C:\\ProgramData\\OpenAI\\Codex\\requirements.toml")
         } else {
             absolute_path("/etc/codex/requirements.toml")
         };
@@ -323,6 +427,14 @@ mod tests {
             Constrained::allow_any(WebSearchMode::Cached),
             Some(RequirementSource::CloudRequirements),
         );
+        requirements.network = Some(Sourced::new(
+            NetworkConstraints {
+                enabled: Some(true),
+                allowed_domains: Some(vec!["example.com".to_string()]),
+                ..Default::default()
+            },
+            RequirementSource::CloudRequirements,
+        ));
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
@@ -338,6 +450,7 @@ mod tests {
             )])),
             rules: None,
             enforce_residency: Some(ResidencyRequirement::Us),
+            network: None,
         };
 
         let user_file = if cfg!(windows) {
@@ -375,6 +488,9 @@ mod tests {
         );
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
         assert!(rendered.contains("enforce_residency: us (source: cloud requirements)"));
+        assert!(rendered.contains(
+            "experimental_network: enabled=true, allowed_domains=[example.com] (source: cloud requirements)"
+        ));
         assert!(!rendered.contains("  - rules:"));
     }
 
@@ -393,6 +509,7 @@ mod tests {
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
+            network: None,
         };
 
         let stack = ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
@@ -401,6 +518,22 @@ mod tests {
         let rendered = render_to_text(&render_debug_config_lines(&stack));
         assert!(
             rendered.contains("allowed_web_search_modes: disabled (source: cloud requirements)")
+        );
+    }
+
+    #[test]
+    fn session_all_proxy_url_uses_socks_when_enabled() {
+        assert_eq!(
+            session_all_proxy_url("127.0.0.1:3128", "127.0.0.1:8081", true),
+            "socks5h://127.0.0.1:8081".to_string()
+        );
+    }
+
+    #[test]
+    fn session_all_proxy_url_uses_http_when_socks_disabled() {
+        assert_eq!(
+            session_all_proxy_url("127.0.0.1:3128", "127.0.0.1:8081", false),
+            "http://127.0.0.1:3128".to_string()
         );
     }
 }

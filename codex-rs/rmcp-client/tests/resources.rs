@@ -11,10 +11,10 @@ use rmcp::model::AnnotateAble;
 use rmcp::model::ClientCapabilities;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::Implementation;
-use rmcp::model::InitializeRequestParam;
+use rmcp::model::InitializeRequestParams;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ProtocolVersion;
-use rmcp::model::ReadResourceRequestParam;
+use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ResourceContents;
 use serde_json::json;
 
@@ -24,8 +24,9 @@ fn stdio_server_bin() -> Result<PathBuf, CargoBinError> {
     codex_utils_cargo_bin::cargo_bin("test_stdio_server")
 }
 
-fn init_params() -> InitializeRequestParam {
-    InitializeRequestParam {
+fn init_params() -> InitializeRequestParams {
+    InitializeRequestParams {
+        meta: None,
         capabilities: ClientCapabilities {
             experimental: None,
             roots: None,
@@ -33,11 +34,12 @@ fn init_params() -> InitializeRequestParam {
             elicitation: Some(ElicitationCapability {
                 schema_validation: None,
             }),
+            tasks: None,
         },
         client_info: Implementation {
             name: "codex-test".into(),
             version: "0.0.0-test".into(),
-            title: Some("Codex rmcp resource test".into()),
+            title: Some("Ata rmcp resource test".into()),
             icons: None,
             website_url: None,
         },
@@ -106,11 +108,12 @@ async fn rmcp_client_can_list_and_read_resources() -> anyhow::Result<()> {
                 rmcp::model::RawResourceTemplate {
                     uri_template: "memo://codex/{slug}".to_string(),
                     name: "codex-memo".to_string(),
-                    title: Some("Codex Memo".to_string()),
+                    title: Some("Ata Memo".to_string()),
                     description: Some(
                         "Template for memo://codex/{slug} resources used in tests.".to_string(),
                     ),
                     mime_type: Some("text/plain".to_string()),
+                    icons: None,
                 }
                 .no_annotation()
             ],
@@ -119,7 +122,8 @@ async fn rmcp_client_can_list_and_read_resources() -> anyhow::Result<()> {
 
     let read = client
         .read_resource(
-            ReadResourceRequestParam {
+            ReadResourceRequestParams {
+                meta: None,
                 uri: RESOURCE_URI.to_string(),
             },
             Some(Duration::from_secs(5)),

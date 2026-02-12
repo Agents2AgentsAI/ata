@@ -44,7 +44,7 @@ use codex_windows_sandbox::SetupFailure;
 use codex_windows_sandbox::SETUP_VERSION;
 
 pub const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
-const SANDBOX_USERS_GROUP_COMMENT: &str = "Codex sandbox internal group (managed)";
+const SANDBOX_USERS_GROUP_COMMENT: &str = "Ata sandbox internal group (managed)";
 const SID_ADMINISTRATORS: &str = "S-1-5-32-544";
 const SID_USERS: &str = "S-1-5-32-545";
 const SID_AUTHENTICATED_USERS: &str = "S-1-5-11";

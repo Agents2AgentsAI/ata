@@ -151,7 +151,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         const VERSION: &str = env!("CARGO_PKG_VERSION");
         ts_msg!(
             self,
-            "OpenAI Codex v{} (research preview)\n--------",
+            "Agents2Agents Ata v{} (research preview)\n--------",
             VERSION
         );
 
@@ -264,7 +264,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     "auto-cancelling (not supported in exec mode)".style(self.dimmed)
                 );
             }
-            EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                last_agent_message, ..
+            }) => {
                 let last_message = last_agent_message
                     .as_deref()
                     .or(self.last_proposed_plan.as_deref());
@@ -300,7 +302,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 ts_msg!(
                     self,
                     "{}\n{}",
-                    "codex".style(self.italic).style(self.magenta),
+                    "ata".style(self.italic).style(self.magenta),
                     message,
                 );
             }

@@ -82,7 +82,7 @@ pub async fn list_remote_skills(config: &Config) -> Result<Vec<RemoteSkillSummar
     let response = client
         .get(&url)
         .timeout(REMOTE_SKILLS_API_TIMEOUT)
-        .query(&[("product_surface", "codex")])
+        .query(&[("product_surface", "ata")])
         .send()
         .await
         .with_context(|| format!("Failed to send request to {url}"))?;
@@ -274,7 +274,7 @@ async fn fetch_remote_skill(config: &Config, hazelnut_id: &str) -> Result<Remote
     let response = client
         .get(&url)
         .timeout(REMOTE_SKILLS_API_TIMEOUT)
-        .query(&[("product_surface", "codex")])
+        .query(&[("product_surface", "ata")])
         .send()
         .await
         .with_context(|| format!("Failed to send request to {url}"))?;

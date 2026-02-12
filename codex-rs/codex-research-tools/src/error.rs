@@ -27,6 +27,9 @@ pub enum ResearchError {
         source: reqwest::Error,
     },
 
+    #[error("http request to {api} failed: {message}")]
+    HttpMessage { api: ResearchApi, message: String },
+
     #[error("upstream API {api} returned {status}: {message}")]
     Upstream {
         api: ResearchApi,
@@ -42,4 +45,33 @@ pub enum ResearchError {
 
     #[error("internal error: {0}")]
     Internal(String),
+}
+
+#[must_use]
+pub(crate) fn is_retryable_upstream_status(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
+}
+
+#[must_use]
+pub(crate) fn is_retryable_http_error(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect()
+}
+
+impl ResearchError {
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::RateLimiterClosed { .. }
+            | Self::Timeout { .. }
+            | Self::Http { .. }
+            | Self::HttpMessage { .. } => true,
+            Self::Upstream { status, .. } => is_retryable_upstream_status(*status),
+            Self::NotConfigured { .. }
+            | Self::NotImplemented { .. }
+            | Self::InvalidInput(_)
+            | Self::Parse { .. }
+            | Self::InternalPanic
+            | Self::Internal(_) => false,
+        }
+    }
 }

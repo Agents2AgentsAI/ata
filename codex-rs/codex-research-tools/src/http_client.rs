@@ -11,6 +11,8 @@ use serde::de::DeserializeOwned;
 use crate::config::RetryConfig;
 use crate::error::ResearchError;
 use crate::error::Result;
+use crate::error::is_retryable_http_error;
+use crate::error::is_retryable_upstream_status;
 use crate::rate_limiter::RateLimiter;
 use crate::rate_limiter::ResearchApi;
 
@@ -69,7 +71,11 @@ impl HttpClient {
         })
     }
 
-    async fn execute_response<F>(&self, api: ResearchApi, build_request: F) -> Result<Response>
+    pub(crate) async fn execute_response<F>(
+        &self,
+        api: ResearchApi,
+        build_request: F,
+    ) -> Result<Response>
     where
         F: Fn() -> reqwest::RequestBuilder,
     {
@@ -89,9 +95,18 @@ impl HttpClient {
             let Some(remaining) = self.remaining_tool_time(started_at) else {
                 return Err(tool_timeout_error(api, self.tool_timeout));
             };
-            let response = match tokio::time::timeout(remaining, request.send()).await {
+            let send_timeout = self.request_timeout.min(remaining);
+            let response = match tokio::time::timeout(send_timeout, request.send()).await {
                 Ok(response) => response,
-                Err(_) => return Err(tool_timeout_error(api, self.tool_timeout)),
+                Err(_) => {
+                    if send_timeout < remaining {
+                        return Err(ResearchError::Timeout {
+                            api,
+                            timeout_ms: self.request_timeout_ms(),
+                        });
+                    }
+                    return Err(tool_timeout_error(api, self.tool_timeout));
+                }
             };
 
             match response {
@@ -101,7 +116,9 @@ impl HttpClient {
                     }
 
                     let status = resp.status();
-                    if should_retry_status(status) && attempt < self.retry_config.max_retries {
+                    if is_retryable_upstream_status(status)
+                        && attempt < self.retry_config.max_retries
+                    {
                         let retry_after = parse_retry_after(resp.headers());
                         let Some(remaining) = self.remaining_tool_time(started_at) else {
                             return Err(tool_timeout_error(api, self.tool_timeout));
@@ -122,7 +139,7 @@ impl HttpClient {
                     });
                 }
                 Err(err) => {
-                    if should_retry_error(&err) && attempt < self.retry_config.max_retries {
+                    if is_retryable_http_error(&err) && attempt < self.retry_config.max_retries {
                         let Some(remaining) = self.remaining_tool_time(started_at) else {
                             return Err(tool_timeout_error(api, self.tool_timeout));
                         };
@@ -133,7 +150,7 @@ impl HttpClient {
                     if err.is_timeout() {
                         return Err(ResearchError::Timeout {
                             api,
-                            timeout_ms: self.request_timeout.as_millis() as u64,
+                            timeout_ms: self.request_timeout_ms(),
                         });
                     }
 
@@ -149,6 +166,10 @@ impl HttpClient {
 
     fn remaining_tool_time(&self, started_at: tokio::time::Instant) -> Option<Duration> {
         self.tool_timeout.checked_sub(started_at.elapsed())
+    }
+
+    fn request_timeout_ms(&self) -> u64 {
+        u64::try_from(self.request_timeout.as_millis()).unwrap_or(u64::MAX)
     }
 
     fn retry_delay(&self, attempt: u32, retry_after: Option<Duration>) -> Duration {
@@ -171,31 +192,29 @@ impl HttpClient {
     }
 }
 
-fn should_retry_status(status: reqwest::StatusCode) -> bool {
-    status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
-}
-
-fn should_retry_error(error: &reqwest::Error) -> bool {
-    error.is_timeout() || error.is_connect()
-}
-
 fn parse_retry_after(headers: &header::HeaderMap) -> Option<Duration> {
     let value = headers.get(header::RETRY_AFTER)?;
     let raw = value.to_str().ok()?;
     parse_retry_after_value(raw)
 }
 
+const MIN_RETRY_AFTER_DELAY: Duration = Duration::from_millis(100);
+
 fn parse_retry_after_value(raw: &str) -> Option<Duration> {
     if let Ok(seconds) = raw.parse::<u64>() {
-        return Some(Duration::from_secs(seconds));
+        let delay = Duration::from_secs(seconds);
+        return Some(delay.max(MIN_RETRY_AFTER_DELAY));
     }
 
     let retry_at = DateTime::parse_from_rfc2822(raw).ok()?.with_timezone(&Utc);
     let delay = retry_at.signed_duration_since(Utc::now());
     if delay <= chrono::Duration::zero() {
-        Some(Duration::from_secs(0))
+        Some(MIN_RETRY_AFTER_DELAY)
     } else {
-        delay.to_std().ok()
+        delay
+            .to_std()
+            .ok()
+            .map(|value| value.max(MIN_RETRY_AFTER_DELAY))
     }
 }
 
@@ -248,12 +267,71 @@ mod tests {
     }
 
     #[test]
+    fn parse_retry_after_value_enforces_floor_for_zero_seconds() {
+        assert_eq!(
+            parse_retry_after_value("0"),
+            Some(Duration::from_millis(100))
+        );
+    }
+
+    #[test]
     fn parse_retry_after_value_accepts_http_date() {
         let header_value = (Utc::now() + chrono::Duration::seconds(2))
             .format("%a, %d %b %Y %H:%M:%S GMT")
             .to_string();
         let delay = parse_retry_after_value(&header_value).expect("valid retry-after date");
         assert!(delay <= Duration::from_secs(3));
+    }
+
+    #[test]
+    fn parse_retry_after_value_enforces_floor_for_past_http_date() {
+        let header_value = (Utc::now() - chrono::Duration::seconds(5))
+            .format("%a, %d %b %Y %H:%M:%S GMT")
+            .to_string();
+        assert_eq!(
+            parse_retry_after_value(&header_value),
+            Some(Duration::from_millis(100))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn request_timeout_applies_even_without_reqwest_timeout() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/slow"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(100)))
+            .mount(&server)
+            .await;
+
+        let request_timeout = Duration::from_millis(25);
+        let client = reqwest::Client::builder().build().expect("reqwest client");
+        let rate_limiter = Arc::new(RateLimiter::new(HashMap::new()));
+        let http = HttpClient::new(
+            client,
+            rate_limiter,
+            RetryConfig {
+                max_retries: 0,
+                base_delay: Duration::from_millis(1),
+                max_delay: Duration::from_secs(30),
+            },
+            request_timeout,
+            Duration::from_secs(2),
+        );
+
+        let err = http
+            .execute_text(ResearchApi::OpenAlex, || {
+                http.client().get(format!("{}/slow", server.uri()))
+            })
+            .await
+            .expect_err("request should time out");
+
+        match err {
+            ResearchError::Timeout { api, timeout_ms } => {
+                assert_eq!(api, ResearchApi::OpenAlex);
+                assert_eq!(timeout_ms, 25);
+            }
+            other => panic!("unexpected error: {other}"),
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

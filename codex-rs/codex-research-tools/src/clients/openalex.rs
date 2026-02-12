@@ -18,9 +18,65 @@ pub(crate) async fn search(
     request: &OpenAlexSearchRequest<'_>,
 ) -> Result<SearchPage> {
     let per_page = request.limit.clamp(1, 200);
-    let page = request.offset / per_page + 1;
-    let page_offset = request.offset % per_page;
+    let mut page = request.offset / per_page + 1;
+    let mut page_offset = request.offset % per_page;
+    let target_len = usize::try_from(request.limit).unwrap_or(usize::MAX);
+    let mut papers = Vec::new();
+    let mut total_available = None;
 
+    loop {
+        let url = build_search_url(base_url, request, per_page, page);
+        let response: OpenAlexResponse = http
+            .execute_json(ResearchApi::OpenAlex, || http.client().get(&url))
+            .await?;
+
+        let OpenAlexResponse { meta, results } = response;
+        total_available = total_available.or(meta.count);
+
+        let page_len = results.len();
+        let remaining = target_len.saturating_sub(papers.len());
+        papers.extend(
+            results
+                .into_iter()
+                .skip(page_offset as usize)
+                .take(remaining)
+                .map(|work| map_work(work, &url, request.include_abstract)),
+        );
+
+        if papers.len() >= target_len {
+            break;
+        }
+
+        let fetched_total = u64::from(request.offset) + u64::try_from(papers.len()).unwrap_or(0);
+        if total_available.is_some_and(|total| fetched_total >= total) {
+            break;
+        }
+
+        if page_len < per_page as usize {
+            break;
+        }
+
+        page = page.saturating_add(1);
+        page_offset = 0;
+    }
+
+    let has_more = total_available.is_some_and(|total| {
+        total > u64::from(request.offset) + u64::try_from(papers.len()).unwrap_or(0)
+    });
+
+    Ok(SearchPage {
+        papers,
+        total_available,
+        has_more,
+    })
+}
+
+fn build_search_url(
+    base_url: &str,
+    request: &OpenAlexSearchRequest<'_>,
+    per_page: u32,
+    page: u32,
+) -> String {
     let mut url = format!(
         "{base_url}/works?search={query}&per-page={per_page}&page={page}",
         query = urlencoding::encode(request.query),
@@ -44,26 +100,7 @@ pub(crate) async fn search(
         url.push_str(&format!("&mailto={}", urlencoding::encode(polite_email)));
     }
 
-    let response: OpenAlexResponse = http
-        .execute_json(ResearchApi::OpenAlex, || http.client().get(&url))
-        .await?;
-
-    let papers = response
-        .results
-        .into_iter()
-        .skip(page_offset as usize)
-        .map(|work| map_work(work, &url, request.include_abstract))
-        .collect::<Vec<_>>();
-
-    let has_more = response.meta.count.is_some_and(|total| {
-        total > u64::from(request.offset) + u64::try_from(papers.len()).unwrap_or(0)
-    });
-
-    Ok(SearchPage {
-        papers,
-        total_available: response.meta.count,
-        has_more,
-    })
+    url
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -236,10 +273,23 @@ fn reconstruct_abstract(index: &HashMap<String, Vec<usize>>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::time::Duration;
 
     use pretty_assertions::assert_eq;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+    use wiremock::matchers::query_param;
 
+    use super::OpenAlexSearchRequest;
     use super::reconstruct_abstract;
+    use super::search;
+    use crate::config::RetryConfig;
+    use crate::http_client::HttpClient;
+    use crate::rate_limiter::RateLimiter;
 
     #[test]
     fn reconstruct_abstract_orders_words_by_position() {
@@ -263,6 +313,77 @@ mod tests {
             reconstruct_abstract(&index),
             Some("sparse index".to_string())
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn search_fetches_across_page_boundary_for_non_aligned_offsets() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/works"))
+            .and(query_param("search", "vision"))
+            .and(query_param("per-page", "10"))
+            .and(query_param("page", "10"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "meta": { "count": 130 },
+                "results": (90..100).map(openalex_work).collect::<Vec<_>>()
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/works"))
+            .and(query_param("search", "vision"))
+            .and(query_param("per-page", "10"))
+            .and(query_param("page", "11"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "meta": { "count": 130 },
+                "results": (100..110).map(openalex_work).collect::<Vec<_>>()
+            })))
+            .mount(&server)
+            .await;
+
+        let http = HttpClient::new(
+            reqwest::Client::new(),
+            Arc::new(RateLimiter::new(HashMap::new())),
+            RetryConfig::default(),
+            Duration::from_secs(30),
+            Duration::from_secs(60),
+        );
+
+        let page = search(
+            &http,
+            &server.uri(),
+            &OpenAlexSearchRequest {
+                polite_email: None,
+                query: "vision",
+                year_from: None,
+                year_to: None,
+                offset: 95,
+                limit: 10,
+                include_abstract: false,
+            },
+        )
+        .await
+        .expect("search should succeed");
+
+        assert_eq!(page.papers.len(), 10);
+        assert_eq!(page.papers[0].title, "Paper 95");
+        assert_eq!(page.papers[9].title, "Paper 104");
+    }
+
+    fn openalex_work(index: u32) -> serde_json::Value {
+        serde_json::json!({
+            "id": format!("https://openalex.org/W{index}"),
+            "display_name": format!("Paper {index}"),
+            "publication_year": 2024,
+            "cited_by_count": index,
+            "doi": format!("https://doi.org/10.1000/{index}"),
+            "ids": {
+                "openalex": format!("https://openalex.org/W{index}"),
+                "doi": format!("https://doi.org/10.1000/{index}")
+            }
+        })
     }
 }
 

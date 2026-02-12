@@ -61,11 +61,15 @@ impl FromStr for PaperId {
 }
 
 fn normalize_doi(value: &str) -> String {
-    value
-        .trim()
+    let lowered = value.trim().to_ascii_lowercase();
+    lowered
         .trim_start_matches("https://doi.org/")
         .trim_start_matches("http://doi.org/")
-        .to_ascii_lowercase()
+        .trim_start_matches("https://dx.doi.org/")
+        .trim_start_matches("http://dx.doi.org/")
+        .trim_start_matches("doi:")
+        .trim()
+        .to_string()
 }
 
 fn normalize_arxiv(value: &str) -> String {
@@ -117,6 +121,28 @@ fn looks_like_openalex(value: &str) -> bool {
     (first == 'W' || first == 'w') && chars.all(|ch| ch.is_ascii_digit())
 }
 
+fn normalize_trimmed(value: &str) -> String {
+    value.trim().to_string()
+}
+
+fn normalize_optional(value: &mut Option<String>, normalizer: fn(&str) -> String) {
+    if let Some(raw) = value {
+        let normalized = normalizer(raw);
+        if normalized.trim().is_empty() {
+            *value = None;
+        } else {
+            *value = Some(normalized);
+        }
+    }
+}
+
+pub(crate) fn normalize_paper_identifiers(paper: &mut Paper) {
+    normalize_optional(&mut paper.doi, normalize_doi);
+    normalize_optional(&mut paper.arxiv_id, normalize_arxiv);
+    normalize_optional(&mut paper.s2_paper_id, normalize_trimmed);
+    normalize_optional(&mut paper.openalex_id, normalize_openalex);
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct PaperIdResolver;
 
@@ -156,48 +182,88 @@ impl PaperIdResolver {
 
     #[must_use]
     pub fn dedup_papers(&self, papers: Vec<Paper>) -> Vec<Paper> {
-        let mut deduped: HashMap<String, Paper> = HashMap::new();
+        let mut key_to_index: HashMap<String, usize> = HashMap::new();
+        let mut deduped: Vec<Paper> = Vec::new();
 
-        for paper in papers {
-            let key = self
-                .canonical_id_for_paper(&paper)
-                .map_or_else(|| paper.title.to_lowercase(), |id| id.to_string());
+        for (paper_index, mut paper) in papers.into_iter().enumerate() {
+            normalize_paper_identifiers(&mut paper);
+            let key = self.canonical_id_for_paper(&paper).map_or_else(
+                || {
+                    let title_key = paper.title.trim().to_ascii_lowercase();
+                    if title_key.is_empty() {
+                        format!("untitled:{paper_index}")
+                    } else {
+                        title_key
+                    }
+                },
+                |id| id.to_string(),
+            );
 
-            if let Some(existing) = deduped.get_mut(&key) {
-                merge_paper(existing, paper);
+            if let Some(existing_index) = key_to_index.get(&key).copied() {
+                if let Some(existing) = deduped.get_mut(existing_index) {
+                    merge_paper(existing, paper);
+                } else {
+                    key_to_index.insert(key, deduped.len());
+                    deduped.push(paper);
+                }
             } else {
-                deduped.insert(key, paper);
+                key_to_index.insert(key, deduped.len());
+                deduped.push(paper);
             }
         }
 
-        deduped.into_values().collect()
+        deduped
     }
 }
 
 fn merge_paper(existing: &mut Paper, incoming: Paper) {
+    let Paper {
+        abstract_text,
+        url,
+        pdf_url,
+        code_url,
+        venue,
+        citation_count,
+        doi,
+        arxiv_id,
+        s2_paper_id,
+        openalex_id,
+        source_meta,
+        ..
+    } = incoming;
+
     if existing.abstract_text.is_none() {
-        existing.abstract_text = incoming.abstract_text.clone();
+        existing.abstract_text = abstract_text;
     }
     if existing.url.is_none() {
-        existing.url = incoming.url.clone();
+        existing.url = url;
     }
     if existing.pdf_url.is_none() {
-        existing.pdf_url = incoming.pdf_url.clone();
+        existing.pdf_url = pdf_url;
     }
     if existing.code_url.is_none() {
-        existing.code_url = incoming.code_url.clone();
+        existing.code_url = code_url;
     }
     if existing.venue.is_none() {
-        existing.venue = incoming.venue.clone();
+        existing.venue = venue;
+    }
+    if existing.doi.is_none() {
+        existing.doi = doi;
+    }
+    if existing.arxiv_id.is_none() {
+        existing.arxiv_id = arxiv_id;
+    }
+    if existing.s2_paper_id.is_none() {
+        existing.s2_paper_id = s2_paper_id;
     }
     if existing.openalex_id.is_none() {
-        existing.openalex_id = incoming.openalex_id.clone();
+        existing.openalex_id = openalex_id;
     }
-    if existing.citation_count.unwrap_or(0) < incoming.citation_count.unwrap_or(0) {
-        existing.citation_count = incoming.citation_count;
+    if existing.citation_count.unwrap_or(0) < citation_count.unwrap_or(0) {
+        existing.citation_count = citation_count;
     }
     if existing.source_meta.is_none() {
-        existing.source_meta = incoming.source_meta;
+        existing.source_meta = source_meta;
     }
 }
 
@@ -208,6 +274,8 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::paper_id::PaperId;
+    use crate::paper_id::PaperIdResolver;
+    use crate::types::Paper;
 
     #[test]
     fn parses_and_formats_all_supported_prefixes() {
@@ -246,5 +314,123 @@ mod tests {
                 .to_string(),
             "openalex:W4398752345"
         );
+    }
+
+    #[test]
+    fn normalizes_common_doi_url_variants() {
+        let cases = [
+            ("doi:10.1000/ABC", "doi:10.1000/abc"),
+            ("doi:https://doi.org/10.1000/ABC", "doi:10.1000/abc"),
+            ("doi:http://doi.org/10.1000/ABC", "doi:10.1000/abc"),
+            ("doi:https://dx.doi.org/10.1000/ABC", "doi:10.1000/abc"),
+            ("doi:http://dx.doi.org/10.1000/ABC", "doi:10.1000/abc"),
+        ];
+
+        for (input, expected) in cases {
+            let parsed = PaperId::from_str(input).expect("doi variant should parse");
+            assert_eq!(parsed.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn dedup_merges_identifier_fields_from_secondary_records() {
+        let resolver = PaperIdResolver;
+        let papers = vec![
+            make_paper(
+                "Paper",
+                Some("10.1000/shared"),
+                None,
+                Some("s2-1"),
+                None,
+                Some(5),
+            ),
+            make_paper(
+                "Paper",
+                Some("https://doi.org/10.1000/shared"),
+                Some("2301.12345v1"),
+                None,
+                Some("W123456"),
+                Some(10),
+            ),
+        ];
+
+        let deduped = resolver.dedup_papers(papers);
+        assert_eq!(deduped.len(), 1);
+
+        let paper = &deduped[0];
+        assert_eq!(paper.doi.as_deref(), Some("10.1000/shared"));
+        assert_eq!(paper.arxiv_id.as_deref(), Some("2301.12345v1"));
+        assert_eq!(paper.s2_paper_id.as_deref(), Some("s2-1"));
+        assert_eq!(paper.openalex_id.as_deref(), Some("W123456"));
+        assert_eq!(paper.citation_count, Some(10));
+    }
+
+    #[test]
+    fn dedup_preserves_first_seen_order_for_relevance() {
+        let resolver = PaperIdResolver;
+        let papers = vec![
+            make_paper("First", Some("10.1000/first"), None, None, None, Some(1)),
+            make_paper(
+                "Second",
+                Some("10.1000/second"),
+                None,
+                None,
+                None,
+                Some(100),
+            ),
+            make_paper(
+                "First duplicate",
+                Some("https://doi.org/10.1000/first"),
+                None,
+                None,
+                None,
+                Some(2),
+            ),
+        ];
+
+        let deduped = resolver.dedup_papers(papers);
+        let titles = deduped
+            .iter()
+            .map(|paper| paper.title.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(titles, vec!["First", "Second"]);
+    }
+
+    #[test]
+    fn dedup_does_not_collapse_distinct_records_without_id_or_title() {
+        let resolver = PaperIdResolver;
+        let papers = vec![
+            make_paper("", None, None, None, None, Some(1)),
+            make_paper(" ", None, None, None, None, Some(2)),
+        ];
+
+        let deduped = resolver.dedup_papers(papers);
+        assert_eq!(deduped.len(), 2);
+    }
+
+    fn make_paper(
+        title: &str,
+        doi: Option<&str>,
+        arxiv_id: Option<&str>,
+        s2_paper_id: Option<&str>,
+        openalex_id: Option<&str>,
+        citation_count: Option<u32>,
+    ) -> Paper {
+        Paper {
+            title: title.to_string(),
+            authors: String::new(),
+            year: None,
+            venue: None,
+            citation_count,
+            abstract_text: None,
+            doi: doi.map(ToString::to_string),
+            arxiv_id: arxiv_id.map(ToString::to_string),
+            s2_paper_id: s2_paper_id.map(ToString::to_string),
+            openalex_id: openalex_id.map(ToString::to_string),
+            url: None,
+            pdf_url: None,
+            code_url: None,
+            source_meta: None,
+        }
     }
 }

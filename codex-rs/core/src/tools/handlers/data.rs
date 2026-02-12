@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::panic::AssertUnwindSafe;
+use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -13,6 +14,11 @@ use codex_data_tools::types::KaggleCompetitionDownloadParams;
 use codex_data_tools::types::KaggleCompetitionFilesParams;
 use codex_data_tools::types::KaggleCompetitionsParams;
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_secrets::SecretName;
+use codex_secrets::SecretScope;
+use codex_secrets::SecretsBackendKind;
+use codex_secrets::SecretsManager;
+use codex_secrets::environment_id_from_cwd;
 use futures::FutureExt;
 use serde::Serialize;
 
@@ -179,8 +185,16 @@ impl ToolHandler for DataBridgeHandler {
     }
 }
 
-pub(crate) fn build_data_config(toml: Option<&DataToolsToml>) -> DataConfig {
+pub(crate) fn build_data_config(
+    toml: Option<&DataToolsToml>,
+    codex_home: &Path,
+    cwd: &Path,
+) -> DataConfig {
     let mut config = DataConfig::from_env();
+    let secret_resolver = DataSecretResolver::new(codex_home, cwd);
+
+    // `from_env()` already loaded environment values, so secret lookup only fills missing keys.
+    apply_secret_overrides(&mut config, |name| secret_resolver.resolve(name));
 
     if let Some(toml) = toml {
         if config.huggingface_token.is_none() {
@@ -195,6 +209,70 @@ pub(crate) fn build_data_config(toml: Option<&DataToolsToml>) -> DataConfig {
     }
 
     config
+}
+
+fn apply_secret_overrides<F>(config: &mut DataConfig, mut resolve_secret: F)
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    if config.huggingface_token.is_none() {
+        config.huggingface_token =
+            resolve_secret("HF_TOKEN").or_else(|| resolve_secret("HUGGING_FACE_HUB_TOKEN"));
+    }
+    if config.kaggle_username.is_none() {
+        config.kaggle_username = resolve_secret("KAGGLE_USERNAME");
+    }
+    if config.kaggle_key.is_none() {
+        config.kaggle_key = resolve_secret("KAGGLE_KEY");
+    }
+    if config.kaggle_api_token.is_none() {
+        config.kaggle_api_token = resolve_secret("KAGGLE_API_TOKEN");
+    }
+    if config.cosmos_api_key.is_none() {
+        config.cosmos_api_key = resolve_secret("NVIDIA_API_KEY");
+    }
+}
+
+struct DataSecretResolver {
+    manager: SecretsManager,
+    environment_scope: Option<SecretScope>,
+}
+
+impl DataSecretResolver {
+    fn new(codex_home: &Path, cwd: &Path) -> Self {
+        let environment_scope = SecretScope::environment(environment_id_from_cwd(cwd)).ok();
+        Self {
+            manager: SecretsManager::new(codex_home.to_path_buf(), SecretsBackendKind::Local),
+            environment_scope,
+        }
+    }
+
+    fn resolve(&self, secret_name: &str) -> Option<String> {
+        let secret_name = SecretName::new(secret_name).ok()?;
+
+        if let Some(scope) = self.environment_scope.as_ref()
+            && let Some(value) = self.get(scope, &secret_name)
+        {
+            return Some(value);
+        }
+
+        self.get(&SecretScope::Global, &secret_name)
+    }
+
+    fn get(&self, scope: &SecretScope, name: &SecretName) -> Option<String> {
+        match self.manager.get(scope, name) {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::debug!(
+                    error = %err,
+                    scope = ?scope,
+                    secret_name = %name,
+                    "failed to load data secret; falling back"
+                );
+                None
+            }
+        }
+    }
 }
 
 fn map_data_error(err: DataError) -> FunctionCallError {

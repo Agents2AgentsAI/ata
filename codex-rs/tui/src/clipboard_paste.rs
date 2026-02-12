@@ -46,6 +46,54 @@ pub struct PastedImageInfo {
     pub encoded_format: EncodedImageFormat, // Always PNG for now.
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachmentKind {
+    Image,
+    File,
+    Unsupported,
+}
+
+pub fn detect_attachment_kind(path: &Path) -> AttachmentKind {
+    if !path.is_file() {
+        return AttachmentKind::Unsupported;
+    }
+
+    if let Some(ext) = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+    {
+        match ext.as_str() {
+            "pdf" => return AttachmentKind::File,
+            "png" | "jpg" | "jpeg" | "gif" | "webp" => return AttachmentKind::Image,
+            _ => {}
+        }
+    }
+
+    let mut buf = [0_u8; 16];
+    let bytes_read = match std::fs::File::open(path).and_then(|mut file| {
+        use std::io::Read;
+        file.read(&mut buf)
+    }) {
+        Ok(bytes_read) => bytes_read,
+        Err(_) => return AttachmentKind::Unsupported,
+    };
+    let bytes = &buf[..bytes_read];
+
+    if bytes.starts_with(b"%PDF-") {
+        return AttachmentKind::File;
+    }
+    if bytes.starts_with(b"\x89PNG")
+        || bytes.starts_with(&[0xFF, 0xD8, 0xFF])
+        || bytes.starts_with(b"GIF8")
+        || (bytes.starts_with(b"RIFF") && bytes.len() >= 12 && &bytes[8..12] == b"WEBP")
+    {
+        return AttachmentKind::Image;
+    }
+
+    AttachmentKind::Unsupported
+}
+
 /// Capture image from system clipboard, encode to PNG, and return bytes + info.
 #[cfg(not(target_os = "android"))]
 pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
@@ -447,6 +495,25 @@ mod pasted_paths_tests {
         assert_eq!(
             pasted_image_format(Path::new("/a/b/c.webp")),
             EncodedImageFormat::Other
+        );
+    }
+
+    #[test]
+    fn detect_attachment_kind_recognizes_pdf_magic() {
+        let file = tempfile::NamedTempFile::new().expect("temp file");
+        std::fs::write(file.path(), b"%PDF-1.4\nbody").expect("write pdf");
+
+        assert_eq!(detect_attachment_kind(file.path()), AttachmentKind::File);
+    }
+
+    #[test]
+    fn detect_attachment_kind_rejects_unknown_file_type() {
+        let file = tempfile::NamedTempFile::new().expect("temp file");
+        std::fs::write(file.path(), b"plain text").expect("write text");
+
+        assert_eq!(
+            detect_attachment_kind(file.path()),
+            AttachmentKind::Unsupported
         );
     }
 

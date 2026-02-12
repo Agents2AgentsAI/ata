@@ -22,7 +22,6 @@ fn permissive_rate_limit_overrides() -> RateLimitOverrides {
         semantic_scholar: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
         arxiv: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
         openalex: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
-        papers_with_code: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
         zotero: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
         github: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
     }
