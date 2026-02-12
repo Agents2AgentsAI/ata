@@ -296,6 +296,25 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 }),
             },
             ToolDef {
+                id: "zotero_get_annotations",
+                native_name: "zotero_get_annotations",
+                mcp_name: "get_annotations",
+                description: "Get annotations in an item or across a Zotero library.",
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "item_key": { "type": "string" },
+                        "library_type": { "type": "string" },
+                        "library_id": { "type": "string" },
+                        "offset": { "type": "integer" },
+                        "limit": { "type": "integer" },
+                        "include_parent_context": { "type": "boolean" },
+                        "max_chars_per_item": { "type": "integer" }
+                    },
+                    "additionalProperties": false
+                }),
+            },
+            ToolDef {
                 id: "zotero_get_attachments",
                 native_name: "zotero_get_attachments",
                 mcp_name: "get_item_attachments",
@@ -580,6 +599,13 @@ mod tests {
         assert_schema_has_field("zotero_advanced_search", "conditions");
         assert_schema_has_field("zotero_advanced_search", "join_mode");
         assert_schema_has_field("zotero_advanced_search", "sort_by");
+    }
+
+    #[test]
+    fn zotero_get_annotations_schema_exposes_scope_and_parent_context_controls() {
+        assert_schema_has_field("zotero_get_annotations", "item_key");
+        assert_schema_has_field("zotero_get_annotations", "include_parent_context");
+        assert_schema_has_field("zotero_get_annotations", "max_chars_per_item");
     }
 
     #[test]

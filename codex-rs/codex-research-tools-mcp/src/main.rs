@@ -10,6 +10,7 @@ use codex_research_tools::tool_specs::all_tool_defs;
 use codex_research_tools::types::PaginationParams;
 use codex_research_tools::types::PaperSearchParams;
 use codex_research_tools::types::ZoteroAdvancedSearchParams;
+use codex_research_tools::types::ZoteroAnnotationsParams;
 use codex_research_tools::types::ZoteroCollectionItemsParams;
 use codex_research_tools::types::ZoteroCollectionsParams;
 use codex_research_tools::types::ZoteroGrepParams;
@@ -253,6 +254,13 @@ impl ServerHandler for ResearchMcpServer {
                 let params: ZoteroItemParams = parse_arguments(request.arguments)?;
                 self.toolkit
                     .zotero_get_notes(params)
+                    .await
+                    .map(serialize_tool_result)
+            }
+            "get_annotations" => {
+                let params: ZoteroAnnotationsParams = parse_arguments(request.arguments)?;
+                self.toolkit
+                    .zotero_get_annotations(params)
                     .await
                     .map(serialize_tool_result)
             }
