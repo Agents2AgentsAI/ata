@@ -336,6 +336,9 @@ pub struct Config {
     /// Optional non-secret research tool settings from `[research]`.
     pub research: Option<ResearchToolsToml>,
 
+    /// Optional non-secret data tool settings from `[data]`.
+    pub data: Option<DataToolsToml>,
+
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
@@ -996,6 +999,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub research: Option<ResearchToolsToml>,
 
+    /// Optional non-secret data tool settings.
+    #[serde(default)]
+    pub data: Option<DataToolsToml>,
+
     /// User-level skill config entries keyed by SKILL.md path.
     pub skills: Option<SkillsConfig>,
 
@@ -1128,6 +1135,14 @@ pub struct ResearchToolsToml {
     pub openalex_email: Option<String>,
     pub zotero_library_type: Option<String>,
     pub zotero_group_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct DataToolsToml {
+    pub huggingface_token: Option<String>,
+    pub kaggle_username: Option<String>,
+    pub kaggle_key: Option<String>,
 }
 
 impl From<ToolsToml> for Tools {
@@ -1799,6 +1814,7 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool_flag,
             web_search_mode: constrained_web_search_mode.value,
             research: cfg.research.clone(),
+            data: cfg.data.clone(),
             use_experimental_unified_exec_tool,
             ghost_snapshot,
             features,
@@ -4088,6 +4104,7 @@ model_verbosity = "high"
                 include_apply_patch_tool: false,
                 web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
                 research: None,
+                data: None,
                 use_experimental_unified_exec_tool: !cfg!(windows),
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
@@ -4177,6 +4194,7 @@ model_verbosity = "high"
             include_apply_patch_tool: false,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             research: None,
+            data: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -4281,6 +4299,7 @@ model_verbosity = "high"
             include_apply_patch_tool: false,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             research: None,
+            data: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -4371,6 +4390,7 @@ model_verbosity = "high"
             include_apply_patch_tool: false,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             research: None,
+            data: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),

@@ -89,6 +89,7 @@ pub type CodexConversation = CodexThread;
 // Re-export common auth types for workspace consumers
 pub use auth::AuthManager;
 pub use auth::CodexAuth;
+pub mod data;
 pub mod default_client;
 pub mod project_doc;
 pub mod research;
