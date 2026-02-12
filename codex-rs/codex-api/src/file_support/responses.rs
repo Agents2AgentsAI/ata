@@ -96,19 +96,10 @@ fn rewrite_url_file_block(block: &mut Value) {
         return;
     };
 
-    let filename = block
-        .get("filename")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-
-    let mut rewritten = serde_json::json!({
+    *block = serde_json::json!({
         "type": "input_file",
         "file_url": url,
     });
-    if let Some(filename) = filename {
-        rewritten["filename"] = Value::String(filename);
-    }
-    *block = rewritten;
 }
 
 /// Wraps raw base64 `file_data` into a `data:<mime>;base64,...` URI and strips `mime_type`
@@ -300,8 +291,7 @@ mod tests {
             payload["input"][0]["content"][0],
             serde_json::json!({
                 "type": "input_file",
-                "file_url": "https://example.com/report.pdf",
-                "filename": "report.pdf"
+                "file_url": "https://example.com/report.pdf"
             })
         );
     }
