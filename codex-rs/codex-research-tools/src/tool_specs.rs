@@ -116,6 +116,135 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 }),
             },
             ToolDef {
+                id: "zotero_grep_text",
+                native_name: "zotero_grep_text",
+                mcp_name: "grep_library_text",
+                description: "Grep-style text search across bounded Zotero candidate content.",
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "pattern": { "type": "string" },
+                        "match_mode": { "type": "string", "enum": ["literal", "regex"] },
+                        "case_sensitive": { "type": "boolean" },
+                        "library_type": { "type": "string" },
+                        "library_id": { "type": "string" },
+                        "parent_item_key": { "type": "string" },
+                        "query_hint": { "type": "string" },
+                        "item_type": { "type": "string" },
+                        "fields": {
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "enum": [
+                                    "title",
+                                    "abstract",
+                                    "extra",
+                                    "note",
+                                    "annotation",
+                                    "fulltext",
+                                    "tag"
+                                ]
+                            }
+                        },
+                        "limit_items": { "type": "integer" },
+                        "limit_matches": { "type": "integer" },
+                        "max_matches_per_item": { "type": "integer" },
+                        "context_chars": { "type": "integer" },
+                        "max_chars_per_item": { "type": "integer" }
+                    },
+                    "required": ["pattern"],
+                    "additionalProperties": false
+                }),
+            },
+            ToolDef {
+                id: "zotero_search_notes",
+                native_name: "zotero_search_notes",
+                mcp_name: "search_notes",
+                description: "Search notes and annotation text in Zotero.",
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" },
+                        "match_mode": { "type": "string", "enum": ["literal", "regex"] },
+                        "case_sensitive": { "type": "boolean" },
+                        "library_type": { "type": "string" },
+                        "library_id": { "type": "string" },
+                        "parent_item_key": { "type": "string" },
+                        "include_annotations": { "type": "boolean" },
+                        "limit": { "type": "integer" },
+                        "max_chars_per_item": { "type": "integer" }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }),
+            },
+            ToolDef {
+                id: "zotero_advanced_search",
+                native_name: "zotero_advanced_search",
+                mcp_name: "advanced_search",
+                description: "Evaluate multi-condition client-side search over bounded Zotero candidates.",
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "conditions": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "field": {
+                                        "type": "string",
+                                        "enum": [
+                                            "title",
+                                            "creator",
+                                            "year",
+                                            "tag",
+                                            "item_type",
+                                            "publication",
+                                            "doi",
+                                            "note",
+                                            "annotation",
+                                            "fulltext"
+                                        ]
+                                    },
+                                    "operation": {
+                                        "type": "string",
+                                        "enum": [
+                                            "contains",
+                                            "not_contains",
+                                            "equals",
+                                            "not_equals",
+                                            "regex",
+                                            "before_year",
+                                            "after_year",
+                                            "is_empty",
+                                            "is_not_empty"
+                                        ]
+                                    },
+                                    "value": { "type": "string" },
+                                    "case_sensitive": { "type": "boolean" }
+                                },
+                                "required": ["field", "operation"],
+                                "additionalProperties": false
+                            }
+                        },
+                        "join_mode": { "type": "string", "enum": ["all", "any"] },
+                        "sort_by": {
+                            "type": "string",
+                            "enum": ["title", "year", "date_added", "date_modified", "relevance"]
+                        },
+                        "sort_direction": { "type": "string", "enum": ["asc", "desc"] },
+                        "library_type": { "type": "string" },
+                        "library_id": { "type": "string" },
+                        "offset": { "type": "integer" },
+                        "limit": { "type": "integer" },
+                        "item_type": { "type": "string" },
+                        "max_chars_per_item": { "type": "integer" }
+                    },
+                    "required": ["conditions"],
+                    "additionalProperties": false
+                }),
+            },
+            ToolDef {
                 id: "zotero_get_item",
                 native_name: "zotero_get_item",
                 mcp_name: "get_item_details",
@@ -429,6 +558,28 @@ mod tests {
     #[test]
     fn zotero_search_schema_exposes_output_budget() {
         assert_schema_has_field("zotero_search", "max_chars_per_item");
+    }
+
+    #[test]
+    fn zotero_grep_schema_exposes_match_and_budget_controls() {
+        assert_schema_has_field("zotero_grep_text", "match_mode");
+        assert_schema_has_field("zotero_grep_text", "fields");
+        assert_schema_has_field("zotero_grep_text", "limit_matches");
+        assert_schema_has_field("zotero_grep_text", "max_chars_per_item");
+    }
+
+    #[test]
+    fn zotero_search_notes_schema_exposes_note_controls() {
+        assert_schema_has_field("zotero_search_notes", "include_annotations");
+        assert_schema_has_field("zotero_search_notes", "limit");
+        assert_schema_has_field("zotero_search_notes", "max_chars_per_item");
+    }
+
+    #[test]
+    fn zotero_advanced_search_schema_exposes_conditions_and_sorting() {
+        assert_schema_has_field("zotero_advanced_search", "conditions");
+        assert_schema_has_field("zotero_advanced_search", "join_mode");
+        assert_schema_has_field("zotero_advanced_search", "sort_by");
     }
 
     #[test]

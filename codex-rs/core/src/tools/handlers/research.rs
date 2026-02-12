@@ -9,10 +9,13 @@ use codex_research_tools::config::ResearchConfig;
 use codex_research_tools::error::ResearchError;
 use codex_research_tools::types::PaginationParams;
 use codex_research_tools::types::PaperSearchParams;
+use codex_research_tools::types::ZoteroAdvancedSearchParams;
 use codex_research_tools::types::ZoteroCollectionItemsParams;
 use codex_research_tools::types::ZoteroCollectionsParams;
+use codex_research_tools::types::ZoteroGrepParams;
 use codex_research_tools::types::ZoteroItemParams;
 use codex_research_tools::types::ZoteroListGroupsParams;
+use codex_research_tools::types::ZoteroSearchNotesParams;
 use codex_research_tools::types::ZoteroSearchParams;
 use codex_research_tools::types::ZoteroTagSearchParams;
 use codex_secrets::SecretName;
@@ -111,6 +114,17 @@ impl ResearchBridgeHandler {
             "zotero_search" => dispatch_with_params!(ZoteroSearchParams, |params| self
                 .toolkit
                 .zotero_search(params)),
+            "zotero_grep_text" => dispatch_with_params!(ZoteroGrepParams, |params| self
+                .toolkit
+                .zotero_grep_text(params)),
+            "zotero_search_notes" => dispatch_with_params!(ZoteroSearchNotesParams, |params| self
+                .toolkit
+                .zotero_search_notes(params)),
+            "zotero_advanced_search" => {
+                dispatch_with_params!(ZoteroAdvancedSearchParams, |params| self
+                    .toolkit
+                    .zotero_advanced_search(params))
+            }
             "zotero_get_item" => dispatch_with_params!(ZoteroItemParams, |params| self
                 .toolkit
                 .zotero_get_item(params)),
