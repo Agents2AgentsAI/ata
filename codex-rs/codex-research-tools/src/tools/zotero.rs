@@ -11,6 +11,7 @@ use crate::clients::zotero::ZoteroCollectionItemsRequest;
 use crate::clients::zotero::ZoteroCollectionsRequest;
 use crate::clients::zotero::ZoteroConfig;
 use crate::clients::zotero::ZoteroLibraryScope;
+use crate::clients::zotero::ZoteroListGroupsRequest;
 use crate::clients::zotero::ZoteroSearchRequest;
 use crate::error::ResearchError;
 use crate::error::Result;
@@ -24,9 +25,11 @@ use crate::types::ZoteroCollectionItemsParams;
 use crate::types::ZoteroCollectionsParams;
 use crate::types::ZoteroCollectionsResult;
 use crate::types::ZoteroFullTextResult;
+use crate::types::ZoteroGroupsResult;
 use crate::types::ZoteroItem;
 use crate::types::ZoteroItemDetail;
 use crate::types::ZoteroItemParams;
+use crate::types::ZoteroListGroupsParams;
 use crate::types::ZoteroNote;
 use crate::types::ZoteroNotesResult;
 use crate::types::ZoteroSearchParams;
@@ -35,6 +38,7 @@ use crate::types::ZoteroTagSearchParams;
 
 const DEFAULT_SEARCH_LIMIT: u32 = 25;
 const DEFAULT_COLLECTIONS_LIMIT: u32 = 100;
+const DEFAULT_GROUPS_LIMIT: u32 = 100;
 const DEFAULT_CHILDREN_LIMIT: u32 = 50;
 const DEFAULT_FULLTEXT_MAX_CHARS: u32 = 10_000;
 const ZOTERO_MAX_PAGE_SIZE: u32 = 100;
@@ -76,6 +80,13 @@ struct NormalizedTagSearchParams {
 #[derive(Debug, Clone, Serialize)]
 struct NormalizedCollectionsParams {
     scope: NormalizedScope,
+    offset: u32,
+    limit: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NormalizedListGroupsParams {
+    user_id: String,
     offset: u32,
     limit: u32,
 }
@@ -417,6 +428,37 @@ pub(crate) async fn zotero_get_collections(
     .await
 }
 
+pub(crate) async fn zotero_list_groups(
+    toolkit: &ResearchToolkit,
+    params: ZoteroListGroupsParams,
+) -> Result<ZoteroGroupsResult> {
+    let normalized = normalize_list_groups_params(toolkit, params)?;
+    let key = CacheKey {
+        tool_name: "zotero_list_groups",
+        params_hash: hash_cache_payload(&normalized)?,
+    };
+    let config = zotero_config(toolkit);
+
+    get_or_fetch_typed(
+        toolkit,
+        key,
+        toolkit.config().cache_ttls.zotero_items,
+        || async move {
+            zotero::list_groups(
+                toolkit.http(),
+                config,
+                &normalized.user_id,
+                ZoteroListGroupsRequest {
+                    offset: normalized.offset,
+                    limit: normalized.limit,
+                },
+            )
+            .await
+        },
+    )
+    .await
+}
+
 pub(crate) async fn zotero_get_collection_items(
     toolkit: &ResearchToolkit,
     params: ZoteroCollectionItemsParams,
@@ -566,6 +608,33 @@ fn normalize_collections_params(
             .limit
             .unwrap_or(DEFAULT_COLLECTIONS_LIMIT)
             .clamp(1, 100),
+    })
+}
+
+fn normalize_list_groups_params(
+    toolkit: &ResearchToolkit,
+    params: ZoteroListGroupsParams,
+) -> Result<NormalizedListGroupsParams> {
+    let scope = resolve_scope(
+        toolkit,
+        Some("user"),
+        params.user_id.as_deref(),
+        "zotero_list_groups",
+    )?;
+
+    let user_id = match scope {
+        ZoteroLibraryScope::User(user_id) => user_id,
+        ZoteroLibraryScope::Group(_) => {
+            return Err(ResearchError::Internal(
+                "zotero_list_groups resolved a non-user scope".to_string(),
+            ));
+        }
+    };
+
+    Ok(NormalizedListGroupsParams {
+        user_id,
+        offset: params.offset.unwrap_or(0),
+        limit: params.limit.unwrap_or(DEFAULT_GROUPS_LIMIT).clamp(1, 100),
     })
 }
 
@@ -770,6 +839,7 @@ mod tests {
     use crate::types::ZoteroCollectionItemsParams;
     use crate::types::ZoteroCollectionsParams;
     use crate::types::ZoteroItemParams;
+    use crate::types::ZoteroListGroupsParams;
     use crate::types::ZoteroSearchParams;
     use crate::types::ZoteroTagSearchParams;
 
@@ -1195,6 +1265,50 @@ mod tests {
 
         assert_eq!(items.items.len(), 1);
         assert_eq!(items.items[0].key, "ITEM1");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_list_groups_uses_local_user_zero_in_local_mode() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/users/0/groups"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "id": 999,
+                    "data": {
+                        "name": "Research Lab",
+                        "description": "Shared papers"
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit_with_config(ResearchConfig {
+            zotero_api_key: None,
+            zotero_user_id: None,
+            zotero_group_id: None,
+            zotero_base_url: format!("{}/api/", server.uri()),
+            ..ResearchConfig::default()
+        });
+
+        let result = toolkit
+            .zotero_list_groups(ZoteroListGroupsParams {
+                user_id: None,
+                offset: Some(0),
+                limit: Some(20),
+            })
+            .await
+            .expect("local zotero list groups should succeed without API key");
+
+        assert_eq!(result.groups.len(), 1);
+        assert_eq!(result.groups[0].id, "999");
+        assert_eq!(result.groups[0].name, "Research Lab");
+        assert_eq!(
+            result.groups[0].description,
+            Some("Shared papers".to_string())
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
