@@ -33,6 +33,18 @@ Each subagent prompt must also include:
 - The KB path from `kb_status` (so the subagent can write cards and figure assets)
 - For Zotero papers: the item key and any fulltext/notes already retrieved by the main agent
 
+### What Subagents Return
+
+Each subagent writes the KB card directly via `kb_write_card` (and extracts figures if available). After completing, the subagent returns a **concise report** to the main agent containing:
+- Card ID that was written
+- Paper title, authors, year
+- 3-5 sentence summary of the core contribution
+- Key architectural choices (backbone type, scale, notable modules)
+- Key training details (stages, data sources, losses)
+- Whether figures were extracted and how many
+
+The subagent does NOT need to return the full Type 1 + Type 2 text — that content lives in the KB card. The subagent's report is just enough for the main agent to inform the user and produce a cross-paper comparison.
+
 ### Main Agent Role
 
 The main agent's role is to:
@@ -40,8 +52,22 @@ The main agent's role is to:
 2. Resolve which papers to synthesize (search Zotero, resolve URLs, etc.)
 3. Construct complete subagent prompts with the full workflow above
 4. Launch subagents in parallel
-5. Collect results and present a summary to the user
-6. If multiple papers: produce a cross-paper comparative section after all subagents complete
+5. Collect subagent reports and tell the user:
+   - Which KB cards were written (card IDs and paths)
+   - Whether figures were extracted
+   - A brief per-paper highlight (from the subagent report)
+6. If multiple papers: read back the cards via `kb_read_card` and produce a **deep cross-paper comparative section** (see below)
+
+### Cross-Paper Comparison (Multi-Paper Only)
+
+After all subagents complete, read the written KB cards via `kb_read_card` to get the full analysis text. Then produce a cross-paper comparison section. This must be substantive narrative prose (500-1500 words), NOT a few bullet points. Follow the same format as the kb-explain cross-card synthesis:
+
+- **Starting points / core questions** — What different question does each work ask?
+- **Shared ideas and divergences** — When two papers use the same technique, explain exactly how their implementations differ with concrete details from each paper.
+- **Architecture comparison** — Compare backbone choices, model scale, input tokenization strategies, output representation, and any novel modules. Explain what each architectural choice buys and what it costs.
+- **Training pipeline comparison** — Compare training stages, data strategies and scale, loss functions, optimization recipes, and how each system handles cross-embodiment or cross-domain generalization. Trace how differences in training produce different model capabilities.
+- **Other technical dimensions** — Compare along additional concrete axes relevant to the papers: action representation, inference pipeline, planning capability, real-time performance, data efficiency, etc.
+- **Field trajectory** — Close with what the collective body of work suggests about the direction of the field.
 
 ## Pre-Synthesis: Obtain the Full Paper
 
