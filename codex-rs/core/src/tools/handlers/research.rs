@@ -17,8 +17,10 @@ use codex_research_tools::types::ZoteroAdvancedSearchParams;
 use codex_research_tools::types::ZoteroAnnotationsParams;
 use codex_research_tools::types::ZoteroCollectionItemsParams;
 use codex_research_tools::types::ZoteroCollectionsParams;
+use codex_research_tools::types::ZoteroGrepParams;
 use codex_research_tools::types::ZoteroItemParams;
 use codex_research_tools::types::ZoteroListGroupsParams;
+use codex_research_tools::types::ZoteroSearchNotesParams;
 use codex_research_tools::types::ZoteroSearchParams;
 use codex_secrets::SecretName;
 use codex_secrets::SecretScope;
@@ -121,6 +123,12 @@ impl ResearchBridgeHandler {
                     .toolkit
                     .zotero_advanced_search(params))
             }
+            "zotero_grep_text" => dispatch_with_params!(ZoteroGrepParams, |params| self
+                .toolkit
+                .zotero_grep_text(params)),
+            "zotero_search_notes" => dispatch_with_params!(ZoteroSearchNotesParams, |params| self
+                .toolkit
+                .zotero_search_notes(params)),
             "zotero_get_item" => dispatch_with_params!(ZoteroItemParams, |params| self
                 .toolkit
                 .zotero_get_item(params)),

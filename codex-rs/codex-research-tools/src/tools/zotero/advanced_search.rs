@@ -241,6 +241,14 @@ fn normalize_advanced_search_params(
     let item_type = normalize_optional_string(params.item_type);
     let server_tag_filter = derive_server_tag_filter(&conditions, &join_mode);
     let condition_item_type = derive_server_item_type_filter(&conditions, &join_mode);
+    if let (Some(param_item_type), Some(condition_item_type)) =
+        (item_type.as_deref(), condition_item_type.as_deref())
+        && !param_item_type.eq_ignore_ascii_case(condition_item_type)
+    {
+        return Err(ResearchError::InvalidInput(format!(
+            "zotero_advanced_search item_type '{param_item_type}' conflicts with item_type equals condition '{condition_item_type}'"
+        )));
+    }
     let effective_item_type = item_type.or(condition_item_type);
     let candidate_strategy = if server_tag_filter.is_some() || effective_item_type.is_some() {
         ZoteroAdvancedCandidateStrategy::ServerFiltered
@@ -739,7 +747,13 @@ fn values_for_field<'a>(
     collected_text: &'a CollectedFieldText,
 ) -> Vec<&'a str> {
     match field {
-        ZoteroSearchConditionField::Title => vec![item.title.as_str()],
+        ZoteroSearchConditionField::Title => {
+            if item.title.trim().is_empty() {
+                Vec::new()
+            } else {
+                vec![item.title.as_str()]
+            }
+        }
         ZoteroSearchConditionField::Creator => {
             if item.authors.trim().is_empty() {
                 Vec::new()
@@ -778,31 +792,42 @@ fn values_match_exact(values: &[&str], expected: Option<&str>, case_sensitive: b
         return false;
     };
 
-    values
-        .iter()
-        .any(|value| text_equals(value, expected, case_sensitive))
-}
-
-fn text_equals(actual: &str, expected: &str, case_sensitive: bool) -> bool {
     if case_sensitive {
-        return actual == expected;
+        return values.contains(&expected);
     }
 
-    actual.to_lowercase() == expected.to_lowercase()
+    let expected_lower = expected.to_lowercase();
+    values
+        .iter()
+        .any(|value| value.to_lowercase() == expected_lower)
 }
 
 fn parse_year(value: &str) -> Option<i32> {
-    let digits = value
-        .chars()
-        .filter(char::is_ascii_digit)
-        .take(4)
-        .collect::<String>();
-
-    if digits.len() != 4 {
+    let bytes = value.as_bytes();
+    if bytes.len() < 4 {
         return None;
     }
 
-    digits.parse::<i32>().ok()
+    for start in 0..=bytes.len() - 4 {
+        let window = &bytes[start..start + 4];
+        if !window.iter().all(u8::is_ascii_digit) {
+            continue;
+        }
+        if start > 0 && bytes[start - 1].is_ascii_digit() {
+            continue;
+        }
+        if start + 4 < bytes.len() && bytes[start + 4].is_ascii_digit() {
+            continue;
+        }
+
+        let year = i32::from(window[0] - b'0') * 1000
+            + i32::from(window[1] - b'0') * 100
+            + i32::from(window[2] - b'0') * 10
+            + i32::from(window[3] - b'0');
+        return Some(year);
+    }
+
+    None
 }
 
 fn map_segments_to_field_text(
@@ -832,10 +857,11 @@ fn to_grep_candidate(item: &ZoteroItem) -> GrepCandidate {
         title: item.title.clone(),
         item_type: item.item_type.clone(),
         tags: item.tags.clone(),
+        source_meta: item.source_meta.clone(),
     }
 }
 
-fn apply_advanced_sort(
+pub(super) fn apply_advanced_sort(
     items: &mut [ZoteroItem],
     sort_by: &ZoteroAdvancedSortBy,
     sort_direction: &ZoteroSortDirection,
@@ -1170,6 +1196,88 @@ mod tests {
     }
 
     #[test]
+    fn equals_and_not_equals_respect_case_sensitivity() {
+        let item = build_item("I1", "Transformer Models", "Alice Kim", Some("2021"));
+        let collected = empty_collected();
+
+        let equals_sensitive = normalized_condition(
+            ZoteroSearchConditionField::Title,
+            ZoteroSearchConditionOperation::Equals,
+            Some("transformer models"),
+            Some(true),
+        );
+        assert!(!evaluate_condition(
+            &equals_sensitive,
+            &item,
+            None,
+            None,
+            &collected
+        ));
+
+        let equals_insensitive = normalized_condition(
+            ZoteroSearchConditionField::Title,
+            ZoteroSearchConditionOperation::Equals,
+            Some("transformer models"),
+            Some(false),
+        );
+        assert!(evaluate_condition(
+            &equals_insensitive,
+            &item,
+            None,
+            None,
+            &collected
+        ));
+
+        let not_equals_sensitive = normalized_condition(
+            ZoteroSearchConditionField::Title,
+            ZoteroSearchConditionOperation::NotEquals,
+            Some("transformer models"),
+            Some(true),
+        );
+        assert!(evaluate_condition(
+            &not_equals_sensitive,
+            &item,
+            None,
+            None,
+            &collected
+        ));
+    }
+
+    #[test]
+    fn is_empty_and_is_not_empty_handle_present_values() {
+        let item = build_item("I1", "Transformer Models", "Alice Kim", Some("2021"));
+        let collected = empty_collected();
+
+        let is_empty = normalized_condition(
+            ZoteroSearchConditionField::Publication,
+            ZoteroSearchConditionOperation::IsEmpty,
+            None,
+            None,
+        );
+        assert!(!evaluate_condition(
+            &is_empty,
+            &item,
+            Some("NeurIPS"),
+            None,
+            &collected
+        ));
+
+        let is_not_empty = normalized_condition(
+            ZoteroSearchConditionField::Publication,
+            ZoteroSearchConditionOperation::IsNotEmpty,
+            None,
+            None,
+        );
+        assert!(evaluate_condition(
+            &is_not_empty,
+            &item,
+            Some("NeurIPS"),
+            None,
+            &collected
+        ));
+    }
+
+    #[test]
     fn apply_advanced_sort_orders_and_reverses_by_title() {
         let mut items = vec![
             build_item("3", "Zeta", "", None),
@@ -1204,6 +1312,66 @@ mod tests {
                 .map(|item| item.key.clone())
                 .collect::<Vec<_>>(),
             vec!["3".to_string(), "2".to_string(), "1".to_string()]
+        );
+    }
+
+    #[test]
+    fn apply_advanced_sort_orders_by_year() {
+        let mut items = vec![
+            build_item("3", "Zeta", "", Some("2020-06-01")),
+            build_item("1", "Alpha", "", Some("2018")),
+            build_item("2", "Beta", "", Some("2019-11")),
+        ];
+        let mut warnings = Vec::new();
+        apply_advanced_sort(
+            &mut items,
+            &ZoteroAdvancedSortBy::Year,
+            &ZoteroSortDirection::Asc,
+            &mut warnings,
+        );
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.key.clone())
+                .collect::<Vec<_>>(),
+            vec!["1".to_string(), "2".to_string(), "3".to_string()]
+        );
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn parse_year_uses_contiguous_four_digit_runs() {
+        assert_eq!(parse_year("2019-06-01"), Some(2019));
+        assert_eq!(parse_year("December 2018"), Some(2018));
+        assert_eq!(parse_year("v1.2.3-2024"), Some(2024));
+        assert_eq!(parse_year("build12345"), None);
+        assert_eq!(parse_year("abc123def456"), None);
+    }
+
+    #[test]
+    fn derive_server_item_type_filter_respects_join_mode() {
+        let conditions = vec![
+            normalized_condition(
+                ZoteroSearchConditionField::ItemType,
+                ZoteroSearchConditionOperation::Equals,
+                Some("journalArticle"),
+                None,
+            ),
+            normalized_condition(
+                ZoteroSearchConditionField::Title,
+                ZoteroSearchConditionOperation::Contains,
+                Some("transformer"),
+                Some(false),
+            ),
+        ];
+
+        assert_eq!(
+            derive_server_item_type_filter(&conditions, &ZoteroAdvancedJoinMode::All),
+            Some("journalArticle".to_string())
+        );
+        assert_eq!(
+            derive_server_item_type_filter(&conditions, &ZoteroAdvancedJoinMode::Any),
+            None
         );
     }
 

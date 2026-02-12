@@ -26,6 +26,7 @@ use crate::types::ZoteroAdvancedCandidateStrategy;
 use crate::types::ZoteroAdvancedCompleteness;
 use crate::types::ZoteroAdvancedSearchParams;
 use crate::types::ZoteroAdvancedSearchResult;
+use crate::types::ZoteroAdvancedSortBy;
 use crate::types::ZoteroAnnotation;
 use crate::types::ZoteroAnnotationsParams;
 use crate::types::ZoteroAnnotationsResult;
@@ -35,6 +36,8 @@ use crate::types::ZoteroCollectionItemsParams;
 use crate::types::ZoteroCollectionsParams;
 use crate::types::ZoteroCollectionsResult;
 use crate::types::ZoteroFullTextResult;
+use crate::types::ZoteroGrepParams;
+use crate::types::ZoteroGrepResult;
 use crate::types::ZoteroGroupsResult;
 use crate::types::ZoteroItem;
 use crate::types::ZoteroItemDetail;
@@ -42,8 +45,11 @@ use crate::types::ZoteroItemParams;
 use crate::types::ZoteroListGroupsParams;
 use crate::types::ZoteroNote;
 use crate::types::ZoteroNotesResult;
+use crate::types::ZoteroSearchNotesParams;
+use crate::types::ZoteroSearchNotesResult;
 use crate::types::ZoteroSearchParams;
 use crate::types::ZoteroSearchResult;
+use crate::types::ZoteroSortDirection;
 use crate::types::ZoteroTagSearchParams;
 
 #[path = "zotero/advanced_search.rs"]
@@ -54,6 +60,8 @@ mod content_collector;
 mod grep;
 #[path = "zotero/match_engine.rs"]
 mod match_engine;
+#[path = "zotero/search_notes.rs"]
+mod search_notes;
 
 const DEFAULT_SEARCH_LIMIT: u32 = 25;
 const DEFAULT_COLLECTIONS_LIMIT: u32 = 100;
@@ -200,13 +208,40 @@ pub(crate) async fn zotero_advanced_search(
     match resolved {
         ResolvedScopes::Single(_) => advanced_search::zotero_advanced_search(toolkit, params).await,
         ResolvedScopes::All(scopes) => {
-            let limit = params.limit.unwrap_or(25).clamp(1, 100) as usize;
+            let requested_offset = params.offset.unwrap_or(0) as usize;
+            let requested_limit = params.limit.unwrap_or(25).clamp(1, 100) as usize;
+            let requested_window = params
+                .offset
+                .unwrap_or(0)
+                .saturating_add(params.limit.unwrap_or(25).clamp(1, 100));
+            let per_scope_fetch_limit = requested_window.clamp(1, 100);
+            let sort_by = params
+                .sort_by
+                .clone()
+                .unwrap_or(ZoteroAdvancedSortBy::Relevance);
+            let sort_direction = params
+                .sort_direction
+                .clone()
+                .unwrap_or(ZoteroSortDirection::Asc);
+
             let mut merged_items: Vec<ZoteroItem> = Vec::new();
             let mut total_scanned: usize = 0;
+            let mut summed_total_available: u64 = 0;
+            let mut total_available_known = true;
+            let mut successful_scopes = 0usize;
+            let mut any_scope_has_more = false;
             let mut all_warnings: Vec<String> = Vec::new();
             let mut all_hints: Vec<String> = Vec::new();
             let mut worst_completeness = ZoteroAdvancedCompleteness::Exact;
             let mut first_strategy = None;
+
+            if requested_window > per_scope_fetch_limit {
+                worst_completeness = ZoteroAdvancedCompleteness::Approximate;
+                all_warnings.push(
+                    "multi-scope advanced search fetch window is capped at 100 items per scope; large offset/limit requests may be incomplete"
+                        .to_string(),
+                );
+            }
 
             for scope in &scopes {
                 let (lib_type, lib_id) = match scope {
@@ -214,15 +249,25 @@ pub(crate) async fn zotero_advanced_search(
                     ZoteroLibraryScope::Group(id) => ("group".to_string(), id.clone()),
                 };
                 let scoped_params = ZoteroAdvancedSearchParams {
-                    library_type: Some(lib_type),
-                    library_id: Some(lib_id),
+                    library_type: Some(lib_type.clone()),
+                    library_id: Some(lib_id.clone()),
+                    offset: Some(0),
+                    limit: Some(per_scope_fetch_limit),
                     ..params.clone()
                 };
                 match advanced_search::zotero_advanced_search(toolkit, scoped_params).await {
                     Ok(result) => {
+                        successful_scopes = successful_scopes.saturating_add(1);
                         total_scanned += result.scanned_items;
                         all_warnings.extend(result.warnings);
                         all_hints.extend(result.hints);
+                        if let Some(scope_total) = result.results.total_available {
+                            summed_total_available =
+                                summed_total_available.saturating_add(scope_total);
+                        } else {
+                            total_available_known = false;
+                        }
+                        any_scope_has_more = any_scope_has_more || result.results.has_more;
                         if first_strategy.is_none() {
                             first_strategy = Some(result.candidate_strategy);
                         }
@@ -231,18 +276,54 @@ pub(crate) async fn zotero_advanced_search(
                         }
                         merged_items.extend(result.results.items);
                     }
-                    Err(_) => {
-                        // Silently skip scope-level errors for graceful degradation.
+                    Err(error) => {
                         worst_completeness = ZoteroAdvancedCompleteness::Approximate;
+                        all_warnings.push(format!(
+                            "advanced search failed for scope {lib_type}/{lib_id}: {error}"
+                        ));
                     }
                 }
             }
 
-            merged_items.truncate(limit);
+            advanced_search::apply_advanced_sort(
+                merged_items.as_mut_slice(),
+                &sort_by,
+                &sort_direction,
+                &mut all_warnings,
+            );
+
+            let after_offset = merged_items
+                .into_iter()
+                .skip(requested_offset)
+                .collect::<Vec<_>>();
+            let truncated = after_offset.len() > requested_limit;
+            let merged_items = after_offset
+                .into_iter()
+                .take(requested_limit)
+                .collect::<Vec<_>>();
             all_warnings.sort();
             all_warnings.dedup();
-            all_hints.sort();
-            all_hints.dedup();
+
+            let total_available = if successful_scopes == 0 || !total_available_known {
+                None
+            } else {
+                Some(summed_total_available)
+            };
+
+            let has_more = if let Some(total) = total_available {
+                let offset = u64::try_from(requested_offset).unwrap_or(u64::MAX);
+                let count = u64::try_from(merged_items.len()).unwrap_or(u64::MAX);
+                offset.saturating_add(count) < total
+            } else {
+                any_scope_has_more || truncated
+            };
+
+            if total_available == Some(0) {
+                all_hints.sort();
+                all_hints.dedup();
+            } else {
+                all_hints.clear();
+            }
 
             Ok(ZoteroAdvancedSearchResult {
                 completeness: worst_completeness,
@@ -253,12 +334,26 @@ pub(crate) async fn zotero_advanced_search(
                 hints: all_hints,
                 results: ZoteroSearchResult {
                     items: merged_items,
-                    total_available: None,
-                    has_more: false,
+                    total_available,
+                    has_more,
                 },
             })
         }
     }
+}
+
+pub(crate) async fn zotero_grep_text(
+    toolkit: &ResearchToolkit,
+    params: ZoteroGrepParams,
+) -> Result<ZoteroGrepResult> {
+    grep::zotero_grep_text(toolkit, params).await
+}
+
+pub(crate) async fn zotero_search_notes(
+    toolkit: &ResearchToolkit,
+    params: ZoteroSearchNotesParams,
+) -> Result<ZoteroSearchNotesResult> {
+    search_notes::zotero_search_notes(toolkit, params).await
 }
 
 pub(crate) async fn zotero_get_item(
@@ -1439,20 +1534,27 @@ mod tests {
 
     use crate::ResearchToolkit;
     use crate::config::ResearchConfig;
+    use crate::error::ResearchError;
     use crate::tools::test_helpers::build_test_toolkit_with_config;
     use crate::types::ZoteroAdvancedCandidateStrategy;
     use crate::types::ZoteroAdvancedCompleteness;
     use crate::types::ZoteroAdvancedSearchParams;
+    use crate::types::ZoteroAdvancedSortBy;
     use crate::types::ZoteroAnnotation;
     use crate::types::ZoteroAnnotationsParams;
     use crate::types::ZoteroCollectionItemsParams;
     use crate::types::ZoteroCollectionsParams;
+    use crate::types::ZoteroGrepField;
+    use crate::types::ZoteroGrepMatchMode;
+    use crate::types::ZoteroGrepParams;
     use crate::types::ZoteroItemParams;
     use crate::types::ZoteroListGroupsParams;
     use crate::types::ZoteroSearchCondition;
     use crate::types::ZoteroSearchConditionField;
     use crate::types::ZoteroSearchConditionOperation;
+    use crate::types::ZoteroSearchNotesParams;
     use crate::types::ZoteroSearchParams;
+    use crate::types::ZoteroSortDirection;
     use crate::types::ZoteroTagSearchParams;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2784,6 +2886,347 @@ mod tests {
         assert_eq!(result.scanned_items, 1);
         assert_eq!(result.results.items.len(), 1);
         assert_eq!(result.results.items[0].key, "ITEM1");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_grep_text_matches_title_literal() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("sort", "dateModified"))
+            .and(query_param("direction", "desc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "ITEM1",
+                    "data": {
+                        "itemType": "journalArticle",
+                        "title": "Diffusion Models for Vision",
+                        "creators": []
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let result = toolkit
+            .zotero_grep_text(ZoteroGrepParams {
+                pattern: "diffusion".to_string(),
+                match_mode: Some(ZoteroGrepMatchMode::Literal),
+                case_sensitive: Some(false),
+                library_type: Some("user".to_string()),
+                library_id: Some("123".to_string()),
+                parent_item_key: None,
+                query_hint: None,
+                item_type: None,
+                fields: Some(vec![ZoteroGrepField::Title]),
+                limit_items: Some(10),
+                limit_matches: Some(5),
+                max_matches_per_item: Some(5),
+                context_chars: Some(50),
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_grep_text should succeed");
+
+        assert_eq!(result.returned_matches, 1);
+        assert_eq!(result.matches[0].item_key, "ITEM1");
+        assert_eq!(result.matches[0].field, "title");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_search_notes_uses_parent_scoped_grep_adapter() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/PARENT1/children"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "NOTE1",
+                    "data": {
+                        "itemType": "note",
+                        "title": "Note One",
+                        "parentItem": "PARENT1"
+                    }
+                },
+                {
+                    "key": "ANN1",
+                    "data": {
+                        "itemType": "annotation",
+                        "title": "Annotation One",
+                        "parentItem": "PARENT1"
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/NOTE1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "key": "NOTE1",
+                "data": {
+                    "itemType": "note",
+                    "note": "<p>Contains target phrase</p>",
+                    "parentItem": "PARENT1"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/ANN1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "key": "ANN1",
+                "data": {
+                    "itemType": "annotation",
+                    "parentItem": "PARENT1",
+                    "annotationType": "highlight",
+                    "annotationText": "<p>Target evidence</p>"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let result = toolkit
+            .zotero_search_notes(ZoteroSearchNotesParams {
+                query: "target".to_string(),
+                match_mode: None,
+                case_sensitive: None,
+                library_type: Some("user".to_string()),
+                library_id: Some("123".to_string()),
+                parent_item_key: Some("PARENT1".to_string()),
+                include_annotations: Some(true),
+                limit: Some(10),
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_search_notes should succeed");
+
+        assert_eq!(result.query, "target");
+        assert_eq!(result.notes.len(), 2);
+        assert_eq!(result.total_available, Some(2));
+        assert_eq!(result.has_more, false);
+        assert!(
+            result
+                .notes
+                .iter()
+                .any(|note| note.field == "note" && note.item_key == "NOTE1")
+        );
+        assert!(
+            result
+                .notes
+                .iter()
+                .any(|note| note.field == "annotation_text" && note.item_key == "ANN1")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_advanced_search_multi_scope_resorts_and_computes_pagination_metadata() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/groups"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Total-Results", "2")
+                    .set_body_json(serde_json::json!([
+                        {
+                            "key": "USER_2020",
+                            "data": {
+                                "itemType": "journalArticle",
+                                "title": "User 2020",
+                                "creators": [],
+                                "date": "2020"
+                            }
+                        },
+                        {
+                            "key": "USER_2023",
+                            "data": {
+                                "itemType": "journalArticle",
+                                "title": "User 2023",
+                                "creators": [],
+                                "date": "2023"
+                            }
+                        }
+                    ])),
+            )
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/groups/456/items"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Total-Results", "2")
+                    .set_body_json(serde_json::json!([
+                        {
+                            "key": "GROUP_2019",
+                            "data": {
+                                "itemType": "journalArticle",
+                                "title": "Group 2019",
+                                "creators": [],
+                                "date": "2019"
+                            }
+                        },
+                        {
+                            "key": "GROUP_2021",
+                            "data": {
+                                "itemType": "journalArticle",
+                                "title": "Group 2021",
+                                "creators": [],
+                                "date": "2021"
+                            }
+                        }
+                    ])),
+            )
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let result = toolkit
+            .zotero_advanced_search(ZoteroAdvancedSearchParams {
+                conditions: vec![ZoteroSearchCondition {
+                    field: ZoteroSearchConditionField::ItemType,
+                    operation: ZoteroSearchConditionOperation::IsNotEmpty,
+                    value: None,
+                    case_sensitive: None,
+                }],
+                join_mode: None,
+                sort_by: Some(ZoteroAdvancedSortBy::Year),
+                sort_direction: Some(ZoteroSortDirection::Asc),
+                library_type: None,
+                library_id: None,
+                offset: Some(0),
+                limit: Some(3),
+                item_type: None,
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_advanced_search should succeed");
+
+        assert_eq!(
+            result
+                .results
+                .items
+                .iter()
+                .map(|item| item.key.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                "GROUP_2019".to_string(),
+                "USER_2020".to_string(),
+                "GROUP_2021".to_string()
+            ]
+        );
+        assert_eq!(result.results.total_available, Some(4));
+        assert_eq!(result.results.has_more, true);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_advanced_search_multi_scope_surfaces_scope_errors_in_warnings() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/groups"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/groups/456/items"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Total-Results", "1")
+                    .set_body_json(serde_json::json!([
+                        {
+                            "key": "GROUP_1",
+                            "data": {
+                                "itemType": "journalArticle",
+                                "title": "Group Item",
+                                "creators": [],
+                                "date": "2021"
+                            }
+                        }
+                    ])),
+            )
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let result = toolkit
+            .zotero_advanced_search(ZoteroAdvancedSearchParams {
+                conditions: vec![ZoteroSearchCondition {
+                    field: ZoteroSearchConditionField::ItemType,
+                    operation: ZoteroSearchConditionOperation::IsNotEmpty,
+                    value: None,
+                    case_sensitive: None,
+                }],
+                join_mode: None,
+                sort_by: None,
+                sort_direction: None,
+                library_type: None,
+                library_id: None,
+                offset: Some(0),
+                limit: Some(10),
+                item_type: None,
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_advanced_search should succeed");
+
+        assert_eq!(result.results.items.len(), 1);
+        assert_eq!(result.results.items[0].key, "GROUP_1");
+        assert_eq!(result.completeness, ZoteroAdvancedCompleteness::Approximate);
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("advanced search failed for scope user/123"))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_advanced_search_rejects_conflicting_item_type_filters() {
+        let server = MockServer::start().await;
+        let toolkit = build_test_toolkit(server.uri());
+
+        let error = toolkit
+            .zotero_advanced_search(ZoteroAdvancedSearchParams {
+                conditions: vec![ZoteroSearchCondition {
+                    field: ZoteroSearchConditionField::ItemType,
+                    operation: ZoteroSearchConditionOperation::Equals,
+                    value: Some("journalArticle".to_string()),
+                    case_sensitive: Some(false),
+                }],
+                join_mode: None,
+                sort_by: None,
+                sort_direction: None,
+                library_type: Some("user".to_string()),
+                library_id: Some("123".to_string()),
+                offset: Some(0),
+                limit: Some(10),
+                item_type: Some("book".to_string()),
+                max_chars_per_item: None,
+            })
+            .await
+            .expect_err("conflicting item_type filters should fail");
+
+        assert!(matches!(error, ResearchError::InvalidInput(_)));
+        assert!(error.to_string().contains("conflicts"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
