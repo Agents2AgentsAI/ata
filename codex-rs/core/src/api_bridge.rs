@@ -12,7 +12,6 @@ use tracing::debug;
 
 use crate::auth::CodexAuth;
 use crate::error::CodexErr;
-use crate::error::ModelCapError;
 use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
 use crate::error::UsageLimitReachedError;
@@ -26,6 +25,7 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
         ApiError::UsageNotIncluded => CodexErr::UsageNotIncluded,
         ApiError::Retryable { message, delay } => CodexErr::Stream(message, delay),
         ApiError::Stream(msg) => CodexErr::Stream(msg, None),
+        ApiError::ServerOverloaded => CodexErr::ServerOverloaded,
         ApiError::Api { status, message } => CodexErr::UnexpectedStatus(UnexpectedResponseError {
             status,
             body: message,
@@ -42,6 +42,19 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                 body,
             } => {
                 let body_text = body.unwrap_or_default();
+
+                if status == http::StatusCode::SERVICE_UNAVAILABLE
+                    && let Ok(value) = serde_json::from_str::<serde_json::Value>(&body_text)
+                    && matches!(
+                        value
+                            .get("error")
+                            .and_then(|error| error.get("code"))
+                            .and_then(serde_json::Value::as_str),
+                        Some("server_is_overloaded" | "slow_down")
+                    )
+                {
+                    return CodexErr::ServerOverloaded;
+                }
 
                 if status == http::StatusCode::BAD_REQUEST {
                     if body_text
@@ -75,23 +88,6 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                 } else if status == http::StatusCode::INTERNAL_SERVER_ERROR {
                     CodexErr::InternalServerError
                 } else if status == http::StatusCode::TOO_MANY_REQUESTS {
-                    if let Some(model) = headers
-                        .as_ref()
-                        .and_then(|map| map.get(MODEL_CAP_MODEL_HEADER))
-                        .and_then(|value| value.to_str().ok())
-                        .map(str::to_string)
-                    {
-                        let reset_after_seconds = headers
-                            .as_ref()
-                            .and_then(|map| map.get(MODEL_CAP_RESET_AFTER_HEADER))
-                            .and_then(|value| value.to_str().ok())
-                            .and_then(|value| value.parse::<u64>().ok());
-                        return CodexErr::ModelCap(ModelCapError {
-                            model,
-                            reset_after_seconds,
-                        });
-                    }
-
                     if let Ok(err) = serde_json::from_str::<UsageErrorResponse>(&body_text) {
                         if err.error.error_type.as_deref() == Some("usage_limit_reached") {
                             let limit_id = extract_header(headers.as_ref(), ACTIVE_LIMIT_HEADER);
@@ -142,8 +138,6 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
     }
 }
 
-const MODEL_CAP_MODEL_HEADER: &str = "x-codex-model-cap-model";
-const MODEL_CAP_RESET_AFTER_HEADER: &str = "x-codex-model-cap-reset-after-seconds";
 const ACTIVE_LIMIT_HEADER: &str = "x-codex-active-limit";
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const OAI_REQUEST_ID_HEADER: &str = "x-oai-request-id";
@@ -152,34 +146,31 @@ const CF_RAY_HEADER: &str = "cf-ray";
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_api::TransportError;
-    use http::HeaderMap;
     use http::StatusCode;
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn map_api_error_maps_model_cap_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            MODEL_CAP_MODEL_HEADER,
-            http::HeaderValue::from_static("boomslang"),
-        );
-        headers.insert(
-            MODEL_CAP_RESET_AFTER_HEADER,
-            http::HeaderValue::from_static("120"),
-        );
+    fn map_api_error_maps_server_overloaded() {
+        let err = map_api_error(ApiError::ServerOverloaded);
+        assert!(matches!(err, CodexErr::ServerOverloaded));
+    }
+
+    #[test]
+    fn map_api_error_maps_server_overloaded_from_503_body() {
+        let body = serde_json::json!({
+            "error": {
+                "code": "server_is_overloaded"
+            }
+        })
+        .to_string();
         let err = map_api_error(ApiError::Transport(TransportError::Http {
-            status: StatusCode::TOO_MANY_REQUESTS,
+            status: http::StatusCode::SERVICE_UNAVAILABLE,
             url: Some("http://example.com/v1/responses".to_string()),
-            headers: Some(headers),
-            body: Some(String::new()),
+            headers: None,
+            body: Some(body),
         }));
 
-        let CodexErr::ModelCap(model_cap) = err else {
-            panic!("expected CodexErr::ModelCap, got {err:?}");
-        };
-        assert_eq!(model_cap.model, "boomslang");
-        assert_eq!(model_cap.reset_after_seconds, Some(120));
+        assert!(matches!(err, CodexErr::ServerOverloaded));
     }
 
     #[test]
@@ -235,7 +226,7 @@ mod tests {
         })
         .to_string();
         let err = map_api_error(ApiError::Transport(TransportError::Http {
-            status: StatusCode::TOO_MANY_REQUESTS,
+            status: http::StatusCode::TOO_MANY_REQUESTS,
             url: Some("http://example.com/v1/responses".to_string()),
             headers: Some(headers),
             body: Some(body),

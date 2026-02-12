@@ -1,6 +1,5 @@
 use anyhow::Context;
 use clap::Parser;
-use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::research::RESEARCHER_SYSTEM_PROMPT;
@@ -14,6 +13,7 @@ use codex_core::research::configured_native_tool_context;
 use codex_protocol::config_types::WebSearchMode;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
+use codex_utils_cli::CliConfigOverrides;
 use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
