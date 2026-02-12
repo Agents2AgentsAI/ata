@@ -187,23 +187,12 @@ pub fn build_reqwest_client_with_timeouts(
     connect_timeout: Option<Duration>,
     request_timeout: Option<Duration>,
 ) -> reqwest::Client {
-    let mut headers = HeaderMap::new();
-    headers.insert("originator", originator().header_value);
-    if let Ok(guard) = REQUIREMENTS_RESIDENCY.read()
-        && let Some(requirement) = guard.as_ref()
-        && !headers.contains_key(RESIDENCY_HEADER_NAME)
-    {
-        let value = match requirement {
-            ResidencyRequirement::Us => HeaderValue::from_static("us"),
-        };
-        headers.insert(RESIDENCY_HEADER_NAME, value);
-    }
     let ua = get_codex_user_agent();
 
     let mut builder = reqwest::Client::builder()
         // Set UA via dedicated helper to avoid header validation pitfalls
         .user_agent(ua)
-        .default_headers(headers);
+        .default_headers(default_headers());
     if let Some(connect_timeout) = connect_timeout {
         builder = builder.connect_timeout(connect_timeout);
     }
@@ -215,6 +204,21 @@ pub fn build_reqwest_client_with_timeouts(
     }
 
     builder.build().unwrap_or_else(|_| reqwest::Client::new())
+}
+
+pub fn default_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert("originator", originator().header_value);
+    if let Ok(guard) = REQUIREMENTS_RESIDENCY.read()
+        && let Some(requirement) = guard.as_ref()
+        && !headers.contains_key(RESIDENCY_HEADER_NAME)
+    {
+        let value = match requirement {
+            ResidencyRequirement::Us => HeaderValue::from_static("us"),
+        };
+        headers.insert(RESIDENCY_HEADER_NAME, value);
+    }
+    headers
 }
 
 fn is_sandboxed() -> bool {

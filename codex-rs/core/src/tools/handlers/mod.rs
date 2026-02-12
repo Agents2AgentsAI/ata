@@ -1,7 +1,9 @@
 pub mod apply_patch;
+pub(crate) mod attach_url_files;
 pub(crate) mod collab;
 mod dynamic;
 mod grep_files;
+mod js_repl;
 mod list_dir;
 mod mcp;
 mod mcp_resource;
@@ -24,6 +26,8 @@ pub use apply_patch::ApplyPatchHandler;
 pub use collab::CollabHandler;
 pub use dynamic::DynamicToolHandler;
 pub use grep_files::GrepFilesHandler;
+pub use js_repl::JsReplHandler;
+pub use js_repl::JsReplResetHandler;
 pub use list_dir::ListDirHandler;
 pub use mcp::McpHandler;
 pub use mcp_resource::McpResourceHandler;

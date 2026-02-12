@@ -7,6 +7,7 @@ use serde_json::Value;
 use serde_json::json;
 
 use crate::error::ApiError;
+use crate::file_support::rewrite_openai_url_file_blocks_in_payload;
 use crate::provider_adapter::ProviderAdapter;
 use crate::provider_adapter::RequestOptions;
 
@@ -43,10 +44,13 @@ impl ProviderAdapter for OpenAiAdapter {
         tools: &[Value],
         options: &RequestOptions,
     ) -> Result<Value, ApiError> {
+        let mut rewritten_input = serde_json::json!(input);
+        rewrite_openai_url_file_blocks_in_payload(&mut rewritten_input);
+
         let mut body = json!({
             "model": model,
             "instructions": instructions,
-            "input": input,
+            "input": rewritten_input,
             "tools": tools,
             "tool_choice": "auto",
             "parallel_tool_calls": options.parallel_tool_calls,
@@ -100,6 +104,34 @@ mod tests {
         assert_eq!(
             body["input"][0]["content"][0]["file_data"],
             "data:application/pdf;base64,JVBERi0xLjQ="
+        );
+    }
+
+    #[test]
+    fn build_request_body_rewrites_url_file_for_openai_wire_shape() {
+        let adapter = OpenAiAdapter::new();
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "url_file",
+                "url": "https://example.com/report.pdf",
+                "filename": "report.pdf",
+                "mime_type": "application/pdf"
+            }]
+        })];
+
+        let body = adapter
+            .build_request_body("gpt-test", "inst", &input, &[], &RequestOptions::default())
+            .expect("request body");
+
+        assert_eq!(
+            body["input"][0]["content"][0],
+            json!({
+                "type": "input_file",
+                "file_url": "https://example.com/report.pdf",
+                "filename": "report.pdf"
+            })
         );
     }
 }

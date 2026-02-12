@@ -242,6 +242,12 @@ fn build_gemini_contents(input: &[Value]) -> Result<Vec<Value>, ApiError> {
                                     });
                                 }
                             }
+                            "url_file" => {
+                                return Err(ApiError::InvalidRequest {
+                                    message: "url_file is not supported for Gemini requests; convert to input_file first"
+                                        .to_string(),
+                                });
+                            }
                             _ => {}
                         }
                     }
@@ -548,5 +554,23 @@ mod tests {
 
         let error = build_gemini_contents(&input).expect_err("missing file data/id should fail");
         assert!(matches!(error, ApiError::InvalidRequest { .. }));
+    }
+
+    #[test]
+    fn test_build_gemini_contents_rejects_url_file() {
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "url_file",
+                "url": "https://example.com/report.pdf"
+            }]
+        })];
+
+        let error = build_gemini_contents(&input).expect_err("url_file should fail");
+        let ApiError::InvalidRequest { message } = error else {
+            panic!("expected invalid request error");
+        };
+        assert!(message.contains("url_file is not supported"));
     }
 }

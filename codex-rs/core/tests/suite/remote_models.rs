@@ -100,9 +100,9 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
     };
-    let manager = ModelsManager::with_provider(
+    let manager = codex_core::test_support::models_manager_with_provider(
         codex_home.path().to_path_buf(),
-        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        codex_core::test_support::auth_manager_from_auth(auth),
         provider,
     );
 
@@ -499,9 +499,9 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
     };
-    let manager = ModelsManager::with_provider(
+    let manager = codex_core::test_support::models_manager_with_provider(
         codex_home.path().to_path_buf(),
-        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        codex_core::test_support::auth_manager_from_auth(auth),
         provider,
     );
 
@@ -564,9 +564,9 @@ async fn remote_models_merge_adds_new_high_priority_first() -> Result<()> {
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
     };
-    let manager = ModelsManager::with_provider(
+    let manager = codex_core::test_support::models_manager_with_provider(
         codex_home.path().to_path_buf(),
-        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        codex_core::test_support::auth_manager_from_auth(auth),
         provider,
     );
 
@@ -615,9 +615,9 @@ async fn remote_models_merge_replaces_overlapping_model() -> Result<()> {
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
     };
-    let manager = ModelsManager::with_provider(
+    let manager = codex_core::test_support::models_manager_with_provider(
         codex_home.path().to_path_buf(),
-        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        codex_core::test_support::auth_manager_from_auth(auth),
         provider,
     );
 
@@ -663,9 +663,9 @@ async fn remote_models_merge_preserves_bundled_models_on_empty_response() -> Res
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
     };
-    let manager = ModelsManager::with_provider(
+    let manager = codex_core::test_support::models_manager_with_provider(
         codex_home.path().to_path_buf(),
-        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        codex_core::test_support::auth_manager_from_auth(auth),
         provider,
     );
 
@@ -708,9 +708,9 @@ async fn remote_models_request_times_out_after_5s() -> Result<()> {
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
     };
-    let manager = ModelsManager::with_provider(
+    let manager = codex_core::test_support::models_manager_with_provider(
         codex_home.path().to_path_buf(),
-        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        codex_core::test_support::auth_manager_from_auth(auth),
         provider,
     );
 
@@ -775,9 +775,9 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
     };
-    let manager = ModelsManager::with_provider(
+    let manager = codex_core::test_support::models_manager_with_provider(
         codex_home.path().to_path_buf(),
-        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        codex_core::test_support::auth_manager_from_auth(auth),
         provider,
     );
 

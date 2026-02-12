@@ -15,6 +15,8 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::is_file_close_tag_text;
+use codex_protocol::models::is_file_open_tag_text;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -177,6 +179,121 @@ impl ContextManager {
             ResponseItem::Message { role, .. } if role == "user" => false,
             _ => false,
         }
+    }
+
+    /// Removes URL-based file attachments from user messages in the most recent turn.
+    ///
+    /// When `url_attachments_in_turn` is greater than zero, this also removes `InputFile`
+    /// attachments from the most recent turn until that count is exhausted. This supports URL
+    /// attachments that were downloaded and injected as local `input_file` blocks.
+    ///
+    /// Returns the number of removed URL attachment blocks.
+    pub(crate) fn drop_last_turn_url_files(&mut self, url_attachments_in_turn: usize) -> usize {
+        let Some(last_user_index) = self
+            .items
+            .iter()
+            .rposition(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
+        else {
+            return 0;
+        };
+
+        let turn_start = self.items[..last_user_index]
+            .iter()
+            .rposition(
+                |item| matches!(item, ResponseItem::Message { role, .. } if role == "assistant"),
+            )
+            .map_or(0, |index| index.saturating_add(1));
+
+        let remove_url_files_only = url_attachments_in_turn == 0;
+        let mut remaining_url_attachments = url_attachments_in_turn;
+        let mut removed_total = 0usize;
+        let mut index = self.items.len();
+        while index > turn_start {
+            if !remove_url_files_only && remaining_url_attachments == 0 {
+                break;
+            }
+            index -= 1;
+
+            let mut should_remove_message = false;
+            if let ResponseItem::Message { role, content, .. } = &mut self.items[index]
+                && role == "user"
+            {
+                let mut removed_in_message = 0usize;
+                let mut filtered = Vec::with_capacity(content.len());
+                let mut content_index = 0usize;
+
+                while content_index < content.len() {
+                    if !remove_url_files_only && remaining_url_attachments == 0 {
+                        filtered.extend(content[content_index..].iter().cloned());
+                        break;
+                    }
+
+                    let next_is_removable = content.get(content_index + 1).is_some_and(|next| {
+                        matches!(next, ContentItem::UrlFile { .. })
+                            || (!remove_url_files_only
+                                && matches!(next, ContentItem::InputFile { .. }))
+                    });
+                    if let ContentItem::InputText { text } = &content[content_index]
+                        && is_file_open_tag_text(text)
+                        && next_is_removable
+                    {
+                        removed_in_message = removed_in_message.saturating_add(1);
+                        if !remove_url_files_only {
+                            remaining_url_attachments = remaining_url_attachments.saturating_sub(1);
+                        }
+                        content_index += 2;
+                        if let Some(ContentItem::InputText { text }) = content.get(content_index)
+                            && is_file_close_tag_text(text)
+                        {
+                            content_index += 1;
+                        }
+                        continue;
+                    }
+
+                    let current_is_removable = matches!(
+                        content.get(content_index),
+                        Some(ContentItem::UrlFile { .. })
+                    ) || (!remove_url_files_only
+                        && matches!(
+                            content.get(content_index),
+                            Some(ContentItem::InputFile { .. })
+                        ));
+                    if current_is_removable {
+                        removed_in_message = removed_in_message.saturating_add(1);
+                        if !remove_url_files_only {
+                            remaining_url_attachments = remaining_url_attachments.saturating_sub(1);
+                        }
+                        if filtered.last().is_some_and(|item| {
+                            matches!(item, ContentItem::InputText { text } if is_file_open_tag_text(text))
+                        }) {
+                            filtered.pop();
+                        }
+                        content_index += 1;
+                        if let Some(ContentItem::InputText { text }) = content.get(content_index)
+                            && is_file_close_tag_text(text)
+                        {
+                            content_index += 1;
+                        }
+                        continue;
+                    }
+
+                    filtered.push(content[content_index].clone());
+                    content_index += 1;
+                }
+
+                if removed_in_message > 0 {
+                    removed_total = removed_total.saturating_add(removed_in_message);
+                    *content = filtered;
+                    should_remove_message = content.is_empty();
+                }
+            }
+
+            if should_remove_message {
+                self.items.remove(index);
+            }
+        }
+
+        removed_total
     }
 
     /// Drop the last `num_turns` user turns from this history.
@@ -468,6 +585,7 @@ pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
             }
             ContentItem::InputImage { .. } => {}
             ContentItem::InputFile { .. } => {}
+            ContentItem::UrlFile { .. } => {}
         }
     }
 

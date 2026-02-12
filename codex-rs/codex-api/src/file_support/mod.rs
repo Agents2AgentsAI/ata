@@ -18,6 +18,7 @@ pub use data_url::parse_data_url;
 pub use errors::UserFacingMappedError;
 pub use errors::map_user_facing_file_error_from_http_body;
 pub use errors::map_user_facing_file_error_from_message;
+pub use responses::rewrite_openai_url_file_blocks_in_payload;
 pub use responses::wrap_responses_input_file_data_uris;
 pub use responses::wrapped_responses_input_file_data_uris;
 pub use routing::FileRoutingError;

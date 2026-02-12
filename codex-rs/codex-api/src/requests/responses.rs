@@ -2,6 +2,7 @@ use crate::common::Reasoning;
 use crate::common::ResponsesApiRequest;
 use crate::common::TextControls;
 use crate::error::ApiError;
+use crate::file_support::rewrite_openai_url_file_blocks_in_payload;
 use crate::file_support::wrapped_responses_input_file_data_uris;
 use crate::provider::Provider;
 use crate::requests::headers::build_conversation_headers;
@@ -143,6 +144,7 @@ impl<'a> ResponsesRequestBuilder<'a> {
 
         let mut body = serde_json::to_value(&req)
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
+        rewrite_openai_url_file_blocks_in_payload(&mut body);
 
         if store && provider.is_azure_responses_endpoint() {
             attach_item_ids(&mut body, &normalized_input);

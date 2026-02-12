@@ -396,6 +396,7 @@ pub fn parse_gemini_chunk(
                 events.push(ResponseEvent::Completed {
                     response_id: String::new(),
                     token_usage,
+                    can_append: false,
                 });
             }
         }
@@ -421,6 +422,7 @@ pub fn parse_gemini_chunk(
         events.push(ResponseEvent::Completed {
             response_id: String::new(),
             token_usage,
+            can_append: false,
         });
     }
 

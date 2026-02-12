@@ -9,6 +9,7 @@ use serde::Deserializer;
 use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
+use url::Url;
 
 use crate::config_types::CollaborationMode;
 use crate::config_types::SandboxMode;
@@ -97,6 +98,16 @@ pub enum ContentItem {
     OutputText {
         text: String,
     },
+    UrlFile {
+        url: String,
+        /// MIME type for provider adapters or tools that need a type hint.
+        /// Not part of the stable public wire shape.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(skip)]
+        mime_type: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -117,7 +128,14 @@ enum UncheckedContentItem {
     OutputText {
         text: String,
     },
+    UrlFile {
+        url: Option<String>,
+        mime_type: Option<String>,
+        filename: Option<String>,
+    },
 }
+
+const MAX_URL_FILE_URL_LENGTH: usize = 8192;
 
 impl TryFrom<UncheckedContentItem> for ContentItem {
     type Error = &'static str;
@@ -149,6 +167,29 @@ impl TryFrom<UncheckedContentItem> for ContentItem {
                 })
             }
             UncheckedContentItem::OutputText { text } => Ok(Self::OutputText { text }),
+            UncheckedContentItem::UrlFile {
+                url,
+                mime_type,
+                filename,
+            } => {
+                let url = url
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .ok_or("url_file requires a non-empty `url`")?;
+                if url.len() > MAX_URL_FILE_URL_LENGTH {
+                    return Err("url_file `url` exceeds max length of 8192 characters");
+                }
+                let parsed =
+                    Url::parse(&url).map_err(|_| "url_file `url` must be a valid absolute URL")?;
+                if !matches!(parsed.scheme(), "http" | "https") {
+                    return Err("url_file `url` must use http or https");
+                }
+                Ok(Self::UrlFile {
+                    url,
+                    mime_type,
+                    filename,
+                })
+            }
         }
     }
 }
@@ -168,6 +209,14 @@ impl ContentItem {
             file_data: None,
             file_id: Some(file_id),
             mime_type: Some(mime_type),
+            filename,
+        }
+    }
+
+    pub fn url_file(url: String, mime_type: Option<String>, filename: Option<String>) -> Self {
+        Self::UrlFile {
+            url,
+            mime_type,
             filename,
         }
     }
@@ -418,7 +467,7 @@ impl DeveloperInstructions {
 
         let (sandbox_mode, writable_roots) = match sandbox_policy {
             SandboxPolicy::DangerFullAccess => (SandboxMode::DangerFullAccess, None),
-            SandboxPolicy::ReadOnly => (SandboxMode::ReadOnly, None),
+            SandboxPolicy::ReadOnly { .. } => (SandboxMode::ReadOnly, None),
             SandboxPolicy::ExternalSandbox { .. } => (SandboxMode::DangerFullAccess, None),
             SandboxPolicy::WorkspaceWrite { .. } => {
                 let roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
@@ -1459,6 +1508,7 @@ mod tests {
     fn builds_permissions_from_policy() {
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
+            read_only_access: Default::default(),
             network_access: true,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -2063,6 +2113,118 @@ mod tests {
                 .contains("input_file must include exactly one of `file_data` or `file_id`"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn url_file_deserialization_accepts_non_empty_url() {
+        let item = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "url_file",
+            "url": " https://example.com/report.pdf ",
+            "filename": "report.pdf",
+            "mime_type": "application/pdf",
+        }))
+        .expect("deserialization should succeed");
+
+        assert_eq!(
+            item,
+            ContentItem::UrlFile {
+                url: "https://example.com/report.pdf".to_string(),
+                mime_type: Some("application/pdf".to_string()),
+                filename: Some("report.pdf".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn url_file_deserialization_rejects_invalid_scheme() {
+        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "url_file",
+            "url": "file:///tmp/report.pdf",
+        }))
+        .expect_err("deserialization should fail");
+
+        assert!(
+            err.to_string()
+                .contains("url_file `url` must use http or https"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn url_file_deserialization_rejects_non_url_values() {
+        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "url_file",
+            "url": "not-a-url",
+        }))
+        .expect_err("deserialization should fail");
+
+        assert!(
+            err.to_string()
+                .contains("url_file `url` must be a valid absolute URL"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn url_file_deserialization_rejects_overly_long_urls() {
+        let long_url = format!(
+            "https://example.com/{}",
+            "a".repeat(MAX_URL_FILE_URL_LENGTH)
+        );
+        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "url_file",
+            "url": long_url,
+        }))
+        .expect_err("deserialization should fail");
+
+        assert!(
+            err.to_string()
+                .contains("url_file `url` exceeds max length of 8192 characters"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn url_file_deserialization_rejects_empty_url() {
+        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "url_file",
+            "url": "",
+        }))
+        .expect_err("deserialization should fail");
+
+        assert!(
+            err.to_string()
+                .contains("url_file requires a non-empty `url`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn url_file_deserialization_rejects_whitespace_url() {
+        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "url_file",
+            "url": "   ",
+        }))
+        .expect_err("deserialization should fail");
+
+        assert!(
+            err.to_string()
+                .contains("url_file requires a non-empty `url`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn url_file_round_trip_preserves_fields() {
+        let original = ContentItem::UrlFile {
+            url: "https://example.com/docs/report.pdf".to_string(),
+            mime_type: Some("application/pdf".to_string()),
+            filename: Some("report.pdf".to_string()),
+        };
+        let serialized = serde_json::to_value(&original).expect("serialize");
+        let parsed = serde_json::from_value::<ContentItem>(serialized).expect("deserialize");
+
+        assert_eq!(parsed, original);
     }
 
     #[test]
