@@ -12,12 +12,9 @@ use codex_research_tools::types::PaperSearchParams;
 use codex_research_tools::types::ZoteroAdvancedSearchParams;
 use codex_research_tools::types::ZoteroCollectionItemsParams;
 use codex_research_tools::types::ZoteroCollectionsParams;
-use codex_research_tools::types::ZoteroGrepParams;
 use codex_research_tools::types::ZoteroItemParams;
 use codex_research_tools::types::ZoteroListGroupsParams;
-use codex_research_tools::types::ZoteroSearchNotesParams;
 use codex_research_tools::types::ZoteroSearchParams;
-use codex_research_tools::types::ZoteroTagSearchParams;
 use rmcp::ErrorData as McpError;
 use rmcp::ServiceExt;
 use rmcp::handler::server::ServerHandler;
@@ -214,20 +211,6 @@ impl ServerHandler for ResearchMcpServer {
                     .await
                     .map(serialize_tool_result)
             }
-            "grep_library_text" => {
-                let params: ZoteroGrepParams = parse_arguments(request.arguments)?;
-                self.toolkit
-                    .zotero_grep_text(params)
-                    .await
-                    .map(serialize_tool_result)
-            }
-            "search_notes" => {
-                let params: ZoteroSearchNotesParams = parse_arguments(request.arguments)?;
-                self.toolkit
-                    .zotero_search_notes(params)
-                    .await
-                    .map(serialize_tool_result)
-            }
             "advanced_search" => {
                 let params: ZoteroAdvancedSearchParams = parse_arguments(request.arguments)?;
                 self.toolkit
@@ -260,13 +243,6 @@ impl ServerHandler for ResearchMcpServer {
                 let params: ZoteroItemParams = parse_arguments(request.arguments)?;
                 self.toolkit
                     .zotero_get_attachments(params)
-                    .await
-                    .map(serialize_tool_result)
-            }
-            "search_by_tag" => {
-                let params: ZoteroTagSearchParams = parse_arguments(request.arguments)?;
-                self.toolkit
-                    .zotero_search_by_tag(params)
                     .await
                     .map(serialize_tool_result)
             }

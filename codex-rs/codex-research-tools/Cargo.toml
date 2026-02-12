@@ -13,7 +13,8 @@ paper_search = ["dep:quick-xml"]
 zotero = ["dep:regex"]
 repo_analysis = ["dep:regex", "dep:walkdir"]
 latex = ["dep:flate2"]
-all = ["paper_search", "zotero", "repo_analysis", "latex"]
+pdf_images = []
+all = ["paper_search", "zotero", "repo_analysis", "latex", "pdf_images"]
 
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }

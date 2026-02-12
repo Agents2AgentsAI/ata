@@ -4,6 +4,8 @@ pub(crate) mod cache_helpers;
 pub(crate) mod latex;
 #[cfg(feature = "paper_search")]
 pub(crate) mod paper_search;
+#[cfg(feature = "pdf_images")]
+pub(crate) mod pdf_images;
 #[cfg(feature = "repo_analysis")]
 pub(crate) mod repo_analysis;
 #[cfg(test)]

@@ -99,7 +99,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 id: "zotero_search",
                 native_name: "zotero_search",
                 mcp_name: "search_library",
-                description: "Search Zotero items by query.",
+                description: "Search Zotero items by keyword query across titles, creators, and tags. For topic-based lookups, also check zotero_get_collections — users often organize papers into named collections that keyword search alone may miss.",
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -109,69 +109,6 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                         "offset": { "type": "integer" },
                         "limit": { "type": "integer" },
                         "item_type": { "type": "string" },
-                        "max_chars_per_item": { "type": "integer" }
-                    },
-                    "required": ["query"],
-                    "additionalProperties": false
-                }),
-            },
-            ToolDef {
-                id: "zotero_grep_text",
-                native_name: "zotero_grep_text",
-                mcp_name: "grep_library_text",
-                description: "Grep-style text search across bounded Zotero candidate content.",
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "pattern": { "type": "string" },
-                        "match_mode": { "type": "string", "enum": ["literal", "regex"] },
-                        "case_sensitive": { "type": "boolean" },
-                        "library_type": { "type": "string" },
-                        "library_id": { "type": "string" },
-                        "parent_item_key": { "type": "string" },
-                        "query_hint": { "type": "string" },
-                        "item_type": { "type": "string" },
-                        "fields": {
-                            "type": "array",
-                            "items": {
-                                "type": "string",
-                                "enum": [
-                                    "title",
-                                    "abstract",
-                                    "extra",
-                                    "note",
-                                    "annotation",
-                                    "fulltext",
-                                    "tag"
-                                ]
-                            }
-                        },
-                        "limit_items": { "type": "integer" },
-                        "limit_matches": { "type": "integer" },
-                        "max_matches_per_item": { "type": "integer" },
-                        "context_chars": { "type": "integer" },
-                        "max_chars_per_item": { "type": "integer" }
-                    },
-                    "required": ["pattern"],
-                    "additionalProperties": false
-                }),
-            },
-            ToolDef {
-                id: "zotero_search_notes",
-                native_name: "zotero_search_notes",
-                mcp_name: "search_notes",
-                description: "Search notes and annotation text in Zotero.",
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "query": { "type": "string" },
-                        "match_mode": { "type": "string", "enum": ["literal", "regex"] },
-                        "case_sensitive": { "type": "boolean" },
-                        "library_type": { "type": "string" },
-                        "library_id": { "type": "string" },
-                        "parent_item_key": { "type": "string" },
-                        "include_annotations": { "type": "boolean" },
-                        "limit": { "type": "integer" },
                         "max_chars_per_item": { "type": "integer" }
                     },
                     "required": ["query"],
@@ -313,30 +250,10 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 }),
             },
             ToolDef {
-                id: "zotero_search_by_tag",
-                native_name: "zotero_search_by_tag",
-                mcp_name: "search_by_tag",
-                description: "Search Zotero items by tag.",
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "tags": { "type": "array", "items": { "type": "string" } },
-                        "library_type": { "type": "string" },
-                        "library_id": { "type": "string" },
-                        "offset": { "type": "integer" },
-                        "limit": { "type": "integer" },
-                        "item_type": { "type": "string" },
-                        "max_chars_per_item": { "type": "integer" }
-                    },
-                    "required": ["tags"],
-                    "additionalProperties": false
-                }),
-            },
-            ToolDef {
                 id: "zotero_get_collections",
                 native_name: "zotero_get_collections",
                 mcp_name: "get_collections",
-                description: "List Zotero collections.",
+                description: "List Zotero collections (user-organized folders). When a user asks about papers on a topic, scan collection names for matches — a collection named after the topic likely contains all relevant papers. Use zotero_get_collection_items to retrieve its contents.",
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -367,7 +284,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 id: "zotero_get_collection_items",
                 native_name: "zotero_get_collection_items",
                 mcp_name: "get_collection_items",
-                description: "List items in a Zotero collection.",
+                description: "List items in a Zotero collection by collection_key. Use after finding a relevant collection via zotero_get_collections.",
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -515,6 +432,43 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
         ]);
     }
 
+    #[cfg(feature = "pdf_images")]
+    {
+        defs.push(ToolDef {
+            id: "pdf_extract_figures",
+            native_name: "pdf_extract_figures",
+            mcp_name: "extract_pdf_figures",
+            description: "Download a PDF and extract embedded figures as PNG images using pdfimages. Filters out small icons and decorations by size and dimensions. Returns metadata for each extracted figure.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "pdf_url": {
+                        "type": "string",
+                        "description": "URL to download the PDF from"
+                    },
+                    "output_dir": {
+                        "type": "string",
+                        "description": "Directory to save extracted PNG images"
+                    },
+                    "min_size_kb": {
+                        "type": "integer",
+                        "description": "Minimum file size in KB to keep (default 5)"
+                    },
+                    "min_width": {
+                        "type": "integer",
+                        "description": "Minimum pixel width to keep (default 100)"
+                    },
+                    "min_height": {
+                        "type": "integer",
+                        "description": "Minimum pixel height to keep (default 100)"
+                    }
+                },
+                "required": ["pdf_url", "output_dir"],
+                "additionalProperties": false
+            }),
+        });
+    }
+
     #[cfg(feature = "latex")]
     {
         defs.push(ToolDef {
@@ -587,21 +541,6 @@ mod tests {
     #[test]
     fn zotero_search_schema_exposes_output_budget() {
         assert_schema_has_field("zotero_search", "max_chars_per_item");
-    }
-
-    #[test]
-    fn zotero_grep_schema_exposes_match_and_budget_controls() {
-        assert_schema_has_field("zotero_grep_text", "match_mode");
-        assert_schema_has_field("zotero_grep_text", "fields");
-        assert_schema_has_field("zotero_grep_text", "limit_matches");
-        assert_schema_has_field("zotero_grep_text", "max_chars_per_item");
-    }
-
-    #[test]
-    fn zotero_search_notes_schema_exposes_note_controls() {
-        assert_schema_has_field("zotero_search_notes", "include_annotations");
-        assert_schema_has_field("zotero_search_notes", "limit");
-        assert_schema_has_field("zotero_search_notes", "max_chars_per_item");
     }
 
     #[test]

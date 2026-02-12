@@ -72,9 +72,13 @@ Use sub-agents when available. Each sub-agent should write one artifact to \
 
     if params.has_zotero {
         phase.push_str(&format!(
-            "- Discover accessible Zotero groups via `{}`.\n\
-- Search My Library or a selected group via `{}` and inspect relevant collections via `{}`.\n",
-            tool.zotero_list_groups, tool.zotero_search, tool.zotero_get_collections,
+            "- Discover accessible Zotero groups via `{list_groups}`.\n\
+- Search items via `{search}`, AND scan collection names via `{collections}` for topic matches.\n\
+- When a collection matches the topic, retrieve its items via `{collection_items}` — this catches papers keyword search misses.\n",
+            list_groups = tool.zotero_list_groups,
+            search = tool.zotero_search,
+            collections = tool.zotero_get_collections,
+            collection_items = tool.zotero_get_collection_items,
         ));
     }
     if params.has_paper_search {

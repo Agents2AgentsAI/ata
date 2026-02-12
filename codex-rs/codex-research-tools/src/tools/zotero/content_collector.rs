@@ -4,7 +4,6 @@ use crate::ResearchToolkit;
 use crate::clients::zotero;
 use crate::clients::zotero::ZoteroChildrenRequest;
 use crate::text_utils::truncate_chars;
-use crate::types::SourceMeta;
 use crate::types::ZoteroItemParams;
 use crate::types::ZoteroNote;
 
@@ -20,11 +19,8 @@ use super::zotero_config;
 
 #[derive(Debug, Clone)]
 pub(super) struct GrepTextSegment {
-    pub(super) item_key: String,
     pub(super) field: &'static str,
     pub(super) text: String,
-    pub(super) parent_item_key: Option<String>,
-    pub(super) source_meta: Option<SourceMeta>,
 }
 
 #[derive(Debug, Default)]
@@ -47,26 +43,15 @@ pub(super) async fn collect_grep_segments(
     if field_enabled(&normalized.fields, crate::types::ZoteroGrepField::Title) {
         push_segment(
             &mut collection.segments,
-            candidate.key.clone(),
             "title",
             candidate.title.clone(),
-            candidate.parent_item_key.clone(),
-            candidate.source_meta.clone(),
             max_chars,
         );
     }
 
     if field_enabled(&normalized.fields, crate::types::ZoteroGrepField::Tag) {
         for tag in &candidate.tags {
-            push_segment(
-                &mut collection.segments,
-                candidate.key.clone(),
-                "tag",
-                tag.clone(),
-                candidate.parent_item_key.clone(),
-                candidate.source_meta.clone(),
-                max_chars,
-            );
+            push_segment(&mut collection.segments, "tag", tag.clone(), max_chars);
         }
     }
 
@@ -87,26 +72,15 @@ pub(super) async fn collect_grep_segments(
                 {
                     push_segment(
                         &mut collection.segments,
-                        candidate.key.clone(),
                         "abstract",
                         abstract_text,
-                        candidate.parent_item_key.clone(),
-                        item.source_meta.clone(),
                         max_chars,
                     );
                 }
                 if field_enabled(&normalized.fields, crate::types::ZoteroGrepField::Extra)
                     && let Some(extra) = item.extra
                 {
-                    push_segment(
-                        &mut collection.segments,
-                        candidate.key.clone(),
-                        "extra",
-                        extra,
-                        candidate.parent_item_key.clone(),
-                        item.source_meta,
-                        max_chars,
-                    );
+                    push_segment(&mut collection.segments, "extra", extra, max_chars);
                 }
             }
             Err(err) => {
@@ -160,11 +134,8 @@ pub(super) async fn collect_grep_segments(
             Ok(fulltext) => {
                 push_segment(
                     &mut collection.segments,
-                    candidate.key.clone(),
                     "fulltext",
                     fulltext.content,
-                    candidate.parent_item_key.clone(),
-                    fulltext.source_meta,
                     max_chars,
                 );
             }
@@ -195,11 +166,8 @@ async fn collect_note_segments(
         if let Some(note_text) = note.note.as_deref() {
             push_segment(
                 &mut collection.segments,
-                note.key.clone(),
                 "note",
                 strip_html_to_text(note_text),
-                note.parent_item.clone(),
-                note.source_meta.clone(),
                 max_chars,
             );
         }
@@ -220,11 +188,8 @@ async fn collect_note_segments(
                 if let Some(note_text) = note.note.as_deref() {
                     push_segment(
                         &mut collection.segments,
-                        note.key.clone(),
                         "note",
                         strip_html_to_text(note_text),
-                        note.parent_item.clone(),
-                        note.source_meta,
                         max_chars,
                     );
                 }
@@ -250,11 +215,8 @@ async fn collect_note_segments(
                 if let Some(note_text) = note.note.as_deref() {
                     push_segment(
                         &mut collection.segments,
-                        note.key.clone(),
                         "note",
                         strip_html_to_text(note_text),
-                        note.parent_item.clone(),
-                        note.source_meta,
                         max_chars,
                     );
                 }
@@ -353,22 +315,16 @@ fn push_annotation_text_segments(
     if let Some(annotation_text) = annotation.annotation_text.as_deref() {
         push_segment(
             out,
-            annotation.key.clone(),
             "annotation_text",
             strip_html_to_text(annotation_text),
-            annotation.parent_item.clone(),
-            annotation.source_meta.clone(),
             max_chars,
         );
     }
     if let Some(annotation_comment) = annotation.annotation_comment.as_deref() {
         push_segment(
             out,
-            annotation.key.clone(),
             "annotation_comment",
             strip_html_to_text(annotation_comment),
-            annotation.parent_item.clone(),
-            annotation.source_meta.clone(),
             max_chars,
         );
     }
@@ -376,11 +332,8 @@ fn push_annotation_text_segments(
 
 fn push_segment(
     out: &mut Vec<GrepTextSegment>,
-    item_key: String,
     field: &'static str,
     text: String,
-    parent_item_key: Option<String>,
-    source_meta: Option<SourceMeta>,
     max_chars: Option<usize>,
 ) {
     let trimmed = text.trim();
@@ -398,11 +351,8 @@ fn push_segment(
     }
 
     out.push(GrepTextSegment {
-        item_key,
         field,
         text: segment_text,
-        parent_item_key,
-        source_meta,
     });
 }
 

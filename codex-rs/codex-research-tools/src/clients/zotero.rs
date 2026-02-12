@@ -158,7 +158,9 @@ pub(crate) async fn search_items(
 
     if let Some(sort) = request.sort {
         url.push_str(&format!("&sort={}", urlencoding::encode(sort)));
-    } else if request.query.is_some() {
+    } else if request.query.is_some() && config.api_key.is_some() {
+        // The remote Zotero API supports sort=relevance for keyword
+        // searches, but the local Zotero API rejects it with 400.
         url.push_str("&sort=relevance");
     }
 
@@ -323,40 +325,6 @@ pub(crate) async fn get_library_annotations(
         ),
         total_available,
         annotations,
-    })
-}
-
-pub(crate) async fn get_children_items(
-    http: &HttpClient,
-    config: ZoteroConfig<'_>,
-    scope: &ZoteroLibraryScope,
-    request: &ZoteroChildrenRequest<'_>,
-    item_type: Option<&str>,
-) -> Result<ZoteroSearchResult> {
-    let mut url = format!(
-        "{root}/items/{item_key}/children?format=json&start={offset}&limit={limit}",
-        root = scope.root_url(config.base_url),
-        item_key = urlencoding::encode(request.item_key),
-        offset = request.offset,
-        limit = request.limit,
-    );
-
-    if let Some(item_type) = item_type {
-        url.push_str(&format!("&itemType={}", urlencoding::encode(item_type)));
-    }
-
-    let (response, total_available): (Vec<ZoteroApiItem>, Option<u64>) =
-        execute_json_with_total_results(http, config, &url).await?;
-
-    let items = response
-        .into_iter()
-        .map(|item| map_item_summary(item, &url, scope))
-        .collect::<Vec<_>>();
-
-    Ok(ZoteroSearchResult {
-        has_more: compute_has_more(request.offset, items.len(), request.limit, total_available),
-        total_available,
-        items,
     })
 }
 
@@ -945,8 +913,33 @@ struct ZoteroApiCollection {
 #[derive(Debug, Deserialize, Default)]
 struct ZoteroApiCollectionData {
     name: Option<String>,
-    #[serde(rename = "parentCollection")]
+    #[serde(
+        rename = "parentCollection",
+        deserialize_with = "deserialize_parent_collection",
+        default
+    )]
     parent_collection: Option<String>,
+}
+
+/// The Zotero API returns `"parentCollection": false` when there is no parent
+/// instead of `null` or omitting the field. This deserializer accepts both
+/// `false` and a string value.
+fn deserialize_parent_collection<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum ParentCollection {
+        Str(String),
+        NotAString(serde_json::Value),
+    }
+    match ParentCollection::deserialize(deserializer)? {
+        ParentCollection::Str(s) if !s.is_empty() => Ok(Some(s)),
+        ParentCollection::Str(_) | ParentCollection::NotAString(_) => Ok(None),
+    }
 }
 
 #[derive(Debug, Deserialize)]

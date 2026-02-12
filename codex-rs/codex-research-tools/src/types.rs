@@ -232,24 +232,6 @@ pub struct ZoteroGrepResult {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct ZoteroSearchNoteMatch {
-    pub item_key: String,
-    pub parent_item: Option<String>,
-    pub field: String,
-    pub snippet: String,
-    pub source_meta: Option<SourceMeta>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct ZoteroSearchNotesResult {
-    pub query: String,
-    pub notes: Vec<ZoteroSearchNoteMatch>,
-    pub total_available: Option<u64>,
-    pub has_more: bool,
-    pub warnings: Vec<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroFullTextResult {
     pub item_key: String,
     pub content: String,
@@ -459,19 +441,6 @@ pub struct ZoteroGrepParams {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct ZoteroSearchNotesParams {
-    pub query: String,
-    pub match_mode: Option<ZoteroGrepMatchMode>,
-    pub case_sensitive: Option<bool>,
-    pub library_type: Option<String>,
-    pub library_id: Option<String>,
-    pub parent_item_key: Option<String>,
-    pub include_annotations: Option<bool>,
-    pub limit: Option<u32>,
-    pub max_chars_per_item: Option<u32>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroAdvancedSearchParams {
     pub conditions: Vec<ZoteroSearchCondition>,
     pub join_mode: Option<ZoteroAdvancedJoinMode>,
@@ -490,17 +459,6 @@ pub struct ZoteroItemParams {
     pub item_key: String,
     pub library_type: Option<String>,
     pub library_id: Option<String>,
-    pub max_chars_per_item: Option<u32>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct ZoteroTagSearchParams {
-    pub tags: Vec<String>,
-    pub library_type: Option<String>,
-    pub library_id: Option<String>,
-    pub offset: Option<u32>,
-    pub limit: Option<u32>,
-    pub item_type: Option<String>,
     pub max_chars_per_item: Option<u32>,
 }
 
@@ -545,4 +503,49 @@ pub struct LatexCompileResult {
     pub warnings: Vec<String>,
     pub num_pages: Option<usize>,
     pub compilation_log_snippet: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub packages_installed: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct PdfExtractFiguresParams {
+    pub pdf_url: String,
+    pub output_dir: String,
+    #[serde(default = "default_min_size_kb")]
+    pub min_size_kb: Option<u32>,
+    #[serde(default = "default_min_width")]
+    pub min_width: Option<u32>,
+    #[serde(default = "default_min_height")]
+    pub min_height: Option<u32>,
+}
+
+fn default_min_size_kb() -> Option<u32> {
+    Some(5)
+}
+
+fn default_min_width() -> Option<u32> {
+    Some(100)
+}
+
+fn default_min_height() -> Option<u32> {
+    Some(100)
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ExtractedFigure {
+    pub path: String,
+    pub width: u32,
+    pub height: u32,
+    pub size_bytes: u64,
+    pub page_number: u32,
+    pub index: u32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct PdfExtractFiguresResult {
+    pub success: bool,
+    pub figures: Vec<ExtractedFigure>,
+    pub total_extracted: usize,
+    pub total_filtered: usize,
+    pub errors: Vec<String>,
 }
