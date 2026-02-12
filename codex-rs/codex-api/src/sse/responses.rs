@@ -251,6 +251,8 @@ pub fn process_responses_event(
                             .message
                             .unwrap_or_else(|| "Invalid request.".to_string());
                         response_error = ApiError::InvalidRequest { message };
+                    } else if is_server_overloaded_error(&error) {
+                        response_error = ApiError::ServerOverloaded;
                     } else {
                         let delay = try_parse_retry_after(&error);
                         let message = error.message.unwrap_or_default();
@@ -271,6 +273,7 @@ pub fn process_responses_event(
                         return Ok(Some(ResponseEvent::Completed {
                             response_id: resp.id,
                             token_usage: resp.usage.map(Into::into),
+                            can_append: false,
                         }));
                     }
                     Err(err) => {
@@ -288,6 +291,7 @@ pub fn process_responses_event(
                         return Ok(Some(ResponseEvent::Completed {
                             response_id: resp.id.unwrap_or_default(),
                             token_usage: resp.usage.map(Into::into),
+                            can_append: true,
                         }));
                     }
                     Err(err) => {
@@ -302,6 +306,7 @@ pub fn process_responses_event(
             return Ok(Some(ResponseEvent::Completed {
                 response_id: String::new(),
                 token_usage: None,
+                can_append: true,
             }));
         }
         "response.output_item.added" => {
@@ -439,6 +444,11 @@ fn is_invalid_request_error(error: &Error) -> bool {
         || error.code.as_deref() == Some("invalid_request_error")
 }
 
+fn is_server_overloaded_error(error: &Error) -> bool {
+    error.code.as_deref() == Some("server_is_overloaded")
+        || error.code.as_deref() == Some("slow_down")
+}
+
 fn rate_limit_regex() -> &'static regex_lite::Regex {
     static RE: std::sync::OnceLock<regex_lite::Regex> = std::sync::OnceLock::new();
     #[expect(clippy::unwrap_used)]
@@ -565,9 +575,11 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                can_append,
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
+                assert!(!can_append);
             }
             other => panic!("unexpected third event: {other:?}"),
         }
@@ -602,7 +614,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn response_done_emits_completed() {
+    async fn response_done_emits_incremental_completed() {
         let done = json!({
             "type": "response.done",
             "response": {
@@ -627,9 +639,11 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                can_append,
             }) => {
                 assert_eq!(response_id, "");
                 assert!(token_usage.is_some());
+                assert!(*can_append);
             }
             other => panic!("unexpected event: {other:?}"),
         }
@@ -652,9 +666,11 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                can_append,
             }) => {
                 assert_eq!(response_id, "");
                 assert!(token_usage.is_none());
+                assert!(*can_append);
             }
             other => panic!("unexpected event: {other:?}"),
         }
@@ -690,9 +706,11 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                can_append,
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
+                assert!(!can_append);
             }
             other => panic!("unexpected event: {other:?}"),
         }

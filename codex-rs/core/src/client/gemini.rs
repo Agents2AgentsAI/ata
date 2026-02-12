@@ -105,6 +105,7 @@ pub(super) async fn stream_gemini_api(
                 return ParseSseEventResult::Emit(vec![ResponseEvent::Completed {
                     response_id: String::new(),
                     token_usage: None,
+                    can_append: false,
                 }]);
             }
 

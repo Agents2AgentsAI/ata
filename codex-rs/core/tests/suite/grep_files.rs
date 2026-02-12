@@ -3,7 +3,7 @@
 use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::features::Feature;
-use codex_core::models_manager::manager::ModelsManager;
+use codex_core::test_support::construct_model_info_offline;
 use codex_protocol::openai_models::ModelsResponse;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::mount_function_call_agent_response;
@@ -150,7 +150,7 @@ async fn start_server_with_grep_tool_model() -> Result<MockServer> {
 
     let codex_home = tempfile::tempdir()?;
     let config = load_default_config_for_test(&codex_home).await;
-    let mut model = ModelsManager::construct_model_info_offline("gpt-5.1-codex", &config);
+    let mut model = construct_model_info_offline("gpt-5.1-codex", &config);
     model.slug = MODEL_WITH_TOOL.to_string();
     model.display_name = MODEL_WITH_TOOL.to_string();
     model.experimental_supported_tools = vec!["grep_files".to_string()];

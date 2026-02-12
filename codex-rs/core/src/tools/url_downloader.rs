@@ -1,5 +1,5 @@
+use crate::default_client::default_headers;
 use crate::default_client::get_codex_user_agent;
-use crate::default_client::originator;
 use crate::tools::url_validation::UrlValidationError;
 use crate::tools::url_validation::UrlValidationOptions;
 use crate::tools::url_validation::ValidatedUrl;
@@ -12,7 +12,6 @@ use http::header::ACCEPT;
 use http::header::LOCATION;
 use reqwest::Client;
 use reqwest::StatusCode;
-use reqwest::header::HeaderMap;
 use sha2::Digest;
 use sha2::Sha256;
 use std::path::Path;
@@ -240,12 +239,10 @@ async fn download_one_url_to_cache(
 }
 
 fn build_downloader_client() -> Client {
-    let mut headers = HeaderMap::new();
-    headers.insert("originator", originator().header_value);
     let user_agent = get_codex_user_agent();
 
     reqwest::Client::builder()
-        .default_headers(headers)
+        .default_headers(default_headers())
         .user_agent(user_agent)
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(REQUEST_TIMEOUT)
