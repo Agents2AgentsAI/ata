@@ -22,7 +22,7 @@ use crate::types::ZoteroSearchResult;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ZoteroConfig<'a> {
     pub base_url: &'a str,
-    pub api_key: &'a str,
+    pub api_key: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -34,6 +34,7 @@ pub(crate) enum ZoteroLibraryScope {
 
 impl ZoteroLibraryScope {
     fn root_url(&self, base_url: &str) -> String {
+        let base_url = base_url.trim_end_matches('/');
         match self {
             Self::User(user_id) => format!("{base_url}/users/{user_id}"),
             Self::Group(group_id) => format!("{base_url}/groups/{group_id}"),
@@ -313,10 +314,14 @@ fn zotero_request(
     config: ZoteroConfig<'_>,
     url: &str,
 ) -> reqwest::RequestBuilder {
-    http.client()
-        .get(url)
-        .header("Zotero-API-Key", config.api_key)
-        .header("Zotero-API-Version", "3")
+    let mut request = http.client().get(url).header("Zotero-API-Version", "3");
+    if let Some(api_key) = config.api_key.filter(|value| !value.trim().is_empty()) {
+        request = request.header("Zotero-API-Key", api_key);
+    } else {
+        // Local Zotero API accepts this header for non-browser clients.
+        request = request.header("Zotero-Allowed-Request", "1");
+    }
+    request
 }
 
 async fn execute_json_with_total_results<T>(

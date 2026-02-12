@@ -5,6 +5,9 @@ use std::time::Duration;
 use crate::rate_limiter::ApiRateLimit;
 use crate::rate_limiter::ResearchApi;
 
+pub const DEFAULT_REMOTE_ZOTERO_BASE_URL: &str = "https://api.zotero.org";
+pub const DEFAULT_LOCAL_ZOTERO_BASE_URL: &str = "http://localhost:23119/api";
+
 #[derive(Clone)]
 pub struct ResearchConfig {
     pub semantic_scholar_api_key: Option<String>,
@@ -92,7 +95,7 @@ impl Default for ResearchConfig {
             semantic_scholar_base_url: "https://api.semanticscholar.org/graph/v1".to_string(),
             arxiv_base_url: "https://export.arxiv.org".to_string(),
             openalex_base_url: "https://api.openalex.org".to_string(),
-            zotero_base_url: "https://api.zotero.org".to_string(),
+            zotero_base_url: DEFAULT_REMOTE_ZOTERO_BASE_URL.to_string(),
             github_api_base_url: "https://api.github.com".to_string(),
             connect_timeout: Duration::from_secs(10),
             request_timeout: Duration::from_secs(30),
@@ -107,10 +110,35 @@ impl Default for ResearchConfig {
 
 impl ResearchConfig {
     #[must_use]
+    pub fn uses_local_zotero_api(&self) -> bool {
+        if self.zotero_api_key.is_some() {
+            return false;
+        }
+
+        let base = self
+            .zotero_base_url
+            .trim_end_matches('/')
+            .to_ascii_lowercase();
+        base == DEFAULT_LOCAL_ZOTERO_BASE_URL
+            || base.starts_with("http://localhost:")
+            || base.starts_with("http://127.0.0.1:")
+            || base.starts_with("http://[::1]:")
+    }
+
+    #[must_use]
     pub fn from_env() -> Self {
+        let zotero_api_key = std::env::var("ZOTERO_API_KEY").ok();
+        let zotero_base_url = std::env::var("ZOTERO_BASE_URL").unwrap_or_else(|_| {
+            if zotero_api_key.is_some() {
+                DEFAULT_REMOTE_ZOTERO_BASE_URL.to_string()
+            } else {
+                DEFAULT_LOCAL_ZOTERO_BASE_URL.to_string()
+            }
+        });
+
         let mut config = Self {
             semantic_scholar_api_key: std::env::var("SEMANTIC_SCHOLAR_API_KEY").ok(),
-            zotero_api_key: std::env::var("ZOTERO_API_KEY").ok(),
+            zotero_api_key,
             zotero_user_id: std::env::var("ZOTERO_USER_ID").ok(),
             openalex_email: std::env::var("OPENALEX_EMAIL").ok(),
             github_token: std::env::var("GITHUB_TOKEN").ok(),
@@ -122,8 +150,7 @@ impl ResearchConfig {
                 .unwrap_or_else(|_| "https://export.arxiv.org".to_string()),
             openalex_base_url: std::env::var("OPENALEX_BASE_URL")
                 .unwrap_or_else(|_| "https://api.openalex.org".to_string()),
-            zotero_base_url: std::env::var("ZOTERO_BASE_URL")
-                .unwrap_or_else(|_| "https://api.zotero.org".to_string()),
+            zotero_base_url,
             github_api_base_url: std::env::var("GITHUB_API_BASE_URL")
                 .unwrap_or_else(|_| "https://api.github.com".to_string()),
             ..Self::default()
