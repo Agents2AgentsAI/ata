@@ -16,8 +16,10 @@ use codex_research_tools::types::ZoteroCollectionsParams;
 use codex_research_tools::types::ZoteroGrepParams;
 use codex_research_tools::types::ZoteroItemParams;
 use codex_research_tools::types::ZoteroListGroupsParams;
+use codex_research_tools::types::ZoteroRecentParams;
 use codex_research_tools::types::ZoteroSearchNotesParams;
 use codex_research_tools::types::ZoteroSearchParams;
+use codex_research_tools::types::ZoteroTagsParams;
 use rmcp::ErrorData as McpError;
 use rmcp::ServiceExt;
 use rmcp::handler::server::ServerHandler;
@@ -211,6 +213,20 @@ impl ServerHandler for ResearchMcpServer {
                 let params: ZoteroSearchParams = parse_arguments(request.arguments)?;
                 self.toolkit
                     .zotero_search(params)
+                    .await
+                    .map(serialize_tool_result)
+            }
+            "get_tags" => {
+                let params: ZoteroTagsParams = parse_arguments(request.arguments)?;
+                self.toolkit
+                    .zotero_get_tags(params)
+                    .await
+                    .map(serialize_tool_result)
+            }
+            "get_recent" => {
+                let params: ZoteroRecentParams = parse_arguments(request.arguments)?;
+                self.toolkit
+                    .zotero_get_recent(params)
                     .await
                     .map(serialize_tool_result)
             }

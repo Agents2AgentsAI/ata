@@ -20,8 +20,10 @@ use codex_research_tools::types::ZoteroCollectionsParams;
 use codex_research_tools::types::ZoteroGrepParams;
 use codex_research_tools::types::ZoteroItemParams;
 use codex_research_tools::types::ZoteroListGroupsParams;
+use codex_research_tools::types::ZoteroRecentParams;
 use codex_research_tools::types::ZoteroSearchNotesParams;
 use codex_research_tools::types::ZoteroSearchParams;
+use codex_research_tools::types::ZoteroTagsParams;
 use codex_secrets::SecretName;
 use codex_secrets::SecretScope;
 use codex_secrets::SecretsBackendKind;
@@ -118,6 +120,12 @@ impl ResearchBridgeHandler {
             "zotero_search" => dispatch_with_params!(ZoteroSearchParams, |params| self
                 .toolkit
                 .zotero_search(params)),
+            "zotero_get_tags" => dispatch_with_params!(ZoteroTagsParams, |params| self
+                .toolkit
+                .zotero_get_tags(params)),
+            "zotero_get_recent" => dispatch_with_params!(ZoteroRecentParams, |params| self
+                .toolkit
+                .zotero_get_recent(params)),
             "zotero_advanced_search" => {
                 dispatch_with_params!(ZoteroAdvancedSearchParams, |params| self
                     .toolkit

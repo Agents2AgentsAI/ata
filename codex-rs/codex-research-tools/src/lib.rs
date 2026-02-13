@@ -55,11 +55,14 @@ use types::ZoteroItemDetail;
 use types::ZoteroItemParams;
 use types::ZoteroListGroupsParams;
 use types::ZoteroNotesResult;
+use types::ZoteroRecentParams;
 use types::ZoteroSearchNotesParams;
 use types::ZoteroSearchNotesResult;
 use types::ZoteroSearchParams;
 use types::ZoteroSearchResult;
 use types::ZoteroTagSearchParams;
+use types::ZoteroTagsParams;
+use types::ZoteroTagsResult;
 
 #[derive(Debug)]
 pub struct ResearchToolkit {
@@ -196,6 +199,36 @@ impl ResearchToolkit {
     pub async fn zotero_search(&self, _params: ZoteroSearchParams) -> Result<ZoteroSearchResult> {
         Err(ResearchError::NotImplemented {
             tool: "zotero_search",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_get_tags(&self, params: ZoteroTagsParams) -> Result<ZoteroTagsResult> {
+        tools::zotero::zotero_get_tags(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_get_tags(&self, _params: ZoteroTagsParams) -> Result<ZoteroTagsResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_get_tags",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_get_recent(
+        &self,
+        params: ZoteroRecentParams,
+    ) -> Result<ZoteroSearchResult> {
+        tools::zotero::zotero_get_recent(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_get_recent(
+        &self,
+        _params: ZoteroRecentParams,
+    ) -> Result<ZoteroSearchResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_get_recent",
         })
     }
 

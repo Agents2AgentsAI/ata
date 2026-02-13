@@ -1,6 +1,7 @@
 use chrono::Utc;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use std::collections::HashSet;
 
 use crate::error::ResearchError;
 use crate::error::Result;
@@ -20,6 +21,7 @@ use crate::types::ZoteroItemDetail;
 use crate::types::ZoteroNote;
 use crate::types::ZoteroNotesResult;
 use crate::types::ZoteroSearchResult;
+use crate::types::ZoteroTagsResult;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ZoteroConfig<'a> {
@@ -90,6 +92,12 @@ pub(crate) struct ZoteroChildrenItemsRequest<'a> {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ZoteroCollectionsRequest {
+    pub offset: u32,
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ZoteroTagsRequest {
     pub offset: u32,
     pub limit: u32,
 }
@@ -479,6 +487,66 @@ pub(crate) async fn get_collections(
     })
 }
 
+pub(crate) async fn get_tags(
+    http: &HttpClient,
+    config: ZoteroConfig<'_>,
+    scope: &ZoteroLibraryScope,
+    request: ZoteroTagsRequest,
+) -> Result<ZoteroTagsResult> {
+    let url = format!(
+        "{root}/tags?format=json&start={offset}&limit={limit}",
+        root = scope.root_url(config.base_url),
+        offset = request.offset,
+        limit = request.limit,
+    );
+
+    let response = http
+        .execute_response(ResearchApi::Zotero, || zotero_request(http, config, &url))
+        .await?;
+    let total_available = parse_total_results_header(&response);
+    let has_next_link = has_link_rel(&response, "next");
+    let payload =
+        response
+            .json::<Vec<ZoteroApiTag>>()
+            .await
+            .map_err(|err| ResearchError::Parse {
+                api: ResearchApi::Zotero,
+                message: err.to_string(),
+            })?;
+
+    let raw_page_len = payload.len();
+    let mut seen_tags: HashSet<String> = HashSet::new();
+    let tags = payload
+        .into_iter()
+        .filter_map(|tag| {
+            let trimmed = tag.tag.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+
+            let normalized = trimmed.to_ascii_lowercase();
+            if !seen_tags.insert(normalized) {
+                return None;
+            }
+
+            Some(trimmed.to_string())
+        })
+        .collect::<Vec<_>>();
+    let has_more = has_next_link
+        || compute_has_more(request.offset, raw_page_len, request.limit, total_available);
+    let page_len = u64::try_from(raw_page_len).unwrap_or(u64::MAX);
+    let has_next_link_bias = if has_next_link { 1 } else { 0 };
+    let minimum_total = u64::from(request.offset)
+        .saturating_add(page_len)
+        .saturating_add(has_next_link_bias);
+
+    Ok(ZoteroTagsResult {
+        tags,
+        total_available: total_available.unwrap_or(minimum_total),
+        has_more,
+    })
+}
+
 pub(crate) async fn list_groups(
     http: &HttpClient,
     config: ZoteroConfig<'_>,
@@ -567,11 +635,7 @@ where
     let response = http
         .execute_response(ResearchApi::Zotero, || zotero_request(http, config, url))
         .await?;
-    let total_available = response
-        .headers()
-        .get("Total-Results")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|raw| raw.parse::<u64>().ok());
+    let total_available = parse_total_results_header(&response);
 
     let payload = response
         .json::<T>()
@@ -581,6 +645,33 @@ where
             message: err.to_string(),
         })?;
     Ok((payload, total_available))
+}
+
+fn parse_total_results_header(response: &reqwest::Response) -> Option<u64> {
+    response
+        .headers()
+        .get("Total-Results")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|raw| raw.parse::<u64>().ok())
+}
+
+fn has_link_rel(response: &reqwest::Response, rel: &str) -> bool {
+    response
+        .headers()
+        .get("Link")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|link_header| link_rel_exists(link_header, rel))
+}
+
+fn link_rel_exists(link_header: &str, rel: &str) -> bool {
+    link_header.split(',').any(|link| {
+        link.split(';').skip(1).any(|part| {
+            part.trim()
+                .strip_prefix("rel=")
+                .map(|value| value.trim_matches('"').eq_ignore_ascii_case(rel))
+                .unwrap_or(false)
+        })
+    })
 }
 
 fn compute_has_more(
@@ -931,6 +1022,7 @@ struct ZoteroApiTag {
 
 #[cfg(test)]
 mod tests {
+    use super::link_rel_exists;
     use super::year_from_date;
     use pretty_assertions::assert_eq;
 
@@ -956,6 +1048,18 @@ mod tests {
         assert_eq!(year_from_date(Some("v1.2.3 1234 build")), None);
         assert_eq!(year_from_date(Some("")), None);
         assert_eq!(year_from_date(None), None);
+    }
+
+    #[test]
+    fn link_rel_exists_detects_next_relation() {
+        assert!(link_rel_exists(
+            r#"<https://api.zotero.org/users/1/tags?start=100&limit=100>; rel="next", <https://api.zotero.org/users/1/tags?start=0&limit=100>; rel="first""#,
+            "next"
+        ));
+        assert!(!link_rel_exists(
+            r#"<https://api.zotero.org/users/1/tags?start=0&limit=100>; rel="first""#,
+            "next"
+        ));
     }
 }
 

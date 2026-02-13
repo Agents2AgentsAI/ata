@@ -98,6 +98,20 @@ pub struct ZoteroSearchResult {
     pub has_more: bool,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroTagsResult {
+    pub tags: Vec<String>,
+    pub total_available: u64,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroRecentSortBy {
+    DateAdded,
+    DateModified,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ZoteroAdvancedJoinMode {
@@ -480,6 +494,25 @@ pub struct ZoteroSearchParams {
     pub offset: Option<u32>,
     pub limit: Option<u32>,
     pub item_type: Option<String>,
+    pub max_chars_per_item: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroTagsParams {
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroRecentParams {
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+    pub item_type: Option<String>,
+    pub sort_by: Option<ZoteroRecentSortBy>,
     pub max_chars_per_item: Option<u32>,
 }
 

@@ -116,6 +116,63 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 }),
             },
             ToolDef {
+                id: "zotero_get_tags",
+                native_name: "zotero_get_tags",
+                mcp_name: "get_tags",
+                description: "List Zotero tags with pagination metadata for autocomplete and filtering flows.",
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "library_type": { "type": "string" },
+                        "library_id": { "type": "string" },
+                        "offset": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 0
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 200,
+                            "default": 100
+                        }
+                    },
+                    "additionalProperties": false
+                }),
+            },
+            ToolDef {
+                id: "zotero_get_recent",
+                native_name: "zotero_get_recent",
+                mcp_name: "get_recent",
+                description: "List recently added or modified Zotero items in descending time order.",
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "library_type": { "type": "string" },
+                        "library_id": { "type": "string" },
+                        "offset": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 0
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 100,
+                            "default": 25
+                        },
+                        "item_type": { "type": "string" },
+                        "sort_by": {
+                            "type": "string",
+                            "enum": ["date_added", "date_modified"],
+                            "default": "date_added"
+                        },
+                        "max_chars_per_item": { "type": "integer" }
+                    },
+                    "additionalProperties": false
+                }),
+            },
+            ToolDef {
                 id: "zotero_advanced_search",
                 native_name: "zotero_advanced_search",
                 mcp_name: "advanced_search",
@@ -615,6 +672,19 @@ mod tests {
     #[test]
     fn zotero_search_schema_exposes_output_budget() {
         assert_schema_has_field("zotero_search", "max_chars_per_item");
+    }
+
+    #[test]
+    fn zotero_get_tags_schema_exposes_pagination_fields() {
+        assert_schema_has_field("zotero_get_tags", "offset");
+        assert_schema_has_field("zotero_get_tags", "limit");
+    }
+
+    #[test]
+    fn zotero_get_recent_schema_exposes_sorting_and_filters() {
+        assert_schema_has_field("zotero_get_recent", "item_type");
+        assert_schema_has_field("zotero_get_recent", "sort_by");
+        assert_schema_has_field("zotero_get_recent", "max_chars_per_item");
     }
 
     #[test]
