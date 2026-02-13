@@ -86,9 +86,8 @@ Before synthesizing, always attempt to read the full paper text. Choose the path
 2. For each paper found, call `zotero_get_item` with `include_attachments=true` and `include_fulltext_resolution=true`.
 3. If `document_resolution.preferred_url` is present, fetch the paper with `attach_url_files` and treat that attached document as the primary source (this preserves figures/tables).
 4. If no URL is available but `document_resolution.local_path` is present, use that local PDF path as the primary source.
-5. Call `zotero_get_fulltext` only as a fallback text source when no HTML/PDF source can be resolved.
-6. Optionally call `zotero_get_notes` to retrieve the user's annotations and highlights — weave these into the synthesis where relevant (e.g. "The authors note X, which the reader flagged as particularly relevant because...").
-7. If neither document source nor indexed text is available, fall back to Path A using the DOI or arXiv ID from the Zotero metadata.
+5. Optionally call `zotero_get_notes` to retrieve the user's annotations and highlights — weave these into the synthesis where relevant (e.g. "The authors note X, which the reader flagged as particularly relevant because...").
+6. If neither `preferred_url` nor `local_path` is available, stop and report this as a Zotero metadata inconsistency instead of switching to indexed fulltext.
 
 When the user asks to analyze multiple papers from Zotero (e.g. "synthesize my Zotero collection on diffusion"), launch one subagent per paper in parallel. After all subagents complete, produce a cross-paper comparative section in the main context (same format as the kb-explain cross-card synthesis).
 
@@ -215,5 +214,5 @@ If `kb_write_card` is not available, produce both types directly in the chat res
 - **No `paper_get` available**: Rely on `attach_url_files` for the PDF; extract metadata manually from the paper text.
 - **PDF download fails**: Synthesize from the abstract and any user-provided context. Clearly note the limitation.
 - **User provides only a title**: Search for the paper using available tools before synthesizing. If not found, ask for a URL or arXiv ID.
-- **Zotero fulltext unavailable**: Fall back to Path A using the DOI or arXiv ID from Zotero metadata. If no identifier exists, use `paper_search` with the title.
+- **Zotero document resolution unavailable**: Report the item key and missing resolution fields (`preferred_url`, `local_path`) as a Zotero metadata inconsistency; do not switch to indexed fulltext.
 - **No Zotero tools configured**: If the user mentions Zotero but tools aren't available, tell them Zotero integration requires API key configuration and fall back to Path A.
