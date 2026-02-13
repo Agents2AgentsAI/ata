@@ -72,9 +72,17 @@ pub(super) async fn stream_gemini_code_assist(
     let access_token = context.access_token;
 
     let url = code_assist_method_url("streamGenerateContent");
+    let url = match reqwest::Url::parse(&url) {
+        Ok(mut parsed) => {
+            parsed.query_pairs_mut().append_pair("alt", "sse");
+            parsed.to_string()
+        }
+        Err(_) => format!("{url}?alt=sse"),
+    };
     let client = build_reqwest_client();
     let request = client
         .post(url)
+        .header("Accept", "text/event-stream")
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {access_token}"))
         .header("X-Goog-Api-Client", build_x_goog_api_client_header())
