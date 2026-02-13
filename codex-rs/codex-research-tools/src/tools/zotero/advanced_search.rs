@@ -627,6 +627,8 @@ async fn evaluate_candidate(
                 library_type: Some(normalized.scope.library_type.clone()),
                 library_id: Some(normalized.scope.library_id.clone()),
                 max_chars_per_item: normalized.max_chars_per_item,
+                include_attachments: None,
+                include_fulltext_resolution: None,
             })
             .await
         {

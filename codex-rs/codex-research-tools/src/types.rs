@@ -89,6 +89,8 @@ pub struct ZoteroItemDetail {
     pub tags: Vec<String>,
     pub extra: Option<String>,
     pub source_meta: Option<SourceMeta>,
+    pub attachments: Option<Vec<ZoteroAttachment>>,
+    pub document_resolution: Option<DocumentResolution>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -550,6 +552,32 @@ pub struct ZoteroSearchNotesParams {
     pub max_chars_per_item: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroCitationFormat {
+    Bibtex,
+    CslJson,
+    Apa,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroCitationGenerator {
+    BetterBibtex,
+    FallbackFormatter,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroCitationResult {
+    pub item_key: String,
+    pub format: ZoteroCitationFormat,
+    pub citation: String,
+    pub citation_key: Option<String>,
+    pub generator: ZoteroCitationGenerator,
+    pub warnings: Vec<String>,
+    pub source_meta: Option<SourceMeta>,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroAdvancedSearchParams {
     pub conditions: Vec<ZoteroSearchCondition>,
@@ -570,6 +598,17 @@ pub struct ZoteroItemParams {
     pub library_type: Option<String>,
     pub library_id: Option<String>,
     pub max_chars_per_item: Option<u32>,
+    pub include_attachments: Option<bool>,
+    pub include_fulltext_resolution: Option<bool>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroCitationParams {
+    pub item_key: String,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub format: Option<ZoteroCitationFormat>,
+    pub prefer_better_bibtex: Option<bool>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]

@@ -75,13 +75,19 @@ Use sub-agents when available. Each sub-agent should write one artifact to \
             "- Discover accessible Zotero groups via `{list_groups}`.\n\
 - Search items via `{search}`, AND scan collection names via `{collections}` for topic matches.\n\
 - When a collection matches the topic, retrieve its items via `{collection_items}` — this catches papers keyword search misses.\n\
-- For papers you need to read deeply, call `{get_item}` then `{get_fulltext}`; if fulltext `resolution` returns a URL, fetch the document with `attach_url_files`.\n",
+- Use `{advanced_search}` for precise metadata filters and `{search_notes}` when evidence likely lives in notes/annotations.\n\
+- For papers you need to read deeply, call `{get_item}` with `include_attachments=true` and `include_fulltext_resolution=true` before `{get_fulltext}`.\n\
+- If `document_resolution.preferred_url` (or fulltext `resolution.preferred_url`) is present, fetch the document with `attach_url_files`.\n\
+- Generate references via `{get_item_citation}` when outputs require BibTeX/APA/CSL citations.\n",
             list_groups = tool.zotero_list_groups,
             search = tool.zotero_search,
             collections = tool.zotero_get_collections,
             collection_items = tool.zotero_get_collection_items,
+            advanced_search = tool.zotero_advanced_search,
+            search_notes = tool.zotero_search_notes,
             get_item = tool.zotero_get_item,
             get_fulltext = tool.zotero_get_fulltext,
+            get_item_citation = tool.zotero_get_item_citation,
         ));
     }
     if params.has_paper_search {
@@ -246,8 +252,10 @@ mod tests {
         let rendered = build_research_prompt(&params());
         assert!(rendered.contains("`zotero_search`"));
         assert!(rendered.contains("`zotero_list_groups`"));
+        assert!(rendered.contains("`zotero_get_item_citation`"));
         assert!(rendered.contains("`paper_search`"));
         assert!(rendered.contains("`repo_find_entrypoints`"));
+        assert!(rendered.contains("include_attachments=true"));
         assert!(rendered.contains("### Phase 4: Reproducible Pipeline Scaffolding"));
         assert!(rendered.contains("### Phase 3b: Skeptic Pass"));
         assert!(rendered.contains(".research_state/subfinding_N.json"));

@@ -297,14 +297,34 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 id: "zotero_get_item",
                 native_name: "zotero_get_item",
                 mcp_name: "get_item_details",
-                description: "Get full Zotero metadata for an item.",
+                description: "Get full Zotero metadata for an item, with optional attachment and document-source enrichment.",
                 input_schema: json!({
                     "type": "object",
                     "properties": {
                         "item_key": { "type": "string" },
                         "library_type": { "type": "string" },
                         "library_id": { "type": "string" },
-                        "max_chars_per_item": { "type": "integer" }
+                        "max_chars_per_item": { "type": "integer" },
+                        "include_attachments": { "type": "boolean", "description": "Include attachment metadata in response" },
+                        "include_fulltext_resolution": { "type": "boolean", "description": "Include document source resolution in response" }
+                    },
+                    "required": ["item_key"],
+                    "additionalProperties": false
+                }),
+            },
+            ToolDef {
+                id: "zotero_get_item_citation",
+                native_name: "zotero_get_item_citation",
+                mcp_name: "get_item_citation",
+                description: "Generate a citation for a Zotero item (BibTeX, CSL JSON, or APA).",
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "item_key": { "type": "string" },
+                        "library_type": { "type": "string" },
+                        "library_id": { "type": "string" },
+                        "format": { "type": "string", "enum": ["bibtex", "csl_json", "apa"] },
+                        "prefer_better_bibtex": { "type": "boolean" }
                     },
                     "required": ["item_key"],
                     "additionalProperties": false
@@ -706,6 +726,18 @@ mod tests {
         assert_schema_has_field("zotero_search_notes", "query");
         assert_schema_has_field("zotero_search_notes", "include_annotations");
         assert_schema_has_field("zotero_search_notes", "limit");
+    }
+
+    #[test]
+    fn zotero_get_item_schema_exposes_enrichment_flags() {
+        assert_schema_has_field("zotero_get_item", "include_attachments");
+        assert_schema_has_field("zotero_get_item", "include_fulltext_resolution");
+    }
+
+    #[test]
+    fn zotero_get_item_citation_schema_exposes_format_controls() {
+        assert_schema_has_field("zotero_get_item_citation", "format");
+        assert_schema_has_field("zotero_get_item_citation", "prefer_better_bibtex");
     }
 
     #[test]

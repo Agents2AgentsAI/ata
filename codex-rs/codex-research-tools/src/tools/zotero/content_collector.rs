@@ -410,5 +410,7 @@ fn build_item_params(
         library_type: Some(scope.library_type.clone()),
         library_id: Some(scope.library_id.clone()),
         max_chars_per_item,
+        include_attachments: None,
+        include_fulltext_resolution: None,
     }
 }
