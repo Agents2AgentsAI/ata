@@ -435,4 +435,3 @@ pub(crate) async fn zotero_get_attachments(
 
     Ok(attachments)
 }
-

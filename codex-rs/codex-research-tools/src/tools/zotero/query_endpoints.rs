@@ -280,7 +280,6 @@ pub(crate) async fn zotero_search_notes(
     search_notes::zotero_search_notes(toolkit, params).await
 }
 
-
 pub(crate) async fn zotero_search_by_tag(
     toolkit: &ResearchToolkit,
     params: ZoteroTagSearchParams,
