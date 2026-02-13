@@ -144,59 +144,114 @@ pub(crate) async fn zotero_get_fulltext(
             let scopes = resolved_scopes_to_vec(&normalized.scopes);
             let mut last_err = None;
             for scope in &scopes {
-                match zotero::get_fulltext(toolkit.http(), config, scope, &normalized.item_key)
-                    .await
-                {
-                    Ok(mut result) => {
-                        let mut resolution_trace = Vec::new();
-
-                        let children_request = ZoteroChildrenRequest {
-                            item_key: &normalized.item_key,
-                            offset: 0,
-                            limit: DEFAULT_CHILDREN_LIMIT,
-                        };
-                        let (item_result, attachments_result) = tokio::join!(
-                            zotero::get_item(toolkit.http(), config, scope, &normalized.item_key),
-                            zotero::get_attachments(
-                                toolkit.http(),
-                                config,
-                                scope,
-                                &children_request
-                            )
-                        );
-
-                        let item = match item_result {
-                            Ok(item) => Some(item),
-                            Err(err) => {
-                                resolution_trace
-                                    .push(format!("item metadata lookup failed: {err}"));
-                                None
+                let mut resolution_trace = Vec::new();
+                let mut prefetched_attachments = None;
+                let mut result =
+                    match zotero::get_fulltext(toolkit.http(), config, scope, &normalized.item_key)
+                        .await
+                    {
+                        Ok(result) => result,
+                        Err(err) => {
+                            if let ResearchError::Upstream { status, .. } = &err
+                                && *status == reqwest::StatusCode::NOT_FOUND
+                            {
+                                let children_request = ZoteroChildrenRequest {
+                                    item_key: &normalized.item_key,
+                                    offset: 0,
+                                    limit: DEFAULT_CHILDREN_LIMIT,
+                                };
+                                let attachments = match zotero::get_attachments(
+                                    toolkit.http(),
+                                    config,
+                                    scope,
+                                    &children_request,
+                                )
+                                .await
+                                {
+                                    Ok(result) => result.attachments,
+                                    Err(attachment_lookup_err) => {
+                                        last_err = Some(attachment_lookup_err);
+                                        continue;
+                                    }
+                                };
+                                let mut fallback_result = None;
+                                let mut fallback_err = None;
+                                for attachment in &attachments {
+                                    match zotero::get_fulltext(
+                                        toolkit.http(),
+                                        config,
+                                        scope,
+                                        &attachment.key,
+                                    )
+                                    .await
+                                    {
+                                        Ok(result) => {
+                                            resolution_trace.push(format!(
+                                            "indexed fulltext missing for {}; using attachment {}",
+                                            normalized.item_key, attachment.key
+                                        ));
+                                            fallback_result = Some(result);
+                                            break;
+                                        }
+                                        Err(attachment_err) => fallback_err = Some(attachment_err),
+                                    }
+                                }
+                                if let Some(result) = fallback_result {
+                                    prefetched_attachments = Some(attachments);
+                                    result
+                                } else {
+                                    last_err = fallback_err.or(Some(err));
+                                    continue;
+                                }
+                            } else {
+                                last_err = Some(err);
+                                continue;
                             }
-                        };
+                        }
+                    };
 
-                        let attachments = match attachments_result {
-                            Ok(result) => result.attachments,
-                            Err(err) => {
-                                resolution_trace.push(format!("attachment lookup failed: {err}"));
-                                Vec::new()
-                            }
-                        };
+                let item =
+                    match zotero::get_item(toolkit.http(), config, scope, &normalized.item_key)
+                        .await
+                    {
+                        Ok(item) => Some(item),
+                        Err(err) => {
+                            resolution_trace.push(format!("item metadata lookup failed: {err}"));
+                            None
+                        }
+                    };
 
-                        let has_indexed_content = !result.content.trim().is_empty();
-                        result.resolution = Some(
-                            resolve_document_sources(
-                                toolkit,
-                                item.as_ref(),
-                                &attachments,
-                                Some(has_indexed_content),
-                                resolution_trace,
-                            )
-                            .await,
-                        );
-                        return Ok(result);
+                let attachments = if let Some(attachments) = prefetched_attachments {
+                    attachments
+                } else {
+                    let children_request = ZoteroChildrenRequest {
+                        item_key: &normalized.item_key,
+                        offset: 0,
+                        limit: DEFAULT_CHILDREN_LIMIT,
+                    };
+                    match zotero::get_attachments(toolkit.http(), config, scope, &children_request)
+                        .await
+                    {
+                        Ok(result) => result.attachments,
+                        Err(err) => {
+                            resolution_trace.push(format!("attachment lookup failed: {err}"));
+                            Vec::new()
+                        }
                     }
-                    Err(err) => last_err = Some(err),
-                }
+                };
+
+                let has_indexed_content = !result.content.trim().is_empty();
+                result.resolution = Some(
+                    resolve_document_sources(
+                        toolkit,
+                        item.as_ref(),
+                        &attachments,
+                        Some(has_indexed_content),
+                        resolution_trace,
+                    )
+                    .await,
+                );
+                return Ok(result);
             }
             Err(last_err
                 .unwrap_or_else(|| ResearchError::Internal("no scopes to search".to_string())))

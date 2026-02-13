@@ -34,13 +34,12 @@ const DEFAULT_GREP_LIMIT_MATCHES: u32 = 100;
 const DEFAULT_GREP_MAX_MATCHES_PER_ITEM: u32 = 50;
 const DEFAULT_GREP_CONTEXT_CHARS: u32 = 120;
 const DEFAULT_GREP_FETCH_CONCURRENCY: usize = 6;
-const DEFAULT_GREP_FIELDS: [ZoteroGrepField; 7] = [
+const DEFAULT_GREP_FIELDS: [ZoteroGrepField; 6] = [
     ZoteroGrepField::Title,
     ZoteroGrepField::Abstract,
     ZoteroGrepField::Extra,
     ZoteroGrepField::Note,
     ZoteroGrepField::Annotation,
-    ZoteroGrepField::Fulltext,
     ZoteroGrepField::Tag,
 ];
 

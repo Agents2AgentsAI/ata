@@ -76,8 +76,10 @@ Use sub-agents when available. Each sub-agent should write one artifact to \
 - Search items via `{search}`, AND scan collection names via `{collections}` for topic matches.\n\
 - When a collection matches the topic, retrieve its items via `{collection_items}` — this catches papers keyword search misses.\n\
 - Use `{advanced_search}` for precise metadata filters and `{search_notes}` when evidence likely lives in notes/annotations.\n\
-- For papers you need to read deeply, call `{get_item}` with `include_attachments=true` and `include_fulltext_resolution=true` before `{get_fulltext}`.\n\
-- If `document_resolution.preferred_url` (or fulltext `resolution.preferred_url`) is present, fetch the document with `attach_url_files`.\n\
+- For papers you need to read deeply, call `{get_item}` with `include_attachments=true` and `include_fulltext_resolution=true`.\n\
+- If `document_resolution.preferred_url` is present, fetch it with `attach_url_files` and treat that attached document as the primary source.\n\
+- If `document_resolution.local_path` is present and no URL is available, use that local PDF path as the primary source.\n\
+- Use `{get_fulltext}` only as a fallback text source when no HTML/PDF source can be resolved.\n\
 - Generate references via `{get_item_citation}` when outputs require BibTeX/APA/CSL citations.\n",
             list_groups = tool.zotero_list_groups,
             search = tool.zotero_search,
