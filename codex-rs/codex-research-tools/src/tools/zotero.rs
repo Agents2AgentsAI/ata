@@ -13,6 +13,7 @@ use serde::Serialize;
 
 use crate::ResearchToolkit;
 use crate::cache::CacheKey;
+use crate::cache::FetchOutput;
 use crate::clients::zotero;
 use crate::clients::zotero::ZoteroChildrenRequest;
 use crate::clients::zotero::ZoteroCollectionItemsRequest;
@@ -82,6 +83,8 @@ const DEFAULT_ANNOTATION_PARENT_FETCH_CONCURRENCY: usize = 6;
 const ZOTERO_MAX_PAGE_SIZE: u32 = 100;
 const AR5IV_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const AR5IV_PROBE_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+const AR5IV_PROBE_NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+const AR5IV_PROBE_MAX_BODY_BYTES: usize = 8 * 1024;
 const AR5IV_BASE_URL: &str = "https://ar5iv.labs.arxiv.org/html";
 const ARXIV_PDF_BASE_URL: &str = "https://arxiv.org/pdf";
 const ZOTERO_STORAGE_DIR_ENV: &str = "ZOTERO_STORAGE_DIR";
@@ -432,14 +435,22 @@ pub(crate) async fn zotero_get_fulltext(
                     Ok(mut result) => {
                         let mut resolution_trace = Vec::new();
 
-                        let item = match zotero::get_item(
-                            toolkit.http(),
-                            config,
-                            scope,
-                            &normalized.item_key,
-                        )
-                        .await
-                        {
+                        let children_request = ZoteroChildrenRequest {
+                            item_key: &normalized.item_key,
+                            offset: 0,
+                            limit: DEFAULT_CHILDREN_LIMIT,
+                        };
+                        let (item_result, attachments_result) = tokio::join!(
+                            zotero::get_item(toolkit.http(), config, scope, &normalized.item_key),
+                            zotero::get_attachments(
+                                toolkit.http(),
+                                config,
+                                scope,
+                                &children_request
+                            )
+                        );
+
+                        let item = match item_result {
                             Ok(item) => Some(item),
                             Err(err) => {
                                 resolution_trace
@@ -448,18 +459,7 @@ pub(crate) async fn zotero_get_fulltext(
                             }
                         };
 
-                        let attachments = match zotero::get_attachments(
-                            toolkit.http(),
-                            config,
-                            scope,
-                            &ZoteroChildrenRequest {
-                                item_key: &normalized.item_key,
-                                offset: 0,
-                                limit: DEFAULT_CHILDREN_LIMIT,
-                            },
-                        )
-                        .await
-                        {
+                        let attachments = match attachments_result {
                             Ok(result) => result.attachments,
                             Err(err) => {
                                 resolution_trace.push(format!("attachment lookup failed: {err}"));
@@ -1753,11 +1753,18 @@ fn resolve_local_pdf_path(
         }
 
         let local_path = storage_root.join(&attachment.key).join(relative_path);
+        let Some(local_path) = local_path.to_str() else {
+            trace.push(format!(
+                "ignored local path for {} because the resolved path is non-UTF-8",
+                attachment.key
+            ));
+            continue;
+        };
         trace.push(format!(
             "resolved local PDF path from attachment {}",
             attachment.key
         ));
-        return Some(local_path.to_string_lossy().to_string());
+        return Some(local_path.to_string());
     }
 
     None
@@ -1833,10 +1840,21 @@ fn normalize_arxiv_id(raw_value: &str) -> Option<String> {
         return None;
     }
 
-    let without_prefix = trimmed
-        .strip_prefix("arXiv:")
-        .or_else(|| trimmed.strip_prefix("ARXIV:"))
-        .unwrap_or(trimmed);
+    let mut chars = trimmed.chars();
+    let mut prefix = String::new();
+    for _ in 0..6 {
+        if let Some(ch) = chars.next() {
+            prefix.push(ch);
+        } else {
+            prefix.clear();
+            break;
+        }
+    }
+    let without_prefix = if prefix.eq_ignore_ascii_case("arxiv:") {
+        chars.as_str()
+    } else {
+        trimmed
+    };
     let cleaned = without_prefix.trim().trim_end_matches(".pdf").trim();
 
     arxiv_id_regex()
@@ -1857,6 +1875,7 @@ fn ar5iv_probe_candidates(arxiv_id: &str) -> Vec<String> {
     let mut candidates = vec![arxiv_id.to_string()];
     if let Some((without_version, version_suffix)) = arxiv_id.rsplit_once('v')
         && !without_version.is_empty()
+        && !version_suffix.is_empty()
         && version_suffix.chars().all(|ch| ch.is_ascii_digit())
         && without_version != arxiv_id
     {
@@ -1885,12 +1904,35 @@ async fn ar5iv_available_cached(toolkit: &ResearchToolkit, arxiv_id: &str, html_
         params_hash,
     };
 
-    match get_or_fetch_typed(toolkit, key, AR5IV_PROBE_CACHE_TTL, || async move {
-        Ok(probe_ar5iv_html(toolkit, html_url).await)
-    })
-    .await
+    match toolkit
+        .cache()
+        .get_or_fetch_with_meta_ttls(
+            key,
+            AR5IV_PROBE_CACHE_TTL,
+            AR5IV_PROBE_NEGATIVE_CACHE_TTL,
+            || async move {
+                let probe_result = probe_ar5iv_html(toolkit, html_url).await;
+                let data = serde_json::to_value(probe_result).map_err(|err| {
+                    ResearchError::Internal(format!(
+                        "failed to serialize ar5iv probe result: {err}"
+                    ))
+                })?;
+                if probe_result {
+                    Ok(FetchOutput::positive(data))
+                } else {
+                    Ok(FetchOutput::negative(data))
+                }
+            },
+        )
+        .await
     {
-        Ok(value) => value,
+        Ok(output) => match serde_json::from_value::<bool>(output.data) {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!(%err, arxiv_id, "failed to deserialize ar5iv probe result");
+                false
+            }
+        },
         Err(err) => {
             tracing::warn!(%err, arxiv_id, "ar5iv probe failed");
             false
@@ -1923,12 +1965,17 @@ async fn probe_ar5iv_html(toolkit: &ResearchToolkit, html_url: &str) -> bool {
         return false;
     }
 
-    let html = match tokio::time::timeout(AR5IV_PROBE_TIMEOUT, response.text()).await {
-        Ok(Ok(html)) => html,
+    let html_prefix = match tokio::time::timeout(
+        AR5IV_PROBE_TIMEOUT,
+        read_response_prefix(response, AR5IV_PROBE_MAX_BODY_BYTES),
+    )
+    .await
+    {
+        Ok(Some(prefix)) => prefix,
         _ => return false,
     };
 
-    let normalized_html = html.to_ascii_lowercase();
+    let normalized_html = html_prefix.to_ascii_lowercase();
     ![
         "no paper found for arxiv id",
         "this paper is not yet available",
@@ -1937,6 +1984,21 @@ async fn probe_ar5iv_html(toolkit: &ResearchToolkit, html_url: &str) -> bool {
     ]
     .iter()
     .any(|needle| normalized_html.contains(needle))
+}
+
+async fn read_response_prefix(mut response: reqwest::Response, max_bytes: usize) -> Option<String> {
+    let mut bytes = Vec::with_capacity(max_bytes);
+    while bytes.len() < max_bytes {
+        let chunk = response.chunk().await.ok()??;
+        let remaining = max_bytes.saturating_sub(bytes.len());
+        if chunk.len() > remaining {
+            bytes.extend_from_slice(&chunk[..remaining]);
+            break;
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+
+    Some(String::from_utf8_lossy(&bytes).to_string())
 }
 
 fn map_zotero_annotation(annotation: zotero::ZoteroAnnotation) -> ZoteroAnnotation {
@@ -4099,6 +4161,111 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_document_sources_extracts_arxiv_id_from_extra_when_url_missing() {
+        let item = sample_item_with_source(None, Some("Notes\narXiv:2401.54321v3"));
+        let attachments = vec![sample_attachment(
+            "ATT1",
+            Some("application/pdf"),
+            Some("https://example.com/fallback.pdf"),
+            None,
+        )];
+
+        let resolution = super::resolve_document_sources_with_probe(
+            Some(&item),
+            &attachments,
+            None,
+            true,
+            Vec::new(),
+            |_, _| async { false },
+        )
+        .await;
+
+        assert_eq!(
+            resolution,
+            DocumentResolution {
+                source_kind: DocumentSourceKind::ArxivPdf,
+                preferred_url: Some("https://arxiv.org/pdf/2401.54321v3.pdf".to_string()),
+                fallback_urls: vec!["https://example.com/fallback.pdf".to_string()],
+                local_path: None,
+                trace: vec![
+                    "detected arXiv id from item extra: 2401.54321v3".to_string(),
+                    "ar5iv probe unavailable; using arXiv PDF".to_string()
+                ],
+            }
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_document_sources_supports_old_style_arxiv_ids() {
+        let item = sample_item_with_source(Some("https://arxiv.org/abs/hep-ph/0001234v1"), None);
+
+        let resolution = super::resolve_document_sources_with_probe(
+            Some(&item),
+            &Vec::new(),
+            None,
+            true,
+            Vec::new(),
+            |_, _| async { false },
+        )
+        .await;
+
+        assert_eq!(
+            resolution,
+            DocumentResolution {
+                source_kind: DocumentSourceKind::ArxivPdf,
+                preferred_url: Some("https://arxiv.org/pdf/hep-ph/0001234v1.pdf".to_string()),
+                fallback_urls: Vec::new(),
+                local_path: None,
+                trace: vec![
+                    "detected arXiv id from item URL: hep-ph/0001234v1".to_string(),
+                    "ar5iv probe unavailable; using arXiv PDF".to_string()
+                ],
+            }
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_document_sources_tries_unversioned_ar5iv_candidate_after_versioned_miss() {
+        let item = sample_item_with_source(Some("https://arxiv.org/abs/2401.12345v2"), None);
+        let attachments = vec![sample_attachment(
+            "ATT1",
+            Some("application/pdf"),
+            Some("https://example.com/fallback.pdf"),
+            None,
+        )];
+        let observed = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+
+        let resolution = super::resolve_document_sources_with_probe(
+            Some(&item),
+            &attachments,
+            None,
+            true,
+            Vec::new(),
+            {
+                let observed = observed.clone();
+                move |probe_id, _| {
+                    let observed = observed.clone();
+                    async move {
+                        observed.lock().await.push(probe_id.clone());
+                        probe_id == "2401.12345"
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(
+            *observed.lock().await,
+            vec!["2401.12345v2".to_string(), "2401.12345".to_string()]
+        );
+        assert_eq!(
+            resolution.preferred_url,
+            Some("https://ar5iv.labs.arxiv.org/html/2401.12345".to_string())
+        );
+        assert_eq!(resolution.source_kind, DocumentSourceKind::Ar5ivHtml);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn resolve_document_sources_prefers_attachment_pdf_urls_for_non_arxiv_items() {
         let item = sample_item_with_source(Some("https://example.com/paper"), None);
         let attachments = vec![
@@ -4135,6 +4302,122 @@ mod tests {
                 local_path: None,
                 trace: vec!["using attachment PDF URL".to_string()],
             }
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_document_sources_handles_missing_item_metadata() {
+        let attachments = vec![sample_attachment(
+            "ATT1",
+            Some("application/pdf"),
+            Some("https://example.com/primary.pdf"),
+            None,
+        )];
+
+        let resolution = super::resolve_document_sources_with_probe(
+            None,
+            &attachments,
+            None,
+            false,
+            vec!["item metadata lookup failed: missing".to_string()],
+            |_, _| async { false },
+        )
+        .await;
+
+        assert_eq!(
+            resolution,
+            DocumentResolution {
+                source_kind: DocumentSourceKind::AttachmentPdfUrl,
+                preferred_url: Some("https://example.com/primary.pdf".to_string()),
+                fallback_urls: Vec::new(),
+                local_path: None,
+                trace: vec![
+                    "item metadata lookup failed: missing".to_string(),
+                    "using attachment PDF URL".to_string()
+                ],
+            }
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_document_sources_uses_indexed_fulltext_trace_when_no_sources_and_no_content() {
+        let item = sample_item_with_source(Some("https://example.com/paper"), None);
+
+        let resolution = super::resolve_document_sources_with_probe(
+            Some(&item),
+            &Vec::new(),
+            None,
+            false,
+            Vec::new(),
+            |_, _| async { false },
+        )
+        .await;
+
+        assert_eq!(
+            resolution,
+            DocumentResolution {
+                source_kind: DocumentSourceKind::IndexedFulltext,
+                preferred_url: None,
+                fallback_urls: Vec::new(),
+                local_path: None,
+                trace: vec![
+                    "local path fallback unavailable: ZOTERO_STORAGE_DIR is not set".to_string(),
+                    "no canonical document source resolved and indexed fulltext is empty"
+                        .to_string()
+                ],
+            }
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_document_sources_skips_malformed_arxiv_urls() {
+        let item = sample_item_with_source(Some("https://arxiv.org/foo/2401.12345"), None);
+        let attachments = vec![sample_attachment(
+            "ATT1",
+            Some("application/pdf"),
+            Some("https://example.com/primary.pdf"),
+            None,
+        )];
+
+        let resolution = super::resolve_document_sources_with_probe(
+            Some(&item),
+            &attachments,
+            None,
+            true,
+            Vec::new(),
+            |_, _| async { true },
+        )
+        .await;
+
+        assert_eq!(
+            resolution,
+            DocumentResolution {
+                source_kind: DocumentSourceKind::AttachmentPdfUrl,
+                preferred_url: Some("https://example.com/primary.pdf".to_string()),
+                fallback_urls: Vec::new(),
+                local_path: None,
+                trace: vec!["using attachment PDF URL".to_string()],
+            }
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn normalize_arxiv_id_strips_prefix_case_insensitively() {
+        assert_eq!(
+            super::normalize_arxiv_id("ArXiV:2401.12345v1"),
+            Some("2401.12345v1".to_string())
+        );
+        assert_eq!(
+            super::normalize_arxiv_id("arxiv:2401.12345v2"),
+            Some("2401.12345v2".to_string())
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ar5iv_probe_candidates_ignores_empty_version_suffix() {
+        assert_eq!(
+            super::ar5iv_probe_candidates("2401.12345v"),
+            vec!["2401.12345v".to_string()]
         );
     }
 
