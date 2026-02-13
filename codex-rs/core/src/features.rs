@@ -80,6 +80,8 @@ pub enum Feature {
     // Experimental
     /// Enable JavaScript REPL tools backed by a persistent Node kernel.
     JsRepl,
+    /// Only expose js_repl tools directly to the model.
+    JsReplToolsOnly,
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
     /// Include the freeform apply_patch tool.
@@ -119,6 +121,8 @@ pub enum Feature {
     Collab,
     /// Enable apps.
     Apps,
+    /// Route apps MCP calls through the configured gateway.
+    AppsMcpGateway,
     /// Enable research tool integrations and capability wiring.
     Research,
     /// Enable data tools for dataset discovery and management.
@@ -326,6 +330,10 @@ impl Features {
         }
 
         overrides.apply(&mut features);
+        if features.enabled(Feature::JsReplToolsOnly) && !features.enabled(Feature::JsRepl) {
+            tracing::warn!("js_repl_tools_only requires js_repl; disabling js_repl_tools_only");
+            features.disable(Feature::JsReplToolsOnly);
+        }
 
         features
     }
@@ -431,6 +439,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::JsRepl,
         key: "js_repl",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::JsReplToolsOnly,
+        key: "js_repl_tools_only",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -589,6 +603,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::AppsMcpGateway,
+        key: "apps_mcp_gateway",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::SkillMcpDependencyInstall,
         key: "skill_mcp_dependency_install",
         stage: Stage::Stable,
@@ -697,6 +717,21 @@ mod tests {
                     spec.default_enabled, false,
                     "feature `{}` is under development and must be disabled by default",
                     spec.key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn default_enabled_features_are_stable() {
+        for spec in FEATURES {
+            if spec.default_enabled {
+                assert_eq!(
+                    spec.stage,
+                    Stage::Stable,
+                    "feature `{}` is enabled by default but is not stable ({:?})",
+                    spec.key,
+                    spec.stage
                 );
             }
         }

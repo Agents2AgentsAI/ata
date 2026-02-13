@@ -39,6 +39,7 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
+use codex_core::protocol::ExecCommandStatus as CoreExecCommandStatus;
 use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
@@ -49,6 +50,7 @@ use codex_core::protocol::McpStartupUpdateEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_core::protocol::RateLimitWindow;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
@@ -2536,6 +2538,11 @@ fn end_exec(
             exit_code,
             duration: std::time::Duration::from_millis(5),
             formatted_output: aggregated,
+            status: if exit_code == 0 {
+                CoreExecCommandStatus::Completed
+            } else {
+                CoreExecCommandStatus::Failed
+            },
         }),
     });
 }
@@ -2997,6 +3004,7 @@ async fn exec_end_without_begin_uses_event_command() {
             exit_code: 0,
             duration: std::time::Duration::from_millis(5),
             formatted_output: "done".to_string(),
+            status: CoreExecCommandStatus::Completed,
         }),
     });
 
@@ -3737,6 +3745,24 @@ async fn slash_clean_submits_background_terminal_cleanup() {
 }
 
 #[tokio::test]
+async fn slash_memory_drop_submits_drop_memories_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryDrop);
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::DropMemories));
+}
+
+#[tokio::test]
+async fn slash_memory_update_submits_update_memories_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryUpdate);
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::UpdateMemories));
+}
+
+#[tokio::test]
 async fn slash_resume_opens_picker() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
@@ -4208,6 +4234,7 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
                 distribution_channel: None,
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
+                is_enabled: true,
             }],
         }),
         false,
@@ -4223,6 +4250,10 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
         before.contains("Installed 1 of 1 available apps."),
         "expected initial apps popup snapshot, got:\n{before}"
     );
+    assert!(
+        before.contains("Installed. Press Enter to open the app page"),
+        "expected selected app description to explain the app page action, got:\n{before}"
+    );
 
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
@@ -4236,6 +4267,7 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
                     distribution_channel: None,
                     install_url: Some("https://example.test/notion".to_string()),
                     is_accessible: true,
+                    is_enabled: true,
                 },
                 codex_chatgpt::connectors::AppInfo {
                     id: "connector_2".to_string(),
@@ -4246,6 +4278,7 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
                     distribution_channel: None,
                     install_url: Some("https://example.test/linear".to_string()),
                     is_accessible: true,
+                    is_enabled: true,
                 },
             ],
         }),
@@ -4279,6 +4312,7 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
             distribution_channel: None,
             install_url: Some("https://example.test/notion".to_string()),
             is_accessible: true,
+            is_enabled: true,
         },
         codex_chatgpt::connectors::AppInfo {
             id: "connector_2".to_string(),
@@ -4289,6 +4323,7 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
             distribution_channel: None,
             install_url: Some("https://example.test/linear".to_string()),
             is_accessible: false,
+            is_enabled: true,
         },
     ];
     chat.on_connectors_loaded(
@@ -4309,6 +4344,7 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
                 distribution_channel: None,
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
+                is_enabled: true,
             }],
         }),
         false,
@@ -4325,6 +4361,265 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
     assert!(
         popup.contains("Installed 1 of 2 available apps."),
         "expected previous full snapshot to be preserved, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    let full_connectors = vec![
+        codex_chatgpt::connectors::AppInfo {
+            id: "unit_test_connector_1".to_string(),
+            name: "Notion".to_string(),
+            description: Some("Workspace docs".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: Some("https://example.test/notion".to_string()),
+            is_accessible: true,
+            is_enabled: true,
+        },
+        codex_chatgpt::connectors::AppInfo {
+            id: "unit_test_connector_2".to_string(),
+            name: "Linear".to_string(),
+            description: Some("Project tracking".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: Some("https://example.test/linear".to_string()),
+            is_accessible: false,
+            is_enabled: true,
+        },
+    ];
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: full_connectors.clone(),
+        }),
+        true,
+    );
+    chat.add_connectors_output();
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![
+                codex_chatgpt::connectors::AppInfo {
+                    id: "unit_test_connector_1".to_string(),
+                    name: "Notion".to_string(),
+                    description: Some("Workspace docs".to_string()),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    distribution_channel: None,
+                    install_url: Some("https://example.test/notion".to_string()),
+                    is_accessible: true,
+                    is_enabled: true,
+                },
+                codex_chatgpt::connectors::AppInfo {
+                    id: "connector_openai_hidden".to_string(),
+                    name: "Hidden OpenAI".to_string(),
+                    description: Some("Should be filtered".to_string()),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    distribution_channel: None,
+                    install_url: Some("https://example.test/hidden-openai".to_string()),
+                    is_accessible: true,
+                    is_enabled: true,
+                },
+            ],
+        }),
+        false,
+    );
+
+    assert_matches!(
+        &chat.connectors_cache,
+        ConnectorsCacheState::Ready(snapshot) if snapshot.connectors == full_connectors
+    );
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Installed 1 of 1 available apps."),
+        "expected partial refresh popup to use filtered connectors, got:\n{popup}"
+    );
+    assert!(
+        !popup.contains("Hidden OpenAI"),
+        "expected disallowed connector to be filtered from partial refresh popup, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn apps_popup_shows_disabled_status_for_installed_but_disabled_apps() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![codex_chatgpt::connectors::AppInfo {
+                id: "connector_1".to_string(),
+                name: "Notion".to_string(),
+                description: Some("Workspace docs".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some("https://example.test/notion".to_string()),
+                is_accessible: true,
+                is_enabled: false,
+            }],
+        }),
+        true,
+    );
+
+    chat.add_connectors_output();
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Installed · Disabled. Press Enter to open the app page"),
+        "expected selected app description to include disabled status, got:\n{popup}"
+    );
+    assert!(
+        popup.contains("enable/disable this app."),
+        "expected selected app description to mention enable/disable action, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn apps_initial_load_applies_enabled_state_from_config() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    let temp = tempdir().expect("tempdir");
+    let config_toml_path =
+        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
+    let user_config = toml::from_str::<TomlValue>(
+        "[apps.connector_1]\nenabled = false\ndisabled_reason = \"user\"\n",
+    )
+    .expect("apps config");
+    chat.config.config_layer_stack = chat
+        .config
+        .config_layer_stack
+        .with_user_config(&config_toml_path, user_config);
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![codex_chatgpt::connectors::AppInfo {
+                id: "connector_1".to_string(),
+                name: "Notion".to_string(),
+                description: Some("Workspace docs".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some("https://example.test/notion".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+            }],
+        }),
+        true,
+    );
+
+    assert_matches!(
+        &chat.connectors_cache,
+        ConnectorsCacheState::Ready(snapshot)
+            if snapshot
+                .connectors
+                .iter()
+                .find(|connector| connector.id == "connector_1")
+                .is_some_and(|connector| !connector.is_enabled)
+    );
+}
+
+#[tokio::test]
+async fn apps_refresh_preserves_toggled_enabled_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![codex_chatgpt::connectors::AppInfo {
+                id: "connector_1".to_string(),
+                name: "Notion".to_string(),
+                description: Some("Workspace docs".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some("https://example.test/notion".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+            }],
+        }),
+        true,
+    );
+    chat.update_connector_enabled("connector_1", false);
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![codex_chatgpt::connectors::AppInfo {
+                id: "connector_1".to_string(),
+                name: "Notion".to_string(),
+                description: Some("Workspace docs".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some("https://example.test/notion".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+            }],
+        }),
+        true,
+    );
+
+    assert_matches!(
+        &chat.connectors_cache,
+        ConnectorsCacheState::Ready(snapshot)
+            if snapshot
+                .connectors
+                .iter()
+                .find(|connector| connector.id == "connector_1")
+                .is_some_and(|connector| !connector.is_enabled)
+    );
+
+    chat.add_connectors_output();
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Installed · Disabled. Press Enter to open the app page"),
+        "expected disabled status to persist after reload, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn apps_popup_for_not_installed_app_uses_install_only_selected_description() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![codex_chatgpt::connectors::AppInfo {
+                id: "connector_2".to_string(),
+                name: "Linear".to_string(),
+                description: Some("Project tracking".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some("https://example.test/linear".to_string()),
+                is_accessible: false,
+                is_enabled: true,
+            }],
+        }),
+        true,
+    );
+
+    chat.add_connectors_output();
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Can be installed. Press Enter to open the app page to install"),
+        "expected selected app description to be install-only for not-installed apps, got:\n{popup}"
+    );
+    assert!(
+        !popup.contains("enable/disable this app."),
+        "did not expect enable/disable text for not-installed apps, got:\n{popup}"
     );
 }
 
@@ -4848,7 +5143,7 @@ async fn disabled_slash_command_while_task_running_snapshot() {
 async fn approvals_popup_shows_disabled_presets() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    chat.config.approval_policy =
+    chat.config.permissions.approval_policy =
         Constrained::new(AskForApproval::OnRequest, |candidate| match candidate {
             AskForApproval::OnRequest => Ok(()),
             _ => Err(invalid_value(
@@ -4884,7 +5179,7 @@ async fn approvals_popup_shows_disabled_presets() {
 async fn approvals_popup_navigation_skips_disabled() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
-    chat.config.approval_policy =
+    chat.config.permissions.approval_policy =
         Constrained::new(AskForApproval::OnRequest, |candidate| match candidate {
             AskForApproval::OnRequest => Ok(()),
             _ => Err(invalid_value(candidate.to_string(), "[on-request]")),
@@ -4961,7 +5256,10 @@ async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
     // Build a chat widget with manual channels to avoid spawning the agent.
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     // Ensure policy allows surfacing approvals explicitly (not strictly required for direct event).
-    chat.config.approval_policy.set(AskForApproval::OnRequest)?;
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
     // Inject an exec approval request to display the approval modal.
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-cmd".into(),
@@ -5016,7 +5314,10 @@ async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
 #[tokio::test]
 async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.config.approval_policy.set(AskForApproval::OnRequest)?;
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
 
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-cmd-noreason".into(),
@@ -5058,7 +5359,10 @@ async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
 async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
 -> anyhow::Result<()> {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.config.approval_policy.set(AskForApproval::OnRequest)?;
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
 
     let script = "python - <<'PY'\nprint('hello')\nPY".to_string();
     let command = vec!["bash".into(), "-lc".into(), script];
@@ -5098,7 +5402,10 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
 #[tokio::test]
 async fn approval_modal_patch_snapshot() -> anyhow::Result<()> {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.config.approval_policy.set(AskForApproval::OnRequest)?;
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
 
     // Build a small changeset and a reason/grant_root to exercise the prompt text.
     let mut changes = HashMap::new();
@@ -5630,6 +5937,7 @@ async fn apply_patch_events_emit_history_cells() {
         stderr: String::new(),
         success: true,
         changes: end_changes,
+        status: CorePatchApplyStatus::Completed,
     };
     chat.handle_codex_event(Event {
         id: "s1".into(),
@@ -5857,6 +6165,7 @@ async fn apply_patch_full_flow_integration_like() {
             stderr: String::new(),
             success: true,
             changes: end_changes,
+            status: CorePatchApplyStatus::Completed,
         }),
     });
 }
@@ -5865,7 +6174,10 @@ async fn apply_patch_full_flow_integration_like() {
 async fn apply_patch_untrusted_shows_approval_modal() -> anyhow::Result<()> {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     // Ensure approval policy is untrusted (OnRequest)
-    chat.config.approval_policy.set(AskForApproval::OnRequest)?;
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
 
     // Simulate a patch approval request from backend
     let mut changes = HashMap::new();
@@ -5913,7 +6225,10 @@ async fn apply_patch_request_shows_diff_summary() -> anyhow::Result<()> {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     // Ensure we are in OnRequest so an approval is surfaced
-    chat.config.approval_policy.set(AskForApproval::OnRequest)?;
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
 
     // Simulate backend asking to apply a patch adding two lines to README.md
     let mut changes = HashMap::new();
@@ -6447,6 +6762,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
             exit_code: 0,
             duration: std::time::Duration::from_millis(16000),
             formatted_output: String::new(),
+            status: CoreExecCommandStatus::Completed,
         }),
     });
     chat.handle_codex_event(Event {

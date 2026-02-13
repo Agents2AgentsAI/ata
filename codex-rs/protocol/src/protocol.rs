@@ -265,6 +265,12 @@ pub enum Op {
     /// Request MCP servers to reinitialize and refresh cached tool lists.
     RefreshMcpServers { config: McpServerRefreshConfig },
 
+    /// Reload user config layer overrides for the active session.
+    ///
+    /// This updates runtime config-derived behavior (for example app
+    /// enable/disable state) without restarting the thread.
+    ReloadUserConfig,
+
     /// Request the list of available custom prompts.
     ListCustomPrompts,
 
@@ -294,6 +300,12 @@ pub enum Op {
     /// The agent will use its existing context (either conversation history or previous response id)
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
+
+    /// Drop all persisted memory artifacts and memory-tracking DB rows.
+    DropMemories,
+
+    /// Trigger a single pass of the startup memory pipeline.
+    UpdateMemories,
 
     /// Set a user-facing thread name in the persisted rollout metadata.
     /// This is a local-only operation handled by codex-core; it does not
@@ -355,10 +367,12 @@ pub enum AskForApproval {
     #[strum(serialize = "untrusted")]
     UnlessTrusted,
 
-    /// *All* commands are auto‑approved, but they are expected to run inside a
-    /// sandbox where network access is disabled and writes are confined to a
-    /// specific set of paths. If the command fails, it will be escalated to
-    /// the user to approve execution without a sandbox.
+    /// DEPRECATED: *All* commands are auto‑approved, but they are expected to
+    /// run inside a sandbox where network access is disabled and writes are
+    /// confined to a specific set of paths. If the command fails, it will be
+    /// escalated to the user to approve execution without a sandbox.
+    /// Prefer `OnRequest` for interactive runs or `Never` for non-interactive
+    /// runs.
     OnFailure,
 
     /// The model decides when to ask the user for approval.
@@ -1159,6 +1173,27 @@ pub enum CodexErrorInfo {
     Other,
 }
 
+impl CodexErrorInfo {
+    /// Whether this error should mark the current turn as failed when replaying history.
+    pub fn affects_turn_status(&self) -> bool {
+        match self {
+            Self::ThreadRollbackFailed => false,
+            Self::ContextWindowExceeded
+            | Self::UsageLimitExceeded
+            | Self::ServerOverloaded
+            | Self::HttpConnectionFailed { .. }
+            | Self::ResponseStreamConnectionFailed { .. }
+            | Self::InternalServerError
+            | Self::Unauthorized
+            | Self::BadRequest
+            | Self::SandboxError
+            | Self::ResponseStreamDisconnected { .. }
+            | Self::ResponseTooManyFailedAttempts { .. }
+            | Self::Other => true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct RawResponseItemEvent {
     pub item: ResponseItem,
@@ -1294,6 +1329,15 @@ pub struct ErrorEvent {
     pub message: String,
     #[serde(default)]
     pub codex_error_info: Option<CodexErrorInfo>,
+}
+
+impl ErrorEvent {
+    /// Whether this error should mark the current turn as failed when replaying history.
+    pub fn affects_turn_status(&self) -> bool {
+        self.codex_error_info
+            .as_ref()
+            .is_none_or(CodexErrorInfo::affects_turn_status)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1899,6 +1943,12 @@ impl From<CompactedItem> for ResponseItem {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+pub struct TurnContextNetworkItem {
+    pub allowed_domains: Vec<String>,
+    pub denied_domains: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1906,6 +1956,8 @@ pub struct TurnContextItem {
     pub cwd: PathBuf,
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<TurnContextNetworkItem>,
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
@@ -2050,6 +2102,14 @@ pub enum ExecCommandSource {
     UnifiedExecInteraction,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecCommandStatus {
+    Completed,
+    Failed,
+    Declined,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecCommandBeginEvent {
     /// Identifier so this can be paired with the ExecCommandEnd event.
@@ -2111,6 +2171,8 @@ pub struct ExecCommandEndEvent {
     pub duration: Duration,
     /// Formatted output from the command, as seen by the model.
     pub formatted_output: String,
+    /// Completion status for this command execution.
+    pub status: ExecCommandStatus,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2234,6 +2296,16 @@ pub struct PatchApplyEndEvent {
     /// The changes that were applied (mirrors PatchApplyBeginEvent::changes).
     #[serde(default)]
     pub changes: HashMap<PathBuf, FileChange>,
+    /// Completion status for this patch application.
+    pub status: PatchApplyStatus,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum PatchApplyStatus {
+    Completed,
+    Failed,
+    Declined,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2789,6 +2861,24 @@ mod tests {
     }
 
     #[test]
+    fn rollback_failed_error_does_not_affect_turn_status() {
+        let event = ErrorEvent {
+            message: "rollback failed".into(),
+            codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+        };
+        assert!(!event.affects_turn_status());
+    }
+
+    #[test]
+    fn generic_error_affects_turn_status() {
+        let event = ErrorEvent {
+            message: "generic".into(),
+            codex_error_info: Some(CodexErrorInfo::Other),
+        };
+        assert!(event.affects_turn_status());
+    }
+
+    #[test]
     fn user_input_serialization_omits_final_output_json_schema_when_none() -> Result<()> {
         let op = Op::UserInput {
             items: Vec::new(),
@@ -2901,6 +2991,53 @@ mod tests {
             _ => panic!("expected turn_aborted event"),
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn turn_context_item_deserializes_without_network() -> Result<()> {
+        let item: TurnContextItem = serde_json::from_value(json!({
+            "cwd": "/tmp",
+            "approval_policy": "never",
+            "sandbox_policy": { "type": "danger-full-access" },
+            "model": "gpt-5",
+            "summary": "auto",
+        }))?;
+
+        assert_eq!(item.network, None);
+        Ok(())
+    }
+
+    #[test]
+    fn turn_context_item_serializes_network_when_present() -> Result<()> {
+        let item = TurnContextItem {
+            turn_id: None,
+            cwd: PathBuf::from("/tmp"),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            network: Some(TurnContextNetworkItem {
+                allowed_domains: vec!["api.example.com".to_string()],
+                denied_domains: vec!["blocked.example.com".to_string()],
+            }),
+            model: "gpt-5".to_string(),
+            personality: None,
+            collaboration_mode: None,
+            effort: None,
+            summary: ReasoningSummaryConfig::Auto,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: None,
+        };
+
+        let value = serde_json::to_value(item)?;
+        assert_eq!(
+            value["network"],
+            json!({
+                "allowed_domains": ["api.example.com"],
+                "denied_domains": ["blocked.example.com"],
+            })
+        );
         Ok(())
     }
 

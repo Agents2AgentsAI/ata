@@ -489,9 +489,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly {
-                access: Default::default(),
-            },
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: large_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
@@ -547,9 +545,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly {
-                access: Default::default(),
-            },
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: smaller_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
