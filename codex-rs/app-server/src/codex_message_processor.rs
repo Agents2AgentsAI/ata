@@ -174,6 +174,9 @@ use codex_core::ThreadManager;
 use codex_core::ThreadSortKey as CoreThreadSortKey;
 use codex_core::auth::AuthMode as CoreAuthMode;
 use codex_core::auth::CLIENT_ID;
+use codex_core::auth::PROVIDER_GEMINI;
+use codex_core::auth::get_provider_api_key;
+use codex_core::auth::get_provider_oauth_credential;
 use codex_core::auth::login_with_api_key;
 use codex_core::auth::login_with_chatgpt_auth_tokens;
 use codex_core::config::Config;
@@ -213,8 +216,10 @@ use codex_core::state_db::StateDbHandle;
 use codex_core::state_db::get_state_db;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_feedback::CodexFeedback;
+use codex_login::GeminiServerOptions;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
+use codex_login::run_gemini_login_server;
 use codex_login::run_login_server;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -795,6 +800,9 @@ impl CodexMessageProcessor {
             LoginAccountParams::Chatgpt => {
                 self.login_chatgpt_v2(request_id).await;
             }
+            LoginAccountParams::Gemini => {
+                self.login_gemini_v2(request_id).await;
+            }
             LoginAccountParams::ChatgptAuthTokens {
                 access_token,
                 chatgpt_account_id,
@@ -1179,6 +1187,121 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn login_gemini_common(
+        &self,
+    ) -> std::result::Result<GeminiServerOptions, JSONRPCErrorError> {
+        let config = self.config.as_ref();
+        if self.auth_manager.is_external_auth_active() {
+            return Err(self.external_auth_active_error());
+        }
+
+        if matches!(
+            config.forced_login_method,
+            Some(ForcedLoginMethod::Chatgpt)
+        ) {
+            return Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "API key login is disabled. Use ChatGPT login instead.".to_string(),
+                data: None,
+            });
+        }
+
+        Ok(GeminiServerOptions {
+            open_browser: false,
+            ..GeminiServerOptions::new(config.codex_home.clone(), config.cli_auth_credentials_store_mode)
+        })
+    }
+
+    async fn login_gemini_v2(&mut self, request_id: ConnectionRequestId) {
+        match self.login_gemini_common().await {
+            Ok(opts) => match run_gemini_login_server(opts) {
+                Ok(server) => {
+                    let login_id = Uuid::new_v4();
+                    let shutdown_handle = server.cancel_handle();
+
+                    {
+                        let mut guard = self.active_login.lock().await;
+                        if let Some(existing) = guard.take() {
+                            drop(existing);
+                        }
+                        *guard = Some(ActiveLogin {
+                            shutdown_handle: shutdown_handle.clone(),
+                            login_id,
+                        });
+                    }
+
+                    let outgoing_clone = self.outgoing.clone();
+                    let active_login = self.active_login.clone();
+                    let auth_manager = self.auth_manager.clone();
+                    let auth_url = server.auth_url.clone();
+                    tokio::spawn(async move {
+                        let (success, error_msg) = match tokio::time::timeout(
+                            LOGIN_CHATGPT_TIMEOUT,
+                            server.block_until_done(),
+                        )
+                        .await
+                        {
+                            Ok(Ok(())) => (true, None),
+                            Ok(Err(err)) => (false, Some(format!("Login server error: {err}"))),
+                            Err(_elapsed) => {
+                                shutdown_handle.shutdown();
+                                (false, Some("Login timed out".to_string()))
+                            }
+                        };
+
+                        let payload = AccountLoginCompletedNotification {
+                            login_id: Some(login_id.to_string()),
+                            success,
+                            error: error_msg,
+                        };
+                        outgoing_clone
+                            .send_server_notification(ServerNotification::AccountLoginCompleted(
+                                payload,
+                            ))
+                            .await;
+
+                        if success {
+                            auth_manager.reload();
+                            let payload = AccountUpdatedNotification {
+                                auth_mode: auth_manager
+                                    .auth_cached()
+                                    .as_ref()
+                                    .map(CodexAuth::api_auth_mode),
+                            };
+                            outgoing_clone
+                                .send_server_notification(ServerNotification::AccountUpdated(
+                                    payload,
+                                ))
+                                .await;
+                        }
+
+                        let mut guard = active_login.lock().await;
+                        if guard.as_ref().map(|l| l.login_id) == Some(login_id) {
+                            *guard = None;
+                        }
+                    });
+
+                    let response = LoginAccountResponse::Gemini {
+                        login_id: login_id.to_string(),
+                        auth_url,
+                    };
+                    self.outgoing.send_response(request_id, response).await;
+                }
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("failed to start login server: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                }
+            },
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+            }
+        }
+    }
+
     async fn cancel_login_chatgpt_common(
         &mut self,
         login_id: Uuid,
@@ -1459,13 +1582,46 @@ impl CodexMessageProcessor {
 
         self.refresh_token_if_requested(do_refresh).await;
 
+        let provider_name = self.config.model_provider.name.to_lowercase();
+        let provider_is_gemini = matches!(provider_name.as_str(), "gemini" | "google gemini");
+        let gemini_api_key = if provider_is_gemini {
+            get_provider_api_key(
+                &self.config.codex_home,
+                PROVIDER_GEMINI,
+                self.config.cli_auth_credentials_store_mode,
+            )
+            .is_some()
+        } else {
+            false
+        };
+        let gemini_oauth = if provider_is_gemini {
+            get_provider_oauth_credential(
+                &self.config.codex_home,
+                PROVIDER_GEMINI,
+                self.config.cli_auth_credentials_store_mode,
+            )
+        } else {
+            None
+        };
+        let requires_gemini_auth = provider_is_gemini && !gemini_api_key && gemini_oauth.is_none();
+
         // Whether auth is required for the active model provider.
         let requires_openai_auth = self.config.model_provider.requires_openai_auth;
 
         if !requires_openai_auth {
+            let account = if let Some(email) =
+                gemini_oauth.as_ref().and_then(|credential| credential.email.clone())
+            {
+                Some(Account::Gemini { email })
+            } else if gemini_api_key {
+                Some(Account::ApiKey {})
+            } else {
+                None
+            };
             let response = GetAccountResponse {
-                account: None,
+                account,
                 requires_openai_auth,
+                requires_gemini_auth,
             };
             self.outgoing.send_response(request_id, response).await;
             return;
@@ -1502,6 +1658,7 @@ impl CodexMessageProcessor {
         let response = GetAccountResponse {
             account,
             requires_openai_auth,
+            requires_gemini_auth,
         };
         self.outgoing.send_response(request_id, response).await;
     }

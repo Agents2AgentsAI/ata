@@ -1,3 +1,4 @@
+mod gemini_oauth;
 mod providers;
 mod storage;
 #[cfg(test)]
@@ -42,6 +43,8 @@ pub use crate::auth::providers::read_api_key_from_env;
 pub use crate::auth::providers::resolve_gemini_auth_source;
 pub use crate::auth::storage::AuthCredentialsStoreMode;
 pub use crate::auth::storage::AuthDotJson;
+pub(crate) use crate::auth::gemini_oauth::code_assist_method_url;
+pub(crate) use crate::auth::gemini_oauth::ensure_gemini_oauth_context;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::create_auth_storage;
 use crate::config::Config;

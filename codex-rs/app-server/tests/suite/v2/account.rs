@@ -29,6 +29,9 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_core::auth::AuthCredentialsStoreMode;
+use codex_core::auth::PROVIDER_GEMINI;
+use codex_core::auth::ProviderOauthCredential;
+use codex_core::auth::login_with_provider_oauth;
 use codex_login::login_with_api_key;
 use codex_protocol::account::PlanType as AccountPlanType;
 use core_test_support::responses;
@@ -51,6 +54,7 @@ struct CreateConfigTomlParams {
     forced_workspace_id: Option<String>,
     requires_openai_auth: Option<bool>,
     base_url: Option<String>,
+    provider_name: Option<String>,
 }
 
 fn create_config_toml(codex_home: &Path, params: CreateConfigTomlParams) -> std::io::Result<()> {
@@ -58,6 +62,9 @@ fn create_config_toml(codex_home: &Path, params: CreateConfigTomlParams) -> std:
     let base_url = params
         .base_url
         .unwrap_or_else(|| "http://127.0.0.1:0/v1".to_string());
+    let provider_name = params
+        .provider_name
+        .unwrap_or_else(|| "Mock provider for test".to_string());
     let forced_line = if let Some(method) = params.forced_method {
         format!("forced_login_method = \"{method}\"\n")
     } else {
@@ -85,7 +92,7 @@ cli_auth_credentials_store = "file"
 model_provider = "mock_provider"
 
 [model_providers.mock_provider]
-name = "Mock provider for test"
+name = "{provider_name}"
 base_url = "{base_url}"
 wire_api = "responses"
 request_max_retries = 0
@@ -222,6 +229,7 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
                 plan_type: AccountPlanType::Pro,
             }),
             requires_openai_auth: true,
+            requires_gemini_auth: false,
         }
     );
 
@@ -289,6 +297,7 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
                 plan_type: AccountPlanType::Pro,
             }),
             requires_openai_auth: true,
+            requires_gemini_auth: false,
         }
     );
 
@@ -908,6 +917,95 @@ async fn login_account_chatgpt_rejected_when_forced_api() -> Result<()> {
 }
 
 #[tokio::test]
+async fn login_account_gemini_rejected_when_forced_chatgpt() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            forced_method: Some("chatgpt".to_string()),
+            ..Default::default()
+        },
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_login_account_gemini_request().await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(
+        err.error.message,
+        "API key login is disabled. Use ChatGPT login instead."
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn login_account_gemini_start_can_be_cancelled() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_login_account_gemini_request().await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    let login: LoginAccountResponse = to_response(resp)?;
+    let LoginAccountResponse::Gemini { login_id, auth_url } = login else {
+        bail!("unexpected login response: {login:?}");
+    };
+    assert!(
+        auth_url.contains("accounts.google.com"),
+        "auth_url should point to Google OAuth"
+    );
+
+    let cancel_id = mcp
+        .send_cancel_login_account_request(CancelLoginAccountParams {
+            login_id: login_id.clone(),
+        })
+        .await?;
+    let cancel_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(cancel_id)),
+    )
+    .await??;
+    let _ok: CancelLoginAccountResponse = to_response(cancel_resp)?;
+
+    let note = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("account/login/completed"),
+    )
+    .await??;
+    let parsed: ServerNotification = note.try_into()?;
+    let ServerNotification::AccountLoginCompleted(payload) = parsed else {
+        bail!("unexpected notification: {parsed:?}");
+    };
+    assert_eq!(payload.login_id, Some(login_id));
+    assert_eq!(payload.success, false);
+    assert!(payload.error.is_some(), "expected a non-empty error on cancel");
+
+    let maybe_updated = timeout(
+        Duration::from_millis(500),
+        mcp.read_stream_until_notification_message("account/updated"),
+    )
+    .await;
+    assert!(
+        maybe_updated.is_err(),
+        "account/updated should not be emitted when login is cancelled"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 // Serialize tests that launch the login server since it binds to a fixed port.
 #[serial(login_port)]
 async fn login_account_chatgpt_start_can_be_cancelled() -> Result<()> {
@@ -1146,6 +1244,7 @@ async fn get_account_with_api_key() -> Result<()> {
     let expected = GetAccountResponse {
         account: Some(Account::ApiKey {}),
         requires_openai_auth: true,
+        requires_gemini_auth: false,
     };
     assert_eq!(received, expected);
     Ok(())
@@ -1180,6 +1279,103 @@ async fn get_account_when_auth_not_required() -> Result<()> {
     let expected = GetAccountResponse {
         account: None,
         requires_openai_auth: false,
+        requires_gemini_auth: false,
+    };
+    assert_eq!(received, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_account_requires_gemini_auth_when_missing_credentials() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(false),
+            provider_name: Some("gemini".to_string()),
+            ..Default::default()
+        },
+    )?;
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[("OPENAI_API_KEY", None), ("GOOGLE_API_KEY", None)],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: GetAccountResponse = to_response(resp)?;
+
+    let expected = GetAccountResponse {
+        account: None,
+        requires_openai_auth: false,
+        requires_gemini_auth: true,
+    };
+    assert_eq!(received, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_account_with_gemini_oauth() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(false),
+            provider_name: Some("gemini".to_string()),
+            ..Default::default()
+        },
+    )?;
+
+    login_with_provider_oauth(
+        codex_home.path(),
+        PROVIDER_GEMINI,
+        ProviderOauthCredential {
+            access: "access-token".to_string(),
+            refresh: "refresh-token".to_string(),
+            expires: None,
+            email: Some("gemini-user@example.com".to_string()),
+            project_id: None,
+            managed_project_id: Some("managed-project".to_string()),
+        },
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[("OPENAI_API_KEY", None), ("GOOGLE_API_KEY", None)],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: GetAccountResponse = to_response(resp)?;
+
+    let expected = GetAccountResponse {
+        account: Some(Account::Gemini {
+            email: "gemini-user@example.com".to_string(),
+        }),
+        requires_openai_auth: false,
+        requires_gemini_auth: false,
     };
     assert_eq!(received, expected);
     Ok(())
@@ -1224,6 +1420,7 @@ async fn get_account_with_chatgpt() -> Result<()> {
             plan_type: AccountPlanType::Pro,
         }),
         requires_openai_auth: true,
+        requires_gemini_auth: false,
     };
     assert_eq!(received, expected);
     Ok(())

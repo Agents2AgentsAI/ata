@@ -6,6 +6,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 
 use super::ModelClientSession;
+use super::gemini_code_assist::stream_gemini_code_assist;
 use super::provider_streaming::ParseSseEventResult;
 use super::provider_streaming::build_reasoning_value;
 use super::provider_streaming::map_api_err_to_codex_err;
@@ -50,12 +51,20 @@ pub(super) async fn stream_gemini_api(
         GeminiAuthSource::ApiKey(api_key) => {
             stream_gemini_with_api_key(session, prompt, model_info, effort, summary, api_key).await
         }
-        GeminiAuthSource::Oauth(_) => Err(CodexErr::Api(
-            "Gemini OAuth credentials are configured, but Gemini Code Assist transport is not implemented yet in this build. Set GOOGLE_API_KEY to use Gemini requests."
-                .to_string(),
-        )),
+        GeminiAuthSource::Oauth(oauth_credential) => {
+            stream_gemini_code_assist(
+                session,
+                prompt,
+                model_info,
+                effort,
+                summary,
+                oauth_credential,
+            )
+            .await
+        }
         GeminiAuthSource::Missing => Err(CodexErr::Api(
-            "Missing Gemini credentials. Set GOOGLE_API_KEY to use Gemini requests.".to_string(),
+            "Missing Gemini credentials. Set GOOGLE_API_KEY or run `ata login --provider gemini --with-oauth`."
+                .to_string(),
         )),
     }
 }

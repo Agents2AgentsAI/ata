@@ -67,8 +67,8 @@ impl ServerOptions {
 pub struct LoginServer {
     pub auth_url: String,
     pub actual_port: u16,
-    server_handle: tokio::task::JoinHandle<io::Result<()>>,
-    shutdown_handle: ShutdownHandle,
+    pub(crate) server_handle: tokio::task::JoinHandle<io::Result<()>>,
+    pub(crate) shutdown_handle: ShutdownHandle,
 }
 
 impl LoginServer {
@@ -89,7 +89,7 @@ impl LoginServer {
 
 #[derive(Clone, Debug)]
 pub struct ShutdownHandle {
-    shutdown_notify: Arc<tokio::sync::Notify>,
+    pub(crate) shutdown_notify: Arc<tokio::sync::Notify>,
 }
 
 impl ShutdownHandle {

@@ -652,6 +652,14 @@ impl McpProcess {
         self.send_request("account/login/start", Some(params)).await
     }
 
+    /// Send an `account/login/start` JSON-RPC request for Gemini OAuth login.
+    pub async fn send_login_account_gemini_request(&mut self) -> anyhow::Result<i64> {
+        let params = serde_json::json!({
+            "type": "gemini"
+        });
+        self.send_request("account/login/start", Some(params)).await
+    }
+
     /// Send an `account/login/cancel` JSON-RPC request.
     pub async fn send_cancel_login_account_request(
         &mut self,

@@ -14,6 +14,7 @@ use codex_cli::login::run_list_providers;
 use codex_cli::login::run_login_status;
 use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::login::run_login_with_device_code;
+use codex_cli::login::run_login_with_provider_oauth;
 use codex_cli::login::run_login_with_provider_api_key;
 use codex_cli::login::run_logout_provider;
 use codex_cloud_tasks::Cli as CloudTasksCli;
@@ -269,6 +270,12 @@ struct LoginCommand {
         help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | ata login --with-api-key`)"
     )]
     with_api_key: bool,
+
+    #[arg(
+        long = "with-oauth",
+        help = "Use OAuth login flow for the selected provider (currently gemini only)"
+    )]
+    with_oauth: bool,
 
     #[arg(
         long = "api-key",
@@ -700,6 +707,16 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     run_list_providers(login_cli.config_overrides).await;
                 }
                 None => {
+                    let auth_mode_count = login_cli.use_device_code as u8
+                        + login_cli.with_api_key as u8
+                        + login_cli.with_oauth as u8;
+                    if auth_mode_count > 1 {
+                        eprintln!(
+                            "Choose only one login mode: --device-auth, --with-api-key, or --with-oauth."
+                        );
+                        std::process::exit(1);
+                    }
+
                     if login_cli.use_device_code {
                         run_login_with_device_code(
                             login_cli.config_overrides,
@@ -720,6 +737,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                             login_cli.provider,
                         )
                         .await;
+                    } else if login_cli.with_oauth {
+                        run_login_with_provider_oauth(login_cli.config_overrides, login_cli.provider)
+                            .await;
                     } else {
                         run_login_with_chatgpt(login_cli.config_overrides).await;
                     }
