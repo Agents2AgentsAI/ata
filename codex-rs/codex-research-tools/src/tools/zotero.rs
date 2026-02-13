@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::time::Duration;
 
 use futures::StreamExt;
 use futures::stream;
@@ -101,11 +100,9 @@ use citation::escape_bibtex_value;
 #[cfg(test)]
 use citation::fallback_apa_citation;
 #[cfg(test)]
-use document_resolution::ar5iv_probe_candidates;
-#[cfg(test)]
 use document_resolution::normalize_arxiv_id;
 #[cfg(test)]
-use document_resolution::resolve_document_sources_with_probe;
+use document_resolution::resolve_document_sources_with_storage_root;
 
 const DEFAULT_SEARCH_LIMIT: u32 = 25;
 const DEFAULT_TAGS_LIMIT: u32 = 100;
@@ -117,11 +114,6 @@ const DEFAULT_FULLTEXT_MAX_CHARS: u32 = 10_000;
 const DEFAULT_LOCAL_USER_LIBRARY_ID: &str = "0";
 const DEFAULT_ANNOTATION_PARENT_FETCH_CONCURRENCY: usize = 6;
 const ZOTERO_MAX_PAGE_SIZE: u32 = 100;
-const AR5IV_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
-const AR5IV_PROBE_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
-const AR5IV_PROBE_NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
-const AR5IV_PROBE_MAX_BODY_BYTES: usize = 8 * 1024;
-const AR5IV_BASE_URL: &str = "https://ar5iv.labs.arxiv.org/html";
 const ARXIV_PDF_BASE_URL: &str = "https://arxiv.org/pdf";
 const ZOTERO_STORAGE_DIR_ENV: &str = "ZOTERO_STORAGE_DIR";
 
