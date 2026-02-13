@@ -749,6 +749,29 @@ impl SandboxPolicy {
                     }
                 }
 
+                // Include the knowledge-base directory under codex home
+                // (e.g. ~/.ata/knowledge-base) so that sandboxed commands
+                // can write KB assets. Only the knowledge-base subtree is
+                // made writable, not the entire codex home.
+                if let Ok(codex_home) = codex_utils_home_dir::find_codex_home() {
+                    let kb_dir = codex_home.join("knowledge-base");
+                    if kb_dir.is_dir() {
+                        match AbsolutePathBuf::from_absolute_path(&kb_dir) {
+                            Ok(kb_path) => {
+                                if !roots.iter().any(|r| r == &kb_path) {
+                                    roots.push(kb_path);
+                                }
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Ignoring KB dir {:?} for sandbox writable root: {e}",
+                                    kb_dir,
+                                );
+                            }
+                        }
+                    }
+                }
+
                 // For each root, compute subpaths that should remain read-only.
                 roots
                     .into_iter()

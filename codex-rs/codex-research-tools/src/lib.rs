@@ -23,6 +23,10 @@ use paper_id::PaperIdResolver;
 use rate_limiter::RateLimiter;
 use types::CitationResult;
 use types::ConfigSchema;
+use types::HnGetThreadParams;
+use types::HnSearchParams;
+use types::HnSearchResult;
+use types::HnThread;
 use types::LatexCompileParams;
 use types::LatexCompileResult;
 use types::ModelDefinition;
@@ -645,6 +649,28 @@ impl ResearchToolkit {
     ) -> Result<RequirementsDiff> {
         Err(ResearchError::NotImplemented {
             tool: "repo_diff_requirements",
+        })
+    }
+
+    #[cfg(feature = "hackernews")]
+    pub async fn hn_search(&self, params: HnSearchParams) -> Result<HnSearchResult> {
+        tools::hackernews::hn_search(self, params).await
+    }
+
+    #[cfg(not(feature = "hackernews"))]
+    pub async fn hn_search(&self, _params: HnSearchParams) -> Result<HnSearchResult> {
+        Err(ResearchError::NotImplemented { tool: "hn_search" })
+    }
+
+    #[cfg(feature = "hackernews")]
+    pub async fn hn_get_thread(&self, params: HnGetThreadParams) -> Result<HnThread> {
+        tools::hackernews::hn_get_thread(self, params).await
+    }
+
+    #[cfg(not(feature = "hackernews"))]
+    pub async fn hn_get_thread(&self, _params: HnGetThreadParams) -> Result<HnThread> {
+        Err(ResearchError::NotImplemented {
+            tool: "hn_get_thread",
         })
     }
 }

@@ -8,6 +8,9 @@ pub(crate) mod semantic_scholar;
 #[cfg(feature = "repo_analysis")]
 pub(crate) mod github;
 
+#[cfg(feature = "hackernews")]
+pub(crate) mod hackernews;
+
 #[cfg(feature = "zotero")]
 pub(crate) mod zotero;
 

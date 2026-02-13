@@ -1,9 +1,9 @@
 ---
-name: kb-explain
-description: Deep technical explanations and cross-card synthesis for KB cards. Use when a user asks to explain, compare, synthesize, understand, or deep-dive into one or more knowledge base cards, or asks how cards relate or work together.
+name: cross-paper-report
+description: Generate integrated cross-paper explanations and final markdown/PDF reports from KB cards. Use when a user asks to explain, compare, synthesize, understand, or deep-dive into one or more knowledge base cards, or asks how cards relate or work together.
 ---
 
-# KB Explain
+# Cross-Paper Report
 
 You MUST produce three deliverables — no exceptions, no shortcuts:
 
