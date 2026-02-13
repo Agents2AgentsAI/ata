@@ -135,13 +135,13 @@ async fn stream_gemini_with_api_key(
             let Some(data) = extract_sse_data_line(event_str) else {
                 return ParseSseEventResult::Continue;
             };
-            parse_gemini_sse_data(data, state, false)
+            parse_gemini_sse_data(&data, state, false)
         },
         |buffer, state| {
             let Some(data) = extract_sse_data_line(buffer) else {
                 return ParseSseEventResult::Continue;
             };
-            parse_gemini_sse_data(data, state, true)
+            parse_gemini_sse_data(&data, state, true)
         },
     ))
 }
