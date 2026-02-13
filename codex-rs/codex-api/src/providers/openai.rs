@@ -129,8 +129,7 @@ mod tests {
             body["input"][0]["content"][0],
             json!({
                 "type": "input_file",
-                "file_url": "https://example.com/report.pdf",
-                "filename": "report.pdf"
+                "file_url": "https://example.com/report.pdf"
             })
         );
     }

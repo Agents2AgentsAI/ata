@@ -80,6 +80,8 @@ pub enum Feature {
     // Experimental
     /// Enable JavaScript REPL tools backed by a persistent Node kernel.
     JsRepl,
+    /// Only expose js_repl tools directly to the model.
+    JsReplToolsOnly,
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
     /// Include the freeform apply_patch tool.
@@ -119,8 +121,12 @@ pub enum Feature {
     Collab,
     /// Enable apps.
     Apps,
-    /// Enable research tools and research workflow integration.
+    /// Route apps MCP calls through the configured gateway.
+    AppsMcpGateway,
+    /// Enable research tool integrations and capability wiring.
     Research,
+    /// Enable data tools for dataset discovery and management.
+    Data,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Prompt for missing skill env var dependencies.
@@ -324,6 +330,10 @@ impl Features {
         }
 
         overrides.apply(&mut features);
+        if features.enabled(Feature::JsReplToolsOnly) && !features.enabled(Feature::JsRepl) {
+            tracing::warn!("js_repl_tools_only requires js_repl; disabling js_repl_tools_only");
+            features.disable(Feature::JsReplToolsOnly);
+        }
 
         features
     }
@@ -429,6 +439,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::JsRepl,
         key: "js_repl",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::JsReplToolsOnly,
+        key: "js_repl_tools_only",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -570,10 +586,26 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::Research,
         key: "research",
         stage: Stage::Experimental {
-            name: "Research Agent",
-            menu_description: "Multi-agent research workflow with paper search, Zotero integration, and proposal synthesis.",
-            announcement: "Research agent support is available as an experimental feature.",
+            name: "Research Tools",
+            menu_description: "Enable research tool integrations (paper search, Zotero, repo analysis). Use `ata research` for the guided multi-phase workflow.",
+            announcement: "Research tools are available as an experimental feature. Use `ata research` to launch the full research workflow.",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Data,
+        key: "data",
+        stage: Stage::Experimental {
+            name: "Data Tools",
+            menu_description: "Dataset discovery and management tools for HuggingFace, Kaggle, and more.",
+            announcement: "Data tools for dataset discovery are available as an experimental feature.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::AppsMcpGateway,
+        key: "apps_mcp_gateway",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
@@ -685,6 +717,21 @@ mod tests {
                     spec.default_enabled, false,
                     "feature `{}` is under development and must be disabled by default",
                     spec.key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn default_enabled_features_are_stable() {
+        for spec in FEATURES {
+            if spec.default_enabled {
+                assert_eq!(
+                    spec.stage,
+                    Stage::Stable,
+                    "feature `{}` is enabled by default but is not stable ({:?})",
+                    spec.key,
+                    spec.stage
                 );
             }
         }

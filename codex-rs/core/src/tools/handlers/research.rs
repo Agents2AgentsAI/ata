@@ -7,13 +7,24 @@ use async_trait::async_trait;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_research_tools::config::ResearchConfig;
 use codex_research_tools::error::ResearchError;
+#[cfg(feature = "research-latex")]
+use codex_research_tools::types::LatexCompileParams;
 use codex_research_tools::types::PaginationParams;
 use codex_research_tools::types::PaperSearchParams;
+#[cfg(feature = "research-pdf-images")]
+use codex_research_tools::types::PdfExtractFiguresParams;
+use codex_research_tools::types::ZoteroAdvancedSearchParams;
+use codex_research_tools::types::ZoteroAnnotationsParams;
+use codex_research_tools::types::ZoteroCitationParams;
 use codex_research_tools::types::ZoteroCollectionItemsParams;
 use codex_research_tools::types::ZoteroCollectionsParams;
+use codex_research_tools::types::ZoteroGrepParams;
 use codex_research_tools::types::ZoteroItemParams;
+use codex_research_tools::types::ZoteroListGroupsParams;
+use codex_research_tools::types::ZoteroRecentParams;
+use codex_research_tools::types::ZoteroSearchNotesParams;
 use codex_research_tools::types::ZoteroSearchParams;
-use codex_research_tools::types::ZoteroTagSearchParams;
+use codex_research_tools::types::ZoteroTagsParams;
 use codex_secrets::SecretName;
 use codex_secrets::SecretScope;
 use codex_secrets::SecretsBackendKind;
@@ -110,30 +121,67 @@ impl ResearchBridgeHandler {
             "zotero_search" => dispatch_with_params!(ZoteroSearchParams, |params| self
                 .toolkit
                 .zotero_search(params)),
+            "zotero_get_tags" => dispatch_with_params!(ZoteroTagsParams, |params| self
+                .toolkit
+                .zotero_get_tags(params)),
+            "zotero_get_recent" => dispatch_with_params!(ZoteroRecentParams, |params| self
+                .toolkit
+                .zotero_get_recent(params)),
+            "zotero_advanced_search" => {
+                dispatch_with_params!(ZoteroAdvancedSearchParams, |params| self
+                    .toolkit
+                    .zotero_advanced_search(params))
+            }
+            "zotero_grep_text" => dispatch_with_params!(ZoteroGrepParams, |params| self
+                .toolkit
+                .zotero_grep_text(params)),
+            "zotero_search_notes" => dispatch_with_params!(ZoteroSearchNotesParams, |params| self
+                .toolkit
+                .zotero_search_notes(params)),
             "zotero_get_item" => dispatch_with_params!(ZoteroItemParams, |params| self
                 .toolkit
                 .zotero_get_item(params)),
+            "zotero_get_item_citation" => {
+                dispatch_with_params!(ZoteroCitationParams, |params| self
+                    .toolkit
+                    .zotero_get_item_citation(params))
+            }
             "zotero_get_fulltext" => dispatch_with_params!(ZoteroItemParams, |params| self
                 .toolkit
                 .zotero_get_fulltext(params)),
             "zotero_get_notes" => dispatch_with_params!(ZoteroItemParams, |params| self
                 .toolkit
                 .zotero_get_notes(params)),
+            "zotero_get_annotations" => {
+                dispatch_with_params!(ZoteroAnnotationsParams, |params| self
+                    .toolkit
+                    .zotero_get_annotations(params))
+            }
             "zotero_get_attachments" => dispatch_with_params!(ZoteroItemParams, |params| self
                 .toolkit
                 .zotero_get_attachments(params)),
-            "zotero_search_by_tag" => dispatch_with_params!(ZoteroTagSearchParams, |params| self
-                .toolkit
-                .zotero_search_by_tag(params)),
             "zotero_get_collections" => {
                 dispatch_with_params!(ZoteroCollectionsParams, |params| self
                     .toolkit
                     .zotero_get_collections(params))
             }
+            "zotero_list_groups" => dispatch_with_params!(ZoteroListGroupsParams, |params| self
+                .toolkit
+                .zotero_list_groups(params)),
             "zotero_get_collection_items" => {
                 dispatch_with_params!(ZoteroCollectionItemsParams, |params| self
                     .toolkit
                     .zotero_get_collection_items(params))
+            }
+            #[cfg(feature = "research-latex")]
+            "latex_compile" => dispatch_with_params!(LatexCompileParams, |params| self
+                .toolkit
+                .latex_compile(params)),
+            #[cfg(feature = "research-pdf-images")]
+            "pdf_extract_figures" => {
+                dispatch_with_params!(PdfExtractFiguresParams, |params| self
+                    .toolkit
+                    .pdf_extract_figures(params))
             }
             #[cfg(feature = "research-repo")]
             "repo_clone_and_summarize" => dispatch_with_params!(RepoCloneArgs, |params| self

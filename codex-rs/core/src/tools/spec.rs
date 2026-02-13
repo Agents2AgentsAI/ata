@@ -3,6 +3,9 @@ use crate::client_common::tools::FreeformTool;
 use crate::client_common::tools::FreeformToolFormat;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
+use crate::data::SharedDataToolkit;
+#[cfg(feature = "data")]
+use crate::data::tool_names::find_mcp_tool_matches as find_mcp_data_tool_matches;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::research::SharedResearchToolkit;
@@ -29,7 +32,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
-#[cfg(feature = "research")]
+#[cfg(any(feature = "research", feature = "data"))]
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -44,6 +47,7 @@ pub(crate) struct ToolsConfig {
     pub web_search_mode: Option<WebSearchMode>,
     pub search_tool: bool,
     pub js_repl_enabled: bool,
+    pub js_repl_tools_only: bool,
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
     pub request_rule_enabled: bool,
@@ -65,6 +69,8 @@ impl ToolsConfig {
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_js_repl = features.enabled(Feature::JsRepl);
+        let include_js_repl_tools_only =
+            include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
         let request_rule_enabled = features.enabled(Feature::RequestRule);
@@ -101,6 +107,7 @@ impl ToolsConfig {
             web_search_mode: *web_search_mode,
             search_tool: include_search_tool,
             js_repl_enabled: include_js_repl,
+            js_repl_tools_only: include_js_repl_tools_only,
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
             request_rule_enabled,
@@ -109,8 +116,15 @@ impl ToolsConfig {
     }
 }
 
-pub(crate) fn filter_tools_for_model(tools: Vec<ToolSpec>, _config: &ToolsConfig) -> Vec<ToolSpec> {
+pub(crate) fn filter_tools_for_model(tools: Vec<ToolSpec>, config: &ToolsConfig) -> Vec<ToolSpec> {
+    if !config.js_repl_tools_only {
+        return tools;
+    }
+
     tools
+        .into_iter()
+        .filter(|spec| matches!(spec.name(), "js_repl" | "js_repl_reset"))
+        .collect()
 }
 
 /// Generic JSON‑Schema subset needed for our tool definitions
@@ -1287,6 +1301,19 @@ fn research_tool_to_openai_tool(
     })
 }
 
+#[cfg(feature = "data")]
+fn data_tool_to_openai_tool(
+    tool: &codex_data_tools::tool_specs::ToolDef,
+) -> Result<ResponsesApiTool, serde_json::Error> {
+    let input_schema = parse_tool_input_schema(&tool.input_schema)?;
+    Ok(ResponsesApiTool {
+        name: tool.native_name.to_string(),
+        description: tool.description.to_string(),
+        strict: false,
+        parameters: input_schema,
+    })
+}
+
 /// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
 /// JsonSchema enum. This function:
 /// - Ensures every schema object has a "type". If missing, infers it from
@@ -1404,7 +1431,7 @@ pub(crate) fn build_specs(
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
-    build_specs_with_research(config, mcp_tools, dynamic_tools, None)
+    build_specs_with_toolkits(config, mcp_tools, dynamic_tools, None, None)
 }
 
 pub(crate) fn build_specs_with_research(
@@ -1413,11 +1440,25 @@ pub(crate) fn build_specs_with_research(
     dynamic_tools: &[DynamicToolSpec],
     research_toolkit: Option<&Arc<SharedResearchToolkit>>,
 ) -> ToolRegistryBuilder {
+    build_specs_with_toolkits(config, mcp_tools, dynamic_tools, research_toolkit, None)
+}
+
+pub(crate) fn build_specs_with_toolkits(
+    config: &ToolsConfig,
+    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
+    dynamic_tools: &[DynamicToolSpec],
+    research_toolkit: Option<&Arc<SharedResearchToolkit>>,
+    data_toolkit: Option<&Arc<SharedDataToolkit>>,
+) -> ToolRegistryBuilder {
     #[cfg(not(feature = "research"))]
     let _ = research_toolkit;
+    #[cfg(not(feature = "data"))]
+    let _ = data_toolkit;
 
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::CollabHandler;
+    #[cfg(feature = "data")]
+    use crate::tools::handlers::DataBridgeHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
@@ -1636,6 +1677,45 @@ pub(crate) fn build_specs_with_research(
         }
     }
 
+    #[cfg(feature = "data")]
+    let mut suppressed_mcp_data_tool_names: BTreeSet<String> = BTreeSet::new();
+
+    #[cfg(feature = "data")]
+    if let Some(toolkit) = data_toolkit {
+        let data_handler = Arc::new(DataBridgeHandler::new(Arc::clone(toolkit)));
+        let discovered_mcp_tools: BTreeMap<String, rmcp::model::Tool> = mcp_tools
+            .as_ref()
+            .map(|tools| {
+                tools
+                    .iter()
+                    .map(|(name, tool)| (name.clone(), tool.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        for def in codex_data_tools::tool_specs::all_tool_defs() {
+            if !toolkit.is_tool_configured(def.id) {
+                continue;
+            }
+
+            let matching_mcp_tools =
+                find_mcp_data_tool_matches(def.mcp_name, &discovered_mcp_tools);
+            match data_tool_to_openai_tool(&def) {
+                Ok(converted_tool) => {
+                    builder.push_spec(ToolSpec::Function(converted_tool));
+                    builder.register_handler(def.native_name, data_handler.clone());
+                    suppressed_mcp_data_tool_names.extend(matching_mcp_tools);
+                }
+                Err(err) => {
+                    tracing::error!(
+                        tool_name = def.native_name,
+                        "failed to convert native data tool schema: {err}"
+                    );
+                }
+            }
+        }
+    }
+
     if let Some(mcp_tools) = mcp_tools {
         let mut entries: Vec<(String, rmcp::model::Tool)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1643,6 +1723,10 @@ pub(crate) fn build_specs_with_research(
         for (name, tool) in entries.into_iter() {
             #[cfg(feature = "research")]
             if suppressed_mcp_research_tool_names.contains(&name) {
+                continue;
+            }
+            #[cfg(feature = "data")]
+            if suppressed_mcp_data_tool_names.contains(&name) {
                 continue;
             }
             match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {
@@ -1704,6 +1788,7 @@ mod tests {
             input_schema: std::sync::Arc::new(rmcp::model::object(input_schema)),
             output_schema: None,
             annotations: None,
+            execution: None,
             icons: None,
             meta: None,
         }
@@ -1721,6 +1806,7 @@ mod tests {
             input_schema: std::sync::Arc::new(schema),
             output_schema: None,
             annotations: None,
+            execution: None,
             icons: None,
             meta: None,
         };
@@ -1747,6 +1833,27 @@ mod tests {
         let mut names = HashSet::new();
         let mut duplicates = Vec::new();
         for name in tools.iter().map(|t| tool_name(&t.spec)) {
+            if !names.insert(name) {
+                duplicates.push(name);
+            }
+        }
+        assert!(
+            duplicates.is_empty(),
+            "duplicate tool entries detected: {duplicates:?}"
+        );
+        for expected in expected_subset {
+            assert!(
+                names.contains(expected),
+                "expected tool {expected} to be present; had: {names:?}"
+            );
+        }
+    }
+
+    fn assert_contains_tool_specs(tools: &[ToolSpec], expected_subset: &[&str]) {
+        use std::collections::HashSet;
+        let mut names = HashSet::new();
+        let mut duplicates = Vec::new();
+        for name in tools.iter().map(tool_name) {
             if !names.insert(name) {
                 duplicates.push(name);
             }
@@ -1839,7 +1946,7 @@ mod tests {
         config.semantic_scholar_base_url = "http://127.0.0.1:9".to_string();
         config.arxiv_base_url = "http://127.0.0.1:9".to_string();
         config.openalex_base_url = "http://127.0.0.1:9".to_string();
-        config.zotero_base_url = "http://127.0.0.1:9".to_string();
+        config.zotero_base_url = "https://api.zotero.invalid".to_string();
         Arc::new(codex_research_tools::ResearchToolkit::new(
             reqwest::Client::new(),
             config,
@@ -1869,32 +1976,6 @@ mod tests {
                 .iter()
                 .any(|tool| tool_name(&tool.spec) == "mcp__paper_search__search_papers"),
             "matched MCP tool should be suppressed when native paper_search is configured"
-        );
-    }
-
-    #[cfg(feature = "research")]
-    #[test]
-    fn zotero_mcp_fallback_is_kept_when_native_zotero_is_not_configured() {
-        let tools_config = default_tools_config();
-        let toolkit =
-            make_research_toolkit(codex_research_tools::config::ResearchConfig::default());
-        let mcp_tools = HashMap::from([(
-            "mcp__zotero__search_library".to_string(),
-            mcp_tool(
-                "search_library",
-                "search zotero",
-                serde_json::json!({"type": "object", "properties": {}}),
-            ),
-        )]);
-
-        let (tools, _) =
-            build_specs_with_research(&tools_config, Some(mcp_tools), &[], Some(&toolkit)).build();
-        assert_contains_tool_names(&tools, &["mcp__zotero__search_library"]);
-        assert!(
-            !tools
-                .iter()
-                .any(|tool| tool_name(&tool.spec) == "zotero_search"),
-            "native zotero tool should not register without API credentials"
         );
     }
 
@@ -2067,6 +2148,77 @@ mod tests {
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert_contains_tool_names(&tools, &["js_repl", "js_repl_reset"]);
+    }
+
+    #[test]
+    fn js_repl_tools_only_filters_model_tools() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::JsRepl);
+        features.enable(Feature::JsReplToolsOnly);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let (tools, _) = build_specs(&tools_config, None, &[]).build();
+        let filtered = filter_tools_for_model(
+            tools.iter().map(|tool| tool.spec.clone()).collect(),
+            &tools_config,
+        );
+        assert_contains_tool_specs(&filtered, &["js_repl", "js_repl_reset"]);
+        assert!(
+            !filtered.iter().any(|tool| tool_name(tool) == "shell"),
+            "expected non-js_repl tools to be hidden when js_repl_tools_only is enabled"
+        );
+    }
+
+    #[test]
+    fn js_repl_tools_only_hides_dynamic_tools_from_model_tools() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::JsRepl);
+        features.enable(Feature::JsReplToolsOnly);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let dynamic_tools = vec![DynamicToolSpec {
+            name: "dynamic_echo".to_string(),
+            description: "echo dynamic payload".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"}
+                },
+                "required": ["text"],
+                "additionalProperties": false
+            }),
+        }];
+        let (tools, _) = build_specs(&tools_config, None, &dynamic_tools).build();
+        assert!(
+            tools.iter().any(|tool| tool.spec.name() == "dynamic_echo"),
+            "expected dynamic tool in full router specs"
+        );
+
+        let filtered = filter_tools_for_model(
+            tools.iter().map(|tool| tool.spec.clone()).collect(),
+            &tools_config,
+        );
+        assert!(
+            !filtered
+                .iter()
+                .any(|tool| tool_name(tool) == "dynamic_echo"),
+            "expected dynamic tools to be hidden from direct model tools in js_repl_tools_only mode"
+        );
+        assert_contains_tool_specs(&filtered, &["js_repl", "js_repl_reset"]);
     }
 
     fn assert_model_tools(

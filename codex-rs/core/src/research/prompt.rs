@@ -72,8 +72,22 @@ Use sub-agents when available. Each sub-agent should write one artifact to \
 
     if params.has_zotero {
         phase.push_str(&format!(
-            "- Search user library via `{}` and inspect relevant collections via `{}`.\n",
-            tool.zotero_search, tool.zotero_get_collections,
+            "- Discover accessible Zotero groups via `{list_groups}`.\n\
+- Search items via `{search}`, AND scan collection names via `{collections}` for topic matches.\n\
+- When a collection matches the topic, retrieve its items via `{collection_items}` — this catches papers keyword search misses.\n\
+- Use `{advanced_search}` for precise metadata filters and `{search_notes}` when evidence likely lives in notes/annotations.\n\
+- For papers you need to read deeply, call `{get_item}` with `include_attachments=true` and `include_fulltext_resolution=true`.\n\
+- If `document_resolution.preferred_url` is present, fetch it with `attach_url_files` and treat that attached document as the primary source.\n\
+- If `document_resolution.local_path` is present and no URL is available, use that local PDF path as the primary source.\n\
+- Generate references via `{get_item_citation}` when outputs require BibTeX/APA/CSL citations.\n",
+            list_groups = tool.zotero_list_groups,
+            search = tool.zotero_search,
+            collections = tool.zotero_get_collections,
+            collection_items = tool.zotero_get_collection_items,
+            advanced_search = tool.zotero_advanced_search,
+            search_notes = tool.zotero_search_notes,
+            get_item = tool.zotero_get_item,
+            get_item_citation = tool.zotero_get_item_citation,
         ));
     }
     if params.has_paper_search {
@@ -237,8 +251,11 @@ mod tests {
     fn prompt_includes_selected_tools_and_phases() {
         let rendered = build_research_prompt(&params());
         assert!(rendered.contains("`zotero_search`"));
+        assert!(rendered.contains("`zotero_list_groups`"));
+        assert!(rendered.contains("`zotero_get_item_citation`"));
         assert!(rendered.contains("`paper_search`"));
         assert!(rendered.contains("`repo_find_entrypoints`"));
+        assert!(rendered.contains("include_attachments=true"));
         assert!(rendered.contains("### Phase 4: Reproducible Pipeline Scaffolding"));
         assert!(rendered.contains("### Phase 3b: Skeptic Pass"));
         assert!(rendered.contains(".research_state/subfinding_N.json"));

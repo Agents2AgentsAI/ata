@@ -10,13 +10,16 @@ workspace = true
 [features]
 default = ["paper_search", "zotero"]
 paper_search = ["dep:quick-xml"]
-zotero = []
+zotero = ["dep:regex"]
 repo_analysis = ["dep:regex", "dep:walkdir"]
-all = ["paper_search", "zotero", "repo_analysis"]
+latex = ["dep:flate2"]
+pdf_images = []
+all = ["paper_search", "zotero", "repo_analysis", "latex", "pdf_images"]
 
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }
 dashmap = "6"
+futures = { workspace = true }
 lru = { workspace = true }
 rand = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
@@ -27,11 +30,13 @@ tokio = { workspace = true, features = ["fs", "macros", "process", "rt", "sync",
 tracing = { workspace = true }
 urlencoding = { workspace = true }
 
+flate2 = { version = "1", optional = true }
 quick-xml = { version = "0.38.4", optional = true }
 regex = { workspace = true, optional = true }
 walkdir = { workspace = true, optional = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 wiremock = { workspace = true }

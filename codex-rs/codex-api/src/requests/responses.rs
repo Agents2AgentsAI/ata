@@ -290,4 +290,32 @@ mod tests {
             "data:application/pdf;base64,JVBERi0xLjQ="
         );
     }
+
+    #[test]
+    fn rewrite_url_file_drops_filename_for_openai_requests() {
+        let provider = provider("openai", "https://api.openai.com/v1");
+        let input = vec![ResponseItem::Message {
+            id: None,
+            role: "user".into(),
+            content: vec![codex_protocol::models::ContentItem::UrlFile {
+                url: "https://example.com/report.pdf".into(),
+                mime_type: Some("application/pdf".into()),
+                filename: Some("report.pdf".into()),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+
+        let request = ResponsesRequestBuilder::new("gpt-test", "inst", &input)
+            .build(&provider)
+            .expect("request");
+
+        assert_eq!(
+            request.body["input"][0]["content"][0],
+            serde_json::json!({
+                "type": "input_file",
+                "file_url": "https://example.com/report.pdf"
+            })
+        );
+    }
 }

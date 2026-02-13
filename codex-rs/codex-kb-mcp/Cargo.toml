@@ -1,11 +1,11 @@
 [package]
-name = "codex-research-tools-mcp"
+name = "codex-kb-mcp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "codex-research-tools-mcp"
+name = "codex-kb-mcp"
 path = "src/main.rs"
 
 [lints]
@@ -14,8 +14,7 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-codex-research-tools = { workspace = true, features = ["all"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+codex-kb = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = ["base64", "macros", "schemars", "server", "transport-io"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

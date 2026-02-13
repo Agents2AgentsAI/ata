@@ -89,6 +89,8 @@ pub struct ZoteroItemDetail {
     pub tags: Vec<String>,
     pub extra: Option<String>,
     pub source_meta: Option<SourceMeta>,
+    pub attachments: Option<Vec<ZoteroAttachment>>,
+    pub document_resolution: Option<DocumentResolution>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -99,9 +101,196 @@ pub struct ZoteroSearchResult {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroTagsResult {
+    pub tags: Vec<String>,
+    pub total_available: u64,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroRecentSortBy {
+    DateAdded,
+    DateModified,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroAdvancedJoinMode {
+    All,
+    Any,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroAdvancedSortBy {
+    Title,
+    Year,
+    DateAdded,
+    DateModified,
+    Relevance,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroSortDirection {
+    Asc,
+    Desc,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroSearchConditionField {
+    Title,
+    Creator,
+    Year,
+    Tag,
+    ItemType,
+    Publication,
+    Doi,
+    Note,
+    Annotation,
+    Fulltext,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroSearchConditionOperation {
+    Contains,
+    NotContains,
+    Equals,
+    NotEquals,
+    Regex,
+    BeforeYear,
+    AfterYear,
+    IsEmpty,
+    IsNotEmpty,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ZoteroSearchCondition {
+    pub field: ZoteroSearchConditionField,
+    pub operation: ZoteroSearchConditionOperation,
+    pub value: Option<String>,
+    pub case_sensitive: Option<bool>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroAdvancedCompleteness {
+    Exact,
+    Approximate,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroAdvancedCandidateStrategy {
+    ServerFiltered,
+    RecentModifiedFallback,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroAdvancedSearchResult {
+    pub completeness: ZoteroAdvancedCompleteness,
+    pub candidate_strategy: ZoteroAdvancedCandidateStrategy,
+    pub scanned_items: usize,
+    pub warnings: Vec<String>,
+    pub hints: Vec<String>,
+    pub results: ZoteroSearchResult,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroGrepMatchMode {
+    Literal,
+    Regex,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroGrepField {
+    Title,
+    Abstract,
+    Extra,
+    Note,
+    Annotation,
+    Fulltext,
+    Tag,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroGrepCandidateStrategy {
+    QueryFiltered,
+    RecentModified,
+    ParentScoped,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroGrepMatch {
+    pub item_key: String,
+    pub field: String,
+    pub match_text: String,
+    pub snippet: String,
+    pub parent_item_key: Option<String>,
+    pub source_meta: Option<SourceMeta>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroGrepResult {
+    pub candidate_strategy: ZoteroGrepCandidateStrategy,
+    pub scanned_items: usize,
+    pub returned_matches: usize,
+    pub truncated: bool,
+    pub warnings: Vec<String>,
+    pub hints: Vec<String>,
+    pub matches: Vec<ZoteroGrepMatch>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroSearchNotesMatch {
+    pub item_key: String,
+    pub parent_item: Option<String>,
+    pub field: String,
+    pub snippet: String,
+    pub source_meta: Option<SourceMeta>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroSearchNotesResult {
+    pub query: String,
+    pub candidate_strategy: ZoteroGrepCandidateStrategy,
+    pub scanned_items: usize,
+    pub notes: Vec<ZoteroSearchNotesMatch>,
+    pub total_available: Option<u64>,
+    pub has_more: bool,
+    pub warnings: Vec<String>,
+    pub hints: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentSourceKind {
+    ArxivPdf,
+    AttachmentPdfUrl,
+    LocalPdfPath,
+    IndexedFulltext,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct DocumentResolution {
+    pub source_kind: DocumentSourceKind,
+    pub preferred_url: Option<String>,
+    pub fallback_urls: Vec<String>,
+    pub local_path: Option<String>,
+    pub trace: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroFullTextResult {
     pub item_key: String,
     pub content: String,
+    pub resolution: Option<DocumentResolution>,
     pub source_meta: Option<SourceMeta>,
 }
 
@@ -123,6 +312,28 @@ pub struct ZoteroNotesResult {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroAnnotation {
+    pub key: String,
+    pub parent_item: Option<String>,
+    pub annotation_type: String,
+    pub annotation_text: Option<String>,
+    pub annotation_comment: Option<String>,
+    pub annotation_color: Option<String>,
+    pub annotation_page_label: Option<String>,
+    pub annotation_sort_index: Option<String>,
+    pub parent_item_title: Option<String>,
+    pub source_meta: Option<SourceMeta>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroAnnotationsResult {
+    pub item_key: Option<String>,
+    pub annotations: Vec<ZoteroAnnotation>,
+    pub total_available: Option<u64>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroAttachment {
     pub key: String,
     pub title: Option<String>,
@@ -130,6 +341,7 @@ pub struct ZoteroAttachment {
     pub content_type: Option<String>,
     pub link_mode: Option<String>,
     pub url: Option<String>,
+    pub path: Option<String>,
     pub parent_item: Option<String>,
     pub source_meta: Option<SourceMeta>,
 }
@@ -153,6 +365,21 @@ pub struct ZoteroCollection {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroCollectionsResult {
     pub collections: Vec<ZoteroCollection>,
+    pub total_available: Option<u64>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroGroup {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub source_meta: Option<SourceMeta>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroGroupsResult {
+    pub groups: Vec<ZoteroGroup>,
     pub total_available: Option<u64>,
     pub has_more: bool,
 }
@@ -275,10 +502,120 @@ pub struct ZoteroSearchParams {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroTagsParams {
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroRecentParams {
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+    pub item_type: Option<String>,
+    pub sort_by: Option<ZoteroRecentSortBy>,
+    pub max_chars_per_item: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroGrepParams {
+    pub pattern: String,
+    pub match_mode: Option<ZoteroGrepMatchMode>,
+    pub case_sensitive: Option<bool>,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub parent_item_key: Option<String>,
+    pub query_hint: Option<String>,
+    pub item_type: Option<String>,
+    pub fields: Option<Vec<ZoteroGrepField>>,
+    pub limit_items: Option<u32>,
+    pub limit_matches: Option<u32>,
+    pub max_matches_per_item: Option<u32>,
+    pub context_chars: Option<u32>,
+    pub max_chars_per_item: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroSearchNotesParams {
+    pub query: String,
+    pub match_mode: Option<ZoteroGrepMatchMode>,
+    pub case_sensitive: Option<bool>,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub parent_item_key: Option<String>,
+    pub include_annotations: Option<bool>,
+    pub limit: Option<u32>,
+    pub max_chars_per_item: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroCitationFormat {
+    Bibtex,
+    CslJson,
+    Apa,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoteroCitationGenerator {
+    FallbackFormatter,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroCitationResult {
+    pub item_key: String,
+    pub format: ZoteroCitationFormat,
+    pub citation: String,
+    pub citation_key: Option<String>,
+    pub generator: ZoteroCitationGenerator,
+    pub warnings: Vec<String>,
+    pub source_meta: Option<SourceMeta>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroAdvancedSearchParams {
+    pub conditions: Vec<ZoteroSearchCondition>,
+    pub join_mode: Option<ZoteroAdvancedJoinMode>,
+    pub sort_by: Option<ZoteroAdvancedSortBy>,
+    pub sort_direction: Option<ZoteroSortDirection>,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+    pub item_type: Option<String>,
+    pub max_chars_per_item: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroItemParams {
     pub item_key: String,
     pub library_type: Option<String>,
     pub library_id: Option<String>,
+    pub max_chars_per_item: Option<u32>,
+    pub include_attachments: Option<bool>,
+    pub include_fulltext_resolution: Option<bool>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroCitationParams {
+    pub item_key: String,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub format: Option<ZoteroCitationFormat>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroAnnotationsParams {
+    pub item_key: Option<String>,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+    pub include_parent_context: Option<bool>,
     pub max_chars_per_item: Option<u32>,
 }
 
@@ -302,6 +639,13 @@ pub struct ZoteroCollectionsParams {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroListGroupsParams {
+    pub user_id: Option<String>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroCollectionItemsParams {
     pub collection_key: String,
     pub library_type: Option<String>,
@@ -310,4 +654,66 @@ pub struct ZoteroCollectionItemsParams {
     pub limit: Option<u32>,
     pub item_type: Option<String>,
     pub max_chars_per_item: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct LatexCompileParams {
+    pub content: String,
+    pub output_dir: String,
+    pub filename: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct LatexCompileResult {
+    pub success: bool,
+    pub pdf_path: Option<String>,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+    pub num_pages: Option<usize>,
+    pub compilation_log_snippet: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub packages_installed: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct PdfExtractFiguresParams {
+    pub pdf_url: String,
+    pub output_dir: String,
+    #[serde(default = "default_min_size_kb")]
+    pub min_size_kb: Option<u32>,
+    #[serde(default = "default_min_width")]
+    pub min_width: Option<u32>,
+    #[serde(default = "default_min_height")]
+    pub min_height: Option<u32>,
+}
+
+fn default_min_size_kb() -> Option<u32> {
+    Some(5)
+}
+
+fn default_min_width() -> Option<u32> {
+    Some(100)
+}
+
+fn default_min_height() -> Option<u32> {
+    Some(100)
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ExtractedFigure {
+    pub path: String,
+    pub width: u32,
+    pub height: u32,
+    pub size_bytes: u64,
+    pub page_number: u32,
+    pub index: u32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct PdfExtractFiguresResult {
+    pub success: bool,
+    pub figures: Vec<ExtractedFigure>,
+    pub total_extracted: usize,
+    pub total_filtered: usize,
+    pub errors: Vec<String>,
 }

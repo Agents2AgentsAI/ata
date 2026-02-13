@@ -43,6 +43,7 @@ codex-keyring-store = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
+codex-data-tools = { workspace = true, optional = true }
 codex-research-tools = { workspace = true, optional = true }
 codex-secrets = { workspace = true, optional = true }
 codex-rmcp-client = { workspace = true }
@@ -52,6 +53,7 @@ codex-utils-file = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-readiness = { workspace = true }
+codex-utils-sanitizer = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-windows-sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
 dirs = { workspace = true }
@@ -70,7 +72,6 @@ notify = { workspace = true }
 once_cell = { workspace = true }
 os_info = { workspace = true }
 rand = { workspace = true }
-regex = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
 rmcp = { workspace = true, default-features = false, features = [
@@ -119,7 +120,11 @@ zip = { workspace = true }
 
 
 [features]
+deterministic_process_ids = []
+data = ["dep:codex-data-tools", "dep:codex-secrets"]
 research = ["dep:codex-research-tools", "dep:codex-secrets"]
+research-latex = ["research", "codex-research-tools/latex"]
+research-pdf-images = ["research", "codex-research-tools/pdf_images"]
 research-repo = ["research", "codex-research-tools/repo_analysis"]
 test-support = []
 
