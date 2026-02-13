@@ -98,7 +98,6 @@ const AR5IV_PROBE_MAX_BODY_BYTES: usize = 8 * 1024;
 const AR5IV_BASE_URL: &str = "https://ar5iv.labs.arxiv.org/html";
 const ARXIV_PDF_BASE_URL: &str = "https://arxiv.org/pdf";
 const ZOTERO_STORAGE_DIR_ENV: &str = "ZOTERO_STORAGE_DIR";
-const ZOTERO_ENABLE_BETTER_BIBTEX_ENV: &str = "ZOTERO_ENABLE_BETTER_BIBTEX";
 
 #[derive(Debug, Clone, Serialize)]
 struct NormalizedScope {
@@ -159,7 +158,6 @@ struct NormalizedCitationParams {
     item_key: String,
     scopes: NormalizedResolvedScopes,
     format: ZoteroCitationFormat,
-    prefer_better_bibtex: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -503,22 +501,8 @@ pub(crate) async fn zotero_get_item(
         toolkit.config().cache_ttls.zotero_items,
         || async move {
             let scopes = resolved_scopes_to_vec(&normalized.scopes);
-            let mut resolved_item = None;
-            let mut last_err = None;
-            for scope in &scopes {
-                match zotero::get_item(toolkit.http(), config, scope, &normalized.item_key).await {
-                    Ok(result) => {
-                        resolved_item = Some((scope.clone(), result));
-                        break;
-                    }
-                    Err(err) => last_err = Some(err),
-                }
-            }
-
-            let (matched_scope, mut item) = resolved_item.ok_or_else(|| {
-                last_err
-                    .unwrap_or_else(|| ResearchError::Internal("no scopes to search".to_string()))
-            })?;
+            let (matched_scope, mut item) =
+                fetch_item_across_scopes(toolkit, config, &scopes, &normalized.item_key).await?;
 
             if let Some(max_chars) = normalized.max_chars_per_item {
                 truncate_optional_string(&mut item.abstract_text, max_chars as usize);
@@ -562,7 +546,7 @@ pub(crate) async fn zotero_get_item(
                                 toolkit,
                                 Some(&item),
                                 &attachments,
-                                false,
+                                None,
                                 Vec::new(),
                             )
                             .await,
@@ -607,67 +591,8 @@ pub(crate) async fn zotero_get_item_citation(
         toolkit.config().cache_ttls.zotero_items,
         || async move {
             let scopes = resolved_scopes_to_vec(&normalized.scopes);
-            let mut resolved_item = None;
-            let mut last_err = None;
-
-            for scope in &scopes {
-                match zotero::get_item(toolkit.http(), config, scope, &normalized.item_key).await {
-                    Ok(result) => {
-                        resolved_item = Some((scope.clone(), result));
-                        break;
-                    }
-                    Err(err) => last_err = Some(err),
-                }
-            }
-
-            let (matched_scope, item) = resolved_item.ok_or_else(|| {
-                last_err.unwrap_or_else(|| ResearchError::Internal("no scopes to search".to_string()))
-            })?;
-
-            let mut warnings = Vec::new();
-            if normalized.prefer_better_bibtex && normalized.format == ZoteroCitationFormat::Bibtex {
-                if !toolkit.config().uses_local_zotero_api() {
-                    warnings.push(
-                        "Better BibTeX requires local Zotero API; using fallback formatter"
-                            .to_string(),
-                    );
-                } else if !better_bibtex_enabled(toolkit) {
-                    warnings.push(format!(
-                        "{ZOTERO_ENABLE_BETTER_BIBTEX_ENV} is not enabled; using fallback formatter",
-                    ));
-                } else {
-                    let library_id = match &matched_scope {
-                        ZoteroLibraryScope::User(id) | ZoteroLibraryScope::Group(id) => {
-                            Some(id.as_str())
-                        }
-                    };
-                    match zotero::get_better_bibtex_citation(
-                        toolkit.http(),
-                        normalized.item_key.as_str(),
-                        library_id,
-                        toolkit.config().zotero_better_bibtex_url.as_deref(),
-                    )
-                    .await
-                    {
-                        Ok(citation) => {
-                            return Ok(ZoteroCitationResult {
-                                item_key: item.key,
-                                format: normalized.format,
-                                citation: citation.citation,
-                                citation_key: citation.citation_key,
-                                generator: ZoteroCitationGenerator::BetterBibtex,
-                                warnings,
-                                source_meta: item.source_meta,
-                            });
-                        }
-                        Err(err) => {
-                            warnings.push(format!(
-                                "Better BibTeX unavailable ({err}); using fallback formatter",
-                            ));
-                        }
-                    }
-                }
-            }
+            let (_, item) =
+                fetch_item_across_scopes(toolkit, config, &scopes, &normalized.item_key).await?;
 
             let (citation, citation_key) = fallback_citation_for_item(&item, normalized.format);
             Ok(ZoteroCitationResult {
@@ -676,7 +601,7 @@ pub(crate) async fn zotero_get_item_citation(
                 citation,
                 citation_key,
                 generator: ZoteroCitationGenerator::FallbackFormatter,
-                warnings,
+                warnings: Vec::new(),
                 source_meta: item.source_meta,
             })
         },
@@ -747,7 +672,7 @@ pub(crate) async fn zotero_get_fulltext(
                                 toolkit,
                                 item.as_ref(),
                                 &attachments,
-                                has_indexed_content,
+                                Some(has_indexed_content),
                                 resolution_trace,
                             )
                             .await,
@@ -1325,7 +1250,6 @@ async fn normalize_citation_params(
         item_key,
         scopes: to_normalized_resolved_scopes(&resolved),
         format: params.format.unwrap_or(ZoteroCitationFormat::Bibtex),
-        prefer_better_bibtex: params.prefer_better_bibtex.unwrap_or(true),
     })
 }
 
@@ -1857,11 +1781,28 @@ fn recent_sort_field(sort_by: &ZoteroRecentSortBy) -> &'static str {
     }
 }
 
+async fn fetch_item_across_scopes(
+    toolkit: &ResearchToolkit,
+    config: ZoteroConfig<'_>,
+    scopes: &[ZoteroLibraryScope],
+    item_key: &str,
+) -> Result<(ZoteroLibraryScope, ZoteroItemDetail)> {
+    let mut last_err = None;
+    for scope in scopes {
+        match zotero::get_item(toolkit.http(), config, scope, item_key).await {
+            Ok(result) => return Ok((scope.clone(), result)),
+            Err(err) => last_err = Some(err),
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| ResearchError::Internal("no scopes to search".to_string())))
+}
+
 async fn resolve_document_sources(
     toolkit: &ResearchToolkit,
     item: Option<&ZoteroItemDetail>,
     attachments: &[ZoteroAttachment],
-    has_indexed_content: bool,
+    has_indexed_content: Option<bool>,
     trace: Vec<String>,
 ) -> DocumentResolution {
     resolve_document_sources_with_probe(
@@ -1881,7 +1822,7 @@ async fn resolve_document_sources_with_probe<F, Fut>(
     item: Option<&ZoteroItemDetail>,
     attachments: &[ZoteroAttachment],
     storage_root: Option<&str>,
-    has_indexed_content: bool,
+    has_indexed_content: Option<bool>,
     mut trace: Vec<String>,
     mut probe_ar5iv: F,
 ) -> DocumentResolution
@@ -1952,14 +1893,24 @@ where
         };
     }
 
-    if has_indexed_content {
-        trace.push(
-            "no canonical document source resolved; using indexed fulltext fallback".to_string(),
-        );
-    } else {
-        trace.push(
-            "no canonical document source resolved and indexed fulltext is empty".to_string(),
-        );
+    match has_indexed_content {
+        Some(true) => {
+            trace.push(
+                "no canonical document source resolved; using indexed fulltext fallback"
+                    .to_string(),
+            );
+        }
+        Some(false) => {
+            trace.push(
+                "no canonical document source resolved and indexed fulltext is empty".to_string(),
+            );
+        }
+        None => {
+            trace.push(
+                "no canonical document source resolved; indexed fulltext availability unknown"
+                    .to_string(),
+            );
+        }
     }
 
     DocumentResolution {
@@ -2352,10 +2303,6 @@ async fn read_response_prefix(mut response: reqwest::Response, max_bytes: usize)
     Some(String::from_utf8_lossy(&bytes).to_string())
 }
 
-fn better_bibtex_enabled(toolkit: &ResearchToolkit) -> bool {
-    toolkit.config().zotero_enable_better_bibtex
-}
-
 fn fallback_citation_for_item(
     item: &ZoteroItemDetail,
     format: ZoteroCitationFormat,
@@ -2463,9 +2410,13 @@ fn fallback_csl_json_citation(item: &ZoteroItemDetail) -> String {
         let authors = item
             .authors
             .iter()
-            .map(|author| serde_json::json!({ "literal": author.trim() }))
+            .map(|author| author.trim())
+            .filter(|author| !author.is_empty())
+            .map(|author| serde_json::json!({ "literal": author }))
             .collect::<Vec<_>>();
-        map.insert("author".to_string(), serde_json::Value::Array(authors));
+        if !authors.is_empty() {
+            map.insert("author".to_string(), serde_json::Value::Array(authors));
+        }
     }
 
     if let Some(year) = extract_year_from_date(item.date.as_deref())
@@ -2518,15 +2469,17 @@ fn fallback_csl_json_citation(item: &ZoteroItemDetail) -> String {
 }
 
 fn fallback_apa_citation(item: &ZoteroItemDetail) -> String {
-    let author_text = if item.authors.is_empty() {
+    let author_text = item
+        .authors
+        .iter()
+        .map(|author| author.trim())
+        .filter(|author| !author.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let author_text = if author_text.is_empty() {
         "Unknown author".to_string()
     } else {
-        item.authors
-            .iter()
-            .map(|author| author.trim())
-            .filter(|author| !author.is_empty())
-            .collect::<Vec<_>>()
-            .join(", ")
+        author_text
     };
     let year = extract_year_from_date(item.date.as_deref()).unwrap_or_else(|| "n.d.".to_string());
     let title = if item.title.trim().is_empty() {
@@ -2988,6 +2941,70 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_get_item_enrichment_resolves_arxiv_item_sources() {
+        let server = MockServer::start().await;
+        mount_item_detail(
+            &server,
+            "ITEM1",
+            serde_json::json!({
+                "itemType": "journalArticle",
+                "title": "arXiv Item",
+                "creators": [{"firstName": "Alice", "lastName": "Kim"}],
+                "date": "2024-01-01",
+                "url": "https://arxiv.org/abs/9999.99999v1"
+            }),
+        )
+        .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/ITEM1/children"))
+            .and(query_param("itemType", "attachment"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "ATT1",
+                    "data": {
+                        "itemType": "attachment",
+                        "title": "paper.pdf",
+                        "filename": "paper.pdf",
+                        "contentType": "application/pdf",
+                        "url": "https://example.com/paper.pdf",
+                        "parentItem": "ITEM1"
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let item = toolkit
+            .zotero_get_item(ZoteroItemParams {
+                item_key: "ITEM1".to_string(),
+                library_type: Some("user".to_string()),
+                library_id: Some("123".to_string()),
+                max_chars_per_item: None,
+                include_attachments: Some(false),
+                include_fulltext_resolution: Some(true),
+            })
+            .await
+            .expect("zotero_get_item should resolve arXiv sources");
+
+        let resolution = item
+            .document_resolution
+            .expect("include_fulltext_resolution=true should return resolution");
+        assert!(matches!(
+            resolution.source_kind,
+            DocumentSourceKind::Ar5ivHtml | DocumentSourceKind::ArxivPdf
+        ));
+        let preferred_url = resolution
+            .preferred_url
+            .expect("arXiv resolution should include a preferred URL");
+        assert!(
+            preferred_url.starts_with("https://arxiv.org/pdf/9999.99999v1.pdf")
+                || preferred_url.starts_with("https://ar5iv.labs.arxiv.org/html/9999.99999")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn zotero_get_item_enrichment_tolerates_attachment_failures() {
         let server = MockServer::start().await;
         mount_item_detail(
@@ -3051,7 +3068,6 @@ mod tests {
                 library_type: Some("user".to_string()),
                 library_id: Some("123".to_string()),
                 format: Some(ZoteroCitationFormat::Bibtex),
-                prefer_better_bibtex: Some(false),
             })
             .await
             .expect("zotero_get_item_citation should succeed");
@@ -3091,7 +3107,6 @@ mod tests {
                 library_type: Some("user".to_string()),
                 library_id: Some("123".to_string()),
                 format: Some(ZoteroCitationFormat::Bibtex),
-                prefer_better_bibtex: Some(false),
             })
             .await
             .expect("zotero_get_item_citation should succeed");
@@ -3101,52 +3116,123 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn zotero_get_item_citation_better_bibtex_failure_falls_back() {
+    async fn zotero_get_item_citation_fallback_csl_json_has_expected_structure() {
         let server = MockServer::start().await;
         mount_item_detail(
             &server,
             "ITEM1",
             serde_json::json!({
                 "itemType": "journalArticle",
-                "title": "Fallback from BBT",
-                "creators": [{"firstName": "Alice", "lastName": "Kim"}],
-                "date": "2024-01-01"
+                "title": "Structured Citation",
+                "creators": [
+                    {"firstName": "Alice", "lastName": "Kim"},
+                    {"firstName": "Bob", "lastName": "Lee"}
+                ],
+                "date": "2021-06-01",
+                "publicationTitle": "NeurIPS",
+                "DOI": "10.1000/example",
+                "url": "https://example.com/paper"
             }),
         )
         .await;
 
-        let toolkit = build_test_toolkit_with_config(ResearchConfig {
-            zotero_api_key: None,
-            zotero_user_id: Some("123".to_string()),
-            zotero_group_id: None,
-            zotero_base_url: server.uri(),
-            zotero_enable_better_bibtex: true,
-            zotero_better_bibtex_url: Some("http://127.0.0.1:9/better-bibtex/json-rpc".to_string()),
-            ..ResearchConfig::default()
-        });
-
+        let toolkit = build_test_toolkit(server.uri());
         let citation = toolkit
             .zotero_get_item_citation(ZoteroCitationParams {
                 item_key: "ITEM1".to_string(),
                 library_type: Some("user".to_string()),
                 library_id: Some("123".to_string()),
-                format: Some(ZoteroCitationFormat::Bibtex),
-                prefer_better_bibtex: Some(true),
+                format: Some(ZoteroCitationFormat::CslJson),
             })
             .await
-            .expect("fallback citation should succeed");
+            .expect("zotero_get_item_citation should succeed");
 
+        assert_eq!(citation.citation_key, None);
         assert_eq!(
             citation.generator,
             ZoteroCitationGenerator::FallbackFormatter
         );
-        assert!(
-            citation
-                .warnings
-                .iter()
-                .any(|warning| warning.contains("Better BibTeX unavailable")),
-            "expected Better BibTeX fallback warning, got {:?}",
-            citation.warnings
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&citation.citation).expect("citation should be valid JSON");
+        assert_eq!(parsed["id"], "ITEM1");
+        assert_eq!(parsed["type"], "article-journal");
+        assert_eq!(parsed["title"], "Structured Citation");
+        assert_eq!(parsed["container-title"], "NeurIPS");
+        assert_eq!(parsed["DOI"], "10.1000/example");
+        assert_eq!(parsed["URL"], "https://example.com/paper");
+        assert_eq!(parsed["issued"]["date-parts"], serde_json::json!([[2021]]));
+        assert_eq!(
+            parsed["author"],
+            serde_json::json!([
+                {"literal": "Alice Kim"},
+                {"literal": "Bob Lee"}
+            ])
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_get_item_citation_fallback_apa_formats_expected_fields() {
+        let server = MockServer::start().await;
+        mount_item_detail(
+            &server,
+            "ITEM1",
+            serde_json::json!({
+                "itemType": "journalArticle",
+                "title": "Reliable Evaluation",
+                "creators": [{"firstName": "Alice", "lastName": "Kim"}],
+                "date": "2024-03-09",
+                "publicationTitle": "Journal of Testing",
+                "DOI": "10.1000/example"
+            }),
+        )
+        .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let citation = toolkit
+            .zotero_get_item_citation(ZoteroCitationParams {
+                item_key: "ITEM1".to_string(),
+                library_type: Some("user".to_string()),
+                library_id: Some("123".to_string()),
+                format: Some(ZoteroCitationFormat::Apa),
+            })
+            .await
+            .expect("zotero_get_item_citation should succeed");
+
+        assert_eq!(citation.citation_key, None);
+        assert_eq!(
+            citation.citation,
+            "Alice Kim (2024). Reliable Evaluation. Journal of Testing. https://doi.org/10.1000/example"
+        );
+    }
+
+    #[test]
+    fn fallback_apa_citation_handles_missing_author_and_year() {
+        let citation = super::fallback_apa_citation(&ZoteroItemDetail {
+            key: "ITEM1".to_string(),
+            title: "Missing Metadata".to_string(),
+            authors: vec!["   ".to_string(), "".to_string()],
+            abstract_text: None,
+            date: None,
+            doi: None,
+            url: None,
+            publication: None,
+            item_type: "journalArticle".to_string(),
+            tags: Vec::new(),
+            extra: None,
+            source_meta: None,
+            attachments: None,
+            document_resolution: None,
+        });
+
+        assert_eq!(citation, "Unknown author (n.d.). Missing Metadata.");
+    }
+
+    #[test]
+    fn escape_bibtex_value_escapes_special_characters() {
+        assert_eq!(
+            super::escape_bibtex_value("&%#_{}~^\\"),
+            "\\&\\%\\#\\_\\{\\}\\textasciitilde{}\\textasciicircum{}\\textbackslash{}"
         );
     }
 
@@ -5621,7 +5707,7 @@ mod tests {
             Some(&item),
             &attachments,
             None,
-            true,
+            Some(true),
             Vec::new(),
             |_, _| async { true },
         )
@@ -5659,7 +5745,7 @@ mod tests {
             Some(&item),
             &attachments,
             None,
-            true,
+            Some(true),
             Vec::new(),
             |_, _| async { false },
         )
@@ -5694,7 +5780,7 @@ mod tests {
             Some(&item),
             &attachments,
             None,
-            true,
+            Some(true),
             Vec::new(),
             |_, _| async { false },
         )
@@ -5723,7 +5809,7 @@ mod tests {
             Some(&item),
             &Vec::new(),
             None,
-            true,
+            Some(true),
             Vec::new(),
             |_, _| async { false },
         )
@@ -5759,7 +5845,7 @@ mod tests {
             Some(&item),
             &attachments,
             None,
-            true,
+            Some(true),
             Vec::new(),
             {
                 let observed = observed.clone();
@@ -5807,7 +5893,7 @@ mod tests {
             Some(&item),
             &attachments,
             None,
-            false,
+            Some(false),
             Vec::new(),
             |_, _| async { false },
         )
@@ -5838,7 +5924,7 @@ mod tests {
             None,
             &attachments,
             None,
-            false,
+            Some(false),
             vec!["item metadata lookup failed: missing".to_string()],
             |_, _| async { false },
         )
@@ -5867,7 +5953,7 @@ mod tests {
             Some(&item),
             &Vec::new(),
             None,
-            false,
+            Some(false),
             Vec::new(),
             |_, _| async { false },
         )
@@ -5890,6 +5976,36 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_document_sources_marks_unknown_indexed_content_when_not_provided() {
+        let item = sample_item_with_source(Some("https://example.com/paper"), None);
+
+        let resolution = super::resolve_document_sources_with_probe(
+            Some(&item),
+            &Vec::new(),
+            None,
+            None,
+            Vec::new(),
+            |_, _| async { false },
+        )
+        .await;
+
+        assert_eq!(
+            resolution,
+            DocumentResolution {
+                source_kind: DocumentSourceKind::IndexedFulltext,
+                preferred_url: None,
+                fallback_urls: Vec::new(),
+                local_path: None,
+                trace: vec![
+                    "local path fallback unavailable: ZOTERO_STORAGE_DIR is not set".to_string(),
+                    "no canonical document source resolved; indexed fulltext availability unknown"
+                        .to_string()
+                ],
+            }
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn resolve_document_sources_skips_malformed_arxiv_urls() {
         let item = sample_item_with_source(Some("https://arxiv.org/foo/2401.12345"), None);
         let attachments = vec![sample_attachment(
@@ -5903,7 +6019,7 @@ mod tests {
             Some(&item),
             &attachments,
             None,
-            true,
+            Some(true),
             Vec::new(),
             |_, _| async { true },
         )
@@ -5957,7 +6073,7 @@ mod tests {
             Some(&item),
             &attachments,
             Some(storage_root.as_str()),
-            false,
+            Some(false),
             Vec::new(),
             |_, _| async { false },
         )
@@ -5997,7 +6113,7 @@ mod tests {
             Some(&item),
             &attachments,
             Some(storage_root.as_str()),
-            true,
+            Some(true),
             Vec::new(),
             |_, _| async { false },
         )
