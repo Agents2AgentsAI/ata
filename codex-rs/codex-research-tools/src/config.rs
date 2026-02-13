@@ -17,6 +17,7 @@ pub struct ResearchConfig {
     pub github_token: Option<String>,
     pub zotero_library_type: Option<String>,
     pub zotero_group_id: Option<String>,
+    pub zotero_storage_dir: Option<String>,
     pub semantic_scholar_base_url: String,
     pub arxiv_base_url: String,
     pub openalex_base_url: String,
@@ -92,6 +93,7 @@ impl Default for ResearchConfig {
             github_token: None,
             zotero_library_type: None,
             zotero_group_id: None,
+            zotero_storage_dir: None,
             semantic_scholar_base_url: "https://api.semanticscholar.org/graph/v1".to_string(),
             arxiv_base_url: "https://export.arxiv.org".to_string(),
             openalex_base_url: "https://api.openalex.org".to_string(),
@@ -144,6 +146,7 @@ impl ResearchConfig {
             github_token: std::env::var("GITHUB_TOKEN").ok(),
             zotero_library_type: std::env::var("ZOTERO_LIBRARY_TYPE").ok(),
             zotero_group_id: std::env::var("ZOTERO_GROUP_ID").ok(),
+            zotero_storage_dir: std::env::var("ZOTERO_STORAGE_DIR").ok(),
             semantic_scholar_base_url: std::env::var("SEMANTIC_SCHOLAR_BASE_URL")
                 .unwrap_or_else(|_| "https://api.semanticscholar.org/graph/v1".to_string()),
             arxiv_base_url: std::env::var("ARXIV_BASE_URL")
@@ -230,6 +233,7 @@ impl fmt::Debug for ResearchConfig {
             .field("github_token", &redact(&self.github_token))
             .field("zotero_library_type", &self.zotero_library_type)
             .field("zotero_group_id", &self.zotero_group_id)
+            .field("zotero_storage_dir", &self.zotero_storage_dir)
             .field("semantic_scholar_base_url", &self.semantic_scholar_base_url)
             .field("arxiv_base_url", &self.arxiv_base_url)
             .field("openalex_base_url", &self.openalex_base_url)

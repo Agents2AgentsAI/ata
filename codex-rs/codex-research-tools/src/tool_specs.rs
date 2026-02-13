@@ -257,7 +257,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 id: "zotero_get_fulltext",
                 native_name: "zotero_get_fulltext",
                 mcp_name: "get_item_fulltext",
-                description: "Get indexed fulltext for a Zotero item.",
+                description: "Get indexed fulltext for a Zotero item and resolve canonical document sources (ar5iv/arXiv/PDF URL/local path).",
                 input_schema: json!({
                     "type": "object",
                     "properties": {
