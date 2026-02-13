@@ -220,6 +220,38 @@ impl AuthDotJson {
         self.set_provider_credential(provider_id, ProviderCredential::Oauth { credential });
     }
 
+    /// Remove only OAuth credentials for a specific provider.
+    /// Preserves stored API keys when credentials are `ApiAndOauth`.
+    pub fn clear_provider_oauth_credential(&mut self, provider_id: &str) -> bool {
+        let Some(existing) = self.providers.get(provider_id).cloned() else {
+            return false;
+        };
+
+        let changed = match existing {
+            ProviderCredential::Api { .. } => false,
+            ProviderCredential::Oauth { .. } => {
+                self.providers.remove(provider_id);
+                true
+            }
+            ProviderCredential::ApiAndOauth { key, .. } => {
+                self.providers
+                    .insert(provider_id.to_string(), ProviderCredential::Api { key });
+                true
+            }
+        };
+
+        if changed {
+            if provider_id == PROVIDER_OPENAI {
+                self.openai_api_key = self
+                    .get_provider_api_key(PROVIDER_OPENAI)
+                    .map(std::string::ToString::to_string);
+            }
+            self.version = Some(AUTH_JSON_VERSION);
+        }
+
+        changed
+    }
+
     /// Remove credentials for a specific provider.
     pub fn remove_provider(&mut self, provider_id: &str) -> bool {
         let removed = self.providers.remove(provider_id).is_some();
@@ -464,6 +496,29 @@ pub(super) fn remove_provider(
     Ok(removed)
 }
 
+/// Remove only OAuth credentials for a specific provider while preserving API keys.
+/// Returns true if OAuth credentials were removed, false if there were none to clear.
+pub fn clear_provider_oauth_credential(
+    codex_home: &Path,
+    provider_id: &str,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> std::io::Result<bool> {
+    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
+    let Some(mut auth) = storage.load()? else {
+        return Ok(false);
+    };
+
+    let cleared = auth.clear_provider_oauth_credential(provider_id);
+    if cleared {
+        if auth.providers.is_empty() && auth.tokens.is_none() {
+            storage.delete()?;
+        } else {
+            storage.save(&auth)?;
+        }
+    }
+    Ok(cleared)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -661,6 +716,50 @@ mod tests {
             auth.get_provider_oauth_credential(PROVIDER_GEMINI),
             Some(oauth),
         );
+    }
+
+    #[test]
+    fn auth_dot_json_clear_provider_oauth_credential_removes_oauth_only() {
+        let mut auth = AuthDotJson::default();
+        let oauth = ProviderOauthCredential {
+            access: "access-token".to_string(),
+            refresh: "refresh-token".to_string(),
+            expires: None,
+            email: Some("user@example.com".to_string()),
+            project_id: None,
+            managed_project_id: Some("managed-project".to_string()),
+        };
+        auth.set_provider_oauth_credential(PROVIDER_GEMINI, oauth);
+
+        let cleared = auth.clear_provider_oauth_credential(PROVIDER_GEMINI);
+
+        assert!(cleared);
+        assert_eq!(auth.get_provider_oauth_credential(PROVIDER_GEMINI), None);
+        assert_eq!(auth.get_provider_api_key(PROVIDER_GEMINI), None);
+    }
+
+    #[test]
+    fn auth_dot_json_clear_provider_oauth_credential_preserves_api_key() {
+        let mut auth = AuthDotJson::default();
+        let oauth = ProviderOauthCredential {
+            access: "access-token".to_string(),
+            refresh: "refresh-token".to_string(),
+            expires: None,
+            email: Some("user@example.com".to_string()),
+            project_id: None,
+            managed_project_id: Some("managed-project".to_string()),
+        };
+        auth.set_provider_api_key(PROVIDER_GEMINI, "AIza-test");
+        auth.set_provider_oauth_credential(PROVIDER_GEMINI, oauth);
+
+        let cleared = auth.clear_provider_oauth_credential(PROVIDER_GEMINI);
+
+        assert!(cleared);
+        assert_eq!(
+            auth.get_provider_api_key(PROVIDER_GEMINI),
+            Some("AIza-test")
+        );
+        assert_eq!(auth.get_provider_oauth_credential(PROVIDER_GEMINI), None);
     }
 
     #[test]

@@ -390,7 +390,7 @@ pub async fn run_list_providers(cli_config_overrides: CliConfigOverrides) -> ! {
         eprintln!("No providers configured");
         eprintln!();
         eprintln!("To configure a provider, run:");
-        eprintln!("  ata auth login --provider <provider>");
+        eprintln!("  ata login --provider <provider>");
         eprintln!();
         eprintln!("Available providers: openai, anthropic, gemini");
         std::process::exit(0);

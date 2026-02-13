@@ -238,6 +238,19 @@ async fn process_request(
                 );
             }
 
+            if let Some(error) = params.get("error").filter(|error| !error.trim().is_empty()) {
+                let mut message = format!("OAuth authorization failed: {error}");
+                if let Some(description) = params
+                    .get("error_description")
+                    .filter(|description| !description.trim().is_empty())
+                {
+                    message = format!("{message} ({description})");
+                }
+                return HandledRequest::Response(
+                    Response::from_string(message).with_status_code(400),
+                );
+            }
+
             let code = match params.get("code") {
                 Some(code) if !code.is_empty() => code.clone(),
                 _ => {

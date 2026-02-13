@@ -12,9 +12,9 @@ use tokio::sync::Mutex;
 use super::AuthCredentialsStoreMode;
 use super::PROVIDER_GEMINI;
 use super::ProviderOauthCredential;
+use super::clear_provider_oauth_credential;
 use super::get_provider_oauth_credential;
 use super::login_with_provider_oauth;
-use super::logout_provider;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
@@ -189,17 +189,46 @@ pub(crate) async fn ensure_gemini_oauth_context(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     initial_credential: ProviderOauthCredential,
 ) -> Result<GeminiOauthRuntimeContext> {
+    ensure_gemini_oauth_context_with_refresh(
+        codex_home,
+        auth_credentials_store_mode,
+        initial_credential,
+        false,
+    )
+    .await
+}
+
+pub(crate) async fn force_refresh_gemini_oauth_context(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    initial_credential: ProviderOauthCredential,
+) -> Result<GeminiOauthRuntimeContext> {
+    ensure_gemini_oauth_context_with_refresh(
+        codex_home,
+        auth_credentials_store_mode,
+        initial_credential,
+        true,
+    )
+    .await
+}
+
+async fn ensure_gemini_oauth_context_with_refresh(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    initial_credential: ProviderOauthCredential,
+    force_refresh: bool,
+) -> Result<GeminiOauthRuntimeContext> {
     let mut credential =
         get_provider_oauth_credential(codex_home, PROVIDER_GEMINI, auth_credentials_store_mode)
             .unwrap_or(initial_credential);
 
-    if should_refresh_credential(&credential) {
+    if force_refresh || should_refresh_credential(&credential) {
         let _refresh_guard = GEMINI_OAUTH_REFRESH_LOCK.lock().await;
         credential =
             get_provider_oauth_credential(codex_home, PROVIDER_GEMINI, auth_credentials_store_mode)
                 .unwrap_or_else(|| credential.clone());
 
-        if should_refresh_credential(&credential) {
+        if force_refresh || should_refresh_credential(&credential) {
             credential =
                 refresh_access_token(codex_home, auth_credentials_store_mode, credential).await?;
             login_with_provider_oauth(
@@ -290,7 +319,11 @@ async fn refresh_access_token(
 
     if !status.is_success() {
         if is_invalid_grant_response(status, &body) {
-            let _ = logout_provider(codex_home, PROVIDER_GEMINI, auth_credentials_store_mode);
+            let _ = clear_provider_oauth_credential(
+                codex_home,
+                PROVIDER_GEMINI,
+                auth_credentials_store_mode,
+            );
             return Err(CodexErr::Api(
                 "Gemini OAuth session expired or revoked. Run `ata login --provider gemini --with-oauth` again."
                     .to_string(),
@@ -565,6 +598,8 @@ async fn resolve_project_via_code_assist(access_token: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::get_provider_api_key;
+    use crate::auth::login_with_provider_api_key;
     use crate::auth::login_with_provider_oauth;
     use crate::auth::test_utils::EnvVarGuard;
     use pretty_assertions::assert_eq;
@@ -671,6 +706,7 @@ mod tests {
     #[serial(gemini_oauth_env)]
     async fn invalid_grant_clears_stored_oauth_credential() {
         let codex_home = tempdir().expect("tempdir");
+        let _google_guard = EnvVarGuard::set(crate::auth::GOOGLE_API_KEY_ENV_VAR, "");
         let token_server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/token"))
@@ -714,6 +750,80 @@ mod tests {
             "unexpected error: {err}"
         );
 
+        assert_eq!(
+            get_provider_oauth_credential(
+                codex_home.path(),
+                PROVIDER_GEMINI,
+                AuthCredentialsStoreMode::File,
+            ),
+            None,
+        );
+    }
+
+    #[tokio::test]
+    #[serial(gemini_oauth_env)]
+    async fn invalid_grant_keeps_stored_api_key() {
+        let codex_home = tempdir().expect("tempdir");
+        let _google_guard = EnvVarGuard::set(crate::auth::GOOGLE_API_KEY_ENV_VAR, "");
+        let token_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_string(r#"{"error":"invalid_grant","error_description":"expired"}"#),
+            )
+            .mount(&token_server)
+            .await;
+
+        let _token_url_guard = EnvVarGuard::set(
+            GEMINI_OAUTH_TOKEN_URL_ENV_VAR,
+            &format!("{}/token", token_server.uri()),
+        );
+        login_with_provider_api_key(
+            codex_home.path(),
+            PROVIDER_GEMINI,
+            "AIza-test",
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store api key");
+
+        let credential = ProviderOauthCredential {
+            access: "old-access".to_string(),
+            refresh: "old-refresh".to_string(),
+            expires: Some(Utc::now() - Duration::seconds(30)),
+            email: None,
+            project_id: None,
+            managed_project_id: Some("managed-project".to_string()),
+        };
+        login_with_provider_oauth(
+            codex_home.path(),
+            PROVIDER_GEMINI,
+            credential.clone(),
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store oauth");
+
+        let err = ensure_gemini_oauth_context(
+            codex_home.path(),
+            AuthCredentialsStoreMode::File,
+            credential,
+        )
+        .await
+        .expect_err("invalid grant should fail");
+        assert!(
+            err.to_string()
+                .contains("Run `ata login --provider gemini --with-oauth` again"),
+            "unexpected error: {err}"
+        );
+
+        assert_eq!(
+            get_provider_api_key(
+                codex_home.path(),
+                PROVIDER_GEMINI,
+                AuthCredentialsStoreMode::File,
+            ),
+            Some("AIza-test".to_string()),
+        );
         assert_eq!(
             get_provider_oauth_credential(
                 codex_home.path(),
