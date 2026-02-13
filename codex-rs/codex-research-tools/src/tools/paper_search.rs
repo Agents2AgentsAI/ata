@@ -12,6 +12,7 @@ use crate::clients::openalex::OpenAlexSearchRequest;
 use crate::clients::semantic_scholar;
 use crate::clients::semantic_scholar::PaperRelation;
 use crate::clients::semantic_scholar::SemanticScholarConfig;
+use crate::clients::semantic_scholar::SemanticScholarRecommendationRequest;
 use crate::clients::semantic_scholar::SemanticScholarRelationRequest;
 use crate::clients::semantic_scholar::SemanticScholarSearchRequest;
 use crate::error::ResearchError;
@@ -23,7 +24,9 @@ use crate::types::CitationResult;
 use crate::types::PaginationParams;
 use crate::types::Paper;
 use crate::types::PaperDetail;
+use crate::types::PaperRecommendationParams;
 use crate::types::PaperSearchParams;
+use crate::types::RecommendationResult;
 use crate::types::SearchResult;
 use crate::types::SourceResult;
 use crate::types::SourceStatus;
@@ -240,6 +243,87 @@ pub(crate) async fn paper_references(
         total_available: page.total_available,
         has_more: page.has_more,
     })
+}
+
+pub(crate) async fn paper_recommendations(
+    toolkit: &ResearchToolkit,
+    params: PaperRecommendationParams,
+) -> Result<RecommendationResult> {
+    if params.positive_paper_ids.is_empty() {
+        return Err(ResearchError::InvalidInput(
+            "paper_recommendations requires at least one positive_paper_ids entry".to_string(),
+        ));
+    }
+
+    let limit = params.limit.unwrap_or(10).clamp(1, 100);
+    let include_abstract = should_include_abstract(Some(true), params.fields.as_ref());
+    let max_chars_per_item = params.max_chars_per_item;
+
+    let mut warnings = Vec::new();
+    let mut resolved_positive = Vec::new();
+    for id in &params.positive_paper_ids {
+        match to_semantic_scholar_id(id) {
+            Ok(resolved) => resolved_positive.push(resolved),
+            Err(err) => warnings.push(format!("skipping positive id '{id}': {err}")),
+        }
+    }
+
+    if resolved_positive.is_empty() {
+        return Err(ResearchError::InvalidInput(
+            "no valid positive paper IDs could be resolved".to_string(),
+        ));
+    }
+
+    let mut resolved_negative = Vec::new();
+    if let Some(neg_ids) = &params.negative_paper_ids {
+        for id in neg_ids {
+            match to_semantic_scholar_id(id) {
+                Ok(resolved) => resolved_negative.push(resolved),
+                Err(err) => warnings.push(format!("skipping negative id '{id}': {err}")),
+            }
+        }
+    }
+
+    let request = SemanticScholarRecommendationRequest {
+        positive_paper_ids: resolved_positive,
+        negative_paper_ids: resolved_negative,
+        limit,
+        include_abstract,
+    };
+
+    let params_hash = hash_cache_payload(&(
+        "paper_recommendations",
+        &request.positive_paper_ids,
+        &request.negative_paper_ids,
+        limit,
+        include_abstract,
+    ))?;
+    let key = CacheKey {
+        tool_name: "paper_recommendations",
+        params_hash,
+    };
+
+    let mut papers: Vec<Paper> = get_or_fetch_typed(
+        toolkit,
+        key,
+        toolkit.config().cache_ttls.paper_search,
+        || async {
+            semantic_scholar::get_recommendations(
+                toolkit.http(),
+                SemanticScholarConfig {
+                    base_url: &toolkit.config().semantic_scholar_base_url,
+                    api_key: toolkit.config().semantic_scholar_api_key.as_deref(),
+                },
+                &request,
+            )
+            .await
+        },
+    )
+    .await?;
+
+    apply_output_budget(&mut papers, include_abstract, max_chars_per_item);
+
+    Ok(RecommendationResult { papers, warnings })
 }
 
 fn normalize_paper_search_params(params: PaperSearchParams) -> Result<NormalizedPaperSearchParams> {

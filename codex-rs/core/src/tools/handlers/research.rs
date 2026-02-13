@@ -10,6 +10,7 @@ use codex_research_tools::error::ResearchError;
 #[cfg(feature = "research-latex")]
 use codex_research_tools::types::LatexCompileParams;
 use codex_research_tools::types::PaginationParams;
+use codex_research_tools::types::PaperRecommendationParams;
 use codex_research_tools::types::PaperSearchParams;
 #[cfg(feature = "research-pdf-images")]
 use codex_research_tools::types::PdfExtractFiguresParams;
@@ -117,6 +118,11 @@ impl ResearchBridgeHandler {
                         max_chars_per_item: params.max_chars_per_item,
                     },
                 ))
+            }
+            "paper_recommendations" => {
+                dispatch_with_params!(PaperRecommendationParams, |params| self
+                    .toolkit
+                    .paper_recommendations(params))
             }
             "zotero_search" => dispatch_with_params!(ZoteroSearchParams, |params| self
                 .toolkit

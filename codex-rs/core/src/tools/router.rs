@@ -55,6 +55,7 @@ impl ToolRouter {
         Self { registry, specs }
     }
 
+    #[allow(dead_code)]
     pub fn from_config_with_research(
         config: &ToolsConfig,
         mcp_tools: Option<HashMap<String, Tool>>,

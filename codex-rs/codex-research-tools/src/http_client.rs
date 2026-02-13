@@ -71,6 +71,17 @@ impl HttpClient {
         })
     }
 
+    pub async fn execute_bytes<F>(&self, api: ResearchApi, build_request: F) -> Result<bytes::Bytes>
+    where
+        F: Fn() -> reqwest::RequestBuilder,
+    {
+        let response = self.execute_response(api, build_request).await?;
+        response.bytes().await.map_err(|err| ResearchError::Parse {
+            api,
+            message: err.to_string(),
+        })
+    }
+
     pub(crate) async fn execute_response<F>(
         &self,
         api: ResearchApi,

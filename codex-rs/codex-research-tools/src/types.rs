@@ -468,6 +468,21 @@ pub struct RequirementsDiff {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct PaperRecommendationParams {
+    pub positive_paper_ids: Vec<String>,
+    pub negative_paper_ids: Option<Vec<String>>,
+    pub limit: Option<u32>,
+    pub fields: Option<Vec<String>>,
+    pub max_chars_per_item: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RecommendationResult {
+    pub papers: Vec<Paper>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct PaperSearchParams {
     pub query: String,
     pub year_from: Option<u32>,
@@ -679,12 +694,18 @@ pub struct LatexCompileResult {
 pub struct PdfExtractFiguresParams {
     pub pdf_url: String,
     pub output_dir: String,
+    #[serde(default = "default_dpi")]
+    pub dpi: Option<u32>,
     #[serde(default = "default_min_size_kb")]
     pub min_size_kb: Option<u32>,
     #[serde(default = "default_min_width")]
     pub min_width: Option<u32>,
     #[serde(default = "default_min_height")]
     pub min_height: Option<u32>,
+}
+
+fn default_dpi() -> Option<u32> {
+    Some(300)
 }
 
 fn default_min_size_kb() -> Option<u32> {
@@ -707,6 +728,12 @@ pub struct ExtractedFigure {
     pub size_bytes: u64,
     pub page_number: u32,
     pub index: u32,
+    pub caption: Option<String>,
+    pub figure_type: Option<String>,
+    #[serde(default)]
+    pub aspect_ratio: Option<f32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quality_hints: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]

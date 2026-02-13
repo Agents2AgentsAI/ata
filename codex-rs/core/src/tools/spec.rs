@@ -1434,6 +1434,7 @@ pub(crate) fn build_specs(
     build_specs_with_toolkits(config, mcp_tools, dynamic_tools, None, None)
 }
 
+#[allow(dead_code)]
 pub(crate) fn build_specs_with_research(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,

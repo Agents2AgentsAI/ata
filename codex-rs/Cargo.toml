@@ -408,6 +408,14 @@ ignored = [
     "codex-secrets",
 ]
 
+[profile.dev]
+# Skip the slow dsymutil pass on macOS; debug symbols stay as separate
+# object files which is fine for local development.
+split-debuginfo = "unpacked"
+# Line-tables-only still gives backtraces with file:line info but
+# compiles noticeably faster than full debug info.
+debug = "line-tables-only"
+
 [profile.release]
 lto = "fat"
 # Because we bundle some of these executables with the TypeScript CLI, we
