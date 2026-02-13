@@ -21,6 +21,8 @@ use super::zotero_config;
 pub(super) struct GrepTextSegment {
     pub(super) field: &'static str,
     pub(super) text: String,
+    pub(super) item_key: String,
+    pub(super) parent_item_key: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -45,13 +47,22 @@ pub(super) async fn collect_grep_segments(
             &mut collection.segments,
             "title",
             candidate.title.clone(),
+            candidate.key.clone(),
+            None,
             max_chars,
         );
     }
 
     if field_enabled(&normalized.fields, crate::types::ZoteroGrepField::Tag) {
         for tag in &candidate.tags {
-            push_segment(&mut collection.segments, "tag", tag.clone(), max_chars);
+            push_segment(
+                &mut collection.segments,
+                "tag",
+                tag.clone(),
+                candidate.key.clone(),
+                None,
+                max_chars,
+            );
         }
     }
 
@@ -74,13 +85,22 @@ pub(super) async fn collect_grep_segments(
                         &mut collection.segments,
                         "abstract",
                         abstract_text,
+                        candidate.key.clone(),
+                        None,
                         max_chars,
                     );
                 }
                 if field_enabled(&normalized.fields, crate::types::ZoteroGrepField::Extra)
                     && let Some(extra) = item.extra
                 {
-                    push_segment(&mut collection.segments, "extra", extra, max_chars);
+                    push_segment(
+                        &mut collection.segments,
+                        "extra",
+                        extra,
+                        candidate.key.clone(),
+                        None,
+                        max_chars,
+                    );
                 }
             }
             Err(err) => {
@@ -136,6 +156,8 @@ pub(super) async fn collect_grep_segments(
                     &mut collection.segments,
                     "fulltext",
                     fulltext.content,
+                    candidate.key.clone(),
+                    None,
                     max_chars,
                 );
             }
@@ -168,9 +190,15 @@ async fn collect_note_segments(
                 &mut collection.segments,
                 "note",
                 strip_html_to_text(note_text),
+                note.key.clone(),
+                note.parent_item.clone(),
                 max_chars,
             );
         }
+        return collection;
+    }
+
+    if candidate.item_type == "annotation" {
         return collection;
     }
 
@@ -190,6 +218,8 @@ async fn collect_note_segments(
                         &mut collection.segments,
                         "note",
                         strip_html_to_text(note_text),
+                        note.key,
+                        note.parent_item,
                         max_chars,
                     );
                 }
@@ -217,6 +247,8 @@ async fn collect_note_segments(
                         &mut collection.segments,
                         "note",
                         strip_html_to_text(note_text),
+                        note.key,
+                        note.parent_item,
                         max_chars,
                     );
                 }
@@ -244,6 +276,10 @@ async fn collect_annotation_segments(
         && let Some(annotation) = parent_scoped_annotations.get(&candidate.key)
     {
         push_annotation_text_segments(&mut collection.segments, annotation, max_chars);
+        return collection;
+    }
+
+    if candidate.item_type == "note" {
         return collection;
     }
 
@@ -317,6 +353,8 @@ fn push_annotation_text_segments(
             out,
             "annotation_text",
             strip_html_to_text(annotation_text),
+            annotation.key.clone(),
+            annotation.parent_item.clone(),
             max_chars,
         );
     }
@@ -325,6 +363,8 @@ fn push_annotation_text_segments(
             out,
             "annotation_comment",
             strip_html_to_text(annotation_comment),
+            annotation.key.clone(),
+            annotation.parent_item.clone(),
             max_chars,
         );
     }
@@ -334,6 +374,8 @@ fn push_segment(
     out: &mut Vec<GrepTextSegment>,
     field: &'static str,
     text: String,
+    item_key: String,
+    parent_item_key: Option<String>,
     max_chars: Option<usize>,
 ) {
     let trimmed = text.trim();
@@ -353,6 +395,8 @@ fn push_segment(
     out.push(GrepTextSegment {
         field,
         text: segment_text,
+        item_key,
+        parent_item_key,
     });
 }
 

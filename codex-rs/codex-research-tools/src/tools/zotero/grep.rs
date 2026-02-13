@@ -175,11 +175,14 @@ pub(super) async fn zotero_grep_text(
                         normalized.context_chars,
                     );
                     matches.push(ZoteroGrepMatch {
-                        item_key: entry.candidate.key.clone(),
+                        item_key: segment.item_key.clone(),
                         field: segment.field.to_string(),
                         match_text,
                         snippet,
-                        parent_item_key: parent_item_key.clone(),
+                        parent_item_key: segment
+                            .parent_item_key
+                            .clone()
+                            .or_else(|| parent_item_key.clone()),
                         source_meta: entry.candidate.source_meta.clone(),
                     });
                     matches_for_item = matches_for_item.saturating_add(1);
