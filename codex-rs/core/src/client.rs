@@ -28,6 +28,7 @@
 
 mod anthropic;
 mod gemini;
+mod gemini_code_assist;
 mod provider_streaming;
 
 use std::sync::Arc;

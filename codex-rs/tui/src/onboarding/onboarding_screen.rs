@@ -103,6 +103,7 @@ impl OnboardingScreen {
                 request_frame: tui.frame_requester(),
                 highlighted_mode,
                 highlighted_provider: ProviderOption::OpenAI,
+                highlighted_provider_auth_method: super::auth::ProviderAuthMethod::ApiKey,
                 error: None,
                 sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
                 codex_home: codex_home.clone(),

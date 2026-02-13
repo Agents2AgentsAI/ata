@@ -2225,6 +2225,39 @@
           ],
           "title": "OutputTextContentItem",
           "type": "object"
+        },
+        {
+          "properties": {
+            "filename": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mime_type": {
+              "description": "MIME type for provider adapters or tools that need a type hint. Not part of the stable public wire shape.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "url_file"
+              ],
+              "title": "UrlFileContentItemType",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "title": "UrlFileContentItem",
+          "type": "object"
         }
       ]
     },
@@ -10156,6 +10189,26 @@
             ],
             "title": "ChatgptAccount",
             "type": "object"
+          },
+          {
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "gemini"
+                ],
+                "title": "GeminiAccountType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "email",
+              "type"
+            ],
+            "title": "GeminiAccount",
+            "type": "object"
           }
         ]
       },
@@ -11661,6 +11714,39 @@
             ],
             "title": "OutputTextContentItem",
             "type": "object"
+          },
+          {
+            "properties": {
+              "filename": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mime_type": {
+                "description": "MIME type for provider adapters or tools that need a type hint. Not part of the stable public wire shape.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "url_file"
+                ],
+                "title": "UrlFileContentItemType",
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "url"
+            ],
+            "title": "UrlFileContentItem",
+            "type": "object"
           }
         ]
       },
@@ -12125,11 +12211,15 @@
               }
             ]
           },
+          "requiresGeminiAuth": {
+            "type": "boolean"
+          },
           "requiresOpenaiAuth": {
             "type": "boolean"
           }
         },
         "required": [
+          "requiresGeminiAuth",
           "requiresOpenaiAuth"
         ],
         "title": "GetAccountResponse",
@@ -12401,6 +12491,22 @@
             "type": "object"
           },
           {
+            "properties": {
+              "type": {
+                "enum": [
+                  "gemini"
+                ],
+                "title": "Geminiv2::LoginAccountParamsType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "Geminiv2::LoginAccountParams",
+            "type": "object"
+          },
+          {
             "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE. The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.",
             "properties": {
               "accessToken": {
@@ -12479,6 +12585,31 @@
               "type"
             ],
             "title": "Chatgptv2::LoginAccountResponse",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "authUrl": {
+                "description": "URL the client should open in a browser to initiate the OAuth flow.",
+                "type": "string"
+              },
+              "loginId": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "gemini"
+                ],
+                "title": "Geminiv2::LoginAccountResponseType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "authUrl",
+              "loginId",
+              "type"
+            ],
+            "title": "Geminiv2::LoginAccountResponse",
             "type": "object"
           },
           {

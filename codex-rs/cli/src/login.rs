@@ -16,7 +16,9 @@ use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::edit::default_model_for_provider;
 use codex_login::ServerOptions;
+use codex_login::GeminiServerOptions;
 use codex_login::run_device_code_login;
+use codex_login::run_gemini_login_server;
 use codex_login::run_login_server;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_utils_cli::CliConfigOverrides;
@@ -124,6 +126,61 @@ pub async fn run_login_with_provider_api_key(
         }
         Err(e) => {
             eprintln!("Error logging in: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Login with OAuth for a specific provider.
+/// Currently supported only for Gemini.
+pub async fn run_login_with_provider_oauth(
+    cli_config_overrides: CliConfigOverrides,
+    provider: Option<String>,
+) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+
+    if matches!(config.forced_login_method, Some(ForcedLoginMethod::Chatgpt)) {
+        eprintln!("{API_KEY_LOGIN_DISABLED_MESSAGE}");
+        std::process::exit(1);
+    }
+
+    let provider_id = validate_provider_id(provider.as_deref());
+    if provider_id != PROVIDER_GEMINI {
+        eprintln!(
+            "OAuth login is currently supported only for provider: {PROVIDER_GEMINI}. Use --with-api-key for {provider_id}."
+        );
+        std::process::exit(1);
+    }
+
+    let opts = GeminiServerOptions::new(
+        config.codex_home.clone(),
+        config.cli_auth_credentials_store_mode,
+    );
+    match run_gemini_login_server(opts) {
+        Ok(server) => {
+            print_login_server_start(server.actual_port, &server.auth_url);
+            match server.block_until_done().await {
+                Ok(()) => {
+                    let default_model = default_model_for_provider(provider_id);
+                    if let Err(err) = ConfigEditsBuilder::new(&config.codex_home)
+                        .set_model(default_model, None, Some(provider_id.to_string()))
+                        .apply_blocking()
+                    {
+                        eprintln!(
+                            "Warning: failed to set default model for provider {provider_id}: {err}"
+                        );
+                    }
+                    eprintln!("{LOGIN_SUCCESS_MESSAGE} for provider: {provider_id}");
+                    std::process::exit(0);
+                }
+                Err(err) => {
+                    eprintln!("Error logging in: {err}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!("Error logging in: {err}");
             std::process::exit(1);
         }
     }
