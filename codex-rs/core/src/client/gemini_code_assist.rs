@@ -24,6 +24,7 @@ use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::default_client::build_reqwest_client;
 use crate::default_client::get_codex_user_agent;
+use crate::error::CodexErr;
 use crate::error::Result;
 use crate::tools::spec::create_tools_json_for_responses_api;
 
@@ -123,7 +124,15 @@ fn parse_code_assist_sse_data(
         }]);
     }
 
+    if let Some(error_message) = extract_code_assist_stream_error_message(data) {
+        return ParseSseEventResult::Fatal(CodexErr::Api(error_message));
+    }
+
     let normalized = unwrap_code_assist_response_envelope(data);
+    if let Some(error_message) = extract_code_assist_stream_error_message(&normalized) {
+        return ParseSseEventResult::Fatal(CodexErr::Api(error_message));
+    }
+
     match codex_api::sse::gemini::parse_gemini_chunk(&normalized, state) {
         Ok(events) => {
             let events = filter_out_created(events);
@@ -176,8 +185,74 @@ fn map_code_assist_model(model: &str) -> &str {
         // Code Assist currently rejects image-focused aliases.
         "gemini-2.5-flash-image-preview" => "gemini-2.5-flash",
         "gemini-2.0-flash-exp-image-generation" => "gemini-2.0-flash",
+        // Code Assist currently does not accept Gemini 3 preview aliases.
+        "gemini-3-flash-preview" | "gemini-3-flash" => "gemini-2.5-flash",
+        "gemini-3-pro-preview" | "gemini-3-pro" => "gemini-2.5-pro",
         _ => model,
     }
+}
+
+fn extract_code_assist_stream_error_message(payload: &str) -> Option<String> {
+    let parsed = serde_json::from_str::<Value>(payload).ok()?;
+
+    if let Some(error) = parsed.get("error") {
+        return Some(format_code_assist_error(error));
+    }
+
+    if let Some(error) = parsed
+        .get("response")
+        .and_then(|response| response.get("error"))
+    {
+        return Some(format_code_assist_error(error));
+    }
+
+    let response_internal = parsed
+        .pointer("/response/sdkHttpResponse/responseInternal")
+        .or_else(|| parsed.pointer("/sdkHttpResponse/responseInternal"))?;
+    if response_internal.get("ok").and_then(Value::as_bool) == Some(false) {
+        let status = response_internal.get("status").and_then(Value::as_i64);
+        let status_text = response_internal
+            .get("statusText")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let status_suffix = match (status, status_text) {
+            (Some(status), Some(status_text)) => format!(" ({status} {status_text})"),
+            (Some(status), None) => format!(" ({status})"),
+            (None, Some(status_text)) => format!(" ({status_text})"),
+            (None, None) => String::new(),
+        };
+        return Some(format!(
+            "Gemini Code Assist API stream returned a non-OK response{status_suffix}."
+        ));
+    }
+
+    None
+}
+
+fn format_code_assist_error(error: &Value) -> String {
+    let code = error.get("code").and_then(Value::as_i64);
+    let status = error
+        .get("status")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let status_suffix = match (code, status) {
+        (Some(code), Some(status)) => format!(" ({code} {status})"),
+        (Some(code), None) => format!(" ({code})"),
+        (None, Some(status)) => format!(" ({status})"),
+        (None, None) => String::new(),
+    };
+    let message = message
+        .map(str::to_string)
+        .unwrap_or_else(|| error.to_string());
+    format!("Gemini Code Assist API error{status_suffix}: {message}")
 }
 
 fn normalize_code_assist_request_body(body: Value) -> Value {
@@ -339,5 +414,49 @@ mod tests {
             r#"{"response":{"candidates":[{"finishReason":"STOP"}]}}"#,
         );
         assert_eq!(unwrapped, r#"{"candidates":[{"finishReason":"STOP"}]}"#);
+    }
+
+    #[test]
+    fn map_code_assist_model_remaps_gemini_3_aliases() {
+        assert_eq!(
+            map_code_assist_model("gemini-3-flash-preview"),
+            "gemini-2.5-flash"
+        );
+        assert_eq!(
+            map_code_assist_model("gemini-3-pro-preview"),
+            "gemini-2.5-pro"
+        );
+    }
+
+    #[test]
+    fn parse_code_assist_sse_data_returns_fatal_for_error_payload() {
+        let mut state = GeminiStreamState::new();
+        let result = parse_code_assist_sse_data(
+            r#"{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"Unsupported model 'gemini-3-flash-preview'"}}"#,
+            &mut state,
+            false,
+        );
+
+        let ParseSseEventResult::Fatal(CodexErr::Api(message)) = result else {
+            panic!("expected fatal API error");
+        };
+        assert!(message.contains("Unsupported model"), "{message}");
+        assert!(message.contains("INVALID_ARGUMENT"), "{message}");
+    }
+
+    #[test]
+    fn parse_code_assist_sse_data_returns_fatal_for_non_ok_response_internal() {
+        let mut state = GeminiStreamState::new();
+        let result = parse_code_assist_sse_data(
+            r#"{"response":{"sdkHttpResponse":{"responseInternal":{"ok":false,"status":400,"statusText":"Bad Request"}}}}"#,
+            &mut state,
+            false,
+        );
+
+        let ParseSseEventResult::Fatal(CodexErr::Api(message)) = result else {
+            panic!("expected fatal API error");
+        };
+        assert!(message.contains("non-OK response"), "{message}");
+        assert!(message.contains("400 Bad Request"), "{message}");
     }
 }

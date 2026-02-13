@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
+use std::time::Duration as StdDuration;
 
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_otel::TelemetryAuthMode;
@@ -134,6 +135,8 @@ const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
     "Your access token could not be refreshed. Please log out and sign in again.";
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
+const GEMINI_OAUTH_REVOKE_URL: &str = "https://oauth2.googleapis.com/revoke";
+pub const GEMINI_OAUTH_REVOKE_URL_OVERRIDE_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_REVOKE_URL";
 
 #[derive(Debug, Error)]
 pub enum RefreshTokenError {
@@ -424,6 +427,7 @@ pub fn logout(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<bool> {
+    revoke_gemini_oauth_tokens_for_store(codex_home, auth_credentials_store_mode);
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
     storage.delete()
 }
@@ -450,6 +454,9 @@ pub fn logout_provider(
     provider_id: &str,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<bool> {
+    if provider_id == PROVIDER_GEMINI {
+        revoke_gemini_oauth_tokens_for_store(codex_home, auth_credentials_store_mode);
+    }
     providers::remove_provider(codex_home, provider_id, auth_credentials_store_mode)
 }
 
@@ -786,6 +793,93 @@ pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 fn refresh_token_endpoint() -> String {
     std::env::var(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR)
         .unwrap_or_else(|_| REFRESH_TOKEN_URL.to_string())
+}
+
+fn gemini_oauth_revoke_endpoint() -> String {
+    std::env::var(GEMINI_OAUTH_REVOKE_URL_OVERRIDE_ENV_VAR)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| GEMINI_OAUTH_REVOKE_URL.to_string())
+}
+
+fn revoke_gemini_oauth_tokens_for_store(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) {
+    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
+    let refresh_token = match storage.load() {
+        Ok(Some(auth_dot_json)) => auth_dot_json
+            .get_provider_oauth_credential(PROVIDER_GEMINI)
+            .map(|credential| credential.refresh)
+            .filter(|token| !token.trim().is_empty()),
+        Ok(None) => None,
+        Err(err) => {
+            tracing::warn!(
+                mode = ?auth_credentials_store_mode,
+                error = %err,
+                "Failed to load auth storage while preparing Gemini OAuth revocation"
+            );
+            None
+        }
+    };
+
+    if let Some(refresh_token) = refresh_token
+        && let Err(err) = revoke_gemini_refresh_token(&refresh_token)
+    {
+        tracing::warn!(
+            mode = ?auth_credentials_store_mode,
+            error = %err,
+            "Failed to revoke Gemini OAuth refresh token during logout; proceeding with local credential removal"
+        );
+    }
+}
+
+fn revoke_gemini_refresh_token(refresh_token: &str) -> std::io::Result<()> {
+    let trimmed_token = refresh_token.trim();
+    if trimmed_token.is_empty() {
+        return Ok(());
+    }
+
+    let endpoint = gemini_oauth_revoke_endpoint();
+    let body = format!(
+        "token={token}&token_type_hint=refresh_token",
+        token = urlencoding::encode(trimmed_token)
+    );
+    std::thread::spawn(move || revoke_gemini_refresh_token_with_client(endpoint, body))
+        .join()
+        .map_err(|_| std::io::Error::other("revoke request thread panicked"))?
+}
+
+fn revoke_gemini_refresh_token_with_client(endpoint: String, body: String) -> std::io::Result<()> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| std::io::Error::other(format!("build revoke runtime failed: {err}")))?;
+
+    runtime.block_on(async move {
+        let client = crate::default_client::build_reqwest_client_with_timeouts(
+            Some(StdDuration::from_secs(10)),
+            Some(StdDuration::from_secs(10)),
+        );
+        let response = client
+            .post(&endpoint)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .map_err(|err| std::io::Error::other(format!("revoke request failed: {err}")))?;
+
+        let status = response.status();
+        if status.is_success() || status == StatusCode::BAD_REQUEST {
+            return Ok(());
+        }
+
+        let body = response.text().await.unwrap_or_default();
+        Err(std::io::Error::other(format!(
+            "revoke endpoint returned {status}: {body}"
+        )))
+    })
 }
 
 impl AuthDotJson {
@@ -1371,6 +1465,12 @@ mod tests {
     use serde::Serialize;
     use serde_json::json;
     use tempfile::tempdir;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::body_string_contains;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
 
     #[tokio::test]
     async fn refresh_without_id_token() {
@@ -1561,6 +1661,91 @@ mod tests {
         assert!(logout(dir.path(), AuthCredentialsStoreMode::File)?);
         assert!(!auth_file.exists());
         Ok(())
+    }
+
+    #[tokio::test]
+    #[serial(gemini_oauth_revoke_env)]
+    async fn logout_provider_revokes_gemini_refresh_token() {
+        let dir = tempdir().expect("tempdir");
+        let _google_guard = EnvVarGuard::set(GOOGLE_API_KEY_ENV_VAR, "");
+        let revoke_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/revoke"))
+            .and(body_string_contains("token=refresh-token"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&revoke_server)
+            .await;
+        let _revoke_url_guard = EnvVarGuard::set(
+            GEMINI_OAUTH_REVOKE_URL_OVERRIDE_ENV_VAR,
+            &format!("{}/revoke", revoke_server.uri()),
+        );
+        login_with_provider_oauth(
+            dir.path(),
+            PROVIDER_GEMINI,
+            ProviderOauthCredential {
+                access: "access-token".to_string(),
+                refresh: "refresh-token".to_string(),
+                expires: None,
+                email: Some("user@example.com".to_string()),
+                project_id: None,
+                managed_project_id: Some("managed-project".to_string()),
+            },
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store gemini oauth");
+
+        let removed = logout_provider(dir.path(), PROVIDER_GEMINI, AuthCredentialsStoreMode::File)
+            .expect("logout provider should succeed");
+        assert!(removed);
+        assert_eq!(
+            get_provider_oauth_credential(
+                dir.path(),
+                PROVIDER_GEMINI,
+                AuthCredentialsStoreMode::File
+            ),
+            None,
+        );
+    }
+
+    #[tokio::test]
+    #[serial(gemini_oauth_revoke_env)]
+    async fn logout_revokes_gemini_refresh_token() {
+        let dir = tempdir().expect("tempdir");
+        let _google_guard = EnvVarGuard::set(GOOGLE_API_KEY_ENV_VAR, "");
+        let revoke_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/revoke"))
+            .and(body_string_contains("token=refresh-token"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&revoke_server)
+            .await;
+        let _revoke_url_guard = EnvVarGuard::set(
+            GEMINI_OAUTH_REVOKE_URL_OVERRIDE_ENV_VAR,
+            &format!("{}/revoke", revoke_server.uri()),
+        );
+        login_with_provider_oauth(
+            dir.path(),
+            PROVIDER_GEMINI,
+            ProviderOauthCredential {
+                access: "access-token".to_string(),
+                refresh: "refresh-token".to_string(),
+                expires: None,
+                email: Some("user@example.com".to_string()),
+                project_id: None,
+                managed_project_id: Some("managed-project".to_string()),
+            },
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store gemini oauth");
+
+        let removed = logout(dir.path(), AuthCredentialsStoreMode::File).expect("logout succeeds");
+        assert!(removed);
+        assert!(
+            !get_auth_file(dir.path()).exists(),
+            "auth.json should be removed after logout"
+        );
     }
 
     struct AuthFileParams {
