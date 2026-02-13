@@ -1195,20 +1195,20 @@ impl CodexMessageProcessor {
             return Err(self.external_auth_active_error());
         }
 
-        if matches!(
-            config.forced_login_method,
-            Some(ForcedLoginMethod::Chatgpt)
-        ) {
+        if matches!(config.forced_login_method, Some(ForcedLoginMethod::Chatgpt)) {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
-                message: "API key login is disabled. Use ChatGPT login instead.".to_string(),
+                message: "OAuth login is disabled. Use ChatGPT login instead.".to_string(),
                 data: None,
             });
         }
 
         Ok(GeminiServerOptions {
             open_browser: false,
-            ..GeminiServerOptions::new(config.codex_home.clone(), config.cli_auth_credentials_store_mode)
+            ..GeminiServerOptions::new(
+                config.codex_home.clone(),
+                config.cli_auth_credentials_store_mode,
+            )
         })
     }
 
@@ -1609,8 +1609,9 @@ impl CodexMessageProcessor {
         let requires_openai_auth = self.config.model_provider.requires_openai_auth;
 
         if !requires_openai_auth {
-            let account = if let Some(email) =
-                gemini_oauth.as_ref().and_then(|credential| credential.email.clone())
+            let account = if let Some(email) = gemini_oauth
+                .as_ref()
+                .and_then(|credential| credential.email.clone())
             {
                 Some(Account::Gemini { email })
             } else if gemini_api_key {

@@ -23,12 +23,22 @@ use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 
+pub use crate::auth::gemini_oauth::DEFAULT_GEMINI_OAUTH_CLIENT_ID;
+pub use crate::auth::gemini_oauth::DEFAULT_GEMINI_OAUTH_CLIENT_SECRET;
+pub use crate::auth::gemini_oauth::DEFAULT_GEMINI_OAUTH_TOKEN_URL;
+pub use crate::auth::gemini_oauth::GEMINI_OAUTH_CLIENT_ID_ENV_VAR;
+pub use crate::auth::gemini_oauth::GEMINI_OAUTH_CLIENT_SECRET_ENV_VAR;
+pub use crate::auth::gemini_oauth::GEMINI_OAUTH_TOKEN_URL_ENV_VAR;
+pub(crate) use crate::auth::gemini_oauth::code_assist_method_url;
+pub(crate) use crate::auth::gemini_oauth::ensure_gemini_oauth_context;
+pub use crate::auth::gemini_oauth::env_string_or_default;
 pub use crate::auth::providers::ANTHROPIC_API_KEY_ENV_VAR;
 pub use crate::auth::providers::GOOGLE_API_KEY_ENV_VAR;
 pub use crate::auth::providers::GeminiAuthSource;
 pub use crate::auth::providers::PROVIDER_ANTHROPIC;
 pub use crate::auth::providers::PROVIDER_GEMINI;
 pub use crate::auth::providers::PROVIDER_OPENAI;
+pub use crate::auth::providers::ProviderAuthMethod;
 pub use crate::auth::providers::ProviderAuthSource;
 pub use crate::auth::providers::ProviderAuthStatus;
 pub use crate::auth::providers::ProviderCredential;
@@ -43,8 +53,6 @@ pub use crate::auth::providers::read_api_key_from_env;
 pub use crate::auth::providers::resolve_gemini_auth_source;
 pub use crate::auth::storage::AuthCredentialsStoreMode;
 pub use crate::auth::storage::AuthDotJson;
-pub(crate) use crate::auth::gemini_oauth::code_assist_method_url;
-pub(crate) use crate::auth::gemini_oauth::ensure_gemini_oauth_context;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::create_auth_storage;
 use crate::config::Config;
@@ -201,6 +209,12 @@ impl CodexAuth {
                 });
 
             let Some(api_key) = api_key else {
+                if auth_dot_json.has_any_provider_oauth_credential() {
+                    // OAuth-only provider auth should not be treated as ChatGPT auth.
+                    // Use an empty key as an ApiKey auth marker so auth mode resolves
+                    // correctly while avoiding accidental bearer-token leakage.
+                    return Ok(CodexAuth::from_api_key_with_client("", client));
+                }
                 return Err(std::io::Error::other("API key auth is missing a key."));
             };
             return Ok(CodexAuth::from_api_key_with_client(api_key, client));
@@ -820,8 +834,8 @@ impl AuthDotJson {
         if self.openai_api_key.is_some() {
             return ApiAuthMode::ApiKey;
         }
-        // Check if there are any provider API keys in the providers map
-        if self.has_any_provider_api_key() {
+        // Check if there are any provider credentials in the providers map.
+        if self.has_any_provider_api_key() || self.has_any_provider_oauth_credential() {
             return ApiAuthMode::ApiKey;
         }
         ApiAuthMode::Chatgpt
@@ -1500,6 +1514,36 @@ mod tests {
         assert_eq!(auth.auth_mode(), AuthMode::ApiKey);
         assert_eq!(auth.api_key(), Some("sk-test-key"));
 
+        assert!(auth.get_token_data().is_err());
+    }
+
+    #[test]
+    #[serial(codex_api_key)]
+    fn loads_oauth_only_provider_as_api_key_mode_without_chatgpt_state() {
+        let dir = tempdir().unwrap();
+        let _openai_guard = EnvVarGuard::set(OPENAI_API_KEY_ENV_VAR, "");
+        let _google_guard = EnvVarGuard::set(GOOGLE_API_KEY_ENV_VAR, "");
+        let credential = ProviderOauthCredential {
+            access: "oauth-access".to_string(),
+            refresh: "oauth-refresh".to_string(),
+            expires: None,
+            email: Some("user@example.com".to_string()),
+            project_id: None,
+            managed_project_id: Some("managed-project".to_string()),
+        };
+        login_with_provider_oauth(
+            dir.path(),
+            PROVIDER_GEMINI,
+            credential,
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store gemini oauth credential");
+
+        let auth = super::load_auth(dir.path(), false, AuthCredentialsStoreMode::File)
+            .expect("load auth")
+            .expect("auth should exist");
+        assert_eq!(auth.auth_mode(), AuthMode::ApiKey);
+        assert_eq!(auth.api_key(), Some(""));
         assert!(auth.get_token_data().is_err());
     }
 

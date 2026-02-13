@@ -11,6 +11,8 @@ use serde_json::json;
 use super::ModelClientSession;
 use super::provider_streaming::ParseSseEventResult;
 use super::provider_streaming::build_reasoning_value;
+use super::provider_streaming::extract_sse_data_line;
+use super::provider_streaming::filter_out_created;
 use super::provider_streaming::map_api_err_to_codex_err;
 use super::provider_streaming::serialize_input_items;
 use super::provider_streaming::spawn_provider_sse_stream;
@@ -64,18 +66,16 @@ pub(super) async fn stream_gemini_code_assist(
         oauth_credential,
     )
     .await?;
-    let request_body = wrap_code_assist_request(
-        &model_info.slug,
-        &context.project_id,
-        request_body,
-    );
+    let request_body =
+        wrap_code_assist_request(&model_info.slug, &context.project_id, request_body);
+    let access_token = context.access_token;
 
     let url = code_assist_method_url("streamGenerateContent");
     let client = build_reqwest_client();
     let request = client
         .post(url)
         .header("Content-Type", "application/json")
-        .header("Authorization", format!("Bearer {}", context.access_token))
+        .header("Authorization", format!("Bearer {access_token}"))
         .header("X-Goog-Api-Client", build_x_goog_api_client_header())
         .header("User-Agent", get_codex_user_agent())
         .json(&request_body);
@@ -94,70 +94,48 @@ pub(super) async fn stream_gemini_code_assist(
             let Some(data) = extract_sse_data_line(event_str) else {
                 return ParseSseEventResult::Continue;
             };
-
-            if data.trim() == "[DONE]" {
-                return ParseSseEventResult::Emit(vec![ResponseEvent::Completed {
-                    response_id: String::new(),
-                    token_usage: None,
-                    can_append: false,
-                }]);
-            }
-
-            let normalized = unwrap_code_assist_response_envelope(data);
-            match codex_api::sse::gemini::parse_gemini_chunk(&normalized, state) {
-                Ok(events) => {
-                    let events = filter_out_created(events);
-                    if events.is_empty() {
-                        ParseSseEventResult::Continue
-                    } else {
-                        ParseSseEventResult::Emit(events)
-                    }
-                }
-                Err(err) => ParseSseEventResult::Fatal(map_api_err_to_codex_err(err)),
-            }
+            parse_code_assist_sse_data(data, state, false)
         },
         |buffer, state| {
             let Some(data) = extract_sse_data_line(buffer) else {
                 return ParseSseEventResult::Continue;
             };
-
-            if data.trim() == "[DONE]" {
-                return ParseSseEventResult::Continue;
-            }
-
-            let normalized = unwrap_code_assist_response_envelope(data);
-            match codex_api::sse::gemini::parse_gemini_chunk(&normalized, state) {
-                Ok(events) => {
-                    let events = filter_out_created(events);
-                    if events.is_empty() {
-                        ParseSseEventResult::Continue
-                    } else {
-                        ParseSseEventResult::Emit(events)
-                    }
-                }
-                Err(err) => ParseSseEventResult::Fatal(map_api_err_to_codex_err(err)),
-            }
+            parse_code_assist_sse_data(data, state, true)
         },
     ))
-}
-
-fn extract_sse_data_line(event_str: &str) -> Option<&str> {
-    event_str
-        .lines()
-        .find_map(|line| line.strip_prefix("data: "))
-        .or_else(|| event_str.strip_prefix("data:").map(str::trim))
-}
-
-fn filter_out_created(events: Vec<ResponseEvent>) -> Vec<ResponseEvent> {
-    events
-        .into_iter()
-        .filter(|event| !matches!(event, ResponseEvent::Created))
-        .collect()
 }
 
 fn build_x_goog_api_client_header() -> String {
     let codex_version = env!("CARGO_PKG_VERSION");
     format!("gl-rust/unknown codex-core/{codex_version}")
+}
+
+fn parse_code_assist_sse_data(
+    data: &str,
+    state: &mut GeminiStreamState,
+    ignore_parse_errors: bool,
+) -> ParseSseEventResult {
+    if data.trim() == "[DONE]" {
+        return ParseSseEventResult::Emit(vec![ResponseEvent::Completed {
+            response_id: String::new(),
+            token_usage: None,
+            can_append: false,
+        }]);
+    }
+
+    let normalized = unwrap_code_assist_response_envelope(data);
+    match codex_api::sse::gemini::parse_gemini_chunk(&normalized, state) {
+        Ok(events) => {
+            let events = filter_out_created(events);
+            if events.is_empty() {
+                ParseSseEventResult::Continue
+            } else {
+                ParseSseEventResult::Emit(events)
+            }
+        }
+        Err(err) if ignore_parse_errors => ParseSseEventResult::Continue,
+        Err(err) => ParseSseEventResult::Fatal(map_api_err_to_codex_err(err)),
+    }
 }
 
 fn wrap_code_assist_request(model: &str, project: &str, request_body: Value) -> Value {
