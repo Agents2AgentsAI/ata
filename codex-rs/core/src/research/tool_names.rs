@@ -291,20 +291,14 @@ mod tests {
     #[test]
     fn from_mcp_tools_matches_qualified_tool_suffix() {
         let defs = all_tool_defs();
-        let mcp_tools = BTreeMap::from([
-            (
-                "mcp__my_paper_search__search_papers".to_string(),
-                mcp_tool("search_papers"),
-            ),
-            (
-                "mcp__my_zotero__search_library".to_string(),
-                mcp_tool("search_library"),
-            ),
-        ]);
+        let mcp_tools = BTreeMap::from([(
+            "mcp__my_paper_search__search_papers".to_string(),
+            mcp_tool("search_papers"),
+        )]);
 
         let names = ResearchToolNames::from_mcp_tools(&defs, &mcp_tools);
         assert_eq!(names.paper_search, "mcp__my_paper_search__search_papers");
-        assert_eq!(names.zotero_search, "mcp__my_zotero__search_library");
+        assert_eq!(names.zotero_search, "zotero_search");
     }
 
     #[test]
@@ -312,17 +306,17 @@ mod tests {
         let defs = all_tool_defs();
         let mcp_tools = BTreeMap::from([
             (
-                "mcp__a__search_library".to_string(),
-                mcp_tool("search_library"),
+                "mcp__a__search_papers".to_string(),
+                mcp_tool("search_papers"),
             ),
             (
-                "mcp__z__search_library".to_string(),
-                mcp_tool("search_library"),
+                "mcp__z__search_papers".to_string(),
+                mcp_tool("search_papers"),
             ),
         ]);
 
         let names = ResearchToolNames::from_mcp_tools(&defs, &mcp_tools);
-        assert_eq!(names.zotero_search, "mcp__a__search_library");
+        assert_eq!(names.paper_search, "mcp__a__search_papers");
     }
 }
 

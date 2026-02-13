@@ -54,14 +54,13 @@ members = [
     "codex-api",
     "codex-research-tools",
     "codex-data-tools",
-    "codex-research-tools-mcp",
     "codex-kb",
     "codex-kb-mcp",
     "state",
     "codex-experimental-api-macros",
 ]
 # Exclude heavy research crates from default builds. Use `cargo build --workspace`
-# or target them explicitly (`cargo build -p codex-research-tools-mcp`) when needed.
+# when needed.
 default-members = [
     "backend-client",
     "ansi-escape",
