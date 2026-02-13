@@ -23,10 +23,14 @@ use paper_id::PaperIdResolver;
 use rate_limiter::RateLimiter;
 use types::CitationResult;
 use types::ConfigSchema;
+use types::LatexCompileParams;
+use types::LatexCompileResult;
 use types::ModelDefinition;
 use types::PaginationParams;
 use types::PaperDetail;
 use types::PaperSearchParams;
+use types::PdfExtractFiguresParams;
+use types::PdfExtractFiguresResult;
 use types::RepoEntrypoint;
 use types::RepoExportPath;
 use types::RepoHealth;
@@ -35,17 +39,32 @@ use types::RepoRequirements;
 use types::RepoSummary;
 use types::RequirementsDiff;
 use types::SearchResult;
+use types::ZoteroAdvancedSearchParams;
+use types::ZoteroAdvancedSearchResult;
+use types::ZoteroAnnotationsParams;
+use types::ZoteroAnnotationsResult;
 use types::ZoteroAttachmentsResult;
+use types::ZoteroCitationParams;
+use types::ZoteroCitationResult;
 use types::ZoteroCollectionItemsParams;
 use types::ZoteroCollectionsParams;
 use types::ZoteroCollectionsResult;
 use types::ZoteroFullTextResult;
+use types::ZoteroGrepParams;
+use types::ZoteroGrepResult;
+use types::ZoteroGroupsResult;
 use types::ZoteroItemDetail;
 use types::ZoteroItemParams;
+use types::ZoteroListGroupsParams;
 use types::ZoteroNotesResult;
+use types::ZoteroRecentParams;
+use types::ZoteroSearchNotesParams;
+use types::ZoteroSearchNotesResult;
 use types::ZoteroSearchParams;
 use types::ZoteroSearchResult;
 use types::ZoteroTagSearchParams;
+use types::ZoteroTagsParams;
+use types::ZoteroTagsResult;
 
 #[derive(Debug)]
 pub struct ResearchToolkit {
@@ -98,9 +117,7 @@ impl ResearchToolkit {
     #[must_use]
     pub fn is_tool_configured(&self, tool_id: &str) -> bool {
         if tool_id.starts_with("zotero_") {
-            let has_library_id =
-                self.config.zotero_user_id.is_some() || self.config.zotero_group_id.is_some();
-            return self.config.zotero_api_key.is_some() && has_library_id;
+            return self.config.zotero_api_key.is_some() || self.config.uses_local_zotero_api();
         }
 
         if tool_id == "repo_get_health" {
@@ -188,6 +205,84 @@ impl ResearchToolkit {
     }
 
     #[cfg(feature = "zotero")]
+    pub async fn zotero_get_tags(&self, params: ZoteroTagsParams) -> Result<ZoteroTagsResult> {
+        tools::zotero::zotero_get_tags(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_get_tags(&self, _params: ZoteroTagsParams) -> Result<ZoteroTagsResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_get_tags",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_get_recent(
+        &self,
+        params: ZoteroRecentParams,
+    ) -> Result<ZoteroSearchResult> {
+        tools::zotero::zotero_get_recent(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_get_recent(
+        &self,
+        _params: ZoteroRecentParams,
+    ) -> Result<ZoteroSearchResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_get_recent",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_advanced_search(
+        &self,
+        params: ZoteroAdvancedSearchParams,
+    ) -> Result<ZoteroAdvancedSearchResult> {
+        tools::zotero::zotero_advanced_search(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_advanced_search(
+        &self,
+        _params: ZoteroAdvancedSearchParams,
+    ) -> Result<ZoteroAdvancedSearchResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_advanced_search",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_grep_text(&self, params: ZoteroGrepParams) -> Result<ZoteroGrepResult> {
+        tools::zotero::zotero_grep_text(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_grep_text(&self, _params: ZoteroGrepParams) -> Result<ZoteroGrepResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_grep_text",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_search_notes(
+        &self,
+        params: ZoteroSearchNotesParams,
+    ) -> Result<ZoteroSearchNotesResult> {
+        tools::zotero::zotero_search_notes(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_search_notes(
+        &self,
+        _params: ZoteroSearchNotesParams,
+    ) -> Result<ZoteroSearchNotesResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_search_notes",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
     pub async fn zotero_get_item(&self, params: ZoteroItemParams) -> Result<ZoteroItemDetail> {
         tools::zotero::zotero_get_item(self, params).await
     }
@@ -196,6 +291,24 @@ impl ResearchToolkit {
     pub async fn zotero_get_item(&self, _params: ZoteroItemParams) -> Result<ZoteroItemDetail> {
         Err(ResearchError::NotImplemented {
             tool: "zotero_get_item",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_get_item_citation(
+        &self,
+        params: ZoteroCitationParams,
+    ) -> Result<ZoteroCitationResult> {
+        tools::zotero::zotero_get_item_citation(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_get_item_citation(
+        &self,
+        _params: ZoteroCitationParams,
+    ) -> Result<ZoteroCitationResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_get_item_citation",
         })
     }
 
@@ -226,6 +339,24 @@ impl ResearchToolkit {
     pub async fn zotero_get_notes(&self, _params: ZoteroItemParams) -> Result<ZoteroNotesResult> {
         Err(ResearchError::NotImplemented {
             tool: "zotero_get_notes",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_get_annotations(
+        &self,
+        params: ZoteroAnnotationsParams,
+    ) -> Result<ZoteroAnnotationsResult> {
+        tools::zotero::zotero_get_annotations(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_get_annotations(
+        &self,
+        _params: ZoteroAnnotationsParams,
+    ) -> Result<ZoteroAnnotationsResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_get_annotations",
         })
     }
 
@@ -284,6 +415,24 @@ impl ResearchToolkit {
     }
 
     #[cfg(feature = "zotero")]
+    pub async fn zotero_list_groups(
+        &self,
+        params: ZoteroListGroupsParams,
+    ) -> Result<ZoteroGroupsResult> {
+        tools::zotero::zotero_list_groups(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_list_groups(
+        &self,
+        _params: ZoteroListGroupsParams,
+    ) -> Result<ZoteroGroupsResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_list_groups",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
     pub async fn zotero_get_collection_items(
         &self,
         params: ZoteroCollectionItemsParams,
@@ -298,6 +447,36 @@ impl ResearchToolkit {
     ) -> Result<ZoteroSearchResult> {
         Err(ResearchError::NotImplemented {
             tool: "zotero_get_collection_items",
+        })
+    }
+
+    #[cfg(feature = "latex")]
+    pub async fn latex_compile(&self, params: LatexCompileParams) -> Result<LatexCompileResult> {
+        tools::latex::latex_compile(params).await
+    }
+
+    #[cfg(not(feature = "latex"))]
+    pub async fn latex_compile(&self, _params: LatexCompileParams) -> Result<LatexCompileResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "latex_compile",
+        })
+    }
+
+    #[cfg(feature = "pdf_images")]
+    pub async fn pdf_extract_figures(
+        &self,
+        params: PdfExtractFiguresParams,
+    ) -> Result<PdfExtractFiguresResult> {
+        tools::pdf_images::pdf_extract_figures(params).await
+    }
+
+    #[cfg(not(feature = "pdf_images"))]
+    pub async fn pdf_extract_figures(
+        &self,
+        _params: PdfExtractFiguresParams,
+    ) -> Result<PdfExtractFiguresResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "pdf_extract_figures",
         })
     }
 

@@ -100,7 +100,7 @@
           "type": "string"
         },
         {
-          "description": "*All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox.",
+          "description": "DEPRECATED: *All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox. Prefer `OnRequest` for interactive runs or `Never` for non-interactive runs.",
           "enum": [
             "on-failure"
           ],
@@ -188,6 +188,9 @@
             "apps": {
               "type": "boolean"
             },
+            "apps_mcp_gateway": {
+              "type": "boolean"
+            },
             "child_agents_md": {
               "type": "boolean"
             },
@@ -198,6 +201,9 @@
               "type": "boolean"
             },
             "connectors": {
+              "type": "boolean"
+            },
+            "data": {
               "type": "boolean"
             },
             "elevated_windows_sandbox": {
@@ -222,6 +228,9 @@
               "type": "boolean"
             },
             "js_repl": {
+              "type": "boolean"
+            },
+            "js_repl_tools_only": {
               "type": "boolean"
             },
             "memory_tool": {
@@ -352,6 +361,21 @@
       },
       "type": "object"
     },
+    "DataToolsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "huggingface_token": {
+          "type": "string"
+        },
+        "kaggle_key": {
+          "type": "string"
+        },
+        "kaggle_username": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "FeedbackConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -430,6 +454,43 @@
           "type": "string"
         }
       ]
+    },
+    "MemoriesToml": {
+      "additionalProperties": false,
+      "description": "Memories settings loaded from config.toml.",
+      "properties": {
+        "max_raw_memories_for_global": {
+          "description": "Maximum number of recent raw memories retained for global consolidation.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_rollout_age_days": {
+          "description": "Maximum age of the threads used for memories.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "max_rollouts_per_startup": {
+          "description": "Maximum number of rollout candidates processed per pass.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "min_rollout_idle_hours": {
+          "description": "Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "phase_1_model": {
+          "description": "Model used for thread summarisation.",
+          "type": "string"
+        },
+        "phase_2_model": {
+          "description": "Model used for memory consolidation.",
+          "type": "string"
+        }
+      },
+      "type": "object"
     },
     "ModeKind": {
       "description": "Initial collaboration mode to use when the TUI starts.",
@@ -1279,6 +1340,15 @@
       "description": "Compact prompt used for history compaction.",
       "type": "string"
     },
+    "data": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/DataToolsToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional non-secret data tool settings."
+    },
     "developer_instructions": {
       "default": null,
       "description": "Developer instructions inserted as a `developer` role message.",
@@ -1308,6 +1378,9 @@
         "apps": {
           "type": "boolean"
         },
+        "apps_mcp_gateway": {
+          "type": "boolean"
+        },
         "child_agents_md": {
           "type": "boolean"
         },
@@ -1318,6 +1391,9 @@
           "type": "boolean"
         },
         "connectors": {
+          "type": "boolean"
+        },
+        "data": {
           "type": "boolean"
         },
         "elevated_windows_sandbox": {
@@ -1342,6 +1418,9 @@
           "type": "boolean"
         },
         "js_repl": {
+          "type": "boolean"
+        },
+        "js_repl_tools_only": {
           "type": "boolean"
         },
         "memory_tool": {
@@ -1507,6 +1586,14 @@
       "default": {},
       "description": "Definition for MCP servers that Codex can reach out to for tool calls.",
       "type": "object"
+    },
+    "memories": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/MemoriesToml"
+        }
+      ],
+      "description": "Memories subsystem settings."
     },
     "model": {
       "description": "Optional override of model selection.",

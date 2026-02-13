@@ -7,7 +7,9 @@ use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
-#[cfg(feature = "research")]
+#[cfg(feature = "data")]
+use crate::data::SharedDataToolkit;
+#[cfg(any(feature = "research", feature = "data"))]
 use crate::default_client::build_reqwest_client_with_timeouts;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -23,6 +25,8 @@ use crate::research::SharedResearchToolkit;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::skills::SkillsManager;
+#[cfg(feature = "data")]
+use crate::tools::handlers::data::build_data_config;
 #[cfg(feature = "research")]
 use crate::tools::handlers::research::build_research_config;
 use codex_protocol::ThreadId;
@@ -40,7 +44,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use tokio::runtime::Handle;
 use tokio::runtime::RuntimeFlavor;
-#[cfg(feature = "research")]
+#[cfg(any(feature = "research", feature = "data"))]
 use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
@@ -140,6 +144,8 @@ pub(crate) struct ThreadManagerState {
     models_manager: Arc<ModelsManager>,
     #[cfg(feature = "research")]
     research_toolkit: OnceCell<Arc<SharedResearchToolkit>>,
+    #[cfg(feature = "data")]
+    data_toolkit: OnceCell<Arc<SharedDataToolkit>>,
     skills_manager: Arc<SkillsManager>,
     file_watcher: Arc<FileWatcher>,
     session_source: SessionSource,
@@ -163,6 +169,8 @@ impl ThreadManager {
                 models_manager: Arc::new(ModelsManager::new(codex_home, auth_manager.clone())),
                 #[cfg(feature = "research")]
                 research_toolkit: OnceCell::new(),
+                #[cfg(feature = "data")]
+                data_toolkit: OnceCell::new(),
                 skills_manager,
                 file_watcher,
                 auth_manager,
@@ -216,6 +224,8 @@ impl ThreadManager {
                 )),
                 #[cfg(feature = "research")]
                 research_toolkit: OnceCell::new(),
+                #[cfg(feature = "data")]
+                data_toolkit: OnceCell::new(),
                 skills_manager,
                 file_watcher,
                 auth_manager,
@@ -292,13 +302,15 @@ impl ThreadManager {
     }
 
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
-        self.start_thread_with_tools(config, Vec::new()).await
+        self.start_thread_with_tools(config, Vec::new(), false)
+            .await
     }
 
     pub async fn start_thread_with_tools(
         &self,
         config: Config,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
         self.state
             .spawn_thread(
@@ -307,6 +319,7 @@ impl ThreadManager {
                 Arc::clone(&self.state.auth_manager),
                 self.agent_control(),
                 dynamic_tools,
+                persist_extended_history,
             )
             .await
     }
@@ -318,7 +331,7 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
-        self.resume_thread_with_history(config, initial_history, auth_manager)
+        self.resume_thread_with_history(config, initial_history, auth_manager, false)
             .await
     }
 
@@ -327,6 +340,7 @@ impl ThreadManager {
         config: Config,
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
+        persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
         self.state
             .spawn_thread(
@@ -335,6 +349,7 @@ impl ThreadManager {
                 auth_manager,
                 self.agent_control(),
                 Vec::new(),
+                persist_extended_history,
             )
             .await
     }
@@ -364,6 +379,7 @@ impl ThreadManager {
         nth_user_message: usize,
         config: Config,
         path: PathBuf,
+        persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
         let history = RolloutRecorder::get_rollout_history(&path).await?;
         let history = truncate_before_nth_user_message(history, nth_user_message);
@@ -374,6 +390,7 @@ impl ThreadManager {
                 Arc::clone(&self.state.auth_manager),
                 self.agent_control(),
                 Vec::new(),
+                persist_extended_history,
             )
             .await
     }
@@ -424,7 +441,7 @@ impl ThreadManagerState {
         config: Config,
         agent_control: AgentControl,
     ) -> CodexResult<NewThread> {
-        self.spawn_new_thread_with_source(config, agent_control, self.session_source.clone())
+        self.spawn_new_thread_with_source(config, agent_control, self.session_source.clone(), false)
             .await
     }
 
@@ -433,6 +450,7 @@ impl ThreadManagerState {
         config: Config,
         agent_control: AgentControl,
         session_source: SessionSource,
+        persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
         self.spawn_thread_with_source(
             config,
@@ -441,6 +459,7 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             Vec::new(),
+            persist_extended_history,
         )
         .await
     }
@@ -460,6 +479,7 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             Vec::new(),
+            false,
         )
         .await
     }
@@ -472,6 +492,7 @@ impl ThreadManagerState {
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
         self.spawn_thread_with_source(
             config,
@@ -480,10 +501,12 @@ impl ThreadManagerState {
             agent_control,
             self.session_source.clone(),
             dynamic_tools,
+            persist_extended_history,
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn_thread_with_source(
         &self,
         config: Config,
@@ -492,6 +515,7 @@ impl ThreadManagerState {
         agent_control: AgentControl,
         session_source: SessionSource,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
         self.file_watcher.register_config(&config);
         let research_toolkit = if config.features.enabled(Feature::Research) {
@@ -527,6 +551,39 @@ impl ThreadManagerState {
         } else {
             None
         };
+        let data_toolkit = if config.features.enabled(Feature::Data) {
+            #[cfg(feature = "data")]
+            {
+                Some(
+                    self.data_toolkit
+                        .get_or_init(|| async {
+                            let data_config = build_data_config(
+                                config.data.as_ref(),
+                                config.codex_home.as_path(),
+                                config.cwd.as_path(),
+                            );
+                            Arc::new(codex_data_tools::DataToolkit::new(
+                                build_reqwest_client_with_timeouts(
+                                    Some(data_config.connect_timeout),
+                                    Some(data_config.request_timeout),
+                                ),
+                                data_config,
+                            ))
+                        })
+                        .await
+                        .clone(),
+                )
+            }
+            #[cfg(not(feature = "data"))]
+            {
+                warn!(
+                    "data feature flag is enabled in config, but codex-core was built without `--features data`"
+                );
+                None
+            }
+        } else {
+            None
+        };
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(
@@ -540,6 +597,8 @@ impl ThreadManagerState {
             agent_control,
             dynamic_tools,
             research_toolkit,
+            data_toolkit,
+            persist_extended_history,
         )
         .await?;
         self.finalize_thread_spawn(codex, thread_id).await

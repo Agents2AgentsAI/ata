@@ -338,6 +338,9 @@ impl ModelClient {
             let subagent = match sub {
                 crate::protocol::SubAgentSource::Review => "review".to_string(),
                 crate::protocol::SubAgentSource::Compact => "compact".to_string(),
+                crate::protocol::SubAgentSource::MemoryConsolidation => {
+                    "memory_consolidation".to_string()
+                }
                 crate::protocol::SubAgentSource::ThreadSpawn { .. } => "collab_spawn".to_string(),
                 crate::protocol::SubAgentSource::Other(label) => label.clone(),
             };
@@ -359,7 +362,7 @@ impl ModelClient {
     ///
     /// This combines provider capability and feature gating; both must be true for websocket paths
     /// to be eligible.
-    fn responses_websocket_enabled(&self, model_info: &ModelInfo) -> bool {
+    pub fn responses_websocket_enabled(&self, model_info: &ModelInfo) -> bool {
         self.state.provider.supports_websockets
             && (self.state.enable_responses_websockets || model_info.prefer_websockets)
     }

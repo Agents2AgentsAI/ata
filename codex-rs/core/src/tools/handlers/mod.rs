@@ -1,6 +1,8 @@
 pub mod apply_patch;
 pub(crate) mod attach_url_files;
 pub(crate) mod collab;
+#[cfg(feature = "data")]
+pub(crate) mod data;
 mod dynamic;
 mod grep_files;
 mod js_repl;
@@ -24,6 +26,8 @@ use serde::Deserialize;
 use crate::function_tool::FunctionCallError;
 pub use apply_patch::ApplyPatchHandler;
 pub use collab::CollabHandler;
+#[cfg(feature = "data")]
+pub(crate) use data::DataBridgeHandler;
 pub use dynamic::DynamicToolHandler;
 pub use grep_files::GrepFilesHandler;
 pub use js_repl::JsReplHandler;
