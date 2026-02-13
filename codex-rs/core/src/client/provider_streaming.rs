@@ -62,6 +62,20 @@ pub(super) fn build_reasoning_value(
     serde_json::to_value(reasoning).ok()
 }
 
+pub(super) fn extract_sse_data_line(event_str: &str) -> Option<&str> {
+    event_str
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))
+        .or_else(|| event_str.strip_prefix("data:").map(str::trim))
+}
+
+pub(super) fn filter_out_created(events: Vec<ResponseEvent>) -> Vec<ResponseEvent> {
+    events
+        .into_iter()
+        .filter(|event| !matches!(event, ResponseEvent::Created))
+        .collect()
+}
+
 pub(super) enum ParseSseEventResult {
     Continue,
     Emit(Vec<ResponseEvent>),
@@ -90,13 +104,7 @@ where
                 if !response.status().is_success() {
                     let status = response.status();
                     let body = response.text().await.unwrap_or_default();
-                    let err = if status == StatusCode::BAD_REQUEST
-                        && body.contains("prompt is too long")
-                    {
-                        CodexErr::ContextWindowExceeded
-                    } else {
-                        CodexErr::Api(format!("{status_error_prefix} API error {status}: {body}"))
-                    };
+                    let err = map_status_error(status_error_prefix, status, &body);
                     let _ = tx_event.send(Err(err)).await;
                     return;
                 }
@@ -178,6 +186,54 @@ where
     ResponseStream { rx_event }
 }
 
+fn map_status_error(status_error_prefix: &str, status: StatusCode, body: &str) -> CodexErr {
+    if status == StatusCode::BAD_REQUEST && body.contains("prompt is too long") {
+        return CodexErr::ContextWindowExceeded;
+    }
+
+    if status_error_prefix == "Gemini Code Assist"
+        && let Some(message) = map_gemini_code_assist_status_error(status, body)
+    {
+        return CodexErr::Api(message);
+    }
+
+    CodexErr::Api(format!("{status_error_prefix} API error {status}: {body}"))
+}
+
+fn map_gemini_code_assist_status_error(status: StatusCode, body: &str) -> Option<String> {
+    if status != StatusCode::FORBIDDEN && status != StatusCode::UNAUTHORIZED {
+        return None;
+    }
+
+    let lower = body.to_ascii_lowercase();
+    if lower.contains("vpcsc")
+        || (lower.contains("vpc") && lower.contains("service perimeter"))
+        || (lower.contains("service") && lower.contains("perimeter"))
+    {
+        return Some(format!(
+            "Gemini Code Assist request was blocked by VPC Service Controls. Use a project outside the restricted perimeter or update VPC-SC policy. Raw error: {status}: {body}"
+        ));
+    }
+
+    if lower.contains("org policy") || lower.contains("organization policy") {
+        return Some(format!(
+            "Gemini Code Assist request was blocked by organization policy. Ask your admin to allow Gemini Code Assist / Cloud Code access for this project. Raw error: {status}: {body}"
+        ));
+    }
+
+    if lower.contains("preview")
+        || lower.contains("allowlist")
+        || lower.contains("not enabled")
+        || lower.contains("permission denied")
+    {
+        return Some(format!(
+            "Gemini Code Assist access appears unavailable for this account or project. Confirm preview/allowlist access and required API enablement, then retry. Raw error: {status}: {body}"
+        ));
+    }
+
+    None
+}
+
 async fn handle_parse_result(
     parse_result: ParseSseEventResult,
     tx_event: &mpsc::Sender<Result<ResponseEvent>>,
@@ -218,4 +274,41 @@ fn take_next_sse_event(buffer: &mut String) -> Option<String> {
     let event = buffer[..end_pos].to_string();
     buffer.drain(..event_end);
     Some(event)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn map_status_error_detects_context_window() {
+        let err = map_status_error(
+            "Gemini",
+            StatusCode::BAD_REQUEST,
+            "prompt is too long: 100000 tokens",
+        );
+        assert!(matches!(err, CodexErr::ContextWindowExceeded));
+    }
+
+    #[test]
+    fn map_status_error_enhances_gemini_code_assist_policy_errors() {
+        let err = map_status_error(
+            "Gemini Code Assist",
+            StatusCode::FORBIDDEN,
+            "Request blocked by VPCSC service perimeter.",
+        );
+        let CodexErr::Api(message) = err else {
+            panic!("expected API error");
+        };
+        assert!(message.contains("VPC Service Controls"), "{message}");
+    }
+
+    #[test]
+    fn map_status_error_keeps_default_for_other_prefixes() {
+        let err = map_status_error("Gemini", StatusCode::FORBIDDEN, "forbidden");
+        let CodexErr::Api(message) = err else {
+            panic!("expected API error");
+        };
+        assert_eq!(message, "Gemini API error 403 Forbidden: forbidden");
+    }
 }

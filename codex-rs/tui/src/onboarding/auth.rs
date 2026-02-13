@@ -511,10 +511,7 @@ impl AuthModeWidget {
         if !auth_url.is_empty() {
             lines.push("  If the link doesn't open automatically, open the following link to authenticate:".into());
             lines.push("".into());
-            lines.push(Line::from(vec![
-                "  ".into(),
-                auth_url.cyan().underlined(),
-            ]));
+            lines.push(Line::from(vec!["  ".into(), auth_url.cyan().underlined()]));
             lines.push("".into());
         }
 
@@ -605,7 +602,9 @@ impl AuthModeWidget {
     ) {
         let provider_name = provider.display_name();
         let lines = vec![
-            format!("✓ Signed in with {provider_name}").fg(Color::Green).into(),
+            format!("✓ Signed in with {provider_name}")
+                .fg(Color::Green)
+                .into(),
             "".into(),
             "  Before you start:".into(),
             "".into(),
@@ -1018,13 +1017,14 @@ impl AuthModeWidget {
                 tokio::spawn(async move {
                     let auth_url = server.auth_url.clone();
                     {
-                        *sign_in_state.write().unwrap() = SignInState::ProviderOauthContinueInBrowser(
-                            ProviderOauthContinueInBrowserState {
-                                provider,
-                                auth_url,
-                                shutdown_flag: Some(server.cancel_handle()),
-                            },
-                        );
+                        *sign_in_state.write().unwrap() =
+                            SignInState::ProviderOauthContinueInBrowser(
+                                ProviderOauthContinueInBrowserState {
+                                    provider,
+                                    auth_url,
+                                    shutdown_flag: Some(server.cancel_handle()),
+                                },
+                            );
                     }
                     request_frame.schedule_frame();
                     match server.block_until_done().await {
@@ -1063,7 +1063,8 @@ impl AuthModeWidget {
             }
             Err(err) => {
                 self.error = Some(format!("Failed to start provider OAuth login: {err}"));
-                *self.sign_in_state.write().unwrap() = SignInState::PickProviderAuthMethod(provider);
+                *self.sign_in_state.write().unwrap() =
+                    SignInState::PickProviderAuthMethod(provider);
                 self.request_frame.schedule_frame();
             }
         }

@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::env;
 use std::path::Path;
+use tracing::warn;
 
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
 
@@ -43,16 +44,8 @@ pub enum ProviderCredential {
     Api { key: String },
     /// OAuth-based authentication (for future use).
     Oauth {
-        access: String,
-        refresh: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        expires: Option<DateTime<Utc>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        email: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        project_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        managed_project_id: Option<String>,
+        #[serde(flatten)]
+        credential: ProviderOauthCredential,
     },
 }
 
@@ -65,11 +58,18 @@ pub enum ProviderAuthSource {
     Environment,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderAuthMethod {
+    ApiKey,
+    Oauth,
+}
+
 /// Information about a configured provider's auth status.
 #[derive(Debug, Clone)]
 pub struct ProviderAuthStatus {
     pub provider_id: String,
     pub source: ProviderAuthSource,
+    pub method: ProviderAuthMethod,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -112,21 +112,7 @@ impl AuthDotJson {
     ) -> Option<ProviderOauthCredential> {
         self.providers.get(provider_id).and_then(|cred| match cred {
             ProviderCredential::Api { .. } => None,
-            ProviderCredential::Oauth {
-                access,
-                refresh,
-                expires,
-                email,
-                project_id,
-                managed_project_id,
-            } => Some(ProviderOauthCredential {
-                access: access.clone(),
-                refresh: refresh.clone(),
-                expires: *expires,
-                email: email.clone(),
-                project_id: project_id.clone(),
-                managed_project_id: managed_project_id.clone(),
-            }),
+            ProviderCredential::Oauth { credential } => Some(credential.clone()),
         })
     }
 
@@ -137,8 +123,25 @@ impl AuthDotJson {
             .any(|cred| matches!(cred, ProviderCredential::Api { .. }))
     }
 
+    /// Check if there are any provider OAuth credentials configured.
+    pub fn has_any_provider_oauth_credential(&self) -> bool {
+        self.providers
+            .values()
+            .any(|cred| matches!(cred, ProviderCredential::Oauth { .. }))
+    }
+
     /// Set credential for a specific provider in the providers map.
     pub fn set_provider_credential(&mut self, provider_id: &str, credential: ProviderCredential) {
+        if self.providers.get(provider_id).is_some_and(|existing| {
+            matches!(existing, ProviderCredential::Api { .. })
+                && matches!(&credential, ProviderCredential::Oauth { .. })
+        }) {
+            warn!(
+                provider_id,
+                "Replacing stored API key credential with OAuth credential for provider"
+            );
+        }
+
         if provider_id == PROVIDER_OPENAI {
             self.openai_api_key = match &credential {
                 ProviderCredential::Api { key } => Some(key.clone()),
@@ -166,25 +169,7 @@ impl AuthDotJson {
         provider_id: &str,
         credential: ProviderOauthCredential,
     ) {
-        let ProviderOauthCredential {
-            access,
-            refresh,
-            expires,
-            email,
-            project_id,
-            managed_project_id,
-        } = credential;
-        self.set_provider_credential(
-            provider_id,
-            ProviderCredential::Oauth {
-                access,
-                refresh,
-                expires,
-                email,
-                project_id,
-                managed_project_id,
-            },
-        );
+        self.set_provider_credential(provider_id, ProviderCredential::Oauth { credential });
     }
 
     /// Remove credentials for a specific provider.
@@ -232,7 +217,7 @@ pub(super) fn set_provider_credential(
 ) -> std::io::Result<()> {
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
     let mut auth_dot_json = storage.load()?.unwrap_or_default();
-    let is_api_credential = matches!(credential, ProviderCredential::Api { .. });
+    let is_api_credential = matches!(&credential, ProviderCredential::Api { .. });
     auth_dot_json.set_provider_credential(provider_id, credential);
     if is_api_credential {
         auth_dot_json.auth_mode = Some(ApiAuthMode::ApiKey);
@@ -266,25 +251,10 @@ pub fn login_with_provider_oauth(
     credential: ProviderOauthCredential,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
-    let ProviderOauthCredential {
-        access,
-        refresh,
-        expires,
-        email,
-        project_id,
-        managed_project_id,
-    } = credential;
     set_provider_credential(
         codex_home,
         provider_id,
-        ProviderCredential::Oauth {
-            access,
-            refresh,
-            expires,
-            email,
-            project_id,
-            managed_project_id,
-        },
+        ProviderCredential::Oauth { credential },
         auth_credentials_store_mode,
     )
 }
@@ -368,6 +338,7 @@ pub fn list_configured_providers(
             result.push(ProviderAuthStatus {
                 provider_id: provider_id.to_string(),
                 source: ProviderAuthSource::Environment,
+                method: ProviderAuthMethod::ApiKey,
             });
         }
     }
@@ -382,14 +353,24 @@ pub fn list_configured_providers(
                 result.push(ProviderAuthStatus {
                     provider_id: PROVIDER_OPENAI.to_string(),
                     source: ProviderAuthSource::Stored,
+                    method: ProviderAuthMethod::Oauth,
                 });
             }
 
             for provider_id in auth.configured_providers() {
                 if !result.iter().any(|p| p.provider_id == provider_id) {
+                    let method = auth
+                        .providers
+                        .get(&provider_id)
+                        .map(|credential| match credential {
+                            ProviderCredential::Api { .. } => ProviderAuthMethod::ApiKey,
+                            ProviderCredential::Oauth { .. } => ProviderAuthMethod::Oauth,
+                        })
+                        .unwrap_or(ProviderAuthMethod::ApiKey);
                     result.push(ProviderAuthStatus {
                         provider_id,
                         source: ProviderAuthSource::Stored,
+                        method,
                     });
                 }
             }
@@ -460,12 +441,14 @@ mod tests {
     #[test]
     fn provider_credential_oauth_serialization() {
         let cred = ProviderCredential::Oauth {
-            access: "access-token".to_string(),
-            refresh: "refresh-token".to_string(),
-            expires: Some(Utc::now()),
-            email: Some("user@example.com".to_string()),
-            project_id: Some("project-id".to_string()),
-            managed_project_id: Some("managed-project-id".to_string()),
+            credential: ProviderOauthCredential {
+                access: "access-token".to_string(),
+                refresh: "refresh-token".to_string(),
+                expires: Some(Utc::now()),
+                email: Some("user@example.com".to_string()),
+                project_id: Some("project-id".to_string()),
+                managed_project_id: Some("managed-project-id".to_string()),
+            },
         };
         let json = serde_json::to_string(&cred).unwrap();
         assert!(json.contains("\"type\":\"oauth\""));
@@ -826,12 +809,14 @@ mod tests {
         let openai = providers.iter().find(|p| p.provider_id == PROVIDER_OPENAI);
         assert!(openai.is_some());
         assert_eq!(openai.unwrap().source, ProviderAuthSource::Stored);
+        assert_eq!(openai.unwrap().method, ProviderAuthMethod::ApiKey);
 
         let anthropic = providers
             .iter()
             .find(|p| p.provider_id == PROVIDER_ANTHROPIC);
         assert!(anthropic.is_some());
         assert_eq!(anthropic.unwrap().source, ProviderAuthSource::Stored);
+        assert_eq!(anthropic.unwrap().method, ProviderAuthMethod::ApiKey);
     }
 
     #[test]
@@ -847,6 +832,37 @@ mod tests {
             .find(|p| p.provider_id == PROVIDER_ANTHROPIC);
         assert!(anthropic.is_some());
         assert_eq!(anthropic.unwrap().source, ProviderAuthSource::Environment);
+        assert_eq!(anthropic.unwrap().method, ProviderAuthMethod::ApiKey);
+    }
+
+    #[test]
+    #[serial(codex_api_key)]
+    fn list_configured_providers_shows_oauth_method() {
+        let dir = tempdir().unwrap();
+        let _openai_guard = EnvVarGuard::set(OPENAI_API_KEY_ENV_VAR, "");
+        let _anthropic_guard = EnvVarGuard::set(ANTHROPIC_API_KEY_ENV_VAR, "");
+        let _google_guard = EnvVarGuard::set(GOOGLE_API_KEY_ENV_VAR, "");
+
+        login_with_provider_oauth(
+            dir.path(),
+            PROVIDER_GEMINI,
+            ProviderOauthCredential {
+                access: "oauth-access".to_string(),
+                refresh: "oauth-refresh".to_string(),
+                expires: None,
+                email: Some("user@example.com".to_string()),
+                project_id: None,
+                managed_project_id: Some("managed-project".to_string()),
+            },
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store gemini oauth");
+
+        let providers = list_configured_providers(dir.path(), AuthCredentialsStoreMode::File);
+        let gemini = providers.iter().find(|p| p.provider_id == PROVIDER_GEMINI);
+        assert!(gemini.is_some());
+        assert_eq!(gemini.unwrap().source, ProviderAuthSource::Stored);
+        assert_eq!(gemini.unwrap().method, ProviderAuthMethod::Oauth);
     }
 
     #[test]

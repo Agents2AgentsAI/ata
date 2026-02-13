@@ -19,26 +19,28 @@ use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
 
-const GEMINI_OAUTH_CLIENT_ID_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_CLIENT_ID";
-const GEMINI_OAUTH_CLIENT_SECRET_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_CLIENT_SECRET";
-const GEMINI_OAUTH_TOKEN_URL_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_TOKEN_URL";
+pub const GEMINI_OAUTH_CLIENT_ID_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_CLIENT_ID";
+pub const GEMINI_OAUTH_CLIENT_SECRET_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_CLIENT_SECRET";
+pub const GEMINI_OAUTH_TOKEN_URL_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_TOKEN_URL";
 const GEMINI_CODE_ASSIST_BASE_URL_ENV_VAR: &str = "CODEX_GEMINI_CODE_ASSIST_BASE_URL";
 const GEMINI_CODE_ASSIST_API_VERSION_ENV_VAR: &str = "CODEX_GEMINI_CODE_ASSIST_API_VERSION";
 const GEMINI_PROJECT_ENV_VAR: &str = "GOOGLE_CLOUD_PROJECT";
 const GEMINI_PROJECT_ID_ENV_VAR: &str = "GOOGLE_CLOUD_PROJECT_ID";
 
-const DEFAULT_GEMINI_OAUTH_CLIENT_ID: &str =
+pub const DEFAULT_GEMINI_OAUTH_CLIENT_ID: &str =
     "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
-const DEFAULT_GEMINI_OAUTH_CLIENT_SECRET: &str = "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";
-const DEFAULT_GEMINI_OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+pub const DEFAULT_GEMINI_OAUTH_CLIENT_SECRET: &str = "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";
+pub const DEFAULT_GEMINI_OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const DEFAULT_GEMINI_CODE_ASSIST_BASE_URL: &str = "https://cloudcode-pa.googleapis.com";
 const DEFAULT_GEMINI_CODE_ASSIST_API_VERSION: &str = "v1internal";
 
 const REFRESH_SKEW_SECONDS: i64 = 300;
-const ONBOARD_POLL_INTERVAL: StdDuration = StdDuration::from_secs(5);
-const ONBOARD_POLL_MAX_ATTEMPTS: usize = 12;
+const ONBOARD_POLL_INITIAL_INTERVAL: StdDuration = StdDuration::from_secs(1);
+const ONBOARD_POLL_MAX_INTERVAL: StdDuration = StdDuration::from_secs(8);
+const ONBOARD_POLL_TIMEOUT: StdDuration = StdDuration::from_secs(60);
 
 static GEMINI_OAUTH_REFRESH_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+static GEMINI_OAUTH_HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(build_reqwest_client);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GeminiOauthRuntimeContext {
@@ -144,36 +146,42 @@ struct OnboardedProject {
 }
 
 pub(crate) fn code_assist_base_url() -> String {
-    std::env::var(GEMINI_CODE_ASSIST_BASE_URL_ENV_VAR)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_GEMINI_CODE_ASSIST_BASE_URL.to_string())
+    env_string_or_default(
+        GEMINI_CODE_ASSIST_BASE_URL_ENV_VAR,
+        DEFAULT_GEMINI_CODE_ASSIST_BASE_URL,
+    )
 }
 
 fn code_assist_api_version() -> String {
-    std::env::var(GEMINI_CODE_ASSIST_API_VERSION_ENV_VAR)
+    env_string_or_default(
+        GEMINI_CODE_ASSIST_API_VERSION_ENV_VAR,
+        DEFAULT_GEMINI_CODE_ASSIST_API_VERSION,
+    )
+}
+
+pub fn env_string_or_default(env_var: &str, default_value: &str) -> String {
+    std::env::var(env_var)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_GEMINI_CODE_ASSIST_API_VERSION.to_string())
+        .unwrap_or_else(|| default_value.to_string())
+}
+
+fn gemini_oauth_http_client() -> &'static reqwest::Client {
+    &GEMINI_OAUTH_HTTP_CLIENT
 }
 
 pub(crate) fn code_assist_method_url(method: &str) -> String {
-    format!(
-        "{base_url}/{version}:{method}",
-        base_url = code_assist_base_url(),
-        version = code_assist_api_version()
-    )
+    let base_url = code_assist_base_url();
+    let version = code_assist_api_version();
+    format!("{base_url}/{version}:{method}")
 }
 
 fn code_assist_operation_url(operation_name: &str) -> String {
     let operation_name = operation_name.trim_start_matches('/');
-    format!(
-        "{base_url}/{version}/{operation_name}",
-        base_url = code_assist_base_url(),
-        version = code_assist_api_version()
-    )
+    let base_url = code_assist_base_url();
+    let version = code_assist_api_version();
+    format!("{base_url}/{version}/{operation_name}")
 }
 
 pub(crate) async fn ensure_gemini_oauth_context(
@@ -181,25 +189,40 @@ pub(crate) async fn ensure_gemini_oauth_context(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     initial_credential: ProviderOauthCredential,
 ) -> Result<GeminiOauthRuntimeContext> {
-    let _refresh_guard = GEMINI_OAUTH_REFRESH_LOCK.lock().await;
-
     let mut credential =
         get_provider_oauth_credential(codex_home, PROVIDER_GEMINI, auth_credentials_store_mode)
             .unwrap_or(initial_credential);
-    let mut changed = false;
 
     if should_refresh_credential(&credential) {
-        credential = refresh_access_token(codex_home, auth_credentials_store_mode, credential).await?;
-        changed = true;
+        let _refresh_guard = GEMINI_OAUTH_REFRESH_LOCK.lock().await;
+        credential =
+            get_provider_oauth_credential(codex_home, PROVIDER_GEMINI, auth_credentials_store_mode)
+                .unwrap_or_else(|| credential.clone());
+
+        if should_refresh_credential(&credential) {
+            credential =
+                refresh_access_token(codex_home, auth_credentials_store_mode, credential).await?;
+            login_with_provider_oauth(
+                codex_home,
+                PROVIDER_GEMINI,
+                credential.clone(),
+                auth_credentials_store_mode,
+            )
+            .map_err(|err| {
+                CodexErr::Api(format!(
+                    "Failed to persist Gemini OAuth credential updates: {err}"
+                ))
+            })?;
+        }
     }
 
     let effective_project_id = ensure_project_context(&credential).await?;
-    if credential.project_id.is_none() && credential.managed_project_id.as_deref() != Some(&effective_project_id) {
+    let configured_project_id = configured_project_id_from_env();
+    let should_persist_managed_project = credential.project_id.is_none()
+        && configured_project_id.as_deref() != Some(effective_project_id.as_str())
+        && credential.managed_project_id.as_deref() != Some(effective_project_id.as_str());
+    if should_persist_managed_project {
         credential.managed_project_id = Some(effective_project_id.clone());
-        changed = true;
-    }
-
-    if changed {
         login_with_provider_oauth(
             codex_home,
             PROVIDER_GEMINI,
@@ -207,7 +230,9 @@ pub(crate) async fn ensure_gemini_oauth_context(
             auth_credentials_store_mode,
         )
         .map_err(|err| {
-            CodexErr::Api(format!("Failed to persist Gemini OAuth credential updates: {err}"))
+            CodexErr::Api(format!(
+                "Failed to persist Gemini OAuth credential updates: {err}"
+            ))
         })?;
     }
 
@@ -232,26 +257,20 @@ async fn refresh_access_token(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     credential: ProviderOauthCredential,
 ) -> Result<ProviderOauthCredential> {
-    let token_url = std::env::var(GEMINI_OAUTH_TOKEN_URL_ENV_VAR)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_GEMINI_OAUTH_TOKEN_URL.to_string());
+    let token_url = env_string_or_default(
+        GEMINI_OAUTH_TOKEN_URL_ENV_VAR,
+        DEFAULT_GEMINI_OAUTH_TOKEN_URL,
+    );
+    let client_id = env_string_or_default(
+        GEMINI_OAUTH_CLIENT_ID_ENV_VAR,
+        DEFAULT_GEMINI_OAUTH_CLIENT_ID,
+    );
+    let client_secret = env_string_or_default(
+        GEMINI_OAUTH_CLIENT_SECRET_ENV_VAR,
+        DEFAULT_GEMINI_OAUTH_CLIENT_SECRET,
+    );
 
-    let client_id = std::env::var(GEMINI_OAUTH_CLIENT_ID_ENV_VAR)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_GEMINI_OAUTH_CLIENT_ID.to_string());
-
-    let client_secret = std::env::var(GEMINI_OAUTH_CLIENT_SECRET_ENV_VAR)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_GEMINI_OAUTH_CLIENT_SECRET.to_string());
-
-    let client = build_reqwest_client();
-    let response = client
+    let response = gemini_oauth_http_client()
         .post(&token_url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(format!(
@@ -265,10 +284,9 @@ async fn refresh_access_token(
         .map_err(|err| CodexErr::Api(format!("Gemini OAuth token refresh request failed: {err}")))?;
 
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|err| CodexErr::Api(format!("Failed to read Gemini OAuth token response: {err}")))?;
+    let body = response.text().await.map_err(|err| {
+        CodexErr::Api(format!("Failed to read Gemini OAuth token response: {err}"))
+    })?;
 
     if !status.is_success() {
         if is_invalid_grant_response(status, &body) {
@@ -327,6 +345,9 @@ fn is_invalid_grant_response(status: StatusCode, response_body: &str) -> bool {
 async fn ensure_project_context(credential: &ProviderOauthCredential) -> Result<String> {
     if let Some(project_id) = credential.project_id.as_ref() {
         return Ok(project_id.clone());
+    }
+    if let Some(configured_project_id) = configured_project_id_from_env() {
+        return Ok(configured_project_id);
     }
     if let Some(managed_project_id) = credential.managed_project_id.as_ref() {
         return Ok(managed_project_id.clone());
@@ -394,15 +415,18 @@ async fn resolve_project_via_code_assist(access_token: &str) -> Result<String> {
         metadata,
     };
 
-    let client = build_reqwest_client();
-    let load_response: LoadCodeAssistResponse = client
+    let load_response: LoadCodeAssistResponse = gemini_oauth_http_client()
         .post(code_assist_method_url("loadCodeAssist"))
         .header("Authorization", format!("Bearer {access_token}"))
         .header("Content-Type", "application/json")
         .json(&load_request)
         .send()
         .await
-        .map_err(|err| CodexErr::Api(format!("Gemini Code Assist loadCodeAssist request failed: {err}")))?
+        .map_err(|err| {
+            CodexErr::Api(format!(
+                "Gemini Code Assist loadCodeAssist request failed: {err}"
+            ))
+        })?
         .error_for_status()
         .map_err(|err| CodexErr::Api(format!("Gemini Code Assist loadCodeAssist failed: {err}")))?
         .json()
@@ -440,43 +464,73 @@ async fn resolve_project_via_code_assist(access_token: &str) -> Result<String> {
         metadata,
     };
 
-    let mut operation_response: LongRunningOperationResponse = client
+    let mut operation_response: LongRunningOperationResponse = gemini_oauth_http_client()
         .post(code_assist_method_url("onboardUser"))
         .header("Authorization", format!("Bearer {access_token}"))
         .header("Content-Type", "application/json")
         .json(&onboard_request)
         .send()
         .await
-        .map_err(|err| CodexErr::Api(format!("Gemini Code Assist onboardUser request failed: {err}")))?
+        .map_err(|err| {
+            CodexErr::Api(format!(
+                "Gemini Code Assist onboardUser request failed: {err}"
+            ))
+        })?
         .error_for_status()
         .map_err(|err| CodexErr::Api(format!("Gemini Code Assist onboardUser failed: {err}")))?
         .json()
         .await
         .map_err(|err| CodexErr::Api(format!("Failed to parse onboardUser response: {err}")))?;
 
+    let poll_started = tokio::time::Instant::now();
+    let mut poll_interval = ONBOARD_POLL_INITIAL_INTERVAL;
+    let mut poll_timed_out = false;
     let mut attempts = 0;
     while !operation_response.done.unwrap_or(false)
         && operation_response
             .name
             .as_ref()
             .is_some_and(|name| !name.trim().is_empty())
-        && attempts < ONBOARD_POLL_MAX_ATTEMPTS
     {
+        let elapsed = poll_started.elapsed();
+        if elapsed >= ONBOARD_POLL_TIMEOUT {
+            poll_timed_out = true;
+            break;
+        }
+
         attempts += 1;
-        tokio::time::sleep(ONBOARD_POLL_INTERVAL).await;
+        let remaining = ONBOARD_POLL_TIMEOUT.saturating_sub(elapsed);
+        let delay = std::cmp::min(poll_interval, remaining);
+        tracing::info!(
+            attempt = attempts,
+            delay_secs = delay.as_secs(),
+            remaining_secs = remaining.as_secs(),
+            "Polling Gemini Code Assist onboarding operation"
+        );
+        tokio::time::sleep(delay).await;
         let operation_name = operation_response.name.clone().unwrap_or_default();
-        operation_response = client
+        operation_response = gemini_oauth_http_client()
             .get(code_assist_operation_url(&operation_name))
             .header("Authorization", format!("Bearer {access_token}"))
             .header("Content-Type", "application/json")
             .send()
             .await
-            .map_err(|err| CodexErr::Api(format!("Gemini Code Assist operation poll failed: {err}")))?
+            .map_err(|err| {
+                CodexErr::Api(format!("Gemini Code Assist operation poll failed: {err}"))
+            })?
             .error_for_status()
             .map_err(|err| CodexErr::Api(format!("Gemini Code Assist operation failed: {err}")))?
             .json()
             .await
             .map_err(|err| CodexErr::Api(format!("Failed to parse operation response: {err}")))?;
+        poll_interval = std::cmp::min(poll_interval.saturating_mul(2), ONBOARD_POLL_MAX_INTERVAL);
+    }
+
+    if poll_timed_out {
+        return Err(CodexErr::Api(
+            "Gemini Code Assist onboarding timed out while waiting for project setup. Retry in a minute, or set GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_PROJECT_ID explicitly."
+                .to_string(),
+        ));
     }
 
     if let Some(onboarded_project_id) = operation_response
@@ -572,8 +626,10 @@ mod tests {
             .mount(&token_server)
             .await;
 
-        let _token_url_guard =
-            EnvVarGuard::set(GEMINI_OAUTH_TOKEN_URL_ENV_VAR, &format!("{}/token", token_server.uri()));
+        let _token_url_guard = EnvVarGuard::set(
+            GEMINI_OAUTH_TOKEN_URL_ENV_VAR,
+            &format!("{}/token", token_server.uri()),
+        );
         let credential = ProviderOauthCredential {
             access: "old-access".to_string(),
             refresh: "old-refresh".to_string(),
@@ -625,8 +681,10 @@ mod tests {
             .mount(&token_server)
             .await;
 
-        let _token_url_guard =
-            EnvVarGuard::set(GEMINI_OAUTH_TOKEN_URL_ENV_VAR, &format!("{}/token", token_server.uri()));
+        let _token_url_guard = EnvVarGuard::set(
+            GEMINI_OAUTH_TOKEN_URL_ENV_VAR,
+            &format!("{}/token", token_server.uri()),
+        );
         let credential = ProviderOauthCredential {
             access: "old-access".to_string(),
             refresh: "old-refresh".to_string(),
@@ -651,7 +709,8 @@ mod tests {
         .await
         .expect_err("invalid grant should fail");
         assert!(
-            err.to_string().contains("Run `ata login --provider gemini --with-oauth` again"),
+            err.to_string()
+                .contains("Run `ata login --provider gemini --with-oauth` again"),
             "unexpected error: {err}"
         );
 

@@ -939,7 +939,7 @@ async fn login_account_gemini_rejected_when_forced_chatgpt() -> Result<()> {
 
     assert_eq!(
         err.error.message,
-        "API key login is disabled. Use ChatGPT login instead."
+        "OAuth login is disabled. Use ChatGPT login instead."
     );
     Ok(())
 }
@@ -991,7 +991,10 @@ async fn login_account_gemini_start_can_be_cancelled() -> Result<()> {
     };
     assert_eq!(payload.login_id, Some(login_id));
     assert_eq!(payload.success, false);
-    assert!(payload.error.is_some(), "expected a non-empty error on cancel");
+    assert!(
+        payload.error.is_some(),
+        "expected a non-empty error on cancel"
+    );
 
     let maybe_updated = timeout(
         Duration::from_millis(500),

@@ -9,6 +9,8 @@ use super::ModelClientSession;
 use super::gemini_code_assist::stream_gemini_code_assist;
 use super::provider_streaming::ParseSseEventResult;
 use super::provider_streaming::build_reasoning_value;
+use super::provider_streaming::extract_sse_data_line;
+use super::provider_streaming::filter_out_created;
 use super::provider_streaming::map_api_err_to_codex_err;
 use super::provider_streaming::serialize_input_items;
 use super::provider_streaming::spawn_provider_sse_stream;
@@ -130,60 +132,43 @@ async fn stream_gemini_with_api_key(
         stream_state,
         vec![ResponseEvent::Created],
         |event_str, state| {
-            let data = if let Some(data_line) = event_str
-                .lines()
-                .find_map(|line| line.strip_prefix("data: "))
-            {
-                data_line
-            } else if let Some(data_line) = event_str.strip_prefix("data:") {
-                data_line.trim()
-            } else {
+            let Some(data) = extract_sse_data_line(event_str) else {
                 return ParseSseEventResult::Continue;
             };
-
-            if data.trim() == "[DONE]" {
-                return ParseSseEventResult::Emit(vec![ResponseEvent::Completed {
-                    response_id: String::new(),
-                    token_usage: None,
-                    can_append: false,
-                }]);
-            }
-
-            match codex_api::sse::gemini::parse_gemini_chunk(data, state) {
-                Ok(events) => {
-                    let events = filter_out_created(events);
-                    if events.is_empty() {
-                        ParseSseEventResult::Continue
-                    } else {
-                        ParseSseEventResult::Emit(events)
-                    }
-                }
-                Err(err) => ParseSseEventResult::Fatal(map_api_err_to_codex_err(err)),
-            }
+            parse_gemini_sse_data(data, state, false)
         },
         |buffer, state| {
-            if let Some(data_line) = buffer.lines().find(|line| line.starts_with("data: ")) {
-                let data = &data_line[6..];
-                if data.trim() == "[DONE]" {
-                    return ParseSseEventResult::Continue;
-                }
-
-                if let Ok(events) = codex_api::sse::gemini::parse_gemini_chunk(data, state) {
-                    let events = filter_out_created(events);
-                    if !events.is_empty() {
-                        return ParseSseEventResult::Emit(events);
-                    }
-                }
-            }
-
-            ParseSseEventResult::Continue
+            let Some(data) = extract_sse_data_line(buffer) else {
+                return ParseSseEventResult::Continue;
+            };
+            parse_gemini_sse_data(data, state, true)
         },
     ))
 }
 
-fn filter_out_created(events: Vec<ResponseEvent>) -> Vec<ResponseEvent> {
-    events
-        .into_iter()
-        .filter(|event| !matches!(event, ResponseEvent::Created))
-        .collect()
+fn parse_gemini_sse_data(
+    data: &str,
+    state: &mut GeminiStreamState,
+    ignore_parse_errors: bool,
+) -> ParseSseEventResult {
+    if data.trim() == "[DONE]" {
+        return ParseSseEventResult::Emit(vec![ResponseEvent::Completed {
+            response_id: String::new(),
+            token_usage: None,
+            can_append: false,
+        }]);
+    }
+
+    match codex_api::sse::gemini::parse_gemini_chunk(data, state) {
+        Ok(events) => {
+            let events = filter_out_created(events);
+            if events.is_empty() {
+                ParseSseEventResult::Continue
+            } else {
+                ParseSseEventResult::Emit(events)
+            }
+        }
+        Err(err) if ignore_parse_errors => ParseSseEventResult::Continue,
+        Err(err) => ParseSseEventResult::Fatal(map_api_err_to_codex_err(err)),
+    }
 }

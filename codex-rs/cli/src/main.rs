@@ -14,8 +14,8 @@ use codex_cli::login::run_list_providers;
 use codex_cli::login::run_login_status;
 use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::login::run_login_with_device_code;
-use codex_cli::login::run_login_with_provider_oauth;
 use codex_cli::login::run_login_with_provider_api_key;
+use codex_cli::login::run_login_with_provider_oauth;
 use codex_cli::login::run_logout_provider;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_exec::Cli as ExecCli;
@@ -738,8 +738,11 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                         )
                         .await;
                     } else if login_cli.with_oauth {
-                        run_login_with_provider_oauth(login_cli.config_overrides, login_cli.provider)
-                            .await;
+                        run_login_with_provider_oauth(
+                            login_cli.config_overrides,
+                            login_cli.provider,
+                        )
+                        .await;
                     } else {
                         run_login_with_chatgpt(login_cli.config_overrides).await;
                     }

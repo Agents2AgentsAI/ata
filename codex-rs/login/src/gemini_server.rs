@@ -13,8 +13,15 @@ use base64::Engine;
 use chrono::Duration;
 use chrono::Utc;
 use codex_core::auth::AuthCredentialsStoreMode;
+use codex_core::auth::DEFAULT_GEMINI_OAUTH_CLIENT_ID;
+use codex_core::auth::DEFAULT_GEMINI_OAUTH_CLIENT_SECRET;
+use codex_core::auth::DEFAULT_GEMINI_OAUTH_TOKEN_URL;
+use codex_core::auth::GEMINI_OAUTH_CLIENT_ID_ENV_VAR;
+use codex_core::auth::GEMINI_OAUTH_CLIENT_SECRET_ENV_VAR;
+use codex_core::auth::GEMINI_OAUTH_TOKEN_URL_ENV_VAR;
 use codex_core::auth::PROVIDER_GEMINI;
 use codex_core::auth::ProviderOauthCredential;
+use codex_core::auth::env_string_or_default;
 use codex_core::auth::login_with_provider_oauth;
 use rand::RngCore;
 use tiny_http::Header;
@@ -23,18 +30,11 @@ use tiny_http::Response;
 use tiny_http::Server;
 use tiny_http::StatusCode;
 
-const GEMINI_OAUTH_CLIENT_ID_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_CLIENT_ID";
-const GEMINI_OAUTH_CLIENT_SECRET_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_CLIENT_SECRET";
 const GEMINI_OAUTH_AUTHORIZE_URL_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_AUTHORIZE_URL";
-const GEMINI_OAUTH_TOKEN_URL_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_TOKEN_URL";
 const GEMINI_OAUTH_USERINFO_URL_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_USERINFO_URL";
 const GEMINI_OAUTH_CALLBACK_PORT_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_CALLBACK_PORT";
 
-const DEFAULT_GEMINI_OAUTH_CLIENT_ID: &str =
-    "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
-const DEFAULT_GEMINI_OAUTH_CLIENT_SECRET: &str = "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";
 const DEFAULT_GEMINI_OAUTH_AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
-const DEFAULT_GEMINI_OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const DEFAULT_GEMINI_OAUTH_USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
 const GEMINI_OAUTH_SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile";
 
@@ -53,7 +53,10 @@ pub struct GeminiServerOptions {
 }
 
 impl GeminiServerOptions {
-    pub fn new(codex_home: PathBuf, cli_auth_credentials_store_mode: AuthCredentialsStoreMode) -> Self {
+    pub fn new(
+        codex_home: PathBuf,
+        cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+    ) -> Self {
         Self {
             codex_home,
             client_id: env_string_or_default(
@@ -87,14 +90,6 @@ impl GeminiServerOptions {
     }
 }
 
-fn env_string_or_default(env_var: &str, default_value: &str) -> String {
-    std::env::var(env_var)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| default_value.to_string())
-}
-
 pub fn run_gemini_login_server(opts: GeminiServerOptions) -> io::Result<LoginServer> {
     let pkce = generate_pkce();
     let state = opts.force_state.clone().unwrap_or_else(generate_state);
@@ -106,7 +101,7 @@ pub fn run_gemini_login_server(opts: GeminiServerOptions) -> io::Result<LoginSer
             return Err(io::Error::new(
                 io::ErrorKind::AddrInUse,
                 "Unable to determine the server port",
-            ))
+            ));
         }
     };
     let server = Arc::new(server);
@@ -228,9 +223,8 @@ async fn process_request(
         Ok(url) => url,
         Err(err) => {
             return HandledRequest::Response(
-                Response::from_string(format!("Invalid callback URL: {err}"))
-                    .with_status_code(400),
-            )
+                Response::from_string(format!("Invalid callback URL: {err}")).with_status_code(400),
+            );
         }
     };
 
@@ -249,7 +243,7 @@ async fn process_request(
                 _ => {
                     return HandledRequest::Response(
                         Response::from_string("Missing authorization code").with_status_code(400),
-                    )
+                    );
                 }
             };
 
@@ -261,7 +255,7 @@ async fn process_request(
                             return HandledRequest::Response(
                                 Response::from_string(format!("Failed to fetch user email: {err}"))
                                     .with_status_code(500),
-                            )
+                            );
                         }
                     };
 
@@ -454,7 +448,9 @@ async fn exchange_code_for_tokens(
         .refresh_token
         .map(|token| token.trim().to_string())
         .filter(|token| !token.is_empty())
-        .ok_or_else(|| io::Error::other("Google OAuth token response did not include refresh_token"))?;
+        .ok_or_else(|| {
+            io::Error::other("Google OAuth token response did not include refresh_token")
+        })?;
 
     Ok(ExchangedTokens {
         access_token: tokens.access_token,
