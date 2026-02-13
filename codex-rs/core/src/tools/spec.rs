@@ -1629,32 +1629,6 @@ pub(crate) fn build_specs_with_toolkits(
     }
 
     #[cfg(feature = "research")]
-    let suppressed_mcp_zotero_tool_names: BTreeSet<String> = {
-        let zotero_mcp_tool_names: BTreeSet<&'static str> =
-            codex_research_tools::tool_specs::all_tool_defs()
-                .into_iter()
-                .filter(|def| def.id.starts_with("zotero_"))
-                .map(|def| def.mcp_name)
-                .collect();
-
-        mcp_tools
-            .as_ref()
-            .map(|tools| {
-                tools
-                    .keys()
-                    .filter(|qualified_name| {
-                        qualified_name
-                            .rsplit("__")
-                            .next()
-                            .is_some_and(|tool_name| zotero_mcp_tool_names.contains(tool_name))
-                    })
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-
-    #[cfg(feature = "research")]
     let mut suppressed_mcp_research_tool_names: BTreeSet<String> = BTreeSet::new();
 
     #[cfg(feature = "research")]
@@ -1738,10 +1712,6 @@ pub(crate) fn build_specs_with_toolkits(
         for (name, tool) in entries.into_iter() {
             #[cfg(feature = "research")]
             if suppressed_mcp_research_tool_names.contains(&name) {
-                continue;
-            }
-            #[cfg(feature = "research")]
-            if suppressed_mcp_zotero_tool_names.contains(&name) {
                 continue;
             }
             #[cfg(feature = "data")]
@@ -1972,37 +1942,6 @@ mod tests {
                 .iter()
                 .any(|tool| tool_name(&tool.spec) == "mcp__paper_search__search_papers"),
             "matched MCP tool should be suppressed when native paper_search is configured"
-        );
-    }
-
-    #[cfg(feature = "research")]
-    #[test]
-    fn zotero_mcp_fallback_is_not_exposed_when_native_zotero_is_not_configured() {
-        let tools_config = default_tools_config();
-        let toolkit =
-            make_research_toolkit(codex_research_tools::config::ResearchConfig::default());
-        let mcp_tools = HashMap::from([(
-            "mcp__zotero__search_library".to_string(),
-            mcp_tool(
-                "search_library",
-                "search zotero",
-                serde_json::json!({"type": "object", "properties": {}}),
-            ),
-        )]);
-
-        let (tools, _) =
-            build_specs_with_research(&tools_config, Some(mcp_tools), &[], Some(&toolkit)).build();
-        assert!(
-            !tools
-                .iter()
-                .any(|tool| tool_name(&tool.spec) == "mcp__zotero__search_library"),
-            "zotero MCP fallback should not be exposed"
-        );
-        assert!(
-            !tools
-                .iter()
-                .any(|tool| tool_name(&tool.spec) == "zotero_search"),
-            "native zotero tool should not register without API credentials"
         );
     }
 

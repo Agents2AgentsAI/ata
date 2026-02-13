@@ -98,7 +98,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
             ToolDef {
                 id: "zotero_search",
                 native_name: "zotero_search",
-                mcp_name: "search_library",
+                mcp_name: "",
                 description: "Search Zotero items by keyword query across titles, creators, and tags. For topic-based lookups, also check zotero_get_collections — users often organize papers into named collections that keyword search alone may miss.",
                 input_schema: json!({
                     "type": "object",
@@ -118,7 +118,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
             ToolDef {
                 id: "zotero_get_tags",
                 native_name: "zotero_get_tags",
-                mcp_name: "get_tags",
+                mcp_name: "",
                 description: "List Zotero tags with pagination metadata for autocomplete and filtering flows.",
                 input_schema: json!({
                     "type": "object",
@@ -143,7 +143,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
             ToolDef {
                 id: "zotero_get_recent",
                 native_name: "zotero_get_recent",
-                mcp_name: "get_recent",
+                mcp_name: "",
                 description: "List recently added or modified Zotero items in descending time order.",
                 input_schema: json!({
                     "type": "object",
@@ -175,7 +175,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
             ToolDef {
                 id: "zotero_advanced_search",
                 native_name: "zotero_advanced_search",
-                mcp_name: "advanced_search",
+                mcp_name: "",
                 description: "Evaluate multi-condition client-side search over bounded Zotero candidates.",
                 input_schema: json!({
                     "type": "object",
@@ -241,7 +241,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
             ToolDef {
                 id: "zotero_grep_text",
                 native_name: "zotero_grep_text",
-                mcp_name: "grep_library_text",
+                mcp_name: "",
                 description: "Run bounded literal or regex matching across Zotero metadata, notes, annotations, and fulltext.",
                 input_schema: json!({
                     "type": "object",
@@ -274,7 +274,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
             ToolDef {
                 id: "zotero_search_notes",
                 native_name: "zotero_search_notes",
-                mcp_name: "search_notes",
+                mcp_name: "",
                 description: "Search Zotero note and annotation text using grep-style matching.",
                 input_schema: json!({
                     "type": "object",
@@ -296,7 +296,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
             ToolDef {
                 id: "zotero_get_item",
                 native_name: "zotero_get_item",
-                mcp_name: "get_item_details",
+                mcp_name: "",
                 description: "Get full Zotero metadata for an item, with optional attachment and document-source enrichment.",
                 input_schema: json!({
                     "type": "object",
@@ -315,7 +315,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
             ToolDef {
                 id: "zotero_get_item_citation",
                 native_name: "zotero_get_item_citation",
-                mcp_name: "get_item_citation",
+                mcp_name: "",
                 description: "Generate a citation for a Zotero item (BibTeX, CSL JSON, or APA).",
                 input_schema: json!({
                     "type": "object",
@@ -332,7 +332,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
             ToolDef {
                 id: "zotero_get_fulltext",
                 native_name: "zotero_get_fulltext",
-                mcp_name: "get_item_fulltext",
+                mcp_name: "",
                 description: "Get indexed fulltext for a Zotero item and resolve canonical document sources (ar5iv/arXiv/PDF URL/local path).",
                 input_schema: json!({
                     "type": "object",
@@ -349,7 +349,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
             ToolDef {
                 id: "zotero_get_notes",
                 native_name: "zotero_get_notes",
-                mcp_name: "get_item_notes",
+                mcp_name: "",
                 description: "Get notes attached to a Zotero item.",
                 input_schema: json!({
                     "type": "object",
@@ -366,7 +366,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
             ToolDef {
                 id: "zotero_get_annotations",
                 native_name: "zotero_get_annotations",
-                mcp_name: "get_annotations",
+                mcp_name: "",
                 description: "Get annotations in an item or across a Zotero library.",
                 input_schema: json!({
                     "type": "object",
@@ -385,7 +385,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
             ToolDef {
                 id: "zotero_get_attachments",
                 native_name: "zotero_get_attachments",
-                mcp_name: "get_item_attachments",
+                mcp_name: "",
                 description: "Get attachment metadata for a Zotero item.",
                 input_schema: json!({
                     "type": "object",
@@ -402,7 +402,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
             ToolDef {
                 id: "zotero_get_collections",
                 native_name: "zotero_get_collections",
-                mcp_name: "get_collections",
+                mcp_name: "",
                 description: "List Zotero collections (user-organized folders). When a user asks about papers on a topic, scan collection names for matches — a collection named after the topic likely contains all relevant papers. Use zotero_get_collection_items to retrieve its contents.",
                 input_schema: json!({
                     "type": "object",
@@ -418,7 +418,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
             ToolDef {
                 id: "zotero_list_groups",
                 native_name: "zotero_list_groups",
-                mcp_name: "list_groups",
+                mcp_name: "",
                 description: "List Zotero groups accessible to the user.",
                 input_schema: json!({
                     "type": "object",
@@ -433,7 +433,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
             ToolDef {
                 id: "zotero_get_collection_items",
                 native_name: "zotero_get_collection_items",
-                mcp_name: "get_collection_items",
+                mcp_name: "",
                 description: "List items in a Zotero collection by collection_key. Use after finding a relevant collection via zotero_get_collections.",
                 input_schema: json!({
                     "type": "object",
