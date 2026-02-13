@@ -11,6 +11,9 @@ use super::provider_streaming::build_reasoning_value;
 use super::provider_streaming::map_api_err_to_codex_err;
 use super::provider_streaming::serialize_input_items;
 use super::provider_streaming::spawn_provider_sse_stream;
+use crate::auth::GeminiAuthSource;
+use crate::auth::PROVIDER_GEMINI;
+use crate::auth::resolve_gemini_auth_source;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
@@ -27,19 +30,47 @@ pub(super) async fn stream_gemini_api(
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
 ) -> Result<ResponseStream> {
+    let auth_source =
+        if session.client.state.provider.name_to_provider_id() == Some(PROVIDER_GEMINI) {
+            resolve_gemini_auth_source(
+                &session.client.state.codex_home,
+                session.client.state.cli_auth_credentials_store_mode,
+            )
+        } else {
+            match session.client.state.provider.api_key_with_auth(
+                &session.client.state.codex_home,
+                session.client.state.cli_auth_credentials_store_mode,
+            )? {
+                Some(api_key) => GeminiAuthSource::ApiKey(api_key),
+                None => GeminiAuthSource::Missing,
+            }
+        };
+
+    match auth_source {
+        GeminiAuthSource::ApiKey(api_key) => {
+            stream_gemini_with_api_key(session, prompt, model_info, effort, summary, api_key).await
+        }
+        GeminiAuthSource::Oauth(_) => Err(CodexErr::Api(
+            "Gemini OAuth credentials are configured, but Gemini Code Assist transport is not implemented yet in this build. Set GOOGLE_API_KEY to use Gemini requests."
+                .to_string(),
+        )),
+        GeminiAuthSource::Missing => Err(CodexErr::Api(
+            "Missing Gemini credentials. Set GOOGLE_API_KEY to use Gemini requests.".to_string(),
+        )),
+    }
+}
+
+async fn stream_gemini_with_api_key(
+    session: &ModelClientSession,
+    prompt: &Prompt,
+    model_info: &ModelInfo,
+    effort: Option<ReasoningEffortConfig>,
+    summary: ReasoningSummaryConfig,
+    api_key: String,
+) -> Result<ResponseStream> {
     let input = prompt.get_formatted_input();
     let instructions = &prompt.base_instructions.text;
     let tools = create_tools_json_for_responses_api(&prompt.tools)?;
-
-    let api_key = session
-        .client
-        .state
-        .provider
-        .api_key_with_auth(
-            &session.client.state.codex_home,
-            session.client.state.cli_auth_credentials_store_mode,
-        )?
-        .ok_or_else(|| CodexErr::Api("Missing GOOGLE_API_KEY".to_string()))?;
 
     let adapter = GeminiAdapter::new();
     let input_values = serialize_input_items(&input)?;
