@@ -79,7 +79,6 @@ Use sub-agents when available. Each sub-agent should write one artifact to \
 - For papers you need to read deeply, call `{get_item}` with `include_attachments=true` and `include_fulltext_resolution=true`.\n\
 - If `document_resolution.preferred_url` is present, fetch it with `attach_url_files` and treat that attached document as the primary source.\n\
 - If `document_resolution.local_path` is present and no URL is available, use that local PDF path as the primary source.\n\
-- Use `{get_fulltext}` only as a fallback text source when no HTML/PDF source can be resolved.\n\
 - Generate references via `{get_item_citation}` when outputs require BibTeX/APA/CSL citations.\n",
             list_groups = tool.zotero_list_groups,
             search = tool.zotero_search,
@@ -88,7 +87,6 @@ Use sub-agents when available. Each sub-agent should write one artifact to \
             advanced_search = tool.zotero_advanced_search,
             search_notes = tool.zotero_search_notes,
             get_item = tool.zotero_get_item,
-            get_fulltext = tool.zotero_get_fulltext,
             get_item_citation = tool.zotero_get_item_citation,
         ));
     }
