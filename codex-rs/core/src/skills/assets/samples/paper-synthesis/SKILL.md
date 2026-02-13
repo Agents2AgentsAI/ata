@@ -83,10 +83,12 @@ Before synthesizing, always attempt to read the full paper text. Choose the path
 ### Path B: Zotero (when user mentions Zotero, a collection, or their library)
 
 1. Use `zotero_search` to find the paper(s) by title, author, or topic. Also call `zotero_get_collections` to check if a collection matches the topic — if so, use `zotero_get_collection_items` to retrieve its contents. If the user names a specific collection, use `zotero_get_collection_items` directly.
-2. For each paper found, call `zotero_get_item` for full metadata (title, authors, year, DOI, tags).
-3. Call `zotero_get_fulltext` to get the indexed full text. This is the primary source — it contains the complete paper content as indexed by Zotero.
-4. Optionally call `zotero_get_notes` to retrieve the user's annotations and highlights — weave these into the synthesis where relevant (e.g. "The authors note X, which the reader flagged as particularly relevant because...").
-5. If `zotero_get_fulltext` returns no content, fall back to Path A using the DOI or arXiv ID from the Zotero metadata.
+2. For each paper found, call `zotero_get_item` with `include_attachments=true` and `include_fulltext_resolution=true`.
+3. If `document_resolution.preferred_url` is present, fetch the paper with `attach_url_files` and treat that attached document as the primary source (this preserves figures/tables).
+4. If no URL is available but `document_resolution.local_path` is present, use that local PDF path as the primary source.
+5. Call `zotero_get_fulltext` only as a fallback text source when no HTML/PDF source can be resolved.
+6. Optionally call `zotero_get_notes` to retrieve the user's annotations and highlights — weave these into the synthesis where relevant (e.g. "The authors note X, which the reader flagged as particularly relevant because...").
+7. If neither document source nor indexed text is available, fall back to Path A using the DOI or arXiv ID from the Zotero metadata.
 
 When the user asks to analyze multiple papers from Zotero (e.g. "synthesize my Zotero collection on diffusion"), launch one subagent per paper in parallel. After all subagents complete, produce a cross-paper comparative section in the main context (same format as the kb-explain cross-card synthesis).
 
