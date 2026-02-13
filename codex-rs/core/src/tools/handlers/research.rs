@@ -15,6 +15,7 @@ use codex_research_tools::types::PaperSearchParams;
 use codex_research_tools::types::PdfExtractFiguresParams;
 use codex_research_tools::types::ZoteroAdvancedSearchParams;
 use codex_research_tools::types::ZoteroAnnotationsParams;
+use codex_research_tools::types::ZoteroCitationParams;
 use codex_research_tools::types::ZoteroCollectionItemsParams;
 use codex_research_tools::types::ZoteroCollectionsParams;
 use codex_research_tools::types::ZoteroGrepParams;
@@ -140,6 +141,11 @@ impl ResearchBridgeHandler {
             "zotero_get_item" => dispatch_with_params!(ZoteroItemParams, |params| self
                 .toolkit
                 .zotero_get_item(params)),
+            "zotero_get_item_citation" => {
+                dispatch_with_params!(ZoteroCitationParams, |params| self
+                    .toolkit
+                    .zotero_get_item_citation(params))
+            }
             "zotero_get_fulltext" => dispatch_with_params!(ZoteroItemParams, |params| self
                 .toolkit
                 .zotero_get_fulltext(params)),

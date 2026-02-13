@@ -2,6 +2,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashSet;
+use std::time::Duration;
 
 use crate::error::ResearchError;
 use crate::error::Result;
@@ -27,6 +28,30 @@ use crate::types::ZoteroTagsResult;
 pub(crate) struct ZoteroConfig<'a> {
     pub base_url: &'a str,
     pub api_key: Option<&'a str>,
+}
+
+const DEFAULT_BETTER_BIBTEX_JSON_RPC_URL: &str = "http://127.0.0.1:23119/better-bibtex/json-rpc";
+const BETTER_BIBTEX_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub(crate) struct BetterBibtexCitation {
+    pub citation: String,
+    pub citation_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct JsonRpcResponse {
+    jsonrpc: String,
+    #[serde(default)]
+    result: Option<serde_json::Value>,
+    #[serde(default)]
+    error: Option<JsonRpcError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct JsonRpcError {
+    code: i64,
+    message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -609,6 +634,38 @@ pub(crate) async fn get_collection_items(
     })
 }
 
+pub(crate) async fn get_better_bibtex_citation(
+    http: &HttpClient,
+    item_key: &str,
+    library_id: Option<&str>,
+    endpoint_override: Option<&str>,
+) -> Result<BetterBibtexCitation> {
+    let endpoint = better_bibtex_endpoint(endpoint_override)?;
+    let scoped_key = scoped_item_key(item_key, library_id);
+    let citation_key_result = better_bibtex_json_rpc(
+        http,
+        endpoint.clone(),
+        "item.citationkey",
+        serde_json::json!([[scoped_key.clone()]]),
+    )
+    .await?;
+
+    let citation_key = parse_citation_key(item_key, scoped_key.as_str(), citation_key_result)?;
+    let export_result = better_bibtex_json_rpc(
+        http,
+        endpoint,
+        "item.export",
+        serde_json::json!([[citation_key.clone()], "Better BibTeX"]),
+    )
+    .await?;
+    let citation = parse_export_result(export_result)?;
+
+    Ok(BetterBibtexCitation {
+        citation,
+        citation_key: Some(citation_key),
+    })
+}
+
 fn zotero_request(
     http: &HttpClient,
     config: ZoteroConfig<'_>,
@@ -622,6 +679,188 @@ fn zotero_request(
         request = request.header("Zotero-Allowed-Request", "1");
     }
     request
+}
+
+async fn better_bibtex_json_rpc(
+    http: &HttpClient,
+    endpoint: reqwest::Url,
+    method: &'static str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value> {
+    let request = http.client().post(endpoint).json(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params,
+        "id": 1
+    }));
+
+    let response = match tokio::time::timeout(BETTER_BIBTEX_TIMEOUT, request.send()).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(source)) => {
+            return Err(ResearchError::Http {
+                api: ResearchApi::Zotero,
+                source,
+            });
+        }
+        Err(_) => {
+            return Err(ResearchError::Timeout {
+                api: ResearchApi::Zotero,
+                timeout_ms: u64::try_from(BETTER_BIBTEX_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
+            });
+        }
+    };
+
+    let status = response.status();
+    if !status.is_success() {
+        let message = response
+            .text()
+            .await
+            .unwrap_or_else(|err| format!("failed to read error body: {err}"));
+        return Err(ResearchError::Upstream {
+            api: ResearchApi::Zotero,
+            status,
+            message,
+        });
+    }
+
+    let payload =
+        match tokio::time::timeout(BETTER_BIBTEX_TIMEOUT, response.json::<serde_json::Value>())
+            .await
+        {
+            Ok(Ok(value)) => value,
+            Ok(Err(err)) => {
+                return Err(ResearchError::Parse {
+                    api: ResearchApi::Zotero,
+                    message: err.to_string(),
+                });
+            }
+            Err(_) => {
+                return Err(ResearchError::Timeout {
+                    api: ResearchApi::Zotero,
+                    timeout_ms: u64::try_from(BETTER_BIBTEX_TIMEOUT.as_millis())
+                        .unwrap_or(u64::MAX),
+                });
+            }
+        };
+
+    let rpc =
+        serde_json::from_value::<JsonRpcResponse>(payload).map_err(|err| ResearchError::Parse {
+            api: ResearchApi::Zotero,
+            message: format!("invalid Better BibTeX JSON-RPC response: {err}"),
+        })?;
+    if rpc.jsonrpc != "2.0" {
+        return Err(ResearchError::Parse {
+            api: ResearchApi::Zotero,
+            message: format!("invalid Better BibTeX JSON-RPC version: {}", rpc.jsonrpc),
+        });
+    }
+    if let Some(error) = rpc.error {
+        return Err(ResearchError::Parse {
+            api: ResearchApi::Zotero,
+            message: format!(
+                "Better BibTeX JSON-RPC error for {}: code {} message {}",
+                method, error.code, error.message
+            ),
+        });
+    }
+
+    rpc.result.ok_or_else(|| ResearchError::Parse {
+        api: ResearchApi::Zotero,
+        message: format!("Better BibTeX JSON-RPC response for {method} missing result"),
+    })
+}
+
+fn better_bibtex_endpoint(override_url: Option<&str>) -> Result<reqwest::Url> {
+    let raw = override_url
+        .map(str::to_string)
+        .unwrap_or_else(|| DEFAULT_BETTER_BIBTEX_JSON_RPC_URL.to_string());
+    let parsed = reqwest::Url::parse(raw.as_str()).map_err(|err| {
+        ResearchError::InvalidInput(format!("invalid Better BibTeX endpoint '{raw}': {err}"))
+    })?;
+
+    if !is_localhost_url(&parsed) {
+        return Err(ResearchError::InvalidInput(
+            "Better BibTeX endpoint must target localhost".to_string(),
+        ));
+    }
+    if parsed.port_or_known_default().is_none() {
+        return Err(ResearchError::InvalidInput(
+            "Better BibTeX endpoint must include an explicit port".to_string(),
+        ));
+    }
+
+    Ok(parsed)
+}
+
+fn is_localhost_url(url: &reqwest::Url) -> bool {
+    url.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
+    })
+}
+
+fn scoped_item_key(item_key: &str, library_id: Option<&str>) -> String {
+    if let Some(library_id) = library_id.map(str::trim).filter(|value| !value.is_empty()) {
+        return format!("{library_id}:{item_key}");
+    }
+
+    item_key.to_string()
+}
+
+fn parse_citation_key(
+    item_key: &str,
+    scoped_item_key: &str,
+    value: serde_json::Value,
+) -> Result<String> {
+    if let Some(as_object) = value.as_object() {
+        if let Some(citation_key) = as_object.get(item_key).and_then(serde_json::Value::as_str) {
+            return Ok(citation_key.to_string());
+        }
+        if let Some(citation_key) = as_object
+            .get(scoped_item_key)
+            .and_then(serde_json::Value::as_str)
+        {
+            return Ok(citation_key.to_string());
+        }
+        if let Some(citation_key) = as_object.values().find_map(serde_json::Value::as_str)
+            && !citation_key.trim().is_empty()
+        {
+            return Ok(citation_key.to_string());
+        }
+    }
+
+    if let Some(as_string) = value.as_str()
+        && !as_string.trim().is_empty()
+    {
+        return Ok(as_string.to_string());
+    }
+
+    Err(ResearchError::Parse {
+        api: ResearchApi::Zotero,
+        message: "Better BibTeX citation-key response has no usable key".to_string(),
+    })
+}
+
+fn parse_export_result(value: serde_json::Value) -> Result<String> {
+    if let Some(as_string) = value.as_str()
+        && !as_string.trim().is_empty()
+    {
+        return Ok(as_string.to_string());
+    }
+
+    if let Some(as_array) = value.as_array() {
+        let lines = as_array
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>();
+        if !lines.is_empty() {
+            return Ok(lines.join("\n"));
+        }
+    }
+
+    Err(ResearchError::Parse {
+        api: ResearchApi::Zotero,
+        message: "Better BibTeX export response is not a citation string".to_string(),
+    })
 }
 
 async fn execute_json_with_total_results<T>(
@@ -756,6 +995,8 @@ fn map_item_detail(
             fetched_at: Utc::now(),
             canonical_id: Some(scope.canonical_item_id(&item.key)),
         }),
+        attachments: None,
+        document_resolution: None,
     }
 }
 

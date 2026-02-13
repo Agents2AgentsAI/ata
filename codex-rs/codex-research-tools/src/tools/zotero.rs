@@ -42,6 +42,10 @@ use crate::types::ZoteroAnnotationsParams;
 use crate::types::ZoteroAnnotationsResult;
 use crate::types::ZoteroAttachment;
 use crate::types::ZoteroAttachmentsResult;
+use crate::types::ZoteroCitationFormat;
+use crate::types::ZoteroCitationGenerator;
+use crate::types::ZoteroCitationParams;
+use crate::types::ZoteroCitationResult;
 use crate::types::ZoteroCollectionItemsParams;
 use crate::types::ZoteroCollectionsParams;
 use crate::types::ZoteroCollectionsResult;
@@ -94,6 +98,7 @@ const AR5IV_PROBE_MAX_BODY_BYTES: usize = 8 * 1024;
 const AR5IV_BASE_URL: &str = "https://ar5iv.labs.arxiv.org/html";
 const ARXIV_PDF_BASE_URL: &str = "https://arxiv.org/pdf";
 const ZOTERO_STORAGE_DIR_ENV: &str = "ZOTERO_STORAGE_DIR";
+const ZOTERO_ENABLE_BETTER_BIBTEX_ENV: &str = "ZOTERO_ENABLE_BETTER_BIBTEX";
 
 #[derive(Debug, Clone, Serialize)]
 struct NormalizedScope {
@@ -145,6 +150,16 @@ struct NormalizedItemParams {
     item_key: String,
     scopes: NormalizedResolvedScopes,
     max_chars_per_item: Option<u32>,
+    include_attachments: bool,
+    include_fulltext_resolution: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NormalizedCitationParams {
+    item_key: String,
+    scopes: NormalizedResolvedScopes,
+    format: ZoteroCitationFormat,
+    prefer_better_bibtex: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -482,31 +497,191 @@ pub(crate) async fn zotero_get_item(
     };
     let config = zotero_config(toolkit);
 
-    let mut item = get_or_fetch_typed(
+    get_or_fetch_typed(
         toolkit,
         key,
         toolkit.config().cache_ttls.zotero_items,
         || async move {
             let scopes = resolved_scopes_to_vec(&normalized.scopes);
+            let mut resolved_item = None;
             let mut last_err = None;
             for scope in &scopes {
                 match zotero::get_item(toolkit.http(), config, scope, &normalized.item_key).await {
-                    Ok(result) => return Ok(result),
+                    Ok(result) => {
+                        resolved_item = Some((scope.clone(), result));
+                        break;
+                    }
                     Err(err) => last_err = Some(err),
                 }
             }
-            Err(last_err
-                .unwrap_or_else(|| ResearchError::Internal("no scopes to search".to_string())))
+
+            let (matched_scope, mut item) = resolved_item.ok_or_else(|| {
+                last_err
+                    .unwrap_or_else(|| ResearchError::Internal("no scopes to search".to_string()))
+            })?;
+
+            if let Some(max_chars) = normalized.max_chars_per_item {
+                truncate_optional_string(&mut item.abstract_text, max_chars as usize);
+                truncate_optional_string(&mut item.extra, max_chars as usize);
+            }
+
+            let need_attachments =
+                normalized.include_attachments || normalized.include_fulltext_resolution;
+            if need_attachments {
+                let mut attachment_scopes = vec![matched_scope.clone()];
+                attachment_scopes
+                    .extend(scopes.into_iter().filter(|scope| scope != &matched_scope));
+
+                let mut last_attachment_err = None;
+                let mut attachments = None;
+                for scope in &attachment_scopes {
+                    match zotero::get_attachments(
+                        toolkit.http(),
+                        config,
+                        scope,
+                        &ZoteroChildrenRequest {
+                            item_key: normalized.item_key.as_str(),
+                            offset: 0,
+                            limit: DEFAULT_CHILDREN_LIMIT,
+                        },
+                    )
+                    .await
+                    {
+                        Ok(result) => {
+                            attachments = Some(result.attachments);
+                            break;
+                        }
+                        Err(err) => last_attachment_err = Some(err),
+                    }
+                }
+
+                if let Some(attachments) = attachments {
+                    if normalized.include_fulltext_resolution {
+                        item.document_resolution = Some(
+                            resolve_document_sources(
+                                toolkit,
+                                Some(&item),
+                                &attachments,
+                                false,
+                                Vec::new(),
+                            )
+                            .await,
+                        );
+                    }
+                    if normalized.include_attachments {
+                        let mut response_attachments = attachments;
+                        if let Some(max_chars) = normalized.max_chars_per_item {
+                            apply_attachments_budget(&mut response_attachments, max_chars as usize);
+                        }
+                        item.attachments = Some(response_attachments);
+                    }
+                } else if let Some(err) = last_attachment_err {
+                    tracing::warn!(
+                        item_key = %normalized.item_key,
+                        %err,
+                        "zotero_get_item attachment enrichment failed; returning base item"
+                    );
+                }
+            }
+
+            Ok(item)
         },
     )
-    .await?;
+    .await
+}
 
-    if let Some(max_chars) = normalized.max_chars_per_item {
-        truncate_optional_string(&mut item.abstract_text, max_chars as usize);
-        truncate_optional_string(&mut item.extra, max_chars as usize);
-    }
+pub(crate) async fn zotero_get_item_citation(
+    toolkit: &ResearchToolkit,
+    params: ZoteroCitationParams,
+) -> Result<ZoteroCitationResult> {
+    let normalized = normalize_citation_params(toolkit, params).await?;
+    let key = CacheKey {
+        tool_name: "zotero_get_item_citation",
+        params_hash: hash_cache_payload(&normalized)?,
+    };
+    let config = zotero_config(toolkit);
 
-    Ok(item)
+    get_or_fetch_typed(
+        toolkit,
+        key,
+        toolkit.config().cache_ttls.zotero_items,
+        || async move {
+            let scopes = resolved_scopes_to_vec(&normalized.scopes);
+            let mut resolved_item = None;
+            let mut last_err = None;
+
+            for scope in &scopes {
+                match zotero::get_item(toolkit.http(), config, scope, &normalized.item_key).await {
+                    Ok(result) => {
+                        resolved_item = Some((scope.clone(), result));
+                        break;
+                    }
+                    Err(err) => last_err = Some(err),
+                }
+            }
+
+            let (matched_scope, item) = resolved_item.ok_or_else(|| {
+                last_err.unwrap_or_else(|| ResearchError::Internal("no scopes to search".to_string()))
+            })?;
+
+            let mut warnings = Vec::new();
+            if normalized.prefer_better_bibtex && normalized.format == ZoteroCitationFormat::Bibtex {
+                if !toolkit.config().uses_local_zotero_api() {
+                    warnings.push(
+                        "Better BibTeX requires local Zotero API; using fallback formatter"
+                            .to_string(),
+                    );
+                } else if !better_bibtex_enabled(toolkit) {
+                    warnings.push(format!(
+                        "{ZOTERO_ENABLE_BETTER_BIBTEX_ENV} is not enabled; using fallback formatter",
+                    ));
+                } else {
+                    let library_id = match &matched_scope {
+                        ZoteroLibraryScope::User(id) | ZoteroLibraryScope::Group(id) => {
+                            Some(id.as_str())
+                        }
+                    };
+                    match zotero::get_better_bibtex_citation(
+                        toolkit.http(),
+                        normalized.item_key.as_str(),
+                        library_id,
+                        toolkit.config().zotero_better_bibtex_url.as_deref(),
+                    )
+                    .await
+                    {
+                        Ok(citation) => {
+                            return Ok(ZoteroCitationResult {
+                                item_key: item.key,
+                                format: normalized.format,
+                                citation: citation.citation,
+                                citation_key: citation.citation_key,
+                                generator: ZoteroCitationGenerator::BetterBibtex,
+                                warnings,
+                                source_meta: item.source_meta,
+                            });
+                        }
+                        Err(err) => {
+                            warnings.push(format!(
+                                "Better BibTeX unavailable ({err}); using fallback formatter",
+                            ));
+                        }
+                    }
+                }
+            }
+
+            let (citation, citation_key) = fallback_citation_for_item(&item, normalized.format);
+            Ok(ZoteroCitationResult {
+                item_key: item.key,
+                format: normalized.format,
+                citation,
+                citation_key,
+                generator: ZoteroCitationGenerator::FallbackFormatter,
+                warnings,
+                source_meta: item.source_meta,
+            })
+        },
+    )
+    .await
 }
 
 pub(crate) async fn zotero_get_fulltext(
@@ -1122,6 +1297,35 @@ async fn normalize_item_params(
         item_key,
         scopes: to_normalized_resolved_scopes(&resolved),
         max_chars_per_item: params.max_chars_per_item,
+        include_attachments: params.include_attachments.unwrap_or(false),
+        include_fulltext_resolution: params.include_fulltext_resolution.unwrap_or(false),
+    })
+}
+
+async fn normalize_citation_params(
+    toolkit: &ResearchToolkit,
+    params: ZoteroCitationParams,
+) -> Result<NormalizedCitationParams> {
+    let item_key = params.item_key.trim().to_string();
+    if item_key.is_empty() {
+        return Err(ResearchError::InvalidInput(
+            "zotero_get_item_citation item_key must not be empty".to_string(),
+        ));
+    }
+
+    let resolved = resolve_scopes(
+        toolkit,
+        params.library_type.as_deref(),
+        params.library_id.as_deref(),
+        "zotero_get_item_citation",
+    )
+    .await?;
+
+    Ok(NormalizedCitationParams {
+        item_key,
+        scopes: to_normalized_resolved_scopes(&resolved),
+        format: params.format.unwrap_or(ZoteroCitationFormat::Bibtex),
+        prefer_better_bibtex: params.prefer_better_bibtex.unwrap_or(true),
     })
 }
 
@@ -2148,6 +2352,335 @@ async fn read_response_prefix(mut response: reqwest::Response, max_bytes: usize)
     Some(String::from_utf8_lossy(&bytes).to_string())
 }
 
+fn better_bibtex_enabled(toolkit: &ResearchToolkit) -> bool {
+    toolkit.config().zotero_enable_better_bibtex
+}
+
+fn fallback_citation_for_item(
+    item: &ZoteroItemDetail,
+    format: ZoteroCitationFormat,
+) -> (String, Option<String>) {
+    match format {
+        ZoteroCitationFormat::Bibtex => {
+            let year = extract_year_from_date(item.date.as_deref());
+            let citation_key = fallback_citation_key(item, year.as_deref());
+            let citation = fallback_bibtex_citation(item, citation_key.as_str(), year.as_deref());
+            (citation, Some(citation_key))
+        }
+        ZoteroCitationFormat::CslJson => (fallback_csl_json_citation(item), None),
+        ZoteroCitationFormat::Apa => (fallback_apa_citation(item), None),
+    }
+}
+
+fn fallback_bibtex_citation(
+    item: &ZoteroItemDetail,
+    citation_key: &str,
+    year: Option<&str>,
+) -> String {
+    let entry_type = fallback_bibtex_entry_type(item.item_type.as_str());
+    let mut fields = Vec::new();
+
+    let title = item.title.trim();
+    if !title.is_empty() {
+        fields.push(("title", escape_bibtex_value(title)));
+    }
+
+    if !item.authors.is_empty() {
+        let authors = item
+            .authors
+            .iter()
+            .map(|author| escape_bibtex_value(author.trim()))
+            .collect::<Vec<_>>()
+            .join(" and ");
+        if !authors.trim().is_empty() {
+            fields.push(("author", authors));
+        }
+    }
+
+    if let Some(year) = year {
+        fields.push(("year", year.to_string()));
+    }
+
+    if let Some(publication) = item
+        .publication
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        match entry_type {
+            "article" => fields.push(("journal", escape_bibtex_value(publication))),
+            "inproceedings" => fields.push(("booktitle", escape_bibtex_value(publication))),
+            _ => {}
+        }
+    }
+
+    if let Some(doi) = item
+        .doi
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        fields.push(("doi", escape_bibtex_value(doi)));
+    }
+
+    if let Some(url) = item
+        .url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        fields.push(("url", escape_bibtex_value(url)));
+    }
+
+    let mut lines = vec![format!("@{entry_type}{{{citation_key},")];
+    for (name, value) in fields {
+        lines.push(format!("  {name} = {{{value}}},"));
+    }
+    lines.push("}".to_string());
+    lines.join("\n")
+}
+
+fn fallback_csl_json_citation(item: &ZoteroItemDetail) -> String {
+    let mut map = serde_json::Map::new();
+    map.insert(
+        "id".to_string(),
+        serde_json::Value::String(item.key.clone()),
+    );
+    map.insert(
+        "type".to_string(),
+        serde_json::Value::String(fallback_csl_item_type(item.item_type.as_str()).to_string()),
+    );
+
+    let title = item.title.trim();
+    if !title.is_empty() {
+        map.insert(
+            "title".to_string(),
+            serde_json::Value::String(title.to_string()),
+        );
+    }
+
+    if !item.authors.is_empty() {
+        let authors = item
+            .authors
+            .iter()
+            .map(|author| serde_json::json!({ "literal": author.trim() }))
+            .collect::<Vec<_>>();
+        map.insert("author".to_string(), serde_json::Value::Array(authors));
+    }
+
+    if let Some(year) = extract_year_from_date(item.date.as_deref())
+        && let Ok(year_value) = year.parse::<u32>()
+    {
+        map.insert(
+            "issued".to_string(),
+            serde_json::json!({ "date-parts": [[year_value]] }),
+        );
+    }
+
+    if let Some(publication) = item
+        .publication
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        map.insert(
+            "container-title".to_string(),
+            serde_json::Value::String(publication.to_string()),
+        );
+    }
+
+    if let Some(doi) = item
+        .doi
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        map.insert(
+            "DOI".to_string(),
+            serde_json::Value::String(doi.to_string()),
+        );
+    }
+
+    if let Some(url) = item
+        .url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        map.insert(
+            "URL".to_string(),
+            serde_json::Value::String(url.to_string()),
+        );
+    }
+
+    serde_json::to_string_pretty(&serde_json::Value::Object(map))
+        .unwrap_or_else(|err| format!("{{\"serialization_error\":\"{err}\"}}"))
+}
+
+fn fallback_apa_citation(item: &ZoteroItemDetail) -> String {
+    let author_text = if item.authors.is_empty() {
+        "Unknown author".to_string()
+    } else {
+        item.authors
+            .iter()
+            .map(|author| author.trim())
+            .filter(|author| !author.is_empty())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let year = extract_year_from_date(item.date.as_deref()).unwrap_or_else(|| "n.d.".to_string());
+    let title = if item.title.trim().is_empty() {
+        "Untitled item"
+    } else {
+        item.title.trim()
+    };
+
+    let mut citation = format!("{author_text} ({year}). {title}.");
+    if let Some(publication) = item
+        .publication
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        citation.push(' ');
+        citation.push_str(publication);
+        if !publication.ends_with('.') {
+            citation.push('.');
+        }
+    }
+
+    if let Some(doi) = item
+        .doi
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        citation.push(' ');
+        if doi.starts_with("10.") {
+            citation.push_str(&format!("https://doi.org/{doi}"));
+        } else {
+            citation.push_str(doi);
+        }
+    } else if let Some(url) = item
+        .url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        citation.push(' ');
+        citation.push_str(url);
+    }
+
+    citation
+}
+
+fn fallback_bibtex_entry_type(item_type: &str) -> &'static str {
+    match item_type.trim().to_ascii_lowercase().as_str() {
+        "journalarticle" => "article",
+        "book" => "book",
+        "conferencepaper" => "inproceedings",
+        _ => "misc",
+    }
+}
+
+fn fallback_csl_item_type(item_type: &str) -> &'static str {
+    match item_type.trim().to_ascii_lowercase().as_str() {
+        "journalarticle" => "article-journal",
+        "book" => "book",
+        "conferencepaper" => "paper-conference",
+        _ => "article",
+    }
+}
+
+fn fallback_citation_key(item: &ZoteroItemDetail, year: Option<&str>) -> String {
+    let suffix = sanitize_citation_key_component(item.key.as_str());
+    if let Some(author) = first_author_key_component(item.authors.as_slice()) {
+        if let Some(year) = year {
+            return format!("{author}{year}{suffix}");
+        }
+        return format!("{author}{suffix}");
+    }
+
+    if let Some(year) = year {
+        return format!("item{year}{suffix}");
+    }
+
+    format!("item{suffix}")
+}
+
+fn first_author_key_component(authors: &[String]) -> Option<String> {
+    let first_author = authors.first()?.trim();
+    if first_author.is_empty() {
+        return None;
+    }
+
+    let surname = first_author
+        .split(',')
+        .next()
+        .unwrap_or(first_author)
+        .split_whitespace()
+        .last()
+        .unwrap_or(first_author);
+    let sanitized = surname
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if sanitized.is_empty() {
+        return None;
+    }
+
+    Some(sanitized)
+}
+
+fn sanitize_citation_key_component(raw: &str) -> String {
+    let sanitized = raw
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if sanitized.is_empty() {
+        return "item".to_string();
+    }
+
+    sanitized
+}
+
+fn escape_bibtex_value(raw: &str) -> String {
+    let mut escaped = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        match ch {
+            '&' => escaped.push_str("\\&"),
+            '%' => escaped.push_str("\\%"),
+            '#' => escaped.push_str("\\#"),
+            '_' => escaped.push_str("\\_"),
+            '{' => escaped.push_str("\\{"),
+            '}' => escaped.push_str("\\}"),
+            '~' => escaped.push_str("\\textasciitilde{}"),
+            '^' => escaped.push_str("\\textasciicircum{}"),
+            '\\' => escaped.push_str("\\textbackslash{}"),
+            _ => escaped.push(ch),
+        }
+    }
+
+    escaped
+}
+
+fn extract_year_from_date(date: Option<&str>) -> Option<String> {
+    static YEAR_RE: OnceLock<Regex> = OnceLock::new();
+    let year_re = YEAR_RE.get_or_init(|| {
+        Regex::new(r"(19|20)\d{2}")
+            .unwrap_or_else(|err| panic!("year extraction regex must compile: {err}"))
+    });
+
+    let raw = date?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    year_re.find(raw).map(|match_| match_.as_str().to_string())
+}
+
 fn map_zotero_annotation(annotation: zotero::ZoteroAnnotation) -> ZoteroAnnotation {
     let annotation_type = annotation
         .annotation_type
@@ -2251,6 +2784,9 @@ mod tests {
     use crate::types::ZoteroAnnotation;
     use crate::types::ZoteroAnnotationsParams;
     use crate::types::ZoteroAttachment;
+    use crate::types::ZoteroCitationFormat;
+    use crate::types::ZoteroCitationGenerator;
+    use crate::types::ZoteroCitationParams;
     use crate::types::ZoteroCollectionItemsParams;
     use crate::types::ZoteroCollectionsParams;
     use crate::types::ZoteroGrepCandidateStrategy;
@@ -2338,6 +2874,8 @@ mod tests {
                 library_type: None,
                 library_id: None,
                 max_chars_per_item: None,
+                include_attachments: None,
+                include_fulltext_resolution: None,
             })
             .await
             .expect("zotero_get_item should succeed");
@@ -2345,6 +2883,280 @@ mod tests {
         assert_eq!(item.key, "ITEM1");
         assert_eq!(item.publication, Some("NeurIPS".to_string()));
         assert_eq!(item.tags, vec!["vision", "diffusion"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_get_item_default_keeps_enrichment_fields_none() {
+        let server = MockServer::start().await;
+        mount_item_detail(
+            &server,
+            "ITEM1",
+            serde_json::json!({
+                "itemType": "journalArticle",
+                "title": "Default Item",
+                "creators": [{"firstName": "Alice", "lastName": "Kim"}],
+                "date": "2023-06-01"
+            }),
+        )
+        .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/ITEM1/children"))
+            .and(query_param("itemType", "attachment"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let item = toolkit
+            .zotero_get_item(ZoteroItemParams {
+                item_key: "ITEM1".to_string(),
+                library_type: Some("user".to_string()),
+                library_id: Some("123".to_string()),
+                max_chars_per_item: None,
+                include_attachments: None,
+                include_fulltext_resolution: None,
+            })
+            .await
+            .expect("zotero_get_item should succeed");
+
+        assert_eq!(item.attachments, None);
+        assert_eq!(item.document_resolution, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_get_item_enrichment_fetches_attachments_once() {
+        let server = MockServer::start().await;
+        mount_item_detail(
+            &server,
+            "ITEM1",
+            serde_json::json!({
+                "itemType": "journalArticle",
+                "title": "Enriched Item",
+                "creators": [{"firstName": "Alice", "lastName": "Kim"}],
+                "date": "2023-06-01"
+            }),
+        )
+        .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/ITEM1/children"))
+            .and(query_param("itemType", "attachment"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "ATT1",
+                    "data": {
+                        "itemType": "attachment",
+                        "title": "paper.pdf",
+                        "filename": "paper.pdf",
+                        "contentType": "application/pdf",
+                        "url": "https://example.com/paper.pdf",
+                        "parentItem": "ITEM1"
+                    }
+                }
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let item = toolkit
+            .zotero_get_item(ZoteroItemParams {
+                item_key: "ITEM1".to_string(),
+                library_type: Some("user".to_string()),
+                library_id: Some("123".to_string()),
+                max_chars_per_item: None,
+                include_attachments: Some(true),
+                include_fulltext_resolution: Some(true),
+            })
+            .await
+            .expect("zotero_get_item should succeed");
+
+        let attachments = item
+            .attachments
+            .expect("include_attachments=true should return attachments");
+        assert_eq!(attachments.len(), 1);
+        let resolution = item
+            .document_resolution
+            .expect("include_fulltext_resolution=true should return resolution");
+        assert_eq!(resolution.source_kind, DocumentSourceKind::AttachmentPdfUrl);
+        assert_eq!(
+            resolution.preferred_url,
+            Some("https://example.com/paper.pdf".to_string())
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_get_item_enrichment_tolerates_attachment_failures() {
+        let server = MockServer::start().await;
+        mount_item_detail(
+            &server,
+            "ITEM1",
+            serde_json::json!({
+                "itemType": "journalArticle",
+                "title": "Enriched Item",
+                "creators": [{"firstName": "Alice", "lastName": "Kim"}],
+                "date": "2023-06-01"
+            }),
+        )
+        .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/ITEM1/children"))
+            .and(query_param("itemType", "attachment"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let item = toolkit
+            .zotero_get_item(ZoteroItemParams {
+                item_key: "ITEM1".to_string(),
+                library_type: Some("user".to_string()),
+                library_id: Some("123".to_string()),
+                max_chars_per_item: None,
+                include_attachments: Some(true),
+                include_fulltext_resolution: Some(true),
+            })
+            .await
+            .expect("zotero_get_item should still succeed when enrichment fails");
+
+        assert_eq!(item.attachments, None);
+        assert_eq!(item.document_resolution, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_get_item_citation_fallback_bibtex_maps_expected_fields() {
+        let server = MockServer::start().await;
+        mount_item_detail(
+            &server,
+            "ITEM1",
+            serde_json::json!({
+                "itemType": "journalArticle",
+                "title": "Diffusion & Vision_101",
+                "creators": [{"firstName": "Alice", "lastName": "Kim"}],
+                "date": "2023-06-01",
+                "DOI": "10.1000/example",
+                "publicationTitle": "NeurIPS",
+                "url": "https://example.com/paper"
+            }),
+        )
+        .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let citation = toolkit
+            .zotero_get_item_citation(ZoteroCitationParams {
+                item_key: "ITEM1".to_string(),
+                library_type: Some("user".to_string()),
+                library_id: Some("123".to_string()),
+                format: Some(ZoteroCitationFormat::Bibtex),
+                prefer_better_bibtex: Some(false),
+            })
+            .await
+            .expect("zotero_get_item_citation should succeed");
+
+        assert_eq!(
+            citation.generator,
+            ZoteroCitationGenerator::FallbackFormatter
+        );
+        assert_eq!(citation.citation_key, Some("kim2023item1".to_string()));
+        assert!(citation.citation.contains("@article{kim2023item1,"));
+        assert!(
+            citation
+                .citation
+                .contains("title = {Diffusion \\& Vision\\_101},")
+        );
+        assert!(citation.warnings.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_get_item_citation_fallback_key_handles_non_latin_authors() {
+        let server = MockServer::start().await;
+        mount_item_detail(
+            &server,
+            "ABCD1234",
+            serde_json::json!({
+                "itemType": "book",
+                "title": "跨语言文献",
+                "creators": [{"name": "李雷"}]
+            }),
+        )
+        .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let citation = toolkit
+            .zotero_get_item_citation(ZoteroCitationParams {
+                item_key: "ABCD1234".to_string(),
+                library_type: Some("user".to_string()),
+                library_id: Some("123".to_string()),
+                format: Some(ZoteroCitationFormat::Bibtex),
+                prefer_better_bibtex: Some(false),
+            })
+            .await
+            .expect("zotero_get_item_citation should succeed");
+
+        assert_eq!(citation.citation_key, Some("itemabcd1234".to_string()));
+        assert!(citation.citation.contains("@book{itemabcd1234,"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_get_item_citation_better_bibtex_failure_falls_back() {
+        let server = MockServer::start().await;
+        mount_item_detail(
+            &server,
+            "ITEM1",
+            serde_json::json!({
+                "itemType": "journalArticle",
+                "title": "Fallback from BBT",
+                "creators": [{"firstName": "Alice", "lastName": "Kim"}],
+                "date": "2024-01-01"
+            }),
+        )
+        .await;
+
+        let toolkit = build_test_toolkit_with_config(ResearchConfig {
+            zotero_api_key: None,
+            zotero_user_id: Some("123".to_string()),
+            zotero_group_id: None,
+            zotero_base_url: server.uri(),
+            zotero_enable_better_bibtex: true,
+            zotero_better_bibtex_url: Some("http://127.0.0.1:9/better-bibtex/json-rpc".to_string()),
+            ..ResearchConfig::default()
+        });
+
+        let citation = toolkit
+            .zotero_get_item_citation(ZoteroCitationParams {
+                item_key: "ITEM1".to_string(),
+                library_type: Some("user".to_string()),
+                library_id: Some("123".to_string()),
+                format: Some(ZoteroCitationFormat::Bibtex),
+                prefer_better_bibtex: Some(true),
+            })
+            .await
+            .expect("fallback citation should succeed");
+
+        assert_eq!(
+            citation.generator,
+            ZoteroCitationGenerator::FallbackFormatter
+        );
+        assert!(
+            citation
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Better BibTeX unavailable")),
+            "expected Better BibTeX fallback warning, got {:?}",
+            citation.warnings
+        );
+    }
+
+    #[test]
+    fn zotero_citation_params_reject_invalid_format() {
+        let parsed = serde_json::from_value::<ZoteroCitationParams>(serde_json::json!({
+            "item_key": "ITEM1",
+            "format": "invalid-format"
+        }));
+        assert!(parsed.is_err());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2404,6 +3216,8 @@ mod tests {
                 library_type: None,
                 library_id: None,
                 max_chars_per_item: Some(5),
+                include_attachments: None,
+                include_fulltext_resolution: None,
             })
             .await
             .expect("zotero_get_fulltext should succeed");
@@ -2433,6 +3247,8 @@ mod tests {
                 library_type: None,
                 library_id: None,
                 max_chars_per_item: Some(4),
+                include_attachments: None,
+                include_fulltext_resolution: None,
             })
             .await
             .expect("zotero_get_notes should succeed");
@@ -2445,6 +3261,8 @@ mod tests {
                 library_type: None,
                 library_id: None,
                 max_chars_per_item: Some(5),
+                include_attachments: None,
+                include_fulltext_resolution: None,
             })
             .await
             .expect("zotero_get_attachments should succeed");
@@ -4634,6 +5452,8 @@ mod tests {
                 library_type: None,
                 library_id: None,
                 max_chars_per_item: None,
+                include_attachments: None,
+                include_fulltext_resolution: None,
             })
             .await
             .expect("should find item in group scope");
@@ -5199,6 +6019,17 @@ mod tests {
         );
     }
 
+    async fn mount_item_detail(server: &MockServer, item_key: &str, data: serde_json::Value) {
+        Mock::given(method("GET"))
+            .and(path(format!("/users/123/items/{item_key}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "key": item_key,
+                "data": data
+            })))
+            .mount(server)
+            .await;
+    }
+
     fn sample_item_with_source(url: Option<&str>, extra: Option<&str>) -> ZoteroItemDetail {
         ZoteroItemDetail {
             key: "ITEM1".to_string(),
@@ -5213,6 +6044,8 @@ mod tests {
             tags: Vec::new(),
             extra: extra.map(ToString::to_string),
             source_meta: None,
+            attachments: None,
+            document_resolution: None,
         }
     }
 

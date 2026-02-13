@@ -44,6 +44,8 @@ use types::ZoteroAdvancedSearchResult;
 use types::ZoteroAnnotationsParams;
 use types::ZoteroAnnotationsResult;
 use types::ZoteroAttachmentsResult;
+use types::ZoteroCitationParams;
+use types::ZoteroCitationResult;
 use types::ZoteroCollectionItemsParams;
 use types::ZoteroCollectionsParams;
 use types::ZoteroCollectionsResult;
@@ -289,6 +291,24 @@ impl ResearchToolkit {
     pub async fn zotero_get_item(&self, _params: ZoteroItemParams) -> Result<ZoteroItemDetail> {
         Err(ResearchError::NotImplemented {
             tool: "zotero_get_item",
+        })
+    }
+
+    #[cfg(feature = "zotero")]
+    pub async fn zotero_get_item_citation(
+        &self,
+        params: ZoteroCitationParams,
+    ) -> Result<ZoteroCitationResult> {
+        tools::zotero::zotero_get_item_citation(self, params).await
+    }
+
+    #[cfg(not(feature = "zotero"))]
+    pub async fn zotero_get_item_citation(
+        &self,
+        _params: ZoteroCitationParams,
+    ) -> Result<ZoteroCitationResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "zotero_get_item_citation",
         })
     }
 
