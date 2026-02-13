@@ -275,6 +275,7 @@ mod tests {
             }))),
             output_schema: None,
             annotations: None,
+            execution: None,
             icons: None,
             meta: None,
         }
