@@ -23,6 +23,7 @@ use crate::clients::zotero::ZoteroLibraryAnnotationsRequest;
 use crate::clients::zotero::ZoteroLibraryScope;
 use crate::clients::zotero::ZoteroListGroupsRequest;
 use crate::clients::zotero::ZoteroSearchRequest;
+use crate::clients::zotero::ZoteroTagsRequest;
 use crate::error::ResearchError;
 use crate::error::Result;
 use crate::rate_limiter::ResearchApi;
@@ -54,12 +55,16 @@ use crate::types::ZoteroItemParams;
 use crate::types::ZoteroListGroupsParams;
 use crate::types::ZoteroNote;
 use crate::types::ZoteroNotesResult;
+use crate::types::ZoteroRecentParams;
+use crate::types::ZoteroRecentSortBy;
 use crate::types::ZoteroSearchNotesParams;
 use crate::types::ZoteroSearchNotesResult;
 use crate::types::ZoteroSearchParams;
 use crate::types::ZoteroSearchResult;
 use crate::types::ZoteroSortDirection;
 use crate::types::ZoteroTagSearchParams;
+use crate::types::ZoteroTagsParams;
+use crate::types::ZoteroTagsResult;
 
 #[path = "zotero/advanced_search.rs"]
 mod advanced_search;
@@ -73,6 +78,7 @@ mod match_engine;
 mod search_notes;
 
 const DEFAULT_SEARCH_LIMIT: u32 = 25;
+const DEFAULT_TAGS_LIMIT: u32 = 100;
 const DEFAULT_COLLECTIONS_LIMIT: u32 = 100;
 const DEFAULT_GROUPS_LIMIT: u32 = 100;
 const DEFAULT_CHILDREN_LIMIT: u32 = 50;
@@ -114,6 +120,23 @@ struct NormalizedSearchParams {
     offset: u32,
     limit: u32,
     item_type: Option<String>,
+    max_chars_per_item: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NormalizedTagsParams {
+    scope: NormalizedScope,
+    offset: u32,
+    limit: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NormalizedRecentParams {
+    scope: NormalizedScope,
+    offset: u32,
+    limit: u32,
+    item_type: Option<String>,
+    sort_by: ZoteroRecentSortBy,
     max_chars_per_item: Option<u32>,
 }
 
@@ -201,6 +224,82 @@ pub(crate) async fn zotero_search(
                 normalized.limit,
             )
             .await
+        },
+    )
+    .await?;
+
+    apply_items_budget(&mut result.items, normalized.max_chars_per_item);
+    Ok(result)
+}
+
+pub(crate) async fn zotero_get_tags(
+    toolkit: &ResearchToolkit,
+    params: ZoteroTagsParams,
+) -> Result<ZoteroTagsResult> {
+    let normalized = normalize_tags_params(toolkit, params)?;
+    let key = CacheKey {
+        tool_name: "zotero_get_tags",
+        params_hash: hash_cache_payload(&normalized)?,
+    };
+    let config = zotero_config(toolkit);
+
+    get_or_fetch_typed(
+        toolkit,
+        key,
+        toolkit.config().cache_ttls.zotero_items,
+        || {
+            let scope = to_scope(&normalized.scope);
+            async move {
+                zotero::get_tags(
+                    toolkit.http(),
+                    config,
+                    &scope,
+                    ZoteroTagsRequest {
+                        offset: normalized.offset,
+                        limit: normalized.limit,
+                    },
+                )
+                .await
+            }
+        },
+    )
+    .await
+}
+
+pub(crate) async fn zotero_get_recent(
+    toolkit: &ResearchToolkit,
+    params: ZoteroRecentParams,
+) -> Result<ZoteroSearchResult> {
+    let normalized = normalize_recent_params(toolkit, params)?;
+    let key = CacheKey {
+        tool_name: "zotero_get_recent",
+        params_hash: hash_cache_payload(&normalized)?,
+    };
+    let config = zotero_config(toolkit);
+
+    let mut result = get_or_fetch_typed(
+        toolkit,
+        key,
+        toolkit.config().cache_ttls.zotero_items,
+        || {
+            let scope = to_scope(&normalized.scope);
+            async move {
+                zotero::search_items(
+                    toolkit.http(),
+                    config,
+                    &scope,
+                    &ZoteroSearchRequest {
+                        query: None,
+                        tag: None,
+                        offset: normalized.offset,
+                        limit: normalized.limit,
+                        item_type: normalized.item_type.as_deref(),
+                        sort: Some(recent_sort_field(&normalized.sort_by)),
+                        direction: Some("desc"),
+                    },
+                )
+                .await
+            }
         },
     )
     .await?;
@@ -928,6 +1027,47 @@ pub(crate) async fn zotero_get_collection_items(
     Ok(result)
 }
 
+fn normalize_tags_params(
+    toolkit: &ResearchToolkit,
+    params: ZoteroTagsParams,
+) -> Result<NormalizedTagsParams> {
+    let scope = resolve_scope(
+        toolkit,
+        params.library_type.as_deref(),
+        params.library_id.as_deref(),
+        "zotero_get_tags",
+    )?;
+
+    Ok(NormalizedTagsParams {
+        scope: to_normalized_scope(&scope),
+        offset: params.offset.unwrap_or(0),
+        limit: params.limit.unwrap_or(DEFAULT_TAGS_LIMIT).clamp(1, 200),
+    })
+}
+
+fn normalize_recent_params(
+    toolkit: &ResearchToolkit,
+    params: ZoteroRecentParams,
+) -> Result<NormalizedRecentParams> {
+    // Recent is intentionally single-scope. Merging recency-ordered streams
+    // across scopes would require an explicit cross-scope merge policy.
+    let scope = resolve_scope(
+        toolkit,
+        params.library_type.as_deref(),
+        params.library_id.as_deref(),
+        "zotero_get_recent",
+    )?;
+
+    Ok(NormalizedRecentParams {
+        scope: to_normalized_scope(&scope),
+        offset: params.offset.unwrap_or(0),
+        limit: params.limit.unwrap_or(DEFAULT_SEARCH_LIMIT).clamp(1, 100),
+        item_type: normalize_optional_string(params.item_type),
+        sort_by: params.sort_by.unwrap_or(ZoteroRecentSortBy::DateAdded),
+        max_chars_per_item: params.max_chars_per_item,
+    })
+}
+
 async fn normalize_search_params(
     toolkit: &ResearchToolkit,
     params: ZoteroSearchParams,
@@ -1504,6 +1644,13 @@ async fn merge_collections_across_scopes(
         total_available: Some(total),
         collections: items,
     })
+}
+
+fn recent_sort_field(sort_by: &ZoteroRecentSortBy) -> &'static str {
+    match sort_by {
+        ZoteroRecentSortBy::DateAdded => "dateAdded",
+        ZoteroRecentSortBy::DateModified => "dateModified",
+    }
 }
 
 async fn resolve_document_sources(
@@ -2112,6 +2259,8 @@ mod tests {
     use crate::types::ZoteroItemDetail;
     use crate::types::ZoteroItemParams;
     use crate::types::ZoteroListGroupsParams;
+    use crate::types::ZoteroRecentParams;
+    use crate::types::ZoteroRecentSortBy;
     use crate::types::ZoteroSearchCondition;
     use crate::types::ZoteroSearchConditionField;
     use crate::types::ZoteroSearchConditionOperation;
@@ -2119,6 +2268,7 @@ mod tests {
     use crate::types::ZoteroSearchParams;
     use crate::types::ZoteroSortDirection;
     use crate::types::ZoteroTagSearchParams;
+    use crate::types::ZoteroTagsParams;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn zotero_search_and_get_item_use_user_scope() {
@@ -3061,6 +3211,208 @@ mod tests {
 
         assert_eq!(result.items.len(), 1);
         assert_eq!(result.items[0].key, "TARGET");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_get_tags_uses_tags_endpoint_and_link_header_for_pagination() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/tags"))
+            .and(query_param("start", "0"))
+            .and(query_param("limit", "100"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header(
+                        "Link",
+                        r#"<https://api.zotero.org/users/123/tags?start=100&limit=100>; rel="next""#,
+                    )
+                    .set_body_json(serde_json::json!([
+                        { "tag": "ml" },
+                        { "tag": "vision" },
+                        { "tag": "   " }
+                    ])),
+            )
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let result = toolkit
+            .zotero_get_tags(ZoteroTagsParams {
+                library_type: None,
+                library_id: None,
+                offset: None,
+                limit: None,
+            })
+            .await
+            .expect("zotero_get_tags should succeed");
+
+        assert_eq!(result.tags, vec!["ml".to_string(), "vision".to_string()]);
+        assert_eq!(result.has_more, true);
+        assert_eq!(result.total_available, 4);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_get_tags_dedups_case_insensitively_and_uses_raw_page_for_has_more() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/tags"))
+            .and(query_param("start", "0"))
+            .and(query_param("limit", "3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "tag": "ml" },
+                { "tag": "ML" },
+                { "tag": "ml" }
+            ])))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let result = toolkit
+            .zotero_get_tags(ZoteroTagsParams {
+                library_type: None,
+                library_id: None,
+                offset: Some(0),
+                limit: Some(3),
+            })
+            .await
+            .expect("zotero_get_tags should succeed");
+
+        assert_eq!(result.tags, vec!["ml".to_string()]);
+        assert_eq!(result.has_more, true);
+        assert_eq!(result.total_available, 3);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_get_recent_defaults_to_date_added_descending() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("sort", "dateAdded"))
+            .and(query_param("direction", "desc"))
+            .and(query_param("start", "0"))
+            .and(query_param("limit", "25"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "RECENT1",
+                    "data": {
+                        "itemType": "journalArticle",
+                        "title": "Recently Added",
+                        "creators": []
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let result = toolkit
+            .zotero_get_recent(ZoteroRecentParams {
+                library_type: None,
+                library_id: None,
+                offset: None,
+                limit: None,
+                item_type: None,
+                sort_by: None,
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_get_recent should succeed");
+
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].key, "RECENT1");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_get_recent_supports_item_type_and_date_modified_sort() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("itemType", "journalArticle"))
+            .and(query_param("sort", "dateModified"))
+            .and(query_param("direction", "desc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "RECENT2",
+                    "data": {
+                        "itemType": "journalArticle",
+                        "title": "Recently Modified",
+                        "creators": []
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let result = toolkit
+            .zotero_get_recent(ZoteroRecentParams {
+                library_type: None,
+                library_id: None,
+                offset: Some(0),
+                limit: Some(25),
+                item_type: Some("journalArticle".to_string()),
+                sort_by: Some(ZoteroRecentSortBy::DateModified),
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_get_recent should succeed");
+
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].key, "RECENT2");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_tags_and_recent_limits_are_clamped() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/tags"))
+            .and(query_param("start", "0"))
+            .and(query_param("limit", "200"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("sort", "dateAdded"))
+            .and(query_param("direction", "desc"))
+            .and(query_param("start", "0"))
+            .and(query_param("limit", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+
+        let tags = toolkit
+            .zotero_get_tags(ZoteroTagsParams {
+                library_type: None,
+                library_id: None,
+                offset: Some(0),
+                limit: Some(500),
+            })
+            .await
+            .expect("zotero_get_tags should clamp limit");
+        assert_eq!(tags.tags, Vec::<String>::new());
+
+        let recent = toolkit
+            .zotero_get_recent(ZoteroRecentParams {
+                library_type: None,
+                library_id: None,
+                offset: Some(0),
+                limit: Some(0),
+                item_type: None,
+                sort_by: None,
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_get_recent should clamp limit");
+        assert_eq!(recent.items.len(), 0);
     }
 
     #[tokio::test(flavor = "multi_thread")]
