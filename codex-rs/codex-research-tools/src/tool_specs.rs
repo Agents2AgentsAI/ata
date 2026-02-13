@@ -608,13 +608,73 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
         ]);
     }
 
+    #[cfg(feature = "hackernews")]
+    {
+        defs.extend([
+            ToolDef {
+                id: "hn_search",
+                native_name: "hn_search",
+                mcp_name: "search_hackernews",
+                description: "Search Hacker News stories and comments via the Algolia API. Filter by content type (story, comment, show_hn, ask_hn), minimum points/comments, date range, author, or story ID. Sort by relevance or date.",
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Search query" },
+                        "content_type": {
+                            "type": "string",
+                            "enum": ["story", "comment", "show_hn", "ask_hn"],
+                            "description": "Filter by content type"
+                        },
+                        "sort_by": {
+                            "type": "string",
+                            "enum": ["relevance", "date"],
+                            "description": "Sort order (default: relevance)"
+                        },
+                        "min_points": { "type": "integer", "description": "Minimum points threshold" },
+                        "min_comments": { "type": "integer", "description": "Minimum comment count" },
+                        "date_from": { "type": "string", "description": "Start date (YYYY-MM-DD)" },
+                        "date_to": { "type": "string", "description": "End date (YYYY-MM-DD)" },
+                        "author": { "type": "string", "description": "Filter by HN username" },
+                        "story_id": { "type": "integer", "description": "Filter comments by parent story ID" },
+                        "offset": { "type": "integer", "description": "Page number (0-based)" },
+                        "limit": { "type": "integer", "description": "Results per page (1-100, default 20)" }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }),
+            },
+            ToolDef {
+                id: "hn_get_thread",
+                native_name: "hn_get_thread",
+                mcp_name: "get_hackernews_thread",
+                description: "Get a Hacker News story or comment by ID with its nested comment tree. Use to read discussions about a paper, tool, or library.",
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "item_id": { "type": "integer", "description": "HN item ID" },
+                        "max_depth": {
+                            "type": "integer",
+                            "description": "Maximum comment nesting depth (1-20, default 5)"
+                        },
+                        "max_comments": {
+                            "type": "integer",
+                            "description": "Maximum total comments to return (1-500, default 200)"
+                        }
+                    },
+                    "required": ["item_id"],
+                    "additionalProperties": false
+                }),
+            },
+        ]);
+    }
+
     #[cfg(feature = "pdf_images")]
     {
         defs.push(ToolDef {
             id: "pdf_extract_figures",
             native_name: "pdf_extract_figures",
             mcp_name: "extract_pdf_figures",
-            description: "Download a PDF and extract embedded figures as PNG images using pdfimages. Filters out small icons and decorations by size and dimensions. Returns metadata for each extracted figure including quality_hints (e.g. 'likely text/table screenshot', 'extreme aspect ratio') to help select real diagrams over text screenshots.",
+            description: "Download a PDF and extract figures/diagrams as PNG images using pdffigures2 for detection and pdftocairo for rendering. Supplements with pdfimages for embedded raster figures. Filters out small icons and decorations by size and dimensions. Returns metadata for each extracted figure including caption, page number, and dimensions.",
             input_schema: json!({
                 "type": "object",
                 "properties": {

@@ -20,6 +20,7 @@ pub enum ResearchApi {
     OpenAlex,
     Zotero,
     GitHub,
+    HackerNews,
 }
 
 impl fmt::Display for ResearchApi {
@@ -30,6 +31,7 @@ impl fmt::Display for ResearchApi {
             Self::OpenAlex => write!(f, "openalex"),
             Self::Zotero => write!(f, "zotero"),
             Self::GitHub => write!(f, "github"),
+            Self::HackerNews => write!(f, "hackernews"),
         }
     }
 }

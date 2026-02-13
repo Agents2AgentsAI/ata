@@ -1,7 +1,0 @@
-interface:
-  display_name: "KB Explain"
-  short_description: "Deep-dive explanations and cross-card synthesis"
-  default_prompt: "Explain my KB cards in depth and show how they relate"
-
-policy:
-  allow_implicit_invocation: true

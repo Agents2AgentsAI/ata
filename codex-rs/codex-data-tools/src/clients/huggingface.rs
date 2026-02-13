@@ -72,19 +72,12 @@ impl<'a> HuggingFaceClient<'a> {
             })
             .await?;
 
-        let limit = request.limit.unwrap_or(100) as usize;
-        let has_more = response.len() >= limit;
-
         let datasets: Vec<Dataset> = response
             .into_iter()
             .map(|r| self.convert_dataset(r))
             .collect();
 
-        Ok(SearchPage {
-            items: datasets,
-            total_available: None, // HF API doesn't provide total count
-            has_more,
-        })
+        Ok(SearchPage { items: datasets })
     }
 
     /// Get dataset information by ID

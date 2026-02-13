@@ -14,6 +14,7 @@ pub struct ResearchPromptParams {
     pub has_zotero: bool,
     pub has_paper_search: bool,
     pub has_repo_analysis: bool,
+    pub has_hackernews: bool,
     pub has_web_search: bool,
     pub has_user_codebase: bool,
     pub codebase_path: Option<String>,
@@ -95,6 +96,13 @@ Use sub-agents when available. Each sub-agent should write one artifact to \
             "- Run academic search via `{}`.\n\
 - Expand graph via `{}` and `{}`.\n",
             tool.paper_search, tool.paper_citations, tool.paper_references,
+        ));
+    }
+    if params.has_hackernews {
+        phase.push_str(&format!(
+            "- Search Hacker News for practitioner discussions via `{}`.\n\
+            - Retrieve full discussion threads via `{}`.\n",
+            tool.hn_search, tool.hn_get_thread,
         ));
     }
     if params.has_web_search {
@@ -238,6 +246,7 @@ mod tests {
             has_zotero: true,
             has_paper_search: true,
             has_repo_analysis: true,
+            has_hackernews: true,
             has_web_search: true,
             has_user_codebase: true,
             codebase_path: Some("/workspace/project".to_string()),

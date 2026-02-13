@@ -33,29 +33,82 @@ fn validate_filename(filename: &str) -> Result<()> {
     Ok(())
 }
 
-/// Check that `pdflatex` is available on `$PATH`.
-async fn check_engine_installed() -> Result<()> {
-    let status = Command::new("which")
-        .arg(ENGINE)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .await
-        .map_err(|e| ResearchError::Internal(format!("failed to run `which {ENGINE}`: {e}")))?;
+/// Well-known locations where pdflatex may be installed but not on `$PATH`.
+const PDFLATEX_CANDIDATE_PATHS: &[&str] = &[
+    // macOS BasicTeX / MacTeX
+    "/Library/TeX/texbin/pdflatex",
+];
 
-    if !status.success() {
-        return Err(ResearchError::InvalidInput(format!(
-            "{ENGINE} is not installed or not found on $PATH"
-        )));
+/// Well-known locations where tlmgr may be installed but not on `$PATH`.
+const TLMGR_CANDIDATE_PATHS: &[&str] = &[
+    // macOS BasicTeX / MacTeX
+    "/Library/TeX/texbin/tlmgr",
+];
+
+/// Locate a working `pdflatex` binary, auto-installing if necessary.
+async fn find_engine() -> Result<PathBuf> {
+    // 1. Check $PATH.
+    if super::system_deps::is_on_path(ENGINE).await {
+        return Ok(PathBuf::from(ENGINE));
     }
-    Ok(())
+
+    // 2. Check well-known paths.
+    if let Some(p) = super::system_deps::find_in_well_known_paths(PDFLATEX_CANDIDATE_PATHS) {
+        return Ok(p);
+    }
+
+    // 3. Auto-install.
+    let pm = super::system_deps::detect_package_manager().await;
+    match pm {
+        Some(super::system_deps::PackageManager::Brew) => {
+            super::system_deps::brew_install("basictex", &["--cask"])
+                .await
+                .map_err(|e| {
+                    ResearchError::Internal(format!("failed to auto-install basictex: {e}"))
+                })?;
+        }
+        Some(super::system_deps::PackageManager::AptGet) => {
+            super::system_deps::apt_install(&[
+                "texlive-latex-base",
+                "texlive-latex-extra",
+                "texlive-latex-recommended",
+                "texlive-fonts-recommended",
+            ])
+            .await
+            .map_err(|e| ResearchError::Internal(format!("failed to auto-install texlive: {e}")))?;
+        }
+        None => {
+            return Err(ResearchError::InvalidInput(format!(
+                "{ENGINE} is not installed and no package manager (brew/apt-get) is available \
+                 to install it automatically. \
+                 Install: `brew install --cask basictex` (macOS) or \
+                 `sudo apt install texlive-latex-base` (Linux)"
+            )));
+        }
+    }
+
+    // 4. Retry: check PATH then well-known paths.
+    if super::system_deps::is_on_path(ENGINE).await {
+        return Ok(PathBuf::from(ENGINE));
+    }
+    if let Some(p) = super::system_deps::find_in_well_known_paths(PDFLATEX_CANDIDATE_PATHS) {
+        return Ok(p);
+    }
+
+    Err(ResearchError::Internal(format!(
+        "{ENGINE} was installed but still not found on $PATH or well-known paths"
+    )))
 }
 
 /// Run a single pdflatex pass. Returns `(success, stdout+stderr)`.
-async fn run_engine_pass(tex_path: &Path, output_dir: &Path) -> Result<(bool, String)> {
+async fn run_engine_pass(
+    engine: &Path,
+    tex_path: &Path,
+    output_dir: &Path,
+) -> Result<(bool, String)> {
     let output = tokio::time::timeout(
         ENGINE_TIMEOUT,
-        Command::new(ENGINE)
+        Command::new(engine)
             .args(["-interaction=nonstopmode", "-halt-on-error"])
             .arg(format!("-output-directory={}", output_dir.display()))
             .arg(tex_path)
@@ -102,26 +155,23 @@ fn extract_missing_packages(log: &str) -> Vec<String> {
     packages
 }
 
-/// Check if `tlmgr` is available on `$PATH`.
-async fn is_tlmgr_available() -> bool {
-    Command::new("which")
-        .arg("tlmgr")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .await
-        .is_ok_and(|s| s.success())
+/// Locate `tlmgr` on `$PATH` or at well-known paths.
+async fn find_tlmgr() -> Option<PathBuf> {
+    if super::system_deps::is_on_path("tlmgr").await {
+        return Some(PathBuf::from("tlmgr"));
+    }
+    super::system_deps::find_in_well_known_paths(TLMGR_CANDIDATE_PATHS)
 }
 
 /// Install LaTeX packages via `tlmgr install`. Returns (success, output).
-async fn tlmgr_install(packages: &[String]) -> (bool, String) {
+async fn tlmgr_install(tlmgr: &Path, packages: &[String]) -> (bool, String) {
     if packages.is_empty() {
         return (true, String::new());
     }
 
     let result = tokio::time::timeout(
         TLMGR_TIMEOUT,
-        Command::new("tlmgr").arg("install").args(packages).output(),
+        Command::new(tlmgr).arg("install").args(packages).output(),
     )
     .await;
 
@@ -241,7 +291,7 @@ async fn cleanup_aux_files(output_dir: &Path, base_name: &str) {
 pub(crate) async fn latex_compile(params: LatexCompileParams) -> Result<LatexCompileResult> {
     let filename = params.filename.as_deref().unwrap_or("document");
     validate_filename(filename)?;
-    check_engine_installed().await?;
+    let engine = find_engine().await?;
 
     // Create output directory and write .tex file.
     let output_dir = PathBuf::from(&params.output_dir);
@@ -257,10 +307,10 @@ pub(crate) async fn latex_compile(params: LatexCompileParams) -> Result<LatexCom
     // Pass 1 — with auto-install retry for missing packages.
     let mut install_attempts = 0;
     let mut all_installed_packages: Vec<String> = Vec::new();
-    let has_tlmgr = is_tlmgr_available().await;
+    let tlmgr = find_tlmgr().await;
 
     loop {
-        let (ok, _) = run_engine_pass(&tex_path, &output_dir).await?;
+        let (ok, _) = run_engine_pass(&engine, &tex_path, &output_dir).await?;
         if ok {
             break;
         }
@@ -271,7 +321,19 @@ pub(crate) async fn latex_compile(params: LatexCompileParams) -> Result<LatexCom
         let log_content = log_snippet.as_deref().unwrap_or("");
         let missing = extract_missing_packages(log_content);
 
-        if missing.is_empty() || !has_tlmgr || install_attempts >= MAX_INSTALL_RETRIES {
+        let Some(ref tlmgr_bin) = tlmgr else {
+            return Ok(LatexCompileResult {
+                success: false,
+                pdf_path: None,
+                errors: parse_errors(log_content),
+                warnings: parse_warnings(log_content),
+                num_pages: None,
+                compilation_log_snippet: log_snippet,
+                packages_installed: all_installed_packages,
+            });
+        };
+
+        if missing.is_empty() || install_attempts >= MAX_INSTALL_RETRIES {
             return Ok(LatexCompileResult {
                 success: false,
                 pdf_path: None,
@@ -289,7 +351,7 @@ pub(crate) async fn latex_compile(params: LatexCompileParams) -> Result<LatexCom
             attempt = install_attempts + 1,
             "auto-installing missing LaTeX packages via tlmgr"
         );
-        let (install_ok, install_output) = tlmgr_install(&missing).await;
+        let (install_ok, install_output) = tlmgr_install(tlmgr_bin, &missing).await;
         install_attempts += 1;
 
         if !install_ok {
@@ -322,10 +384,10 @@ pub(crate) async fn latex_compile(params: LatexCompileParams) -> Result<LatexCom
     }
 
     // Pass 2 (resolve references)
-    let _ = run_engine_pass(&tex_path, &output_dir).await?;
+    let _ = run_engine_pass(&engine, &tex_path, &output_dir).await?;
 
     // Pass 3 (cross-references)
-    let (pass3_ok, _) = run_engine_pass(&tex_path, &output_dir).await?;
+    let (pass3_ok, _) = run_engine_pass(&engine, &tex_path, &output_dir).await?;
 
     let log_path = output_dir.join(format!("{filename}.log"));
     let log_snippet = read_log_snippet(&log_path).await;
@@ -542,5 +604,42 @@ Hello, world!
                 .to_string()
                 .contains("path separators")
         );
+    }
+
+    #[tokio::test]
+    async fn find_engine_returns_valid_pdflatex_path() {
+        match find_engine().await {
+            Ok(path) => {
+                let s = path.to_string_lossy();
+                assert!(
+                    s.contains("pdflatex") || s.contains("texbin"),
+                    "expected pdflatex in path, got: {s}"
+                );
+            }
+            Err(e) => {
+                // Acceptable if TeX is genuinely not installed and no PM.
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("not installed") || msg.contains("not found"),
+                    "unexpected error: {msg}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn find_tlmgr_finds_tlmgr_when_tex_installed() {
+        let engine = find_engine().await;
+        if engine.is_ok() {
+            // If pdflatex is installed, tlmgr should be findable too.
+            let tlmgr = find_tlmgr().await;
+            assert!(tlmgr.is_some(), "pdflatex found but tlmgr was not");
+            let path = tlmgr.expect("just checked is_some");
+            assert!(
+                path.to_string_lossy().contains("tlmgr"),
+                "expected tlmgr in path, got: {}",
+                path.display()
+            );
+        }
     }
 }

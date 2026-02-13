@@ -44,6 +44,27 @@ For explain-style requests, always lead with conceptual clarity before formal de
 - **Progressive disclosure:** each concept must be fully grounded before the next builds on it. Never forward-reference a mechanism that hasn't been explained yet.
 - **No undefined jargon or acronyms.** Every abbreviation and technical term gets a plain-language gloss on first use — even common ones like "MLP" ("a small feedforward neural network") or "DiT" ("Diffusion Transformer").
 
+### Mandatory Explanation Completion Contract
+
+When the user asks to **explain** a paper (or asks for understanding, deep dive, synthesis, comparison, or report), shallow chat-level summaries are forbidden.
+
+You MUST complete one of these end-to-end paths:
+
+1. **KB-first reuse path**
+   - Call `kb_status` and then search existing material:
+     - `kb_search` for matching paper cards (title, DOI, arXiv ID, aliases)
+     - `kb_read_file` for existing reports under `explanations/` when relevant names are found
+   - If a matching deep explanation/report exists, return that explanation to the user as the primary answer and cite the KB artifact path.
+
+2. **Synthesize-then-report path (required fallback)**
+   - If no matching deep explanation exists, run full `paper-synthesis` for the requested paper(s) to write/update paper cards.
+   - Then run `cross-paper-report` on the new card set, even for a single paper when the user asked for explanation/deep understanding.
+   - Return the full explanation output (not a short summary), and include paths to:
+     - `explanations/<name>.md`
+     - `explanations/<name>.pdf`
+
+Completion is blocked until one path above is finished. Do NOT stop after a brief inline explanation.
+
 ## Execution: Use Subagents
 
 **Always launch a subagent for each paper.** This is mandatory, not optional:
@@ -88,11 +109,12 @@ The main agent's role is to:
    - Which KB cards were written (card IDs and paths)
    - Whether figures were extracted
    - A brief per-paper highlight (from the subagent report)
-6. If multiple papers: run the **kb-explain workflow** on the newly written cards (see below)
+6. If multiple papers: run the **cross-paper-report workflow** on the newly written cards (see below)
+7. If the user intent is explanation/deep-dive and only one paper was requested: run `cross-paper-report` for that single card as well
 
-### Cross-Paper Synthesis via kb-explain (Multi-Paper Only)
+### Cross-Paper Synthesis via cross-paper-report
 
-After all subagents complete, run the full `kb-explain` skill on the set of newly written KB cards. This produces a much richer output than an inline comparison — it generates:
+After all subagents complete, run the full `cross-paper-report` skill on the set of newly written KB cards. This applies to both multi-paper comparisons and single-paper explanation requests. It produces a much richer output than an inline explanation — it generates:
 
 1. **Deep narrative explanation** per card (800-2500 words each) with architecture deep dives, training pipeline walkthroughs, key equations, and analogies
 2. **Cross-card comparative synthesis** tracing shared ideas, divergences, architecture/training differences, and field trajectory
@@ -101,11 +123,11 @@ After all subagents complete, run the full `kb-explain` skill on the set of newl
 
 To trigger this, launch a subagent with the following prompt:
 
-> Invoke the `kb-explain` skill for cards `paper-lapa` and `paper-groot-n1`. The KB path is `/path/to/knowledge-base`. Follow the skill's full workflow — all three deliverables (narrative, markdown, PDF) are mandatory.
+> Invoke the `cross-paper-report` skill for cards `paper-lapa` and `paper-groot-n1`. The KB path is `/path/to/knowledge-base`. Follow the skill's full workflow — all three deliverables (narrative, markdown, PDF) are mandatory.
 
-The Skill tool loads the full kb-explain instructions automatically. Do NOT manually reconstruct the kb-explain workflow in the subagent prompt.
+The Skill tool loads the full cross-paper-report instructions automatically. Do NOT manually reconstruct the cross-paper-report workflow in the subagent prompt.
 
-Do NOT attempt to produce the comparison yourself inline — the kb-explain workflow handles it with far more depth, structure, and visual output (TikZ diagrams, properly typeset PDF).
+Do NOT attempt to produce the explanation or comparison yourself inline — the cross-paper-report workflow handles it with far more depth, structure, and visual output (TikZ diagrams, properly typeset PDF).
 
 ## Pre-Synthesis: Obtain the Full Paper
 
@@ -128,7 +150,7 @@ Before synthesizing, always attempt to read the full paper text. Choose the path
 6. Optionally call `zotero_get_notes` to retrieve the user's annotations and highlights — weave these into the synthesis where relevant (e.g. "The authors note X, which the reader flagged as particularly relevant because...").
 7. If neither `preferred_url` nor `local_path` is available, stop and report this as a Zotero metadata inconsistency instead of switching to indexed fulltext.
 
-When the user asks to analyze multiple papers from Zotero (e.g. "synthesize my Zotero collection on diffusion"), launch one subagent per paper in parallel. After all subagents complete, run the `kb-explain` skill on the newly written cards to produce the full cross-paper synthesis with narrative prose, markdown, and LaTeX PDF.
+When the user asks to analyze multiple papers from Zotero (e.g. "synthesize my Zotero collection on diffusion"), launch one subagent per paper in parallel. After all subagents complete, run the `cross-paper-report` skill on the newly written cards to produce the full cross-paper synthesis with narrative prose, markdown, and LaTeX PDF.
 
 ## Type 1: Structured Summary
 

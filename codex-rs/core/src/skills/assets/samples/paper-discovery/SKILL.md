@@ -1,11 +1,11 @@
 ---
-name: research-scout
+name: paper-discovery
 description: Use when a user asks a research question, wants to learn about a research topic, asks how something is done in the literature, or wants to discover papers. Examples -- "how do people train RL for robotic grasping", "what are the best methods for sim-to-real transfer", "I want to learn about diffusion policies", "find me papers on VLAs". Provides structured landscape briefings with approaches, best papers, and reading plans. Also handles KB/Zotero-based proactive discovery.
 metadata:
-  short-description: Answer research questions and discover papers
+  short-description: Discover and rank papers for a topic
 ---
 
-# Research Scout
+# Paper Discovery
 
 Two modes of operation:
 
@@ -14,14 +14,24 @@ Two modes of operation:
 
 ## Invocation Modes
 
-- `$research-scout explore: how do people train RL for robotic grasping` -- explore a question or topic from scratch
-- `$research-scout explore: best methods for sim-to-real transfer in manipulation` -- practical "how to" questions work too
-- `$research-scout` -- discovery mode: full KB scan, all 4 strategies
-- `$research-scout topic:<topic>` -- discovery mode: focused on a specific topic tag
-- `$research-scout authors` -- discovery mode: author-tracking only
-- `$research-scout recent` -- discovery mode: trend scanning only
+- `$paper-discovery explore: how do people train RL for robotic grasping` -- explore a question or topic from scratch
+- `$paper-discovery explore: best methods for sim-to-real transfer in manipulation` -- practical "how to" questions work too
+- `$paper-discovery` -- discovery mode: full KB scan, all 4 strategies
+- `$paper-discovery topic:<topic>` -- discovery mode: focused on a specific topic tag
+- `$paper-discovery authors` -- discovery mode: author-tracking only
+- `$paper-discovery recent` -- discovery mode: trend scanning only
 
-**Mode detection**: If the user's input is a question or describes something they want to learn about (even without the `explore:` prefix), use explore mode. If the user just invokes `$research-scout` with no arguments, use discovery mode.
+**Mode detection**: If the user's input is a question or describes something they want to learn about (even without the `explore:` prefix), use explore mode. If the user just invokes `$paper-discovery` with no arguments, use discovery mode.
+
+
+## Mandatory Pipeline Contract
+
+This skill is discovery-first. For multi-paper requests or requests that ask for a final explained report, you MUST enforce this order:
+1. `paper-discovery` (this skill) to map methods and shortlist papers.
+2. `paper-synthesis` to create deep per-paper cards.
+3. `cross-paper-report` to generate the integrated cross-paper narrative, markdown artifact, and PDF.
+
+Do not mark the request complete until step 3 is done when the user asks for synthesis/reporting across multiple papers.
 
 ---
 
@@ -335,7 +345,7 @@ Sort by composite score descending.
 Present the top 15-20 papers as a numbered list:
 
 ```
-## Research Scout Discovery Report
+## Paper Discovery Discovery Report
 ### [Date] | Mode: [full-kb / topic:X / authors / recent]
 
 Found N new papers across M discovery strategies.

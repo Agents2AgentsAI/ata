@@ -41,6 +41,8 @@ macro_rules! set_tool_name_for_id {
             "repo_extract_config_schema" => $self.repo_extract_config_schema = $resolved_name,
             "repo_diff_requirements" => $self.repo_diff_requirements = $resolved_name,
             "pdf_extract_figures" => $self.pdf_extract_figures = $resolved_name,
+            "hn_search" => $self.hn_search = $resolved_name,
+            "hn_get_thread" => $self.hn_get_thread = $resolved_name,
             _ => {}
         }
     };
@@ -51,6 +53,7 @@ pub struct ResearchToolAvailability {
     pub has_paper_search: bool,
     pub has_zotero: bool,
     pub has_repo_analysis: bool,
+    pub has_hackernews: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +94,8 @@ pub struct ResearchToolNames {
     pub repo_extract_config_schema: String,
     pub repo_diff_requirements: String,
     pub pdf_extract_figures: String,
+    pub hn_search: String,
+    pub hn_get_thread: String,
 }
 
 impl Default for ResearchToolNames {
@@ -126,6 +131,8 @@ impl Default for ResearchToolNames {
             repo_extract_config_schema: "repo_extract_config_schema".to_string(),
             repo_diff_requirements: "repo_diff_requirements".to_string(),
             pdf_extract_figures: "pdf_extract_figures".to_string(),
+            hn_search: "hn_search".to_string(),
+            hn_get_thread: "hn_get_thread".to_string(),
         }
     }
 }
@@ -189,10 +196,12 @@ pub fn native_tool_availability() -> ResearchToolAvailability {
         let has_paper_search = defs.iter().any(|def| def.id == "paper_search");
         let has_zotero = defs.iter().any(|def| def.id == "zotero_search");
         let has_repo_analysis = defs.iter().any(|def| def.id == "repo_find_entrypoints");
+        let has_hackernews = defs.iter().any(|def| def.id == "hn_search");
         ResearchToolAvailability {
             has_paper_search,
             has_zotero,
             has_repo_analysis,
+            has_hackernews,
         }
     }
     #[cfg(not(feature = "research"))]
@@ -228,6 +237,7 @@ pub fn configured_native_tool_context(
                 "paper_search" => availability.has_paper_search = true,
                 "zotero_search" => availability.has_zotero = true,
                 "repo_find_entrypoints" => availability.has_repo_analysis = true,
+                "hn_search" => availability.has_hackernews = true,
                 _ => {}
             }
         }

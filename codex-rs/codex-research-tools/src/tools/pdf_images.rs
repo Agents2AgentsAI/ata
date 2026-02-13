@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -61,24 +60,6 @@ struct Pdffigures2BoundingBox {
     y2: f64,
 }
 
-/// Check that a binary is available on `$PATH`.
-async fn check_binary(name: &str, install_hint: &str) -> Result<()> {
-    let status = Command::new("which")
-        .arg(name)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .await
-        .map_err(|e| ResearchError::Internal(format!("failed to run `which {name}`: {e}")))?;
-
-    if !status.success() {
-        return Err(ResearchError::InvalidInput(format!(
-            "{name} is not installed or not found on $PATH. {install_hint}"
-        )));
-    }
-    Ok(())
-}
-
 /// Well-known locations where Java may be installed but not on `$PATH`.
 const JAVA_CANDIDATE_PATHS: &[&str] = &[
     // Homebrew on Apple Silicon
@@ -90,20 +71,17 @@ const JAVA_CANDIDATE_PATHS: &[&str] = &[
     "/usr/lib/jvm/java/bin/java",
 ];
 
-/// Locate a working `java` binary.
+/// Probe for a working `java` binary without installing anything.
 ///
 /// Resolution order:
 /// 1. `$PATH` (via `which java`)
 /// 2. macOS `/usr/libexec/java_home` helper
 /// 3. Well-known Homebrew / Linux paths
-async fn find_java() -> std::result::Result<PathBuf, String> {
+async fn probe_java() -> Option<PathBuf> {
     // 1. Check $PATH.
-    let which = Command::new("which")
-        .arg("java")
-        .output()
-        .await
-        .map_err(|e| format!("failed to run `which java`: {e}"))?;
-    if which.status.success() {
+    if let Ok(which) = Command::new("which").arg("java").output().await
+        && which.status.success()
+    {
         let p = String::from_utf8_lossy(&which.stdout).trim().to_string();
         if !p.is_empty() {
             // On macOS, /usr/bin/java is a stub that may not work. Verify it.
@@ -114,7 +92,7 @@ async fn find_java() -> std::result::Result<PathBuf, String> {
                 .status()
                 .await;
             if probe.is_ok_and(|s| s.success()) {
-                return Ok(PathBuf::from(p));
+                return Some(PathBuf::from(p));
             }
         }
     }
@@ -128,22 +106,80 @@ async fn find_java() -> std::result::Result<PathBuf, String> {
             let home = String::from_utf8_lossy(&out.stdout).trim().to_string();
             let candidate = PathBuf::from(&home).join("bin/java");
             if candidate.exists() {
-                return Ok(candidate);
+                return Some(candidate);
             }
         }
     }
 
     // 3. Probe well-known paths.
-    for path in JAVA_CANDIDATE_PATHS {
-        let p = PathBuf::from(path);
-        if p.exists() {
-            return Ok(p);
+    super::system_deps::find_in_well_known_paths(JAVA_CANDIDATE_PATHS)
+}
+
+/// Locate a working `java` binary, auto-installing if necessary.
+async fn find_java() -> std::result::Result<PathBuf, String> {
+    if let Some(java) = probe_java().await {
+        return Ok(java);
+    }
+
+    // Auto-install Java.
+    let pm = super::system_deps::detect_package_manager().await;
+    match pm {
+        Some(super::system_deps::PackageManager::Brew) => {
+            super::system_deps::brew_install("openjdk", &[]).await?;
+        }
+        Some(super::system_deps::PackageManager::AptGet) => {
+            super::system_deps::apt_install(&["default-jre-headless"]).await?;
+        }
+        None => {
+            return Err(
+                "Java is required but was not found and no package manager (brew/apt-get) \
+                 is available to install it automatically. \
+                 Install: `brew install openjdk` (macOS) or `sudo apt install default-jre-headless` (Linux)"
+                    .to_string(),
+            );
         }
     }
 
-    Err("Java is required but was not found. \
-         Install: `brew install openjdk` (macOS) or `sudo apt install default-jre-headless` (Linux)"
-        .to_string())
+    // Retry probe after install.
+    probe_java().await.ok_or_else(|| {
+        "Java was installed but still not found on $PATH or well-known paths. \
+         You may need to restart your shell or set JAVA_HOME."
+            .to_string()
+    })
+}
+
+/// Ensure pdftocairo (from poppler-utils) is available, auto-installing if necessary.
+async fn ensure_pdftocairo() -> std::result::Result<(), String> {
+    if super::system_deps::is_on_path(PDFTOCAIRO_BIN).await {
+        return Ok(());
+    }
+
+    let pm = super::system_deps::detect_package_manager().await;
+    match pm {
+        Some(super::system_deps::PackageManager::Brew) => {
+            super::system_deps::brew_install("poppler", &[]).await?;
+        }
+        Some(super::system_deps::PackageManager::AptGet) => {
+            super::system_deps::apt_install(&["poppler-utils"]).await?;
+        }
+        None => {
+            return Err(
+                "pdftocairo is required but was not found and no package manager (brew/apt-get) \
+                 is available to install it automatically. \
+                 Install: `brew install poppler` (macOS) or `sudo apt install poppler-utils` (Linux)"
+                    .to_string(),
+            );
+        }
+    }
+
+    // Verify after install.
+    if super::system_deps::is_on_path(PDFTOCAIRO_BIN).await {
+        Ok(())
+    } else {
+        Err(format!(
+            "{PDFTOCAIRO_BIN} was installed but still not found on $PATH"
+        ))
+    }
 }
 
 /// Return the platform-appropriate cache directory for research tools.
@@ -256,16 +292,8 @@ async fn check_prerequisites() -> std::result::Result<Prerequisites, String> {
     // 2. Find java (checks $PATH, /usr/libexec/java_home, well-known paths).
     let java_bin = find_java().await?;
 
-    // 3. Check pdftocairo.
-    if let Err(e) = check_binary(
-        PDFTOCAIRO_BIN,
-        "poppler-utils is required. Install: `brew install poppler` (macOS) \
-         or `sudo apt install poppler-utils` (Linux)",
-    )
-    .await
-    {
-        return Err(e.to_string());
-    }
+    // 3. Ensure pdftocairo is available (auto-install if needed).
+    ensure_pdftocairo().await?;
 
     Ok(Prerequisites { jar_path, java_bin })
 }
@@ -372,8 +400,8 @@ async fn render_figure(
     let w = ((region_bb.x2 - region_bb.x1) * scale).ceil() as i32;
     let h = ((region_bb.y2 - region_bb.y1) * scale).ceil() as i32;
 
-    // pdftocairo -png -singlefile -f <page> -l <page> -r <dpi> -x X -y Y -W W -H H input output
-    let page_str = page.to_string();
+    // pdftocairo uses 1-indexed pages, pdffigures2 uses 0-indexed.
+    let page_str = (page + 1).to_string();
     let dpi_str = dpi.to_string();
     let x_str = x.to_string();
     let y_str = y.to_string();
@@ -420,68 +448,6 @@ fn read_png_dimensions(path: &Path) -> Option<(u32, u32)> {
     let width = u32::from_be_bytes([data[16], data[17], data[18], data[19]]);
     let height = u32::from_be_bytes([data[20], data[21], data[22], data[23]]);
     Some((width, height))
-}
-
-/// Quality metrics derived from pixel-level analysis of an extracted figure.
-struct FigureQualityMetrics {
-    aspect_ratio: f32,
-    quality_hints: Vec<String>,
-}
-
-/// Analyze a PNG figure's pixel content to produce quality hints.
-///
-/// Subsamples ~10,000 pixels to estimate whitespace fraction and color
-/// diversity. Returns `None` if the image cannot be decoded.
-fn analyze_figure_quality(path: &Path, width: u32, height: u32) -> Option<FigureQualityMetrics> {
-    let aspect_ratio = width as f32 / height as f32;
-
-    let img = image::open(path).ok()?.to_rgb8();
-    let total_pixels = img.width() as usize * img.height() as usize;
-    let sample_count = 10_000usize;
-    let stride = (total_pixels / sample_count).max(1);
-
-    let mut white_count = 0u32;
-    let mut color_buckets: HashSet<u16> = HashSet::new();
-
-    for (i, pixel) in img.pixels().enumerate() {
-        if i % stride != 0 {
-            continue;
-        }
-        let [r, g, b] = pixel.0;
-        if r > 240 && g > 240 && b > 240 {
-            white_count += 1;
-        }
-        // Quantize to 4 bits per channel (12-bit bucket).
-        let bucket = ((u16::from(r) >> 4) << 8) | ((u16::from(g) >> 4) << 4) | (u16::from(b) >> 4);
-        color_buckets.insert(bucket);
-    }
-
-    let sampled = (total_pixels / stride) as f32;
-    let white_fraction = white_count as f32 / sampled;
-    let color_count = color_buckets.len() as u32;
-
-    let mut hints = Vec::new();
-
-    if white_fraction > 0.85 && color_count < 15 {
-        hints.push(format!(
-            "likely text/table screenshot ({:.0}% white, {color_count} colors)",
-            white_fraction * 100.0
-        ));
-    } else if white_fraction > 0.75 && color_count < 25 {
-        hints.push(format!(
-            "high whitespace, may be a text region ({:.0}% white, {color_count} colors)",
-            white_fraction * 100.0
-        ));
-    }
-
-    if !(0.2..=5.0).contains(&aspect_ratio) {
-        hints.push(format!("extreme aspect ratio ({aspect_ratio:.1})"));
-    }
-
-    Some(FigureQualityMetrics {
-        aspect_ratio,
-        quality_hints: hints,
-    })
 }
 
 /// A raster image embedded in the PDF, parsed from `pdfimages -list` output.
@@ -630,12 +596,6 @@ async fn extract_raster_images(
             continue;
         }
 
-        let (aspect_ratio, quality_hints) = match analyze_figure_quality(&final_name, width, height)
-        {
-            Some(m) => (Some(m.aspect_ratio), m.quality_hints),
-            None => (Some(width as f32 / height as f32), Vec::new()),
-        };
-
         figures.push(ExtractedFigure {
             path: final_name.to_string_lossy().into_owned(),
             width,
@@ -645,8 +605,6 @@ async fn extract_raster_images(
             index: img.num,
             caption: None,
             figure_type: Some("Figure".to_string()),
-            aspect_ratio,
-            quality_hints,
         });
     }
 
@@ -822,12 +780,6 @@ pub(crate) async fn pdf_extract_figures(
             continue;
         }
 
-        let (aspect_ratio, quality_hints) = match analyze_figure_quality(&output_png, width, height)
-        {
-            Some(m) => (Some(m.aspect_ratio), m.quality_hints),
-            None => (Some(width as f32 / height as f32), Vec::new()),
-        };
-
         figures.push(ExtractedFigure {
             path: output_png.to_string_lossy().into_owned(),
             width,
@@ -837,8 +789,6 @@ pub(crate) async fn pdf_extract_figures(
             index: *idx as u32,
             caption: Some(fig.caption.clone()),
             figure_type: Some(fig.figure_type.clone()),
-            aspect_ratio,
-            quality_hints,
         });
     }
 
@@ -1204,76 +1154,49 @@ mod tests {
         assert!(cached_jar.exists(), "cached JAR should be detected");
     }
 
-    #[test]
-    fn analyze_quality_white_image() {
-        // A mostly-white image should be flagged as likely text/table screenshot.
-        let dir = tempfile::tempdir().expect("create temp dir");
-        let path = dir.path().join("white.png");
-        let img = image::ImageBuffer::from_fn(200, 200, |_, _| image::Rgb([250u8, 250, 250]));
-        img.save(&path).expect("save white PNG");
-
-        let metrics = analyze_figure_quality(&path, 200, 200);
-        assert!(metrics.is_some());
-        let m = metrics.expect("metrics should be Some");
-        assert!((m.aspect_ratio - 1.0).abs() < 0.01);
-        assert!(
-            m.quality_hints
-                .iter()
-                .any(|h| h.contains("likely text/table screenshot")),
-            "expected text/table hint, got: {:?}",
-            m.quality_hints
-        );
+    #[tokio::test]
+    async fn probe_java_finds_installed_java() {
+        // On dev machines with Java installed, probe_java should find it.
+        let result = probe_java().await;
+        if let Some(path) = result {
+            assert!(
+                path.to_string_lossy().contains("java"),
+                "path should contain 'java', got: {}",
+                path.display()
+            );
+        }
+        // If Java is not installed, the test trivially passes.
     }
 
-    #[test]
-    fn analyze_quality_colorful_image() {
-        // A colorful image should produce no quality hints.
-        let dir = tempfile::tempdir().expect("create temp dir");
-        let path = dir.path().join("colorful.png");
-        let img = image::ImageBuffer::from_fn(200, 200, |x, y| {
-            image::Rgb([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8])
-        });
-        img.save(&path).expect("save colorful PNG");
-
-        let metrics = analyze_figure_quality(&path, 200, 200);
-        assert!(metrics.is_some());
-        let m = metrics.expect("metrics should be Some");
-        assert!(
-            m.quality_hints.is_empty(),
-            "expected no hints for colorful image, got: {:?}",
-            m.quality_hints
-        );
+    #[tokio::test]
+    async fn find_java_returns_valid_path() {
+        // find_java() should succeed on machines with Java (or auto-install).
+        // We only assert the shape — not that it actually auto-installed.
+        match find_java().await {
+            Ok(path) => {
+                assert!(
+                    path.to_string_lossy().contains("java"),
+                    "expected java in path, got: {}",
+                    path.display()
+                );
+            }
+            Err(msg) => {
+                // Acceptable if no package manager is available.
+                assert!(msg.contains("not found"), "unexpected error: {msg}");
+            }
+        }
     }
 
-    #[test]
-    fn analyze_quality_extreme_aspect_ratio() {
-        // A very wide banner should be flagged for extreme aspect ratio.
-        let dir = tempfile::tempdir().expect("create temp dir");
-        let path = dir.path().join("banner.png");
-        let img = image::ImageBuffer::from_fn(1000, 50, |x, y| {
-            image::Rgb([(x % 256) as u8, (y % 256) as u8, ((x * y) % 256) as u8])
-        });
-        img.save(&path).expect("save banner PNG");
-
-        let metrics = analyze_figure_quality(&path, 1000, 50);
-        assert!(metrics.is_some());
-        let m = metrics.expect("metrics should be Some");
-        assert!(
-            m.quality_hints
-                .iter()
-                .any(|h| h.contains("extreme aspect ratio")),
-            "expected extreme aspect ratio hint, got: {:?}",
-            m.quality_hints
-        );
-    }
-
-    #[test]
-    fn analyze_quality_returns_none_for_invalid_file() {
-        let dir = tempfile::tempdir().expect("create temp dir");
-        let path = dir.path().join("corrupt.png");
-        std::fs::write(&path, b"not a real png").expect("write corrupt file");
-
-        let metrics = analyze_figure_quality(&path, 100, 100);
-        assert!(metrics.is_none());
+    #[tokio::test]
+    async fn ensure_pdftocairo_succeeds_when_poppler_installed() {
+        // On machines with poppler-utils, this should succeed.
+        let result = ensure_pdftocairo().await;
+        if super::super::system_deps::is_on_path("pdftocairo").await {
+            assert!(
+                result.is_ok(),
+                "pdftocairo is on PATH but ensure_pdftocairo failed: {:?}",
+                result.err()
+            );
+        }
     }
 }

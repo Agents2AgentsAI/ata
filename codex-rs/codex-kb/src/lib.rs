@@ -76,6 +76,8 @@ pub struct ReadCardResult {
     pub source: Option<card::CardSource>,
     pub tensions: Vec<String>,
     pub supersedes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub figures: Vec<card::CardFigure>,
     pub body: String,
 }
 
@@ -483,6 +485,7 @@ impl KnowledgeBase {
             source: c.frontmatter.source,
             tensions: c.frontmatter.tensions,
             supersedes: c.frontmatter.supersedes,
+            figures: c.frontmatter.figures,
             body: c.body,
         })
     }

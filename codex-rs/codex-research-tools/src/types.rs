@@ -1,4 +1,5 @@
 use chrono::DateTime;
+use chrono::NaiveDate;
 use chrono::Utc;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -730,10 +731,6 @@ pub struct ExtractedFigure {
     pub index: u32,
     pub caption: Option<String>,
     pub figure_type: Option<String>,
-    #[serde(default)]
-    pub aspect_ratio: Option<f32>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub quality_hints: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -743,4 +740,69 @@ pub struct PdfExtractFiguresResult {
     pub total_extracted: usize,
     pub total_filtered: usize,
     pub errors: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Hacker News types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct HnItem {
+    pub id: u64,
+    pub title: Option<String>,
+    pub url: Option<String>,
+    pub author: Option<String>,
+    pub points: Option<u32>,
+    pub num_comments: Option<u32>,
+    pub created_at: Option<DateTime<Utc>>,
+    pub item_type: String,
+    pub text: Option<String>,
+    pub story_title: Option<String>,
+    pub story_url: Option<String>,
+    pub hn_url: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct HnSearchResult {
+    pub items: Vec<HnItem>,
+    pub total_hits: u64,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct HnSearchParams {
+    pub query: String,
+    pub content_type: Option<String>,
+    pub sort_by: Option<String>,
+    pub min_points: Option<u32>,
+    pub min_comments: Option<u32>,
+    pub date_from: Option<NaiveDate>,
+    pub date_to: Option<NaiveDate>,
+    pub author: Option<String>,
+    pub story_id: Option<u64>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct HnComment {
+    pub id: u64,
+    pub author: Option<String>,
+    pub text: Option<String>,
+    pub created_at: Option<DateTime<Utc>>,
+    pub children: Vec<HnComment>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct HnThread {
+    pub story: HnItem,
+    pub comments: Vec<HnComment>,
+    pub total_comments: u32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct HnGetThreadParams {
+    pub item_id: u64,
+    pub max_depth: Option<u32>,
+    pub max_comments: Option<u32>,
 }
