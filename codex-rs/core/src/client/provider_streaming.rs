@@ -62,11 +62,19 @@ pub(super) fn build_reasoning_value(
     serde_json::to_value(reasoning).ok()
 }
 
-pub(super) fn extract_sse_data_line(event_str: &str) -> Option<&str> {
-    event_str
+pub(super) fn extract_sse_data_line(event_str: &str) -> Option<String> {
+    let data_lines: Vec<&str> = event_str
         .lines()
-        .find_map(|line| line.strip_prefix("data: "))
-        .or_else(|| event_str.strip_prefix("data:").map(str::trim))
+        .filter_map(|line| {
+            line.strip_prefix("data: ")
+                .or_else(|| line.strip_prefix("data:").map(str::trim_start))
+        })
+        .collect();
+    if data_lines.is_empty() {
+        None
+    } else {
+        Some(data_lines.join("\n"))
+    }
 }
 
 pub(super) fn filter_out_created(events: Vec<ResponseEvent>) -> Vec<ResponseEvent> {
@@ -327,6 +335,23 @@ fn take_next_sse_event(buffer: &mut String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn extract_sse_data_line_reads_single_data_line() {
+        assert_eq!(
+            extract_sse_data_line("event: message\ndata: {\"ok\":true}"),
+            Some("{\"ok\":true}".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_sse_data_line_joins_multiple_data_lines() {
+        assert_eq!(
+            extract_sse_data_line("event: message\ndata: {\"items\":[\ndata: 1,2,3]}"),
+            Some("{\"items\":[\n1,2,3]}".to_string())
+        );
+    }
 
     #[test]
     fn map_status_error_detects_context_window() {
