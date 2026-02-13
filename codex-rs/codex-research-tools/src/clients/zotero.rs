@@ -232,6 +232,7 @@ pub(crate) async fn get_fulltext(
     Ok(ZoteroFullTextResult {
         item_key: item_key.to_string(),
         content: response.content.unwrap_or_default(),
+        resolution: None,
         source_meta: Some(SourceMeta {
             source: "zotero".to_string(),
             api_url: url,
@@ -734,6 +735,7 @@ fn map_attachment(
         content_type: item.data.content_type,
         link_mode: item.data.link_mode,
         url: item.data.url,
+        path: item.data.path,
         parent_item: item.data.parent_item,
         source_meta: Some(SourceMeta {
             source: "zotero".to_string(),
@@ -910,6 +912,7 @@ struct ZoteroApiItemData {
     content_type: Option<String>,
     #[serde(rename = "linkMode")]
     link_mode: Option<String>,
+    path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

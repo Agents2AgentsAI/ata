@@ -1,8 +1,14 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Component;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use futures::StreamExt;
 use futures::stream;
+use regex::Regex;
 use serde::Serialize;
 
 use crate::ResearchToolkit;
@@ -22,6 +28,8 @@ use crate::rate_limiter::ResearchApi;
 use crate::text_utils::truncate_chars;
 use crate::tools::cache_helpers::get_or_fetch_typed;
 use crate::tools::cache_helpers::hash_cache_payload;
+use crate::types::DocumentResolution;
+use crate::types::DocumentSourceKind;
 use crate::types::ZoteroAdvancedCandidateStrategy;
 use crate::types::ZoteroAdvancedCompleteness;
 use crate::types::ZoteroAdvancedSearchParams;
@@ -72,6 +80,11 @@ const DEFAULT_FULLTEXT_MAX_CHARS: u32 = 10_000;
 const DEFAULT_LOCAL_USER_LIBRARY_ID: &str = "0";
 const DEFAULT_ANNOTATION_PARENT_FETCH_CONCURRENCY: usize = 6;
 const ZOTERO_MAX_PAGE_SIZE: u32 = 100;
+const AR5IV_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const AR5IV_PROBE_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+const AR5IV_BASE_URL: &str = "https://ar5iv.labs.arxiv.org/html";
+const ARXIV_PDF_BASE_URL: &str = "https://arxiv.org/pdf";
+const ZOTERO_STORAGE_DIR_ENV: &str = "ZOTERO_STORAGE_DIR";
 
 #[derive(Debug, Clone, Serialize)]
 struct NormalizedScope {
@@ -416,7 +429,57 @@ pub(crate) async fn zotero_get_fulltext(
                 match zotero::get_fulltext(toolkit.http(), config, scope, &normalized.item_key)
                     .await
                 {
-                    Ok(result) => return Ok(result),
+                    Ok(mut result) => {
+                        let mut resolution_trace = Vec::new();
+
+                        let item = match zotero::get_item(
+                            toolkit.http(),
+                            config,
+                            scope,
+                            &normalized.item_key,
+                        )
+                        .await
+                        {
+                            Ok(item) => Some(item),
+                            Err(err) => {
+                                resolution_trace
+                                    .push(format!("item metadata lookup failed: {err}"));
+                                None
+                            }
+                        };
+
+                        let attachments = match zotero::get_attachments(
+                            toolkit.http(),
+                            config,
+                            scope,
+                            &ZoteroChildrenRequest {
+                                item_key: &normalized.item_key,
+                                offset: 0,
+                                limit: DEFAULT_CHILDREN_LIMIT,
+                            },
+                        )
+                        .await
+                        {
+                            Ok(result) => result.attachments,
+                            Err(err) => {
+                                resolution_trace.push(format!("attachment lookup failed: {err}"));
+                                Vec::new()
+                            }
+                        };
+
+                        let has_indexed_content = !result.content.trim().is_empty();
+                        result.resolution = Some(
+                            resolve_document_sources(
+                                toolkit,
+                                item.as_ref(),
+                                &attachments,
+                                has_indexed_content,
+                                resolution_trace,
+                            )
+                            .await,
+                        );
+                        return Ok(result);
+                    }
                     Err(err) => last_err = Some(err),
                 }
             }
@@ -1443,6 +1506,439 @@ async fn merge_collections_across_scopes(
     })
 }
 
+async fn resolve_document_sources(
+    toolkit: &ResearchToolkit,
+    item: Option<&ZoteroItemDetail>,
+    attachments: &[ZoteroAttachment],
+    has_indexed_content: bool,
+    trace: Vec<String>,
+) -> DocumentResolution {
+    resolve_document_sources_with_probe(
+        item,
+        attachments,
+        toolkit.config().zotero_storage_dir.as_deref(),
+        has_indexed_content,
+        trace,
+        |arxiv_id, html_url| async move {
+            ar5iv_available_cached(toolkit, arxiv_id.as_str(), html_url.as_str()).await
+        },
+    )
+    .await
+}
+
+async fn resolve_document_sources_with_probe<F, Fut>(
+    item: Option<&ZoteroItemDetail>,
+    attachments: &[ZoteroAttachment],
+    storage_root: Option<&str>,
+    has_indexed_content: bool,
+    mut trace: Vec<String>,
+    mut probe_ar5iv: F,
+) -> DocumentResolution
+where
+    F: FnMut(String, String) -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let attachment_urls = attachment_pdf_urls(attachments, &mut trace);
+
+    if let Some(item) = item
+        && let Some(arxiv_id) = extract_arxiv_id(item, &mut trace)
+    {
+        let arxiv_pdf = format!("{ARXIV_PDF_BASE_URL}/{arxiv_id}.pdf");
+        for probe_id in ar5iv_probe_candidates(arxiv_id.as_str()) {
+            let html_url = format!("{AR5IV_BASE_URL}/{probe_id}");
+            if probe_ar5iv(probe_id.clone(), html_url.clone()).await {
+                trace.push(format!("ar5iv probe succeeded for {probe_id}"));
+                let mut fallback_urls = Vec::new();
+                push_unique_url(&mut fallback_urls, arxiv_pdf.clone());
+                for url in &attachment_urls {
+                    push_unique_url(&mut fallback_urls, url.clone());
+                }
+                return DocumentResolution {
+                    source_kind: DocumentSourceKind::Ar5ivHtml,
+                    preferred_url: Some(html_url),
+                    fallback_urls,
+                    local_path: None,
+                    trace,
+                };
+            }
+        }
+
+        trace.push("ar5iv probe unavailable; using arXiv PDF".to_string());
+        let mut fallback_urls = Vec::new();
+        for url in attachment_urls {
+            if url != arxiv_pdf {
+                push_unique_url(&mut fallback_urls, url);
+            }
+        }
+        return DocumentResolution {
+            source_kind: DocumentSourceKind::ArxivPdf,
+            preferred_url: Some(arxiv_pdf),
+            fallback_urls,
+            local_path: None,
+            trace,
+        };
+    }
+
+    if let Some(preferred_url) = attachment_urls.first().cloned() {
+        let fallback_urls = attachment_urls.into_iter().skip(1).collect::<Vec<_>>();
+        trace.push("using attachment PDF URL".to_string());
+        return DocumentResolution {
+            source_kind: DocumentSourceKind::AttachmentPdfUrl,
+            preferred_url: Some(preferred_url),
+            fallback_urls,
+            local_path: None,
+            trace,
+        };
+    }
+
+    if let Some(local_path) = resolve_local_pdf_path(storage_root, attachments, &mut trace) {
+        return DocumentResolution {
+            source_kind: DocumentSourceKind::LocalPdfPath,
+            preferred_url: None,
+            fallback_urls: Vec::new(),
+            local_path: Some(local_path),
+            trace,
+        };
+    }
+
+    if has_indexed_content {
+        trace.push(
+            "no canonical document source resolved; using indexed fulltext fallback".to_string(),
+        );
+    } else {
+        trace.push(
+            "no canonical document source resolved and indexed fulltext is empty".to_string(),
+        );
+    }
+
+    DocumentResolution {
+        source_kind: DocumentSourceKind::IndexedFulltext,
+        preferred_url: None,
+        fallback_urls: Vec::new(),
+        local_path: None,
+        trace,
+    }
+}
+
+fn attachment_pdf_urls(attachments: &[ZoteroAttachment], trace: &mut Vec<String>) -> Vec<String> {
+    let mut urls = Vec::new();
+    for attachment in attachments {
+        let Some(raw_url) = attachment.url.as_deref() else {
+            continue;
+        };
+        let Some(url) = sanitize_http_url(raw_url) else {
+            trace.push(format!(
+                "ignored non-http attachment URL for attachment {}",
+                attachment.key
+            ));
+            continue;
+        };
+        if attachment_looks_like_pdf(attachment, Some(url.as_str()), attachment.path.as_deref()) {
+            push_unique_url(&mut urls, url);
+        }
+    }
+    urls
+}
+
+fn attachment_looks_like_pdf(
+    attachment: &ZoteroAttachment,
+    url: Option<&str>,
+    path_hint: Option<&str>,
+) -> bool {
+    if attachment
+        .content_type
+        .as_deref()
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/pdf"))
+    {
+        return true;
+    }
+    if attachment.filename.as_deref().is_some_and(has_pdf_suffix) {
+        return true;
+    }
+    if attachment.title.as_deref().is_some_and(has_pdf_suffix) {
+        return true;
+    }
+    if url.is_some_and(is_pdf_url) {
+        return true;
+    }
+    path_hint.is_some_and(has_pdf_suffix)
+}
+
+fn has_pdf_suffix(value: &str) -> bool {
+    value.trim().to_ascii_lowercase().ends_with(".pdf")
+}
+
+fn is_pdf_url(url: &str) -> bool {
+    if let Ok(parsed) = reqwest::Url::parse(url) {
+        return parsed.path().to_ascii_lowercase().ends_with(".pdf");
+    }
+
+    has_pdf_suffix(url)
+}
+
+fn sanitize_http_url(raw_url: &str) -> Option<String> {
+    let trimmed = raw_url.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut parsed = reqwest::Url::parse(trimmed).ok()?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return None;
+    }
+    parsed.set_fragment(None);
+    Some(parsed.to_string())
+}
+
+fn resolve_local_pdf_path(
+    storage_root: Option<&str>,
+    attachments: &[ZoteroAttachment],
+    trace: &mut Vec<String>,
+) -> Option<String> {
+    let Some(storage_root) = storage_root
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+    else {
+        trace.push(format!(
+            "local path fallback unavailable: {ZOTERO_STORAGE_DIR_ENV} is not set"
+        ));
+        return None;
+    };
+
+    if !storage_root.is_absolute() {
+        trace.push(format!(
+            "local path fallback unavailable: {ZOTERO_STORAGE_DIR_ENV} must be an absolute path"
+        ));
+        return None;
+    }
+
+    for attachment in attachments {
+        let Some(path_hint) = attachment
+            .path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+
+        if !attachment_looks_like_pdf(attachment, attachment.url.as_deref(), Some(path_hint)) {
+            continue;
+        }
+
+        let Some(storage_relative) = path_hint.strip_prefix("storage:") else {
+            trace.push(format!(
+                "ignored attachment path for {} because it does not use storage: prefix",
+                attachment.key
+            ));
+            continue;
+        };
+
+        if !is_safe_storage_component(attachment.key.as_str()) {
+            trace.push(format!(
+                "ignored attachment path for {} because attachment key is not path-safe",
+                attachment.key
+            ));
+            continue;
+        }
+
+        let relative_path = Path::new(storage_relative.trim_start_matches('/'));
+        if !is_safe_relative_path(relative_path) {
+            trace.push(format!(
+                "ignored attachment path for {} due to unsafe relative path",
+                attachment.key
+            ));
+            continue;
+        }
+
+        let local_path = storage_root.join(&attachment.key).join(relative_path);
+        trace.push(format!(
+            "resolved local PDF path from attachment {}",
+            attachment.key
+        ));
+        return Some(local_path.to_string_lossy().to_string());
+    }
+
+    None
+}
+
+fn is_safe_storage_component(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+}
+
+fn is_safe_relative_path(path: &Path) -> bool {
+    let mut has_component = false;
+    for component in path.components() {
+        match component {
+            Component::Normal(_) => has_component = true,
+            Component::CurDir => {}
+            _ => return false,
+        }
+    }
+    has_component
+}
+
+fn extract_arxiv_id(item: &ZoteroItemDetail, trace: &mut Vec<String>) -> Option<String> {
+    if let Some(url) = item.url.as_deref()
+        && let Some(arxiv_id) = extract_arxiv_id_from_url(url)
+    {
+        trace.push(format!("detected arXiv id from item URL: {arxiv_id}"));
+        return Some(arxiv_id);
+    }
+
+    if let Some(extra) = item.extra.as_deref()
+        && let Some(arxiv_id) = extract_arxiv_id_from_extra(extra)
+    {
+        trace.push(format!("detected arXiv id from item extra: {arxiv_id}"));
+        return Some(arxiv_id);
+    }
+
+    None
+}
+
+fn extract_arxiv_id_from_url(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url.trim()).ok()?;
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    if !(host == "arxiv.org" || host.ends_with(".arxiv.org")) {
+        return None;
+    }
+
+    let segments = parsed.path_segments()?.collect::<Vec<_>>();
+    let (prefix, suffix_segments) = segments.split_first()?;
+
+    let candidate = if *prefix == "abs" || *prefix == "pdf" {
+        suffix_segments.join("/")
+    } else {
+        return None;
+    };
+
+    let candidate = candidate.strip_suffix(".pdf").unwrap_or(candidate.as_str());
+    normalize_arxiv_id(candidate)
+}
+
+fn extract_arxiv_id_from_extra(extra: &str) -> Option<String> {
+    arxiv_id_regex()
+        .captures(extra)
+        .and_then(|capture| capture.get(1))
+        .map(|match_| match_.as_str().to_string())
+}
+
+fn normalize_arxiv_id(raw_value: &str) -> Option<String> {
+    let trimmed = raw_value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let without_prefix = trimmed
+        .strip_prefix("arXiv:")
+        .or_else(|| trimmed.strip_prefix("ARXIV:"))
+        .unwrap_or(trimmed);
+    let cleaned = without_prefix.trim().trim_end_matches(".pdf").trim();
+
+    arxiv_id_regex()
+        .captures(cleaned)
+        .and_then(|capture| capture.get(1))
+        .map(|match_| match_.as_str().to_string())
+}
+
+fn arxiv_id_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)\b((?:\d{4}\.\d{4,5}|[a-z][a-z.\-]+/\d{7})(?:v\d+)?)\b")
+            .unwrap_or_else(|err| panic!("arXiv id regex must compile: {err}"))
+    })
+}
+
+fn ar5iv_probe_candidates(arxiv_id: &str) -> Vec<String> {
+    let mut candidates = vec![arxiv_id.to_string()];
+    if let Some((without_version, version_suffix)) = arxiv_id.rsplit_once('v')
+        && !without_version.is_empty()
+        && version_suffix.chars().all(|ch| ch.is_ascii_digit())
+        && without_version != arxiv_id
+    {
+        candidates.push(without_version.to_string());
+    }
+    candidates
+}
+
+fn push_unique_url(urls: &mut Vec<String>, candidate: String) {
+    if !urls.iter().any(|existing| existing == &candidate) {
+        urls.push(candidate);
+    }
+}
+
+async fn ar5iv_available_cached(toolkit: &ResearchToolkit, arxiv_id: &str, html_url: &str) -> bool {
+    let params_hash = match hash_cache_payload(&arxiv_id) {
+        Ok(hash) => hash,
+        Err(err) => {
+            tracing::warn!(%err, arxiv_id, "failed to hash ar5iv probe cache key");
+            return false;
+        }
+    };
+
+    let key = CacheKey {
+        tool_name: "zotero_ar5iv_probe",
+        params_hash,
+    };
+
+    match get_or_fetch_typed(toolkit, key, AR5IV_PROBE_CACHE_TTL, || async move {
+        Ok(probe_ar5iv_html(toolkit, html_url).await)
+    })
+    .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!(%err, arxiv_id, "ar5iv probe failed");
+            false
+        }
+    }
+}
+
+async fn probe_ar5iv_html(toolkit: &ResearchToolkit, html_url: &str) -> bool {
+    let response = match tokio::time::timeout(
+        AR5IV_PROBE_TIMEOUT,
+        toolkit
+            .http()
+            .execute_response(ResearchApi::Arxiv, || toolkit.http().client().get(html_url)),
+    )
+    .await
+    {
+        Ok(Ok(response)) => response,
+        _ => return false,
+    };
+
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_ascii_lowercase);
+    if !content_type
+        .as_deref()
+        .is_some_and(|value| value.starts_with("text/html"))
+    {
+        return false;
+    }
+
+    let html = match tokio::time::timeout(AR5IV_PROBE_TIMEOUT, response.text()).await {
+        Ok(Ok(html)) => html,
+        _ => return false,
+    };
+
+    let normalized_html = html.to_ascii_lowercase();
+    ![
+        "no paper found for arxiv id",
+        "this paper is not yet available",
+        "unable to fetch source",
+        "ar5iv is temporarily unavailable",
+    ]
+    .iter()
+    .any(|needle| normalized_html.contains(needle))
+}
+
 fn map_zotero_annotation(annotation: zotero::ZoteroAnnotation) -> ZoteroAnnotation {
     let annotation_type = annotation
         .annotation_type
@@ -1513,6 +2009,7 @@ fn apply_attachments_budget(attachments: &mut [ZoteroAttachment], max_chars: usi
         truncate_optional_string(&mut attachment.content_type, max_chars);
         truncate_optional_string(&mut attachment.link_mode, max_chars);
         truncate_optional_string(&mut attachment.url, max_chars);
+        truncate_optional_string(&mut attachment.path, max_chars);
     }
 }
 
@@ -1536,17 +2033,21 @@ mod tests {
     use crate::config::ResearchConfig;
     use crate::error::ResearchError;
     use crate::tools::test_helpers::build_test_toolkit_with_config;
+    use crate::types::DocumentResolution;
+    use crate::types::DocumentSourceKind;
     use crate::types::ZoteroAdvancedCandidateStrategy;
     use crate::types::ZoteroAdvancedCompleteness;
     use crate::types::ZoteroAdvancedSearchParams;
     use crate::types::ZoteroAdvancedSortBy;
     use crate::types::ZoteroAnnotation;
     use crate::types::ZoteroAnnotationsParams;
+    use crate::types::ZoteroAttachment;
     use crate::types::ZoteroCollectionItemsParams;
     use crate::types::ZoteroCollectionsParams;
     use crate::types::ZoteroGrepField;
     use crate::types::ZoteroGrepMatchMode;
     use crate::types::ZoteroGrepParams;
+    use crate::types::ZoteroItemDetail;
     use crate::types::ZoteroItemParams;
     use crate::types::ZoteroListGroupsParams;
     use crate::types::ZoteroSearchCondition;
@@ -1694,6 +2195,24 @@ mod tests {
             .await
             .expect("zotero_get_fulltext should succeed");
         assert_eq!(fulltext.content, "ab...");
+        let resolution = fulltext
+            .resolution
+            .expect("zotero_get_fulltext should include resolution");
+        assert_eq!(resolution.source_kind, DocumentSourceKind::AttachmentPdfUrl);
+        assert_eq!(
+            resolution.preferred_url,
+            Some("https://example.com/paper.pdf".to_string())
+        );
+        assert_eq!(resolution.fallback_urls, Vec::<String>::new());
+        assert_eq!(resolution.local_path, None);
+        assert!(
+            resolution
+                .trace
+                .iter()
+                .any(|entry| entry.contains("item metadata lookup failed")),
+            "expected metadata lookup warning in trace: {:?}",
+            resolution.trace
+        );
 
         let notes = toolkit
             .zotero_get_notes(ZoteroItemParams {
@@ -3504,6 +4023,233 @@ mod tests {
         let names: Vec<_> = result.collections.iter().map(|c| c.name.as_str()).collect();
         assert!(names.contains(&"User Collection"));
         assert!(names.contains(&"Group Collection"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_document_sources_prefers_ar5iv_when_available() {
+        let item = sample_item_with_source(Some("https://arxiv.org/abs/2401.12345v2"), None);
+        let attachments = vec![sample_attachment(
+            "ATT1",
+            Some("application/pdf"),
+            Some("https://example.com/fallback.pdf"),
+            None,
+        )];
+
+        let resolution = super::resolve_document_sources_with_probe(
+            Some(&item),
+            &attachments,
+            None,
+            true,
+            Vec::new(),
+            |_, _| async { true },
+        )
+        .await;
+
+        assert_eq!(
+            resolution,
+            DocumentResolution {
+                source_kind: DocumentSourceKind::Ar5ivHtml,
+                preferred_url: Some("https://ar5iv.labs.arxiv.org/html/2401.12345v2".to_string()),
+                fallback_urls: vec![
+                    "https://arxiv.org/pdf/2401.12345v2.pdf".to_string(),
+                    "https://example.com/fallback.pdf".to_string()
+                ],
+                local_path: None,
+                trace: vec![
+                    "detected arXiv id from item URL: 2401.12345v2".to_string(),
+                    "ar5iv probe succeeded for 2401.12345v2".to_string()
+                ],
+            }
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_document_sources_falls_back_to_arxiv_pdf_when_ar5iv_unavailable() {
+        let item = sample_item_with_source(Some("https://arxiv.org/abs/2401.12345v2"), None);
+        let attachments = vec![sample_attachment(
+            "ATT1",
+            Some("application/pdf"),
+            Some("https://example.com/fallback.pdf"),
+            None,
+        )];
+
+        let resolution = super::resolve_document_sources_with_probe(
+            Some(&item),
+            &attachments,
+            None,
+            true,
+            Vec::new(),
+            |_, _| async { false },
+        )
+        .await;
+
+        assert_eq!(
+            resolution,
+            DocumentResolution {
+                source_kind: DocumentSourceKind::ArxivPdf,
+                preferred_url: Some("https://arxiv.org/pdf/2401.12345v2.pdf".to_string()),
+                fallback_urls: vec!["https://example.com/fallback.pdf".to_string()],
+                local_path: None,
+                trace: vec![
+                    "detected arXiv id from item URL: 2401.12345v2".to_string(),
+                    "ar5iv probe unavailable; using arXiv PDF".to_string()
+                ],
+            }
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_document_sources_prefers_attachment_pdf_urls_for_non_arxiv_items() {
+        let item = sample_item_with_source(Some("https://example.com/paper"), None);
+        let attachments = vec![
+            sample_attachment(
+                "ATT1",
+                Some("application/pdf"),
+                Some("https://example.com/primary.pdf"),
+                None,
+            ),
+            sample_attachment(
+                "ATT2",
+                Some("application/pdf"),
+                Some("https://example.com/secondary.pdf"),
+                None,
+            ),
+        ];
+
+        let resolution = super::resolve_document_sources_with_probe(
+            Some(&item),
+            &attachments,
+            None,
+            false,
+            Vec::new(),
+            |_, _| async { false },
+        )
+        .await;
+
+        assert_eq!(
+            resolution,
+            DocumentResolution {
+                source_kind: DocumentSourceKind::AttachmentPdfUrl,
+                preferred_url: Some("https://example.com/primary.pdf".to_string()),
+                fallback_urls: vec!["https://example.com/secondary.pdf".to_string()],
+                local_path: None,
+                trace: vec!["using attachment PDF URL".to_string()],
+            }
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_document_sources_uses_local_storage_path_when_no_pdf_url_exists() {
+        let temp_dir = tempfile::tempdir().expect("temp directory");
+        let storage_root = temp_dir.path().to_string_lossy().to_string();
+        let item = sample_item_with_source(Some("https://example.com/paper"), None);
+        let attachments = vec![sample_attachment(
+            "ATT1",
+            Some("application/pdf"),
+            None,
+            Some("storage:paper.pdf"),
+        )];
+
+        let resolution = super::resolve_document_sources_with_probe(
+            Some(&item),
+            &attachments,
+            Some(storage_root.as_str()),
+            false,
+            Vec::new(),
+            |_, _| async { false },
+        )
+        .await;
+
+        let expected_path = temp_dir
+            .path()
+            .join("ATT1")
+            .join("paper.pdf")
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(
+            resolution,
+            DocumentResolution {
+                source_kind: DocumentSourceKind::LocalPdfPath,
+                preferred_url: None,
+                fallback_urls: Vec::new(),
+                local_path: Some(expected_path),
+                trace: vec!["resolved local PDF path from attachment ATT1".to_string()],
+            }
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_document_sources_rejects_unsafe_local_paths() {
+        let temp_dir = tempfile::tempdir().expect("temp directory");
+        let storage_root = temp_dir.path().to_string_lossy().to_string();
+        let item = sample_item_with_source(Some("https://example.com/paper"), None);
+        let attachments = vec![sample_attachment(
+            "ATT1",
+            Some("application/pdf"),
+            None,
+            Some("storage:../../escape.pdf"),
+        )];
+
+        let resolution = super::resolve_document_sources_with_probe(
+            Some(&item),
+            &attachments,
+            Some(storage_root.as_str()),
+            true,
+            Vec::new(),
+            |_, _| async { false },
+        )
+        .await;
+
+        assert_eq!(
+            resolution,
+            DocumentResolution {
+                source_kind: DocumentSourceKind::IndexedFulltext,
+                preferred_url: None,
+                fallback_urls: Vec::new(),
+                local_path: None,
+                trace: vec![
+                    "ignored attachment path for ATT1 due to unsafe relative path".to_string(),
+                    "no canonical document source resolved; using indexed fulltext fallback"
+                        .to_string()
+                ],
+            }
+        );
+    }
+
+    fn sample_item_with_source(url: Option<&str>, extra: Option<&str>) -> ZoteroItemDetail {
+        ZoteroItemDetail {
+            key: "ITEM1".to_string(),
+            title: "Sample Item".to_string(),
+            authors: vec!["Alice Example".to_string()],
+            abstract_text: None,
+            date: Some("2024".to_string()),
+            doi: None,
+            url: url.map(ToString::to_string),
+            publication: None,
+            item_type: "journalArticle".to_string(),
+            tags: Vec::new(),
+            extra: extra.map(ToString::to_string),
+            source_meta: None,
+        }
+    }
+
+    fn sample_attachment(
+        key: &str,
+        content_type: Option<&str>,
+        url: Option<&str>,
+        path: Option<&str>,
+    ) -> ZoteroAttachment {
+        ZoteroAttachment {
+            key: key.to_string(),
+            title: Some("attachment".to_string()),
+            filename: Some("paper.pdf".to_string()),
+            content_type: content_type.map(ToString::to_string),
+            link_mode: Some("imported_file".to_string()),
+            url: url.map(ToString::to_string),
+            path: path.map(ToString::to_string),
+            parent_item: Some("ITEM1".to_string()),
+            source_meta: None,
+        }
     }
 
     fn build_test_toolkit(zotero_base_url: String) -> ResearchToolkit {

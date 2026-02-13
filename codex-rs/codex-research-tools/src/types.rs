@@ -250,9 +250,29 @@ pub struct ZoteroSearchNotesResult {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentSourceKind {
+    Ar5ivHtml,
+    ArxivPdf,
+    AttachmentPdfUrl,
+    LocalPdfPath,
+    IndexedFulltext,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct DocumentResolution {
+    pub source_kind: DocumentSourceKind,
+    pub preferred_url: Option<String>,
+    pub fallback_urls: Vec<String>,
+    pub local_path: Option<String>,
+    pub trace: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroFullTextResult {
     pub item_key: String,
     pub content: String,
+    pub resolution: Option<DocumentResolution>,
     pub source_meta: Option<SourceMeta>,
 }
 
@@ -303,6 +323,7 @@ pub struct ZoteroAttachment {
     pub content_type: Option<String>,
     pub link_mode: Option<String>,
     pub url: Option<String>,
+    pub path: Option<String>,
     pub parent_item: Option<String>,
     pub source_meta: Option<SourceMeta>,
 }
