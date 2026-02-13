@@ -121,6 +121,22 @@ pub(crate) fn test_config() -> Config {
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
+pub struct Permissions {
+    /// Approval policy for executing commands.
+    pub approval_policy: Constrained<AskForApproval>,
+    /// Effective sandbox policy used for shell/unified exec.
+    pub sandbox_policy: Constrained<SandboxPolicy>,
+    /// Effective network configuration applied to all spawned processes.
+    pub network: Option<NetworkProxySpec>,
+    /// Policy used to build process environments for shell/unified exec.
+    pub shell_environment_policy: ShellEnvironmentPolicy,
+    /// Effective Windows sandbox mode derived from `[windows].sandbox` or
+    /// legacy feature keys.
+    pub windows_sandbox_mode: Option<WindowsSandboxModeToml>,
+}
+
+/// Application configuration loaded from disk and merged with overrides.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     /// Provenance for how this [`Config`] was derived (merged layers + enforced
     /// requirements).
@@ -150,24 +166,17 @@ pub struct Config {
     /// Optionally specify the personality of the model
     pub personality: Option<Personality>,
 
-    /// Approval policy for executing commands.
-    pub approval_policy: Constrained<AskForApproval>,
-
-    pub sandbox_policy: Constrained<SandboxPolicy>,
+    /// Effective permission configuration for shell tool execution.
+    pub permissions: Permissions,
 
     /// enforce_residency means web traffic cannot be routed outside of a
     /// particular geography. HTTP clients should direct their requests
     /// using backend-specific headers or URLs to enforce this.
     pub enforce_residency: Constrained<Option<ResidencyRequirement>>,
 
-    /// Effective network configuration applied to all spawned processes.
-    pub network: Option<NetworkProxySpec>,
-
     /// True if the user passed in an override or set a value in config.toml
     /// for either of approval_policy or sandbox_mode.
     pub did_user_set_custom_approval_policy_or_sandbox_mode: bool,
-
-    pub shell_environment_policy: ShellEnvironmentPolicy,
 
     /// When `true`, `AgentReasoning` events emitted by the backend will be
     /// suppressed from the frontend output. This can reduce visual noise when
@@ -352,10 +361,6 @@ pub struct Config {
 
     /// Settings for ghost snapshots (used for undo).
     pub ghost_snapshot: GhostSnapshotConfig,
-
-    /// Effective Windows sandbox mode derived from `[windows].sandbox` or
-    /// legacy feature keys.
-    pub windows_sandbox_mode: Option<WindowsSandboxModeToml>,
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: Features,
@@ -1786,12 +1791,15 @@ impl Config {
             model_provider,
             cwd: resolved_cwd,
             startup_warnings,
-            approval_policy: constrained_approval_policy.value,
-            sandbox_policy: constrained_sandbox_policy.value,
+            permissions: Permissions {
+                approval_policy: constrained_approval_policy.value,
+                sandbox_policy: constrained_sandbox_policy.value,
+                network,
+                shell_environment_policy,
+                windows_sandbox_mode,
+            },
             enforce_residency: enforce_residency.value,
-            network,
             did_user_set_custom_approval_policy_or_sandbox_mode,
-            shell_environment_policy,
             notify: cfg.notify,
             user_instructions,
             base_instructions,
@@ -1858,7 +1866,6 @@ impl Config {
             data: cfg.data.clone(),
             use_experimental_unified_exec_tool,
             ghost_snapshot,
-            windows_sandbox_mode,
             features,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
@@ -1964,28 +1971,28 @@ impl Config {
     }
 
     pub fn set_windows_sandbox_enabled(&mut self, value: bool) {
-        self.windows_sandbox_mode = if value {
+        self.permissions.windows_sandbox_mode = if value {
             Some(WindowsSandboxModeToml::Unelevated)
         } else if matches!(
-            self.windows_sandbox_mode,
+            self.permissions.windows_sandbox_mode,
             Some(WindowsSandboxModeToml::Unelevated)
         ) {
             None
         } else {
-            self.windows_sandbox_mode
+            self.permissions.windows_sandbox_mode
         };
     }
 
     pub fn set_windows_elevated_sandbox_enabled(&mut self, value: bool) {
-        self.windows_sandbox_mode = if value {
+        self.permissions.windows_sandbox_mode = if value {
             Some(WindowsSandboxModeToml::Elevated)
         } else if matches!(
-            self.windows_sandbox_mode,
+            self.permissions.windows_sandbox_mode,
             Some(WindowsSandboxModeToml::Elevated)
         ) {
             None
         } else {
-            self.windows_sandbox_mode
+            self.permissions.windows_sandbox_mode
         };
     }
 }
@@ -2428,12 +2435,12 @@ trust_level = "trusted"
 
         let expected_backend = AbsolutePathBuf::try_from(backend).unwrap();
         if cfg!(target_os = "windows") {
-            match config.sandbox_policy.get() {
+            match config.permissions.sandbox_policy.get() {
                 SandboxPolicy::ReadOnly { .. } => {}
                 other => panic!("expected read-only policy on Windows, got {other:?}"),
             }
         } else {
-            match config.sandbox_policy.get() {
+            match config.permissions.sandbox_policy.get() {
                 SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
                     assert_eq!(
                         writable_roots
@@ -2723,7 +2730,7 @@ profile = "project"
         )?;
 
         assert!(matches!(
-            config.sandbox_policy.get(),
+            config.permissions.sandbox_policy.get(),
             &SandboxPolicy::DangerFullAccess
         ));
         assert!(config.did_user_set_custom_approval_policy_or_sandbox_mode);
@@ -2761,12 +2768,12 @@ profile = "project"
 
         if cfg!(target_os = "windows") {
             assert!(matches!(
-                config.sandbox_policy.get(),
+                config.permissions.sandbox_policy.get(),
                 SandboxPolicy::ReadOnly { .. }
             ));
         } else {
             assert!(matches!(
-                config.sandbox_policy.get(),
+                config.permissions.sandbox_policy.get(),
                 SandboxPolicy::WorkspaceWrite { .. }
             ));
         }
@@ -4082,12 +4089,15 @@ model_verbosity = "high"
                 model_auto_compact_token_limit: None,
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
-                approval_policy: Constrained::allow_any(AskForApproval::Never),
-                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                permissions: Permissions {
+                    approval_policy: Constrained::allow_any(AskForApproval::Never),
+                    sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                    network: None,
+                    shell_environment_policy: ShellEnvironmentPolicy::default(),
+                    windows_sandbox_mode: None,
+                },
                 enforce_residency: Constrained::allow_any(None),
-                network: None,
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
-                shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
@@ -4132,7 +4142,6 @@ model_verbosity = "high"
                 suppress_unstable_features_warning: false,
                 active_profile: Some("o3".to_string()),
                 active_project: ProjectConfig { trust_level: None },
-                windows_sandbox_mode: None,
                 windows_wsl_setup_acknowledged: false,
                 notices: Default::default(),
                 check_for_update_on_startup: true,
@@ -4191,12 +4200,15 @@ model_verbosity = "high"
             model_auto_compact_token_limit: None,
             model_provider_id: "openai-custom".to_string(),
             model_provider: fixture.openai_custom_provider.clone(),
-            approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
-            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+            permissions: Permissions {
+                approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
+                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                network: None,
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
+                windows_sandbox_mode: None,
+            },
             enforce_residency: Constrained::allow_any(None),
-            network: None,
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
-            shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -4241,7 +4253,6 @@ model_verbosity = "high"
             suppress_unstable_features_warning: false,
             active_profile: Some("gpt3".to_string()),
             active_project: ProjectConfig { trust_level: None },
-            windows_sandbox_mode: None,
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -4298,12 +4309,15 @@ model_verbosity = "high"
             model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
-            approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
-            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+            permissions: Permissions {
+                approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                network: None,
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
+                windows_sandbox_mode: None,
+            },
             enforce_residency: Constrained::allow_any(None),
-            network: None,
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
-            shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -4348,7 +4362,6 @@ model_verbosity = "high"
             suppress_unstable_features_warning: false,
             active_profile: Some("zdr".to_string()),
             active_project: ProjectConfig { trust_level: None },
-            windows_sandbox_mode: None,
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -4391,12 +4404,15 @@ model_verbosity = "high"
             model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
-            approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
-            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+            permissions: Permissions {
+                approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                network: None,
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
+                windows_sandbox_mode: None,
+            },
             enforce_residency: Constrained::allow_any(None),
-            network: None,
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
-            shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -4441,7 +4457,6 @@ model_verbosity = "high"
             suppress_unstable_features_warning: false,
             active_profile: Some("gpt5".to_string()),
             active_project: ProjectConfig { trust_level: None },
-            windows_sandbox_mode: None,
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -4974,7 +4989,7 @@ mcp_oauth_callback_port = 5678
 
         // Verify that untrusted projects get UnlessTrusted approval policy
         assert_eq!(
-            config.approval_policy.value(),
+            config.permissions.approval_policy.value(),
             AskForApproval::UnlessTrusted,
             "Expected UnlessTrusted approval policy for untrusted project"
         );
@@ -4982,13 +4997,16 @@ mcp_oauth_callback_port = 5678
         // Verify that untrusted projects still get WorkspaceWrite sandbox (or ReadOnly on Windows)
         if cfg!(target_os = "windows") {
             assert!(
-                matches!(config.sandbox_policy.get(), SandboxPolicy::ReadOnly { .. }),
+                matches!(
+                    config.permissions.sandbox_policy.get(),
+                    SandboxPolicy::ReadOnly { .. }
+                ),
                 "Expected ReadOnly on Windows"
             );
         } else {
             assert!(
                 matches!(
-                    config.sandbox_policy.get(),
+                    config.permissions.sandbox_policy.get(),
                     SandboxPolicy::WorkspaceWrite { .. }
                 ),
                 "Expected WorkspaceWrite sandbox for untrusted project"
@@ -5015,9 +5033,8 @@ mcp_oauth_callback_port = 5678
             }))
             .build()
             .await?;
-
         assert_eq!(
-            *config.sandbox_policy.get(),
+            *config.permissions.sandbox_policy.get(),
             SandboxPolicy::new_read_only_policy()
         );
         Ok(())
@@ -5054,7 +5071,7 @@ mcp_oauth_callback_port = 5678
             .build()
             .await?;
         assert_eq!(
-            *config.sandbox_policy.get(),
+            *config.permissions.sandbox_policy.get(),
             SandboxPolicy::new_read_only_policy()
         );
         Ok(())
@@ -5086,7 +5103,10 @@ mcp_oauth_callback_port = 5678
 
         assert_eq!(config.web_search_mode.value(), WebSearchMode::Cached);
         assert_eq!(
-            resolve_web_search_mode_for_turn(&config.web_search_mode, config.sandbox_policy.get()),
+            resolve_web_search_mode_for_turn(
+                &config.web_search_mode,
+                config.permissions.sandbox_policy.get(),
+            ),
             WebSearchMode::Cached,
         );
         Ok(())
@@ -5120,7 +5140,10 @@ trust_level = "untrusted"
             .build()
             .await?;
 
-        assert_eq!(config.approval_policy.value(), AskForApproval::OnRequest);
+        assert_eq!(
+            config.permissions.approval_policy.value(),
+            AskForApproval::OnRequest
+        );
         Ok(())
     }
 
@@ -5145,7 +5168,10 @@ trust_level = "untrusted"
             }))
             .build()
             .await?;
-        assert_eq!(config.approval_policy.value(), AskForApproval::OnRequest);
+        assert_eq!(
+            config.permissions.approval_policy.value(),
+            AskForApproval::OnRequest
+        );
         Ok(())
     }
 }
