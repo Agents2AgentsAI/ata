@@ -1033,6 +1033,33 @@ impl ChatWidget {
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
         self.current_cwd = Some(event.cwd.clone());
+
+        // Keep the widget's config copy in sync with the active thread.
+        // This is used when building `Op::UserTurn` (cwd/approval/sandbox).
+        self.config.cwd = event.cwd.clone();
+        if let Err(err) = self
+            .config
+            .permissions
+            .approval_policy
+            .set(event.approval_policy)
+        {
+            tracing::warn!(%err, "failed to sync approval policy from session config");
+            self.add_error_message(format!(
+                "Failed to sync approval policy from session config: {err}"
+            ));
+        }
+        if let Err(err) = self
+            .config
+            .permissions
+            .sandbox_policy
+            .set(event.sandbox_policy.clone())
+        {
+            tracing::warn!(%err, "failed to sync sandbox policy from session config");
+            self.add_error_message(format!(
+                "Failed to sync sandbox policy from session config: {err}"
+            ));
+        }
+
         let initial_messages = event.initial_messages.clone();
         let forked_from_id = event.forked_from_id;
         let model_for_header = event.model.clone();
