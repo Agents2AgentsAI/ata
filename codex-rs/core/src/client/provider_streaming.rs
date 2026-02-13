@@ -109,71 +109,16 @@ where
                     return;
                 }
 
-                if emit_events(&tx_event, initial_events).await {
-                    return;
-                }
-
-                let mut stream = response.bytes_stream();
-                let mut buffer = String::new();
-
-                loop {
-                    let chunk_result = tokio::time::timeout(idle_timeout, stream.next()).await;
-
-                    match chunk_result {
-                        Ok(Some(Ok(chunk))) => {
-                            if let Ok(text) = std::str::from_utf8(&chunk) {
-                                buffer.push_str(text);
-                            }
-
-                            while let Some(event_str) = take_next_sse_event(&mut buffer) {
-                                if event_str.trim().is_empty() {
-                                    continue;
-                                }
-
-                                if handle_parse_result(
-                                    parse_event(&event_str, &mut state),
-                                    &tx_event,
-                                )
-                                .await
-                                {
-                                    return;
-                                }
-                            }
-                        }
-                        Ok(Some(Err(err))) => {
-                            let _ = tx_event
-                                .send(Err(CodexErr::Api(format!("Stream error: {err}"))))
-                                .await;
-                            return;
-                        }
-                        Ok(None) => {
-                            if !buffer.trim().is_empty()
-                                && handle_parse_result(
-                                    parse_trailing(&buffer, &mut state),
-                                    &tx_event,
-                                )
-                                .await
-                            {
-                                return;
-                            }
-
-                            let _ = tx_event
-                                .send(Ok(ResponseEvent::Completed {
-                                    response_id: String::new(),
-                                    token_usage: None,
-                                    can_append: false,
-                                }))
-                                .await;
-                            return;
-                        }
-                        Err(_) => {
-                            let _ = tx_event
-                                .send(Err(CodexErr::Api("Stream timeout".to_string())))
-                                .await;
-                            return;
-                        }
-                    }
-                }
+                stream_provider_response(
+                    response,
+                    idle_timeout,
+                    &tx_event,
+                    &mut state,
+                    initial_events,
+                    &mut parse_event,
+                    &mut parse_trailing,
+                )
+                .await;
             }
             Err(err) => {
                 let _ = tx_event
@@ -186,7 +131,110 @@ where
     ResponseStream { rx_event }
 }
 
-fn map_status_error(status_error_prefix: &str, status: StatusCode, body: &str) -> CodexErr {
+pub(super) fn spawn_provider_sse_stream_from_response<State, ParseEvent, ParseTrailing>(
+    response: reqwest::Response,
+    idle_timeout: Duration,
+    mut state: State,
+    initial_events: Vec<ResponseEvent>,
+    mut parse_event: ParseEvent,
+    mut parse_trailing: ParseTrailing,
+) -> ResponseStream
+where
+    State: Send + 'static,
+    ParseEvent: FnMut(&str, &mut State) -> ParseSseEventResult + Send + 'static,
+    ParseTrailing: FnMut(&str, &mut State) -> ParseSseEventResult + Send + 'static,
+{
+    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
+    tokio::spawn(async move {
+        stream_provider_response(
+            response,
+            idle_timeout,
+            &tx_event,
+            &mut state,
+            initial_events,
+            &mut parse_event,
+            &mut parse_trailing,
+        )
+        .await;
+    });
+    ResponseStream { rx_event }
+}
+
+async fn stream_provider_response<State, ParseEvent, ParseTrailing>(
+    response: reqwest::Response,
+    idle_timeout: Duration,
+    tx_event: &mpsc::Sender<Result<ResponseEvent>>,
+    state: &mut State,
+    initial_events: Vec<ResponseEvent>,
+    parse_event: &mut ParseEvent,
+    parse_trailing: &mut ParseTrailing,
+) where
+    ParseEvent: FnMut(&str, &mut State) -> ParseSseEventResult + Send + 'static,
+    ParseTrailing: FnMut(&str, &mut State) -> ParseSseEventResult + Send + 'static,
+{
+    if emit_events(tx_event, initial_events).await {
+        return;
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
+
+    loop {
+        let chunk_result = tokio::time::timeout(idle_timeout, stream.next()).await;
+
+        match chunk_result {
+            Ok(Some(Ok(chunk))) => {
+                if let Ok(text) = std::str::from_utf8(&chunk) {
+                    buffer.push_str(text);
+                }
+
+                while let Some(event_str) = take_next_sse_event(&mut buffer) {
+                    if event_str.trim().is_empty() {
+                        continue;
+                    }
+
+                    if handle_parse_result(parse_event(&event_str, state), tx_event).await {
+                        return;
+                    }
+                }
+            }
+            Ok(Some(Err(err))) => {
+                let _ = tx_event
+                    .send(Err(CodexErr::Api(format!("Stream error: {err}"))))
+                    .await;
+                return;
+            }
+            Ok(None) => {
+                if !buffer.trim().is_empty()
+                    && handle_parse_result(parse_trailing(&buffer, state), tx_event).await
+                {
+                    return;
+                }
+
+                let _ = tx_event
+                    .send(Ok(ResponseEvent::Completed {
+                        response_id: String::new(),
+                        token_usage: None,
+                        can_append: false,
+                    }))
+                    .await;
+                return;
+            }
+            Err(_) => {
+                let _ = tx_event
+                    .send(Err(CodexErr::Api("Stream timeout".to_string())))
+                    .await;
+                return;
+            }
+        }
+    }
+}
+
+pub(super) fn map_status_error(
+    status_error_prefix: &str,
+    status: StatusCode,
+    body: &str,
+) -> CodexErr {
     if status == StatusCode::BAD_REQUEST && body.contains("prompt is too long") {
         return CodexErr::ContextWindowExceeded;
     }

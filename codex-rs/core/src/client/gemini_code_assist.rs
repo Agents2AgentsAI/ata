@@ -4,6 +4,8 @@ use codex_api::ProviderAdapter;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use once_cell::sync::Lazy;
+use reqwest::StatusCode;
 use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
@@ -14,11 +16,13 @@ use super::provider_streaming::build_reasoning_value;
 use super::provider_streaming::extract_sse_data_line;
 use super::provider_streaming::filter_out_created;
 use super::provider_streaming::map_api_err_to_codex_err;
+use super::provider_streaming::map_status_error;
 use super::provider_streaming::serialize_input_items;
-use super::provider_streaming::spawn_provider_sse_stream;
+use super::provider_streaming::spawn_provider_sse_stream_from_response;
 use crate::auth::ProviderOauthCredential;
 use crate::auth::code_assist_method_url;
 use crate::auth::ensure_gemini_oauth_context;
+use crate::auth::force_refresh_gemini_oauth_context;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
@@ -29,6 +33,7 @@ use crate::error::Result;
 use crate::tools::spec::create_tools_json_for_responses_api;
 
 const CODE_ASSIST_THOUGHT_SIGNATURE: &str = "skip_thought_signature_validator";
+static GEMINI_CODE_ASSIST_HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(build_reqwest_client);
 
 pub(super) async fn stream_gemini_code_assist(
     session: &ModelClientSession,
@@ -64,12 +69,9 @@ pub(super) async fn stream_gemini_code_assist(
     let context = ensure_gemini_oauth_context(
         &session.client.state.codex_home,
         session.client.state.cli_auth_credentials_store_mode,
-        oauth_credential,
+        oauth_credential.clone(),
     )
     .await?;
-    let request_body =
-        wrap_code_assist_request(&model_info.slug, &context.project_id, request_body);
-    let access_token = context.access_token;
 
     let url = code_assist_method_url("streamGenerateContent");
     let url = match reqwest::Url::parse(&url) {
@@ -79,24 +81,63 @@ pub(super) async fn stream_gemini_code_assist(
         }
         Err(_) => format!("{url}?alt=sse"),
     };
-    let client = build_reqwest_client();
-    let request = client
-        .post(url)
+    let request_body =
+        wrap_code_assist_request(&model_info.slug, &context.project_id, request_body.clone());
+    let mut response = gemini_code_assist_http_client()
+        .post(&url)
         .header("Accept", "text/event-stream")
         .header("Content-Type", "application/json")
-        .header("Authorization", format!("Bearer {access_token}"))
+        .header("Authorization", format!("Bearer {}", context.access_token))
         .header("X-Goog-Api-Client", build_x_goog_api_client_header())
         .header("User-Agent", get_codex_user_agent())
-        .json(&request_body);
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|err| CodexErr::Api(format!("Request failed: {err}")))?;
+
+    let should_retry_after_refresh = response.status() == StatusCode::UNAUTHORIZED;
+
+    if should_retry_after_refresh {
+        let refreshed_context = force_refresh_gemini_oauth_context(
+            &session.client.state.codex_home,
+            session.client.state.cli_auth_credentials_store_mode,
+            oauth_credential,
+        )
+        .await?;
+        let request_body = wrap_code_assist_request(
+            &model_info.slug,
+            &refreshed_context.project_id,
+            request_body,
+        );
+        response = gemini_code_assist_http_client()
+            .post(&url)
+            .header("Accept", "text/event-stream")
+            .header("Content-Type", "application/json")
+            .header(
+                "Authorization",
+                format!("Bearer {}", refreshed_context.access_token),
+            )
+            .header("X-Goog-Api-Client", build_x_goog_api_client_header())
+            .header("User-Agent", get_codex_user_agent())
+            .json(&request_body)
+            .send()
+            .await
+            .map_err(|err| CodexErr::Api(format!("Retry request failed: {err}")))?;
+    }
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(map_status_error("Gemini Code Assist", status, &body));
+    }
 
     let idle_timeout = session.client.state.provider.stream_idle_timeout();
     let mut stream_state = GeminiStreamState::new();
     stream_state.created_sent = true;
 
-    Ok(spawn_provider_sse_stream(
-        request,
+    Ok(spawn_provider_sse_stream_from_response(
+        response,
         idle_timeout,
-        "Gemini Code Assist",
         stream_state,
         vec![ResponseEvent::Created],
         |event_str, state| {
@@ -112,6 +153,10 @@ pub(super) async fn stream_gemini_code_assist(
             parse_code_assist_sse_data(data, state, true)
         },
     ))
+}
+
+fn gemini_code_assist_http_client() -> &'static reqwest::Client {
+    &GEMINI_CODE_ASSIST_HTTP_CLIENT
 }
 
 fn build_x_goog_api_client_header() -> String {
