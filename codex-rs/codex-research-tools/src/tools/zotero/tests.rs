@@ -223,7 +223,7 @@ async fn zotero_get_item_enrichment_fetches_attachments_once() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn zotero_get_item_enrichment_resolves_arxiv_item_sources() {
+async fn zotero_get_item_enrichment_resolves_arxiv_pdf_item_sources() {
     let server = MockServer::start().await;
     mount_item_detail(
         &server,
@@ -273,17 +273,11 @@ async fn zotero_get_item_enrichment_resolves_arxiv_item_sources() {
     let resolution = item
         .document_resolution
         .expect("include_fulltext_resolution=true should return resolution");
-    assert!(matches!(
-        resolution.source_kind,
-        DocumentSourceKind::Ar5ivHtml | DocumentSourceKind::ArxivPdf
-    ));
+    assert_eq!(resolution.source_kind, DocumentSourceKind::ArxivPdf);
     let preferred_url = resolution
         .preferred_url
         .expect("arXiv resolution should include a preferred URL");
-    assert!(
-        preferred_url.starts_with("https://arxiv.org/pdf/9999.99999v1.pdf")
-            || preferred_url.starts_with("https://ar5iv.labs.arxiv.org/html/9999.99999")
-    );
+    assert!(preferred_url.starts_with("https://arxiv.org/pdf/9999.99999v1.pdf"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2976,7 +2970,7 @@ async fn multi_scope_collections_merges_across_libraries() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn resolve_document_sources_prefers_ar5iv_when_available() {
+async fn resolve_document_sources_prefers_arxiv_pdf_when_available() {
     let item = sample_item_with_source(Some("https://arxiv.org/abs/2401.12345v2"), None);
     let attachments = vec![sample_attachment(
         "ATT1",
@@ -2985,51 +2979,12 @@ async fn resolve_document_sources_prefers_ar5iv_when_available() {
         None,
     )];
 
-    let resolution = super::resolve_document_sources_with_probe(
+    let resolution = super::resolve_document_sources_with_storage_root(
         Some(&item),
         &attachments,
         None,
         Some(true),
         Vec::new(),
-        |_, _| async { true },
-    )
-    .await;
-
-    assert_eq!(
-        resolution,
-        DocumentResolution {
-            source_kind: DocumentSourceKind::Ar5ivHtml,
-            preferred_url: Some("https://ar5iv.labs.arxiv.org/html/2401.12345v2".to_string()),
-            fallback_urls: vec![
-                "https://arxiv.org/pdf/2401.12345v2.pdf".to_string(),
-                "https://example.com/fallback.pdf".to_string()
-            ],
-            local_path: None,
-            trace: vec![
-                "detected arXiv id from item URL: 2401.12345v2".to_string(),
-                "ar5iv probe succeeded for 2401.12345v2".to_string()
-            ],
-        }
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn resolve_document_sources_falls_back_to_arxiv_pdf_when_ar5iv_unavailable() {
-    let item = sample_item_with_source(Some("https://arxiv.org/abs/2401.12345v2"), None);
-    let attachments = vec![sample_attachment(
-        "ATT1",
-        Some("application/pdf"),
-        Some("https://example.com/fallback.pdf"),
-        None,
-    )];
-
-    let resolution = super::resolve_document_sources_with_probe(
-        Some(&item),
-        &attachments,
-        None,
-        Some(true),
-        Vec::new(),
-        |_, _| async { false },
     )
     .await;
 
@@ -3042,7 +2997,41 @@ async fn resolve_document_sources_falls_back_to_arxiv_pdf_when_ar5iv_unavailable
             local_path: None,
             trace: vec![
                 "detected arXiv id from item URL: 2401.12345v2".to_string(),
-                "ar5iv probe unavailable; using arXiv PDF".to_string()
+                "using arXiv PDF".to_string()
+            ],
+        }
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resolve_document_sources_returns_arxiv_pdf_for_arxiv_items() {
+    let item = sample_item_with_source(Some("https://arxiv.org/abs/2401.12345v2"), None);
+    let attachments = vec![sample_attachment(
+        "ATT1",
+        Some("application/pdf"),
+        Some("https://example.com/fallback.pdf"),
+        None,
+    )];
+
+    let resolution = super::resolve_document_sources_with_storage_root(
+        Some(&item),
+        &attachments,
+        None,
+        Some(true),
+        Vec::new(),
+    )
+    .await;
+
+    assert_eq!(
+        resolution,
+        DocumentResolution {
+            source_kind: DocumentSourceKind::ArxivPdf,
+            preferred_url: Some("https://arxiv.org/pdf/2401.12345v2.pdf".to_string()),
+            fallback_urls: vec!["https://example.com/fallback.pdf".to_string()],
+            local_path: None,
+            trace: vec![
+                "detected arXiv id from item URL: 2401.12345v2".to_string(),
+                "using arXiv PDF".to_string()
             ],
         }
     );
@@ -3058,13 +3047,12 @@ async fn resolve_document_sources_extracts_arxiv_id_from_extra_when_url_missing(
         None,
     )];
 
-    let resolution = super::resolve_document_sources_with_probe(
+    let resolution = super::resolve_document_sources_with_storage_root(
         Some(&item),
         &attachments,
         None,
         Some(true),
         Vec::new(),
-        |_, _| async { false },
     )
     .await;
 
@@ -3077,7 +3065,7 @@ async fn resolve_document_sources_extracts_arxiv_id_from_extra_when_url_missing(
             local_path: None,
             trace: vec![
                 "detected arXiv id from item extra: 2401.54321v3".to_string(),
-                "ar5iv probe unavailable; using arXiv PDF".to_string()
+                "using arXiv PDF".to_string()
             ],
         }
     );
@@ -3087,13 +3075,12 @@ async fn resolve_document_sources_extracts_arxiv_id_from_extra_when_url_missing(
 async fn resolve_document_sources_supports_old_style_arxiv_ids() {
     let item = sample_item_with_source(Some("https://arxiv.org/abs/hep-ph/0001234v1"), None);
 
-    let resolution = super::resolve_document_sources_with_probe(
+    let resolution = super::resolve_document_sources_with_storage_root(
         Some(&item),
         &Vec::new(),
         None,
         Some(true),
         Vec::new(),
-        |_, _| async { false },
     )
     .await;
 
@@ -3106,51 +3093,10 @@ async fn resolve_document_sources_supports_old_style_arxiv_ids() {
             local_path: None,
             trace: vec![
                 "detected arXiv id from item URL: hep-ph/0001234v1".to_string(),
-                "ar5iv probe unavailable; using arXiv PDF".to_string()
+                "using arXiv PDF".to_string()
             ],
         }
     );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn resolve_document_sources_tries_unversioned_ar5iv_candidate_after_versioned_miss() {
-    let item = sample_item_with_source(Some("https://arxiv.org/abs/2401.12345v2"), None);
-    let attachments = vec![sample_attachment(
-        "ATT1",
-        Some("application/pdf"),
-        Some("https://example.com/fallback.pdf"),
-        None,
-    )];
-    let observed = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
-
-    let resolution = super::resolve_document_sources_with_probe(
-        Some(&item),
-        &attachments,
-        None,
-        Some(true),
-        Vec::new(),
-        {
-            let observed = observed.clone();
-            move |probe_id, _| {
-                let observed = observed.clone();
-                async move {
-                    observed.lock().await.push(probe_id.clone());
-                    probe_id == "2401.12345"
-                }
-            }
-        },
-    )
-    .await;
-
-    assert_eq!(
-        *observed.lock().await,
-        vec!["2401.12345v2".to_string(), "2401.12345".to_string()]
-    );
-    assert_eq!(
-        resolution.preferred_url,
-        Some("https://ar5iv.labs.arxiv.org/html/2401.12345".to_string())
-    );
-    assert_eq!(resolution.source_kind, DocumentSourceKind::Ar5ivHtml);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3171,13 +3117,12 @@ async fn resolve_document_sources_prefers_attachment_pdf_urls_for_non_arxiv_item
         ),
     ];
 
-    let resolution = super::resolve_document_sources_with_probe(
+    let resolution = super::resolve_document_sources_with_storage_root(
         Some(&item),
         &attachments,
         None,
         Some(false),
         Vec::new(),
-        |_, _| async { false },
     )
     .await;
 
@@ -3202,13 +3147,12 @@ async fn resolve_document_sources_handles_missing_item_metadata() {
         None,
     )];
 
-    let resolution = super::resolve_document_sources_with_probe(
+    let resolution = super::resolve_document_sources_with_storage_root(
         None,
         &attachments,
         None,
         Some(false),
         vec!["item metadata lookup failed: missing".to_string()],
-        |_, _| async { false },
     )
     .await;
 
@@ -3231,13 +3175,12 @@ async fn resolve_document_sources_handles_missing_item_metadata() {
 async fn resolve_document_sources_uses_indexed_fulltext_trace_when_no_sources_and_no_content() {
     let item = sample_item_with_source(Some("https://example.com/paper"), None);
 
-    let resolution = super::resolve_document_sources_with_probe(
+    let resolution = super::resolve_document_sources_with_storage_root(
         Some(&item),
         &Vec::new(),
         None,
         Some(false),
         Vec::new(),
-        |_, _| async { false },
     )
     .await;
 
@@ -3260,13 +3203,12 @@ async fn resolve_document_sources_uses_indexed_fulltext_trace_when_no_sources_an
 async fn resolve_document_sources_marks_unknown_indexed_content_when_not_provided() {
     let item = sample_item_with_source(Some("https://example.com/paper"), None);
 
-    let resolution = super::resolve_document_sources_with_probe(
+    let resolution = super::resolve_document_sources_with_storage_root(
         Some(&item),
         &Vec::new(),
         None,
         None,
         Vec::new(),
-        |_, _| async { false },
     )
     .await;
 
@@ -3296,13 +3238,12 @@ async fn resolve_document_sources_skips_malformed_arxiv_urls() {
         None,
     )];
 
-    let resolution = super::resolve_document_sources_with_probe(
+    let resolution = super::resolve_document_sources_with_storage_root(
         Some(&item),
         &attachments,
         None,
         Some(true),
         Vec::new(),
-        |_, _| async { true },
     )
     .await;
 
@@ -3331,14 +3272,6 @@ async fn normalize_arxiv_id_strips_prefix_case_insensitively() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn ar5iv_probe_candidates_ignores_empty_version_suffix() {
-    assert_eq!(
-        super::ar5iv_probe_candidates("2401.12345v"),
-        vec!["2401.12345v".to_string()]
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn resolve_document_sources_uses_local_storage_path_when_no_pdf_url_exists() {
     let temp_dir = tempfile::tempdir().expect("temp directory");
     let storage_root = temp_dir.path().to_string_lossy().to_string();
@@ -3350,13 +3283,12 @@ async fn resolve_document_sources_uses_local_storage_path_when_no_pdf_url_exists
         Some("storage:paper.pdf"),
     )];
 
-    let resolution = super::resolve_document_sources_with_probe(
+    let resolution = super::resolve_document_sources_with_storage_root(
         Some(&item),
         &attachments,
         Some(storage_root.as_str()),
         Some(false),
         Vec::new(),
-        |_, _| async { false },
     )
     .await;
 
@@ -3390,13 +3322,12 @@ async fn resolve_document_sources_rejects_unsafe_local_paths() {
         Some("storage:../../escape.pdf"),
     )];
 
-    let resolution = super::resolve_document_sources_with_probe(
+    let resolution = super::resolve_document_sources_with_storage_root(
         Some(&item),
         &attachments,
         Some(storage_root.as_str()),
         Some(true),
         Vec::new(),
-        |_, _| async { false },
     )
     .await;
 

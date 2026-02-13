@@ -31,7 +31,7 @@ If you omit any section, the subagent WILL skip it. Common mistake: forgetting f
 Each subagent prompt must also include:
 - The paper identifier (URL, DOI, arXiv ID, or Zotero item key)
 - The KB path from `kb_status` (so the subagent can write cards and figure assets)
-- For Zotero papers: the item key and any fulltext/notes already retrieved by the main agent
+- For Zotero papers: the item key and any notes already retrieved by the main agent
 
 ### What Subagents Return
 
@@ -84,10 +84,11 @@ Before synthesizing, always attempt to read the full paper text. Choose the path
 
 1. Use `zotero_search` to find the paper(s) by title, author, or topic. Also call `zotero_get_collections` to check if a collection matches the topic — if so, use `zotero_get_collection_items` to retrieve its contents. If the user names a specific collection, use `zotero_get_collection_items` directly.
 2. For each paper found, call `zotero_get_item` with `include_attachments=true` and `include_fulltext_resolution=true`.
-3. If `document_resolution.preferred_url` is present, fetch the paper with `attach_url_files` and treat that attached document as the primary source (this preserves figures/tables).
+3. If `document_resolution.preferred_url` (PDF URL) is present, fetch the paper with `attach_url_files` and treat that attached document as the primary source (this preserves figures/tables).
 4. If no URL is available but `document_resolution.local_path` is present, use that local PDF path as the primary source.
-5. Optionally call `zotero_get_notes` to retrieve the user's annotations and highlights — weave these into the synthesis where relevant (e.g. "The authors note X, which the reader flagged as particularly relevant because...").
-6. If neither `preferred_url` nor `local_path` is available, stop and report this as a Zotero metadata inconsistency instead of switching to indexed fulltext.
+5. Do not call `zotero_get_fulltext` for paper synthesis. Indexed fulltext is lossy (no figures/tables) and is not an acceptable primary source when PDF resolution is required.
+6. Optionally call `zotero_get_notes` to retrieve the user's annotations and highlights — weave these into the synthesis where relevant (e.g. "The authors note X, which the reader flagged as particularly relevant because...").
+7. If neither `preferred_url` nor `local_path` is available, stop and report this as a Zotero metadata inconsistency instead of switching to indexed fulltext.
 
 When the user asks to analyze multiple papers from Zotero (e.g. "synthesize my Zotero collection on diffusion"), launch one subagent per paper in parallel. After all subagents complete, produce a cross-paper comparative section in the main context (same format as the kb-explain cross-card synthesis).
 

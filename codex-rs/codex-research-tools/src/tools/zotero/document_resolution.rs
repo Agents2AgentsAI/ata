@@ -6,21 +6,11 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 use crate::ResearchToolkit;
-use crate::cache::CacheKey;
-use crate::cache::FetchOutput;
-use crate::error::ResearchError;
-use crate::rate_limiter::ResearchApi;
-use crate::tools::cache_helpers::hash_cache_payload;
 use crate::types::DocumentResolution;
 use crate::types::DocumentSourceKind;
 use crate::types::ZoteroAttachment;
 use crate::types::ZoteroItemDetail;
 
-use super::AR5IV_BASE_URL;
-use super::AR5IV_PROBE_CACHE_TTL;
-use super::AR5IV_PROBE_MAX_BODY_BYTES;
-use super::AR5IV_PROBE_NEGATIVE_CACHE_TTL;
-use super::AR5IV_PROBE_TIMEOUT;
 use super::ARXIV_PDF_BASE_URL;
 use super::ZOTERO_STORAGE_DIR_ENV;
 
@@ -31,57 +21,30 @@ pub(super) async fn resolve_document_sources(
     has_indexed_content: Option<bool>,
     trace: Vec<String>,
 ) -> DocumentResolution {
-    resolve_document_sources_with_probe(
+    resolve_document_sources_with_storage_root(
         item,
         attachments,
         toolkit.config().zotero_storage_dir.as_deref(),
         has_indexed_content,
         trace,
-        |arxiv_id, html_url| async move {
-            ar5iv_available_cached(toolkit, arxiv_id.as_str(), html_url.as_str()).await
-        },
     )
     .await
 }
 
-pub(super) async fn resolve_document_sources_with_probe<F, Fut>(
+pub(super) async fn resolve_document_sources_with_storage_root(
     item: Option<&ZoteroItemDetail>,
     attachments: &[ZoteroAttachment],
     storage_root: Option<&str>,
     has_indexed_content: Option<bool>,
     mut trace: Vec<String>,
-    mut probe_ar5iv: F,
-) -> DocumentResolution
-where
-    F: FnMut(String, String) -> Fut,
-    Fut: std::future::Future<Output = bool>,
-{
+) -> DocumentResolution {
     let attachment_urls = attachment_pdf_urls(attachments, &mut trace);
 
     if let Some(item) = item
         && let Some(arxiv_id) = extract_arxiv_id(item, &mut trace)
     {
         let arxiv_pdf = format!("{ARXIV_PDF_BASE_URL}/{arxiv_id}.pdf");
-        for probe_id in ar5iv_probe_candidates(arxiv_id.as_str()) {
-            let html_url = format!("{AR5IV_BASE_URL}/{probe_id}");
-            if probe_ar5iv(probe_id.clone(), html_url.clone()).await {
-                trace.push(format!("ar5iv probe succeeded for {probe_id}"));
-                let mut fallback_urls = Vec::new();
-                push_unique_url(&mut fallback_urls, arxiv_pdf.clone());
-                for url in &attachment_urls {
-                    push_unique_url(&mut fallback_urls, url.clone());
-                }
-                return DocumentResolution {
-                    source_kind: DocumentSourceKind::Ar5ivHtml,
-                    preferred_url: Some(html_url),
-                    fallback_urls,
-                    local_path: None,
-                    trace,
-                };
-            }
-        }
-
-        trace.push("ar5iv probe unavailable; using arXiv PDF".to_string());
+        trace.push("using arXiv PDF".to_string());
         let mut fallback_urls = Vec::new();
         for url in attachment_urls {
             if url != arxiv_pdf {
@@ -399,132 +362,8 @@ fn arxiv_id_regex() -> &'static Regex {
     })
 }
 
-pub(super) fn ar5iv_probe_candidates(arxiv_id: &str) -> Vec<String> {
-    let mut candidates = vec![arxiv_id.to_string()];
-    if let Some((without_version, version_suffix)) = arxiv_id.rsplit_once('v')
-        && !without_version.is_empty()
-        && !version_suffix.is_empty()
-        && version_suffix.chars().all(|ch| ch.is_ascii_digit())
-        && without_version != arxiv_id
-    {
-        candidates.push(without_version.to_string());
-    }
-    candidates
-}
-
 fn push_unique_url(urls: &mut Vec<String>, candidate: String) {
     if !urls.iter().any(|existing| existing == &candidate) {
         urls.push(candidate);
     }
-}
-
-async fn ar5iv_available_cached(toolkit: &ResearchToolkit, arxiv_id: &str, html_url: &str) -> bool {
-    let params_hash = match hash_cache_payload(&arxiv_id) {
-        Ok(hash) => hash,
-        Err(err) => {
-            tracing::warn!(%err, arxiv_id, "failed to hash ar5iv probe cache key");
-            return false;
-        }
-    };
-
-    let key = CacheKey {
-        tool_name: "zotero_ar5iv_probe",
-        params_hash,
-    };
-
-    match toolkit
-        .cache()
-        .get_or_fetch_with_meta_ttls(
-            key,
-            AR5IV_PROBE_CACHE_TTL,
-            AR5IV_PROBE_NEGATIVE_CACHE_TTL,
-            || async move {
-                let probe_result = probe_ar5iv_html(toolkit, html_url).await;
-                let data = serde_json::to_value(probe_result).map_err(|err| {
-                    ResearchError::Internal(format!(
-                        "failed to serialize ar5iv probe result: {err}"
-                    ))
-                })?;
-                if probe_result {
-                    Ok(FetchOutput::positive(data))
-                } else {
-                    Ok(FetchOutput::negative(data))
-                }
-            },
-        )
-        .await
-    {
-        Ok(output) => match serde_json::from_value::<bool>(output.data) {
-            Ok(value) => value,
-            Err(err) => {
-                tracing::warn!(%err, arxiv_id, "failed to deserialize ar5iv probe result");
-                false
-            }
-        },
-        Err(err) => {
-            tracing::warn!(%err, arxiv_id, "ar5iv probe failed");
-            false
-        }
-    }
-}
-
-async fn probe_ar5iv_html(toolkit: &ResearchToolkit, html_url: &str) -> bool {
-    let response = match tokio::time::timeout(
-        AR5IV_PROBE_TIMEOUT,
-        toolkit
-            .http()
-            .execute_response(ResearchApi::Arxiv, || toolkit.http().client().get(html_url)),
-    )
-    .await
-    {
-        Ok(Ok(response)) => response,
-        _ => return false,
-    };
-
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_ascii_lowercase);
-    if !content_type
-        .as_deref()
-        .is_some_and(|value| value.starts_with("text/html"))
-    {
-        return false;
-    }
-
-    let html_prefix = match tokio::time::timeout(
-        AR5IV_PROBE_TIMEOUT,
-        read_response_prefix(response, AR5IV_PROBE_MAX_BODY_BYTES),
-    )
-    .await
-    {
-        Ok(Some(prefix)) => prefix,
-        _ => return false,
-    };
-
-    let normalized_html = html_prefix.to_ascii_lowercase();
-    ![
-        "no paper found for arxiv id",
-        "this paper is not yet available",
-        "unable to fetch source",
-        "ar5iv is temporarily unavailable",
-    ]
-    .iter()
-    .any(|needle| normalized_html.contains(needle))
-}
-
-async fn read_response_prefix(mut response: reqwest::Response, max_bytes: usize) -> Option<String> {
-    let mut bytes = Vec::with_capacity(max_bytes);
-    while bytes.len() < max_bytes {
-        let chunk = response.chunk().await.ok()??;
-        let remaining = max_bytes.saturating_sub(bytes.len());
-        if chunk.len() > remaining {
-            bytes.extend_from_slice(&chunk[..remaining]);
-            break;
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-
-    Some(String::from_utf8_lossy(&bytes).to_string())
 }
