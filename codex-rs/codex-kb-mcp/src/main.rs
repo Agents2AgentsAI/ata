@@ -167,6 +167,16 @@ impl ServerHandler for KbMcpServer {
                     .await
                     .map(serialize_tool_result)
             }
+            "kb_reset" => {
+                let params: ResetArgs = parse_arguments(request.arguments)?;
+                if !params.confirm {
+                    return Err(McpError::invalid_params(
+                        "confirm must be true to reset the knowledge base".to_string(),
+                        None,
+                    ));
+                }
+                self.kb.reset().await.map(serialize_tool_result)
+            }
             "kb_list_cards" => {
                 let params: ListCardsArgs = parse_arguments(request.arguments)?;
                 self.kb
@@ -302,6 +312,11 @@ struct WriteFileArgs {
 #[derive(Debug, Deserialize)]
 struct ReadFileArgs {
     path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResetArgs {
+    confirm: bool,
 }
 
 #[derive(Debug, Deserialize)]

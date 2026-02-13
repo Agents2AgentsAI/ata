@@ -95,6 +95,14 @@ pub struct DeleteCardResult {
     pub topics_updated: Vec<String>,
 }
 
+/// Result returned from `reset`.
+#[derive(Debug, Serialize)]
+pub struct ResetResult {
+    pub cards_removed: usize,
+    pub topics_removed: usize,
+    pub other_removed: Vec<String>,
+}
+
 /// Overall KB status.
 #[derive(Debug, Serialize)]
 pub struct KbStatus {
@@ -551,6 +559,63 @@ impl KnowledgeBase {
         })
     }
 
+    /// Reset the entire knowledge base, removing all cards, topics, assets,
+    /// and other generated content. Re-initializes the empty directory structure.
+    pub async fn reset(&self) -> Result<ResetResult> {
+        let _guard = self.index_lock.lock().await;
+
+        let mut cards_removed = 0;
+        let mut topics_removed = 0;
+        let mut other_removed = Vec::new();
+
+        // Count cards before removing.
+        let cards_dir = self.kb_path.join("cards");
+        if cards_dir.exists() {
+            cards_removed = std::fs::read_dir(&cards_dir)?
+                .filter_map(std::result::Result::ok)
+                .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+                .count();
+        }
+
+        // Count topics before removing.
+        let topics_dir = self.kb_path.join("topics");
+        if topics_dir.exists() {
+            topics_removed = std::fs::read_dir(&topics_dir)?
+                .filter_map(std::result::Result::ok)
+                .filter(|e| e.path().is_dir())
+                .count();
+        }
+
+        // Remove everything inside the KB directory (but keep the root itself).
+        for entry in std::fs::read_dir(&self.kb_path)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+
+            if entry.path().is_dir() {
+                std::fs::remove_dir_all(entry.path())?;
+                if name_str != "cards" && name_str != "topics" {
+                    other_removed.push(name_str.into_owned());
+                }
+            } else {
+                std::fs::remove_file(entry.path())?;
+                if name_str != "index.json" {
+                    other_removed.push(name_str.into_owned());
+                }
+            }
+        }
+
+        // Re-initialize empty structure.
+        drop(_guard);
+        self.init()?;
+
+        Ok(ResetResult {
+            cards_removed,
+            topics_removed,
+            other_removed,
+        })
+    }
+
     /// Write an arbitrary file under the KB root.
     ///
     /// `relative_path` must not contain `..` or start with `/`.
@@ -857,6 +922,80 @@ mod tests {
         // Card count is 0.
         let status = kb.status().await.unwrap();
         assert_eq!(status.card_count, 0);
+    }
+
+    #[tokio::test]
+    async fn reset_clears_everything() {
+        let dir = tempfile::tempdir().unwrap();
+        let kb = KnowledgeBase::new(dir.path().to_path_buf());
+
+        // Write two cards with different topics.
+        kb.write_card(
+            "card-a".into(),
+            "Card A".into(),
+            vec!["alpha".into()],
+            Some("First card.".into()),
+            None,
+            None,
+            Some("current".into()),
+            None,
+            None,
+            None,
+            None,
+            "body a".into(),
+        )
+        .await
+        .unwrap();
+
+        kb.write_card(
+            "card-b".into(),
+            "Card B".into(),
+            vec!["beta".into()],
+            Some("Second card.".into()),
+            None,
+            None,
+            Some("stub".into()),
+            None,
+            None,
+            None,
+            None,
+            "body b".into(),
+        )
+        .await
+        .unwrap();
+
+        // Write an extra file (simulating an asset / explanation).
+        kb.write_file("assets/fig.png", "fake-image-data")
+            .await
+            .unwrap();
+        kb.write_file("explanations/report.md", "# Report")
+            .await
+            .unwrap();
+
+        // Verify things exist before reset.
+        assert_eq!(kb.status().await.unwrap().card_count, 2);
+        assert!(dir.path().join("assets/fig.png").exists());
+        assert!(dir.path().join("explanations/report.md").exists());
+
+        // Reset.
+        let result = kb.reset().await.unwrap();
+        assert_eq!(result.cards_removed, 2);
+        assert_eq!(result.topics_removed, 2);
+        assert!(result.other_removed.contains(&"assets".to_string()));
+        assert!(result.other_removed.contains(&"explanations".to_string()));
+
+        // Verify the KB is empty but structure is intact.
+        let status = kb.status().await.unwrap();
+        assert_eq!(status.card_count, 0);
+        assert!(status.topics.is_empty());
+        assert!(status.tag_taxonomy.is_empty());
+        assert!(dir.path().join("cards").is_dir());
+        assert!(dir.path().join("topics").is_dir());
+        assert!(dir.path().join("index.json").is_file());
+
+        // Old content is gone.
+        assert!(!dir.path().join("assets").exists());
+        assert!(!dir.path().join("explanations").exists());
     }
 
     #[tokio::test]

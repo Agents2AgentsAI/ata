@@ -2213,10 +2213,13 @@ dependencies = [
 name = "codex-research-tools"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "chrono",
  "dashmap",
+ "dirs",
  "flate2",
  "futures",
+ "image",
  "lru 0.16.3",
  "pretty_assertions",
  "quick-xml",

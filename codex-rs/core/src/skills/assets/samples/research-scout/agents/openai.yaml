@@ -1,0 +1,7 @@
+interface:
+  display_name: "Research Scout"
+  short_description: "Answer research questions and discover papers"
+  default_prompt: "Use $research-scout to explore this research question"
+
+policy:
+  allow_implicit_invocation: true

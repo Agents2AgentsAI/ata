@@ -89,6 +89,32 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                     "additionalProperties": false
                 }),
             },
+            ToolDef {
+                id: "paper_recommendations",
+                native_name: "paper_recommendations",
+                mcp_name: "get_recommendations",
+                description: "Get paper recommendations based on example papers. Provide paper IDs (DOI, arXiv ID, or S2 ID) as positive examples of papers you like. Optionally provide negative examples of papers to avoid.",
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "positive_paper_ids": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Paper IDs (DOI, arXiv ID, or S2 ID) of papers to use as positive examples"
+                        },
+                        "negative_paper_ids": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Paper IDs of papers to use as negative examples (papers to avoid)"
+                        },
+                        "limit": { "type": "integer" },
+                        "fields": { "type": "array", "items": { "type": "string" } },
+                        "max_chars_per_item": { "type": "integer" }
+                    },
+                    "required": ["positive_paper_ids"],
+                    "additionalProperties": false
+                }),
+            },
         ]);
     }
 
@@ -588,7 +614,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
             id: "pdf_extract_figures",
             native_name: "pdf_extract_figures",
             mcp_name: "extract_pdf_figures",
-            description: "Download a PDF and extract embedded figures as PNG images using pdfimages. Filters out small icons and decorations by size and dimensions. Returns metadata for each extracted figure.",
+            description: "Download a PDF and extract embedded figures as PNG images using pdfimages. Filters out small icons and decorations by size and dimensions. Returns metadata for each extracted figure including quality_hints (e.g. 'likely text/table screenshot', 'extreme aspect ratio') to help select real diagrams over text screenshots.",
             input_schema: json!({
                 "type": "object",
                 "properties": {

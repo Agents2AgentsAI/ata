@@ -28,9 +28,11 @@ use types::LatexCompileResult;
 use types::ModelDefinition;
 use types::PaginationParams;
 use types::PaperDetail;
+use types::PaperRecommendationParams;
 use types::PaperSearchParams;
 use types::PdfExtractFiguresParams;
 use types::PdfExtractFiguresResult;
+use types::RecommendationResult;
 use types::RepoEntrypoint;
 use types::RepoExportPath;
 use types::RepoHealth;
@@ -189,6 +191,24 @@ impl ResearchToolkit {
     ) -> Result<CitationResult> {
         Err(ResearchError::NotImplemented {
             tool: "paper_references",
+        })
+    }
+
+    #[cfg(feature = "paper_search")]
+    pub async fn paper_recommendations(
+        &self,
+        params: PaperRecommendationParams,
+    ) -> Result<RecommendationResult> {
+        tools::paper_search::paper_recommendations(self, params).await
+    }
+
+    #[cfg(not(feature = "paper_search"))]
+    pub async fn paper_recommendations(
+        &self,
+        _params: PaperRecommendationParams,
+    ) -> Result<RecommendationResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "paper_recommendations",
         })
     }
 

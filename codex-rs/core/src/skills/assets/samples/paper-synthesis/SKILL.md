@@ -9,6 +9,41 @@ metadata:
 
 Produce two complementary outputs for any research paper: a **Structured Summary** for quick reference and a **Pedagogical Deep Dive** for understanding. Default to both unless the user requests only one.
 
+## Default Narrative Style (Walkthrough-First)
+
+Unless the user asks for a different style, write explanations as a **self-contained technical walkthrough** for an expert reader who has not seen the paper:
+
+- Start with the core problem in plain language before diving into architecture details.
+- Explain the method as a concrete pipeline with explicit stage headers (`Stage 1`, `Stage 2`, etc.) whenever the paper uses staged training.
+- For each major design choice, explicitly explain **why this choice was made** and what breaks with the simpler alternative.
+- Use analogies before formal details when introducing non-obvious concepts.
+- After each key equation, include both variable definitions and an intuitive explanation of what the equation is doing.
+- Prefer short, readable paragraphs and explicit transitions over dense prose.
+- For multi-paper requests, include a dedicated final section in prose: `How the Papers Relate`.
+- **Voice**: Use plain, direct language — simple words, short sentences, no academic stiffness. Use **second-person ("you") for procedural walkthroughs** of how the method works ("You take two frames from a video…", "You train an encoder-decoder system…"). Use **neutral third-person for framing, results, and analysis** ("LAPA tackles a fundamental bottleneck…", "The same codebook entries produce similar motions…"). Do NOT open problem statements with "You want to…" — that sounds like a tutorial, not a technical discussion.
+- **Define every technical term inline on first use** in plain language before using it further. If you mention "VQ-VAE", immediately explain what it is and why it matters — never assume the reader already knows.
+- **Use concrete worked examples with specific numbers** to build intuition (e.g., "8 possible values × 4 positions = 4,096 latent actions"). Specificity builds intuition faster than abstraction. However, keep model variant names, exact tensor shapes, hyperparameter values, and architecture identifiers out of the narrative paragraphs — collect them in the Details block (see next rule).
+- **Details block at the end of each subsection.** After the narrative paragraphs of each subsection (each Stage, each major section), add a **Details:** line that collects reference specifics: model names and variants, exact dimensions and tensor shapes, hyperparameter values, tokenizer identifiers, layer counts, hidden dims, optimizer settings, etc. The narrative should be fully understandable without reading the Details block — it is a reference appendix for precision, not part of the conceptual flow. Example:
+  > **Details:** Base model: Cosmos-Predict2-2B Video2World. Tokenizer: Wan2.1. Input: (1+T)×H×W×3 → (1+T')×H'×W'×16 (T'=T/4, H'=H/8, W'=W/8). Text encoder: T5-XXL.
+- **Explain concepts completely in place.** When a concept is non-obvious, explain it right where it appears rather than deferring to a later section. If Stage 1 uses a VQ-VAE, explain VQ-VAE right there in Stage 1.
+
+### Basics-First Contract (Mandatory by default)
+
+For explain-style requests, always lead with conceptual clarity before formal detail:
+
+- Use this opening flow per paper:
+  1. `The problem` (plain language, 3-6 sentences)
+  2. `The Core Idea` (what the paper changes, at a high level)
+  3. `Stage-by-stage walkthrough` (`Stage 1`, `Stage 2`, `Stage 3` where applicable)
+  4. `Why This Matters` (why this is better than a simpler baseline)
+  5. `Key Results` (numbers + one-sentence interpretation each)
+  6. `Limitations` (practical boundary conditions)
+- If equations are used, first explain intuition in words, then show equation, then define symbols.
+- Avoid opening with dense implementation detail, notation, or long architecture dumps.
+- Prefer concrete examples (e.g., "frame before / frame after", "replace latent head with action head") over abstract phrasing.
+- **Progressive disclosure:** each concept must be fully grounded before the next builds on it. Never forward-reference a mechanism that hasn't been explained yet.
+- **No undefined jargon or acronyms.** Every abbreviation and technical term gets a plain-language gloss on first use — even common ones like "MLP" ("a small feedforward neural network") or "DiT" ("Diffusion Transformer").
+
 ## Execution: Use Subagents
 
 **Always launch a subagent for each paper.** This is mandatory, not optional:
@@ -18,20 +53,17 @@ Produce two complementary outputs for any research paper: a **Structured Summary
 
 ### Subagent Prompt Construction
 
-You MUST copy the **entire workflow** into each subagent prompt — not a summary, not just the Type 1/Type 2 sections. The subagent has no access to this skill file; it only knows what you put in the prompt. Include ALL of the following sections verbatim (or faithfully paraphrased with every detail preserved):
+Each subagent prompt should instruct the subagent to **invoke the `paper-synthesis` skill** (via the Skill tool) and follow its workflow. This ensures the subagent always gets the complete, up-to-date instructions — no copy-pasting, no lossy summarization, no hardcoded file paths.
 
-1. **Pre-Synthesis** — how to obtain the full paper (Path A or Path B depending on source)
-2. **Type 1: Structured Summary** — all headers: Metadata, Architecture, Training Pipeline, Core Method, Key Results, What's Novel, Limitations
-3. **Type 2: Pedagogical Deep Dive** — all subsections: Framing, Architecture Deep Dive, Training Pipeline, Method Walkthrough, Analogies, Results Interpretation, Emergent Behaviors and Limitations, Connections
-4. **Figure Extraction** — the `pdf_extract_figures` phase with output_dir, figure selection criteria, and how to pass figures to `kb_write_card`
-5. **KB Card Storage** — frontmatter format, card body structure (Summary, Architecture, Training Pipeline, Deep Dive, Key Equations, Connections), and `kb_write_card` instructions
+Use this template for each subagent prompt:
 
-If you omit any section, the subagent WILL skip it. Common mistake: forgetting figure extraction or the detailed architecture/training requirements.
+> Invoke the `paper-synthesis` skill and follow its complete workflow for this paper. Execute every section: Pre-Synthesis, Type 1 Structured Summary, Type 2 Pedagogical Deep Dive (with the Default Narrative Style and Basics-First Contract), Figure Extraction, and KB Card Storage. Skip the "Execution: Use Subagents" section — you ARE the subagent.
+>
+> Paper: [identifier — URL, DOI, arXiv ID, or Zotero item key]
+> KB path: [value from kb_status]
+> [For Zotero papers: item key, downloaded PDF path, and any notes already retrieved]
 
-Each subagent prompt must also include:
-- The paper identifier (URL, DOI, arXiv ID, or Zotero item key)
-- The KB path from `kb_status` (so the subagent can write cards and figure assets)
-- For Zotero papers: the item key and any notes already retrieved by the main agent
+Do NOT manually reconstruct the workflow or style rules in the subagent prompt. The Skill tool loads the full instructions automatically.
 
 ### What Subagents Return
 
@@ -56,18 +88,24 @@ The main agent's role is to:
    - Which KB cards were written (card IDs and paths)
    - Whether figures were extracted
    - A brief per-paper highlight (from the subagent report)
-6. If multiple papers: read back the cards via `kb_read_card` and produce a **deep cross-paper comparative section** (see below)
+6. If multiple papers: run the **kb-explain workflow** on the newly written cards (see below)
 
-### Cross-Paper Comparison (Multi-Paper Only)
+### Cross-Paper Synthesis via kb-explain (Multi-Paper Only)
 
-After all subagents complete, read the written KB cards via `kb_read_card` to get the full analysis text. Then produce a cross-paper comparison section. This must be substantive narrative prose (500-1500 words), NOT a few bullet points. Follow the same format as the kb-explain cross-card synthesis:
+After all subagents complete, run the full `kb-explain` skill on the set of newly written KB cards. This produces a much richer output than an inline comparison — it generates:
 
-- **Starting points / core questions** — What different question does each work ask?
-- **Shared ideas and divergences** — When two papers use the same technique, explain exactly how their implementations differ with concrete details from each paper.
-- **Architecture comparison** — Compare backbone choices, model scale, input tokenization strategies, output representation, and any novel modules. Explain what each architectural choice buys and what it costs.
-- **Training pipeline comparison** — Compare training stages, data strategies and scale, loss functions, optimization recipes, and how each system handles cross-embodiment or cross-domain generalization. Trace how differences in training produce different model capabilities.
-- **Other technical dimensions** — Compare along additional concrete axes relevant to the papers: action representation, inference pipeline, planning capability, real-time performance, data efficiency, etc.
-- **Field trajectory** — Close with what the collective body of work suggests about the direction of the field.
+1. **Deep narrative explanation** per card (800-2500 words each) with architecture deep dives, training pipeline walkthroughs, key equations, and analogies
+2. **Cross-card comparative synthesis** tracing shared ideas, divergences, architecture/training differences, and field trajectory
+3. **Markdown file** saved to the KB via `kb_write_file` at `explanations/<descriptive-name>.md`
+4. **LaTeX PDF** with TikZ diagrams compiled via `latex_compile`
+
+To trigger this, launch a subagent with the following prompt:
+
+> Invoke the `kb-explain` skill for cards `paper-lapa` and `paper-groot-n1`. The KB path is `/path/to/knowledge-base`. Follow the skill's full workflow — all three deliverables (narrative, markdown, PDF) are mandatory.
+
+The Skill tool loads the full kb-explain instructions automatically. Do NOT manually reconstruct the kb-explain workflow in the subagent prompt.
+
+Do NOT attempt to produce the comparison yourself inline — the kb-explain workflow handles it with far more depth, structure, and visual output (TikZ diagrams, properly typeset PDF).
 
 ## Pre-Synthesis: Obtain the Full Paper
 
@@ -90,7 +128,7 @@ Before synthesizing, always attempt to read the full paper text. Choose the path
 6. Optionally call `zotero_get_notes` to retrieve the user's annotations and highlights — weave these into the synthesis where relevant (e.g. "The authors note X, which the reader flagged as particularly relevant because...").
 7. If neither `preferred_url` nor `local_path` is available, stop and report this as a Zotero metadata inconsistency instead of switching to indexed fulltext.
 
-When the user asks to analyze multiple papers from Zotero (e.g. "synthesize my Zotero collection on diffusion"), launch one subagent per paper in parallel. After all subagents complete, produce a cross-paper comparative section in the main context (same format as the kb-explain cross-card synthesis).
+When the user asks to analyze multiple papers from Zotero (e.g. "synthesize my Zotero collection on diffusion"), launch one subagent per paper in parallel. After all subagents complete, run the `kb-explain` skill on the newly written cards to produce the full cross-paper synthesis with narrative prose, markdown, and LaTeX PDF.
 
 ## Type 1: Structured Summary
 
@@ -136,20 +174,34 @@ Use bullet points under these headers:
 
 Write flowing narrative prose. Never use bullet points in the deep dive.
 
+**Hard depth floor: the Deep Dive must be at least 1000 words.** Architecture-heavy papers should reach 1500-2500 words. If your Deep Dive is shorter than 1000 words, you have written a summary, not a deep dive — expand before saving.
+
 ### Framing
 Open by situating the paper relative to prior work: "Where [prior approach] addresses X by doing Y, this paper asks a different question: Z." Establish why the reader should care.
 
 ### Architecture Deep Dive
-Describe the full model architecture in narrative prose. Cover the backbone (type, depth, width, attention configuration), how each input modality is tokenized and embedded (dimensions, sequence lengths, positional encoding), what the output heads predict (action chunks, flow vectors, discrete tokens) and how predictions are decoded to the control space. Describe any non-standard modules — cross-attention mechanisms, codebook quantization layers, mixture-of-experts routing, adaptive normalization — explaining the mechanism and why the simpler alternative would fail. State parameter counts and breakdown when available.
+Describe the full model architecture in narrative prose, focusing on what each component does and why it is needed. Cover the backbone type and role, how each input modality is tokenized and embedded, what the output heads predict and how predictions are decoded to the control space. Describe any non-standard modules — cross-attention mechanisms, codebook quantization layers, mixture-of-experts routing, adaptive normalization — explaining the mechanism and why the simpler alternative would fail. Collect exact architecture specifics (model variant name, layer counts, hidden dims, attention heads, patch sizes, parameter counts, sequence lengths, positional encoding type) in a **Details:** block at the end of this section.
 
 ### Training Pipeline
-Walk through every training stage in order. For each stage, explain the objective, what data is used (source, scale, modalities), which components are frozen vs. trained, and duration (steps, GPU-hours). Describe the loss functions with their mathematical form and any weighting or annealing schedules. Cover optimization details: optimizer, learning rate schedule (warmup, decay), batch size, gradient clipping, distributed strategy. Explain the inference pipeline end-to-end — from raw sensor observation through the model to executed action — including iterative processes (diffusion denoising steps, autoregressive decoding), latency, and control frequency.
+Walk through every training stage in order. For each stage, explain the objective, what data is used and why, which components are frozen vs. trained, and the rationale for each choice. Describe the loss functions with their mathematical form and intuitive explanation. Explain the inference pipeline end-to-end — from raw sensor observation through the model to executed action — including iterative processes and their purpose. Collect specific optimization details (optimizer name, learning rate schedule, batch size, gradient clipping, step counts, GPU-hours, distributed strategy, latency numbers, control frequency) in a **Details:** block at the end of this section.
 
 ### Method Walkthrough
-Walk through the core method step by step with specific numbers inline. For each design choice, explain WHY it was made — what would go wrong with the obvious alternative. When the paper introduces equations, reproduce them and define every variable.
+
+This is the core of the Deep Dive and must be the longest section. Walk through the core method stage by stage, using worked examples for intuition but collecting exact model names, tensor shapes, and hyperparameters in a **Details:** block at the end of each stage.
+
+**Per-stage depth rule: each stage must be at least 2-3 full paragraphs.** Each stage should cover:
+- What concretely happens (use worked examples for intuition; collect exact tensor shapes, codebook sizes, and array dimensions in the **Details:** block)
+- Why this design choice was made — what breaks with the simpler alternative
+- How the output of this stage feeds into the next
+
+A stage description like "The latent head is removed and replaced with a new robot-action head" is a summary, not a walkthrough. A proper version explains what the old head looked like, what the new head's shape is (e.g., "7 dimensions × 256 bins for a 7-DOF arm"), why the old head is disposable, and why fine-tuning converges fast.
+
+Similarly, "Robot vectors are normalized to [-1,1], tiled, and inserted into latent slots" is a summary. A proper version explains the concrete mechanics: take a 50×14 action array (700 numbers), normalize each to [-1,1], copy the 700 numbers ~23 times to fill a 32×32×16 = 16,384-element volume, then slot it into the sequence as if it were an image latent.
+
+When the paper introduces equations, reproduce them, define every variable, and write a full-paragraph intuition (3-5 sentences) explaining what the equation does and why it works — not a one-liner.
 
 ### Analogies
-For non-obvious concepts, provide an analogy that builds intuition before the formal explanation.
+For non-obvious concepts, provide an analogy that builds intuition before the formal explanation. Example: "Think of this as building an action dictionary from scratch — like BPE learns tokenization without knowing grammar, this learns action tokenization without knowing kinematics."
 
 ### Results Interpretation
 Do not merely restate numbers. Interpret them: What do the ablations reveal about which components matter? Are there surprising results? What does the gap between this method and baselines tell us about the problem structure?
@@ -164,9 +216,20 @@ Cross-reference related work meaningfully: "This is analogous to [X] in [related
 
 If `pdf_extract_figures` is available and a PDF was successfully fetched:
 
-1. Call `pdf_extract_figures` with `pdf_url` set to the PDF URL and `output_dir` set to `<kb_path>/assets/<card-id>/`.
-2. Review the returned figure list. Select 2-5 key figures that best illustrate the paper's core method, architecture, or results. Skip decorative figures, logos, and duplicates.
-3. Pass the selected figures to `kb_write_card` via the `figures` field, with a short `caption` for each and the `page` number.
+1. Call `pdf_extract_figures` with `pdf_url` set to the PDF URL and `output_dir` set to a **temp directory** (e.g., `/tmp/pdf-figures-<card-id>/`). Do NOT extract directly into `<kb_path>/assets/` — that would leave unselected figures permanently in the KB.
+2. **Filter** using `quality_hints`:
+   - **Reject** figures flagged "likely text/table screenshot" — these are almost always misidentified text regions or rendered tables, not real diagrams.
+   - **Deprioritize** figures with "high whitespace, may be a text region" unless the caption clearly describes a real diagram (e.g., "Figure 3: Architecture overview").
+   - **Skip** figures flagged "extreme aspect ratio" — these are typically page banners, headers, or decorative rules.
+   - **Prefer** figures with empty `quality_hints` (passed all checks) and meaningful captions.
+3. **Select 2-5 figures** from the remaining candidates using this priority order:
+   1. **Architecture and method diagrams** (highest priority) — system overviews, block diagrams, pipeline schematics, model architecture figures. These are the most valuable because they visually explain *how the method works*. Look for captions mentioning "architecture", "overview", "pipeline", "framework", "method", "approach", or stage/component names.
+   2. **Training pipeline and data flow diagrams** — figures showing training stages, data processing, loss computation, or inference pipelines.
+   3. **Qualitative result visualizations** — side-by-side comparisons, generated outputs, attention maps, failure mode illustrations. These show *what the model does* concretely.
+   4. **Quantitative result charts** (lowest priority) — bar charts, line plots, tables comparing numbers. Only include these if fewer than 2 figures were selected from higher-priority tiers, or if the chart reveals something the narrative cannot convey in text (e.g., a striking scaling curve).
+   - When in doubt between a results chart and an architecture diagram, always pick the architecture diagram. The Deep Dive narrative can describe numerical results in text, but cannot substitute for a visual system overview.
+4. **Move only the selected figures** into the KB assets directory: `mkdir -p <kb_path>/assets/<card-id>/ && cp <selected-figure-paths> <kb_path>/assets/<card-id>/`. Then delete the temp directory (`rm -rf /tmp/pdf-figures-<card-id>/`).
+5. Pass the selected figures to `kb_write_card` via the `figures` field, using their new paths under `assets/<card-id>/`, with a short `caption` for each and the `page` number.
 
 If `pdf_extract_figures` is not available, skip this phase silently.
 
@@ -198,10 +261,14 @@ contributed_by: paper-synthesis
 <Stage-by-stage training: objectives, data, losses, optimization, inference pipeline>
 
 ## Deep Dive
-<Type 2 pedagogical narrative content — method walkthrough, analogies, results interpretation>
+<Type 2 pedagogical narrative — minimum 1000 words. Must include multi-paragraph
+stage walkthroughs with concrete numbers/dimensions, "why this / what breaks" for each
+design choice, analogies before formalism, and results interpretation. This section is the
+primary content of the card — it must be a self-contained walkthrough, not a summary.>
 
 ## Key Equations
-<Reproduce the 2-3 most important equations with variable definitions and intuitive explanations>
+<Reproduce the 2-3 most important equations with variable definitions and full-paragraph
+intuitive explanations (3-5 sentences each, not one-liners).>
 
 ## Connections
 <List 3-5 related papers with one-line descriptions of the relationship>
