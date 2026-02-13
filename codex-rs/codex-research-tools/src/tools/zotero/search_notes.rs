@@ -2,6 +2,7 @@ use crate::ResearchToolkit;
 use crate::error::ResearchError;
 use crate::error::Result;
 use crate::types::ZoteroGrepField;
+use crate::types::ZoteroGrepMatchMode;
 use crate::types::ZoteroGrepParams;
 use crate::types::ZoteroSearchNotesMatch;
 use crate::types::ZoteroSearchNotesParams;
@@ -19,15 +20,16 @@ pub(super) async fn zotero_search_notes(
     }
     let include_annotations = params.include_annotations.unwrap_or(true);
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
+    let match_mode = params.match_mode.unwrap_or(ZoteroGrepMatchMode::Literal);
     let parent_item_key = super::normalize_optional_string(params.parent_item_key);
     let grep_params = ZoteroGrepParams {
         pattern: query.clone(),
-        match_mode: params.match_mode,
+        match_mode: Some(match_mode.clone()),
         case_sensitive: params.case_sensitive,
         library_type: params.library_type,
         library_id: params.library_id,
         parent_item_key: parent_item_key.clone(),
-        query_hint: if parent_item_key.is_some() {
+        query_hint: if parent_item_key.is_some() || match_mode == ZoteroGrepMatchMode::Regex {
             None
         } else {
             Some(query.clone())
@@ -38,7 +40,7 @@ pub(super) async fn zotero_search_notes(
         } else {
             Some(vec![ZoteroGrepField::Note])
         },
-        limit_items: None,
+        limit_items: Some(limit.max(50)),
         limit_matches: Some(limit),
         max_matches_per_item: None,
         context_chars: None,
@@ -46,6 +48,16 @@ pub(super) async fn zotero_search_notes(
     };
 
     let grep_result = super::grep::zotero_grep_text(toolkit, grep_params).await?;
+    let candidate_strategy = grep_result.candidate_strategy;
+    let scanned_items = grep_result.scanned_items;
+    let total_available = if grep_result.truncated {
+        None
+    } else {
+        Some(grep_result.returned_matches as u64)
+    };
+    let has_more = grep_result.truncated;
+    let warnings = grep_result.warnings;
+    let hints = grep_result.hints;
     let notes = grep_result
         .matches
         .into_iter()
@@ -60,13 +72,12 @@ pub(super) async fn zotero_search_notes(
 
     Ok(ZoteroSearchNotesResult {
         query,
-        total_available: if grep_result.truncated {
-            None
-        } else {
-            Some(u64::try_from(notes.len()).unwrap_or(u64::MAX))
-        },
-        has_more: grep_result.truncated,
-        warnings: grep_result.warnings,
+        candidate_strategy,
+        scanned_items,
+        total_available,
+        has_more,
+        warnings,
+        hints,
         notes,
     })
 }

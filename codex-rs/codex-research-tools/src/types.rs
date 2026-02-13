@@ -257,10 +257,13 @@ pub struct ZoteroSearchNotesMatch {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroSearchNotesResult {
     pub query: String,
+    pub candidate_strategy: ZoteroGrepCandidateStrategy,
+    pub scanned_items: usize,
     pub notes: Vec<ZoteroSearchNotesMatch>,
     pub total_available: Option<u64>,
     pub has_more: bool,
     pub warnings: Vec<String>,
+    pub hints: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]

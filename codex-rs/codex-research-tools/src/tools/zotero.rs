@@ -2253,6 +2253,7 @@ mod tests {
     use crate::types::ZoteroAttachment;
     use crate::types::ZoteroCollectionItemsParams;
     use crate::types::ZoteroCollectionsParams;
+    use crate::types::ZoteroGrepCandidateStrategy;
     use crate::types::ZoteroGrepField;
     use crate::types::ZoteroGrepMatchMode;
     use crate::types::ZoteroGrepParams;
@@ -3939,9 +3940,23 @@ mod tests {
             .expect("zotero_search_notes should succeed");
 
         assert_eq!(result.query, "target");
+        assert_eq!(
+            result.candidate_strategy,
+            ZoteroGrepCandidateStrategy::ParentScoped
+        );
+        assert_eq!(result.scanned_items, 2);
         assert_eq!(result.notes.len(), 2);
         assert_eq!(result.total_available, Some(2));
         assert_eq!(result.has_more, false);
+        assert_eq!(result.hints, Vec::<String>::new());
+        assert_eq!(
+            result
+                .notes
+                .iter()
+                .map(|note| note.parent_item.clone())
+                .collect::<Vec<_>>(),
+            vec![Some("PARENT1".to_string()), Some("PARENT1".to_string())]
+        );
         assert!(
             result
                 .notes
@@ -3953,6 +3968,339 @@ mod tests {
                 .notes
                 .iter()
                 .any(|note| note.field == "annotation_text" && note.item_key == "ANN1")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_search_notes_reports_note_origin_for_library_scoped_matches() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("q", "target"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "ITEM1",
+                    "data": {
+                        "itemType": "journalArticle",
+                        "title": "Parent Item",
+                        "creators": []
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/ITEM1/children"))
+            .and(query_param("itemType", "note"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "NOTE1",
+                    "data": {
+                        "itemType": "note",
+                        "parentItem": "ITEM1",
+                        "note": "<p>Target in note body</p>"
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let result = toolkit
+            .zotero_search_notes(ZoteroSearchNotesParams {
+                query: "target".to_string(),
+                match_mode: None,
+                case_sensitive: None,
+                library_type: Some("user".to_string()),
+                library_id: Some("123".to_string()),
+                parent_item_key: None,
+                include_annotations: Some(false),
+                limit: Some(10),
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_search_notes should succeed");
+
+        assert_eq!(
+            result.candidate_strategy,
+            ZoteroGrepCandidateStrategy::QueryFiltered
+        );
+        assert_eq!(result.scanned_items, 1);
+        assert_eq!(result.notes.len(), 1);
+        assert_eq!(result.total_available, Some(1));
+        assert_eq!(result.has_more, false);
+        assert_eq!(result.hints, Vec::<String>::new());
+        assert_eq!(result.notes[0].item_key, "NOTE1");
+        assert_eq!(result.notes[0].parent_item.as_deref(), Some("ITEM1"));
+        assert_eq!(result.notes[0].field, "note");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_search_notes_regex_mode_disables_query_prefilter_hint() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("sort", "dateModified"))
+            .and(query_param("direction", "desc"))
+            .and(query_param("start", "0"))
+            .and(query_param("limit", "50"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "NOTE1",
+                    "data": {
+                        "itemType": "note",
+                        "title": "Note One",
+                        "parentItem": "PARENT1"
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/NOTE1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "key": "NOTE1",
+                "data": {
+                    "itemType": "note",
+                    "note": "<p>Cell cycle evidence</p>",
+                    "parentItem": "PARENT1"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let result = toolkit
+            .zotero_search_notes(ZoteroSearchNotesParams {
+                query: r"\bcell\b".to_string(),
+                match_mode: Some(ZoteroGrepMatchMode::Regex),
+                case_sensitive: None,
+                library_type: Some("user".to_string()),
+                library_id: Some("123".to_string()),
+                parent_item_key: None,
+                include_annotations: Some(false),
+                limit: Some(10),
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_search_notes should succeed");
+
+        assert_eq!(
+            result.candidate_strategy,
+            ZoteroGrepCandidateStrategy::RecentModified
+        );
+        assert_eq!(result.scanned_items, 1);
+        assert_eq!(result.notes.len(), 1);
+        assert_eq!(result.notes[0].item_key, "NOTE1");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_search_notes_parent_scope_respects_include_annotations_false() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/PARENT1/children"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "NOTE1",
+                    "data": {
+                        "itemType": "note",
+                        "title": "Note One",
+                        "parentItem": "PARENT1"
+                    }
+                },
+                {
+                    "key": "ANN1",
+                    "data": {
+                        "itemType": "annotation",
+                        "title": "Annotation One",
+                        "parentItem": "PARENT1"
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/NOTE1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "key": "NOTE1",
+                "data": {
+                    "itemType": "note",
+                    "note": "<p>No keyword here</p>",
+                    "parentItem": "PARENT1"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let result = toolkit
+            .zotero_search_notes(ZoteroSearchNotesParams {
+                query: "target".to_string(),
+                match_mode: None,
+                case_sensitive: None,
+                library_type: Some("user".to_string()),
+                library_id: Some("123".to_string()),
+                parent_item_key: Some("PARENT1".to_string()),
+                include_annotations: Some(false),
+                limit: Some(10),
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_search_notes should succeed");
+
+        assert_eq!(
+            result.candidate_strategy,
+            ZoteroGrepCandidateStrategy::ParentScoped
+        );
+        assert_eq!(result.scanned_items, 2);
+        assert_eq!(result.notes, Vec::new());
+        assert_eq!(result.total_available, Some(0));
+        assert_eq!(result.has_more, false);
+        assert!(!result.hints.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_search_notes_respects_max_chars_per_item_bounds() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("q", "needle"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "ITEM1",
+                    "data": {
+                        "itemType": "journalArticle",
+                        "title": "Parent Item",
+                        "creators": []
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/ITEM1/children"))
+            .and(query_param("itemType", "note"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "NOTE1",
+                    "data": {
+                        "itemType": "note",
+                        "parentItem": "ITEM1",
+                        "note": "<p>aaaaaaaaaaaaaaa needle</p>"
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let result = toolkit
+            .zotero_search_notes(ZoteroSearchNotesParams {
+                query: "needle".to_string(),
+                match_mode: None,
+                case_sensitive: None,
+                library_type: Some("user".to_string()),
+                library_id: Some("123".to_string()),
+                parent_item_key: None,
+                include_annotations: Some(false),
+                limit: Some(10),
+                max_chars_per_item: Some(10),
+            })
+            .await
+            .expect("zotero_search_notes should succeed");
+
+        assert_eq!(
+            result.candidate_strategy,
+            ZoteroGrepCandidateStrategy::QueryFiltered
+        );
+        assert_eq!(result.scanned_items, 1);
+        assert_eq!(result.notes, Vec::new());
+        assert_eq!(result.total_available, Some(0));
+        assert_eq!(result.has_more, false);
+        assert!(!result.hints.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_search_notes_limit_sets_has_more_and_total_available() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/PARENT1/children"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "NOTE1",
+                    "data": {
+                        "itemType": "note",
+                        "title": "Note One",
+                        "parentItem": "PARENT1"
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/NOTE1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "key": "NOTE1",
+                "data": {
+                    "itemType": "note",
+                    "note": "<p>target alpha target beta target gamma</p>",
+                    "parentItem": "PARENT1"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let toolkit = build_test_toolkit(server.uri());
+        let result = toolkit
+            .zotero_search_notes(ZoteroSearchNotesParams {
+                query: "target".to_string(),
+                match_mode: None,
+                case_sensitive: None,
+                library_type: Some("user".to_string()),
+                library_id: Some("123".to_string()),
+                parent_item_key: Some("PARENT1".to_string()),
+                include_annotations: Some(false),
+                limit: Some(2),
+                max_chars_per_item: None,
+            })
+            .await
+            .expect("zotero_search_notes should succeed");
+
+        assert_eq!(result.notes.len(), 2);
+        assert_eq!(result.total_available, None);
+        assert_eq!(result.has_more, true);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zotero_search_notes_rejects_empty_query() {
+        let toolkit = build_test_toolkit("http://127.0.0.1".to_string());
+        let err = toolkit
+            .zotero_search_notes(ZoteroSearchNotesParams {
+                query: "   ".to_string(),
+                match_mode: None,
+                case_sensitive: None,
+                library_type: Some("user".to_string()),
+                library_id: Some("123".to_string()),
+                parent_item_key: None,
+                include_annotations: Some(true),
+                limit: Some(10),
+                max_chars_per_item: None,
+            })
+            .await
+            .expect_err("empty queries should be rejected");
+
+        assert!(
+            matches!(err, ResearchError::InvalidInput(message) if message.contains("must not be empty"))
         );
     }
 
