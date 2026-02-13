@@ -323,8 +323,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                         "item_key": { "type": "string" },
                         "library_type": { "type": "string" },
                         "library_id": { "type": "string" },
-                        "format": { "type": "string", "enum": ["bibtex", "csl_json", "apa"] },
-                        "prefer_better_bibtex": { "type": "boolean" }
+                        "format": { "type": "string", "enum": ["bibtex", "csl_json", "apa"] }
                     },
                     "required": ["item_key"],
                     "additionalProperties": false
@@ -737,7 +736,6 @@ mod tests {
     #[test]
     fn zotero_get_item_citation_schema_exposes_format_controls() {
         assert_schema_has_field("zotero_get_item_citation", "format");
-        assert_schema_has_field("zotero_get_item_citation", "prefer_better_bibtex");
     }
 
     #[test]

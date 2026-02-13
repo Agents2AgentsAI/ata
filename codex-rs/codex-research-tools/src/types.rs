@@ -563,7 +563,6 @@ pub enum ZoteroCitationFormat {
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ZoteroCitationGenerator {
-    BetterBibtex,
     FallbackFormatter,
 }
 
@@ -608,7 +607,6 @@ pub struct ZoteroCitationParams {
     pub library_type: Option<String>,
     pub library_id: Option<String>,
     pub format: Option<ZoteroCitationFormat>,
-    pub prefer_better_bibtex: Option<bool>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
