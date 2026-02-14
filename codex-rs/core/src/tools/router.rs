@@ -68,8 +68,13 @@ impl ToolRouter {
             return Self::from_config(config, mcp_tools, app_tools, dynamic_tools);
         }
 
-        let builder =
-            build_specs_with_research(config, mcp_tools, app_tools, dynamic_tools, research_toolkit);
+        let builder = build_specs_with_research(
+            config,
+            mcp_tools,
+            app_tools,
+            dynamic_tools,
+            research_toolkit,
+        );
         let (specs, registry) = builder.build();
 
         Self { registry, specs }
