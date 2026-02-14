@@ -8,6 +8,8 @@ pub use kaggle::KaggleClient;
 #[derive(Debug, Clone)]
 pub struct SearchPage<T> {
     pub items: Vec<T>,
+    #[allow(dead_code)]
     pub total_available: Option<u64>,
+    #[allow(dead_code)]
     pub has_more: bool,
 }

@@ -185,6 +185,7 @@ impl<'a> KaggleClient<'a> {
 
     /// Get download URL for a dataset
     /// Note: Kaggle downloads are ZIP files of the entire dataset
+    #[allow(dead_code)]
     pub fn get_download_url(&self, owner: &str, slug: &str) -> String {
         format!(
             "{}/datasets/download/{}/{}",
@@ -356,6 +357,7 @@ impl<'a> KaggleClient<'a> {
     }
 
     /// Download entire dataset as a ZIP file
+    #[allow(dead_code)]
     pub async fn download_dataset(
         &self,
         owner: &str,
