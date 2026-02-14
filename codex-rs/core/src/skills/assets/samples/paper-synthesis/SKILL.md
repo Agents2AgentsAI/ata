@@ -76,7 +76,7 @@ Before synthesizing, always attempt to read the full paper text. Choose the path
 ### Path A: arXiv URL or DOI (default)
 
 1. If given an arXiv `/abs/` URL, convert it to `/pdf/` (e.g. `https://arxiv.org/abs/2503.14734` becomes `https://arxiv.org/pdf/2503.14734`).
-2. Use `attach_url_files` to fetch the PDF. If available, use `paper_get` to retrieve metadata (title, authors, abstract) as supplementary context.
+2. Use `attach_url_files` to fetch the PDF. After it succeeds, the PDF content is injected into your conversation context automatically — you can read and analyze it immediately. Do not search for a downloaded file on disk or use shell commands to extract text. If available, use `paper_get` to retrieve metadata (title, authors, abstract) as supplementary context.
 3. If PDF fetch fails, fall back to the abstract from `paper_get` and note in output: "Based on abstract only; full text unavailable."
 4. If neither source is available, clearly state this limitation upfront.
 
@@ -84,7 +84,7 @@ Before synthesizing, always attempt to read the full paper text. Choose the path
 
 1. Use `zotero_search` to find the paper(s) by title, author, or topic. Also call `zotero_get_collections` to check if a collection matches the topic — if so, use `zotero_get_collection_items` to retrieve its contents. If the user names a specific collection, use `zotero_get_collection_items` directly.
 2. For each paper found, call `zotero_get_item` with `include_attachments=true` and `include_fulltext_resolution=true`.
-3. If `document_resolution.preferred_url` (PDF URL) is present, fetch the paper with `attach_url_files` and treat that attached document as the primary source (this preserves figures/tables).
+3. If `document_resolution.preferred_url` (PDF URL) is present, fetch the paper with `attach_url_files` and treat that attached document as the primary source (this preserves figures/tables). After `attach_url_files` succeeds, the PDF content is injected into your conversation context automatically — you can read and analyze it immediately. Do not search for a downloaded file on disk or use shell commands to extract text.
 4. If no URL is available but `document_resolution.local_path` is present, use that local PDF path as the primary source.
 5. Do not call `zotero_get_fulltext` for paper synthesis. Indexed fulltext is lossy (no figures/tables) and is not an acceptable primary source when PDF resolution is required.
 6. Optionally call `zotero_get_notes` to retrieve the user's annotations and highlights — weave these into the synthesis where relevant (e.g. "The authors note X, which the reader flagged as particularly relevant because...").
