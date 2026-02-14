@@ -15,6 +15,7 @@ use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::error::CodexErr;
 use crate::error::Result;
+use crate::util::redact_error_body;
 
 /// Maps an [`ApiError`] to the corresponding [`CodexErr`] variant,
 /// preserving structured error kinds (e.g. `ContextWindowExceeded`)
@@ -247,16 +248,23 @@ pub(super) fn map_status_error(
         return CodexErr::ContextWindowExceeded;
     }
 
+    let redacted_body = redact_error_body(body);
     if status_error_prefix == "Gemini Code Assist"
-        && let Some(message) = map_gemini_code_assist_status_error(status, body)
+        && let Some(message) = map_gemini_code_assist_status_error(status, body, &redacted_body)
     {
         return CodexErr::Api(message);
     }
 
-    CodexErr::Api(format!("{status_error_prefix} API error {status}: {body}"))
+    CodexErr::Api(format!(
+        "{status_error_prefix} API error {status}: {redacted_body}"
+    ))
 }
 
-fn map_gemini_code_assist_status_error(status: StatusCode, body: &str) -> Option<String> {
+fn map_gemini_code_assist_status_error(
+    status: StatusCode,
+    body: &str,
+    redacted_body: &str,
+) -> Option<String> {
     if status != StatusCode::FORBIDDEN && status != StatusCode::UNAUTHORIZED {
         return None;
     }
@@ -267,13 +275,13 @@ fn map_gemini_code_assist_status_error(status: StatusCode, body: &str) -> Option
         || (lower.contains("service") && lower.contains("perimeter"))
     {
         return Some(format!(
-            "Gemini Code Assist request was blocked by VPC Service Controls. Use a project outside the restricted perimeter or update VPC-SC policy. Raw error: {status}: {body}"
+            "Gemini Code Assist request was blocked by VPC Service Controls. Use a project outside the restricted perimeter or update VPC-SC policy. Raw error: {status}: {redacted_body}"
         ));
     }
 
     if lower.contains("org policy") || lower.contains("organization policy") {
         return Some(format!(
-            "Gemini Code Assist request was blocked by organization policy. Ask your admin to allow Gemini Code Assist / Cloud Code access for this project. Raw error: {status}: {body}"
+            "Gemini Code Assist request was blocked by organization policy. Ask your admin to allow Gemini Code Assist / Cloud Code access for this project. Raw error: {status}: {redacted_body}"
         ));
     }
 
@@ -283,7 +291,7 @@ fn map_gemini_code_assist_status_error(status: StatusCode, body: &str) -> Option
         || lower.contains("permission denied")
     {
         return Some(format!(
-            "Gemini Code Assist access appears unavailable for this account or project. Confirm preview/allowlist access and required API enablement, then retry. Raw error: {status}: {body}"
+            "Gemini Code Assist access appears unavailable for this account or project. Confirm preview/allowlist access and required API enablement, then retry. Raw error: {status}: {redacted_body}"
         ));
     }
 
@@ -383,5 +391,19 @@ mod tests {
             panic!("expected API error");
         };
         assert_eq!(message, "Gemini API error 403 Forbidden: forbidden");
+    }
+
+    #[test]
+    fn map_status_error_redacts_sensitive_body_fields() {
+        let err = map_status_error(
+            "Gemini",
+            StatusCode::FORBIDDEN,
+            r#"{"access_token":"secret-access-token-123","message":"forbidden"}"#,
+        );
+        let CodexErr::Api(message) = err else {
+            panic!("expected API error");
+        };
+        assert!(message.contains("[REDACTED_SECRET]"), "{message}");
+        assert!(!message.contains("secret-access-token-123"), "{message}");
     }
 }

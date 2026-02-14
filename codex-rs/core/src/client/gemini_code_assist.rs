@@ -386,7 +386,29 @@ fn unwrap_code_assist_response_envelope(data: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::AuthCredentialsStoreMode;
+    use crate::auth::GEMINI_OAUTH_TOKEN_URL_ENV_VAR;
+    use crate::auth::ProviderOauthCredential;
+    use crate::auth::login_with_provider_oauth;
+    use crate::auth::test_utils::EnvVarGuard;
+    use crate::built_in_model_providers;
+    use chrono::Duration;
+    use chrono::Utc;
+    use codex_protocol::ThreadId;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::SessionSource;
+    use futures::StreamExt;
     use pretty_assertions::assert_eq;
+    use serial_test::serial;
+    use tempfile::tempdir;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::header;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+    use wiremock::matchers::query_param;
 
     #[test]
     fn wrap_code_assist_request_wraps_bare_requests() {
@@ -511,5 +533,119 @@ mod tests {
         };
         assert!(message.contains("non-OK response"), "{message}");
         assert!(message.contains("400 Bad Request"), "{message}");
+    }
+
+    #[tokio::test]
+    #[serial(gemini_oauth_env)]
+    async fn stream_gemini_code_assist_retries_once_after_401() {
+        let codex_home = tempdir().expect("tempdir");
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"access_token":"refreshed-access","refresh_token":"refreshed-refresh","expires_in":3600}"#,
+            ))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1internal:streamGenerateContent"))
+            .and(query_param("alt", "sse"))
+            .and(header("authorization", "Bearer old-access"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1internal:streamGenerateContent"))
+            .and(query_param("alt", "sse"))
+            .and(header("authorization", "Bearer refreshed-access"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Content-Type", "text/event-stream")
+                    .set_body_string("data: [DONE]\n\n"),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let _token_url_guard = EnvVarGuard::set(
+            GEMINI_OAUTH_TOKEN_URL_ENV_VAR,
+            &format!("{}/token", mock_server.uri()),
+        );
+        let _base_url_guard =
+            EnvVarGuard::set("CODEX_GEMINI_CODE_ASSIST_BASE_URL", &mock_server.uri());
+        let _project_guard = EnvVarGuard::set("GOOGLE_CLOUD_PROJECT", "");
+        let _project_id_guard = EnvVarGuard::set("GOOGLE_CLOUD_PROJECT_ID", "");
+
+        let oauth_credential = ProviderOauthCredential {
+            access: "old-access".to_string(),
+            refresh: "old-refresh".to_string(),
+            expires: Some(Utc::now() + Duration::hours(1)),
+            email: Some("user@example.com".to_string()),
+            project_id: Some("project-123".to_string()),
+            managed_project_id: None,
+        };
+        login_with_provider_oauth(
+            codex_home.path(),
+            crate::auth::PROVIDER_GEMINI,
+            oauth_credential.clone(),
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store oauth");
+
+        let model_client = crate::ModelClient::new(
+            None,
+            ThreadId::new(),
+            built_in_model_providers()["gemini"].clone(),
+            SessionSource::Cli,
+            None,
+            false,
+            false,
+            false,
+            false,
+            None,
+            codex_home.path().to_path_buf(),
+            AuthCredentialsStoreMode::File,
+        );
+        let session = model_client.new_session();
+        let mut prompt = Prompt::default();
+        prompt.input.push(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "hello".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        });
+        let model_info =
+            crate::models_manager::model_info::model_info_from_slug("gemini-2.5-flash");
+
+        let mut stream = stream_gemini_code_assist(
+            &session,
+            &prompt,
+            &model_info,
+            None,
+            codex_protocol::config_types::ReasoningSummary::None,
+            oauth_credential,
+        )
+        .await
+        .expect("stream should start");
+
+        let mut saw_completed = false;
+        while let Some(event) = stream.next().await {
+            match event {
+                Ok(ResponseEvent::Completed { .. }) => {
+                    saw_completed = true;
+                    break;
+                }
+                Ok(_) => {}
+                Err(err) => panic!("unexpected stream error: {err}"),
+            }
+        }
+        assert!(saw_completed, "expected a completed event");
+
+        mock_server.verify().await;
     }
 }

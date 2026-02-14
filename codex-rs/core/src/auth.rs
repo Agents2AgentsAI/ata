@@ -2,7 +2,7 @@ mod gemini_oauth;
 mod providers;
 mod storage;
 #[cfg(test)]
-mod test_utils;
+pub(crate) mod test_utils;
 
 use async_trait::async_trait;
 use chrono::Utc;
