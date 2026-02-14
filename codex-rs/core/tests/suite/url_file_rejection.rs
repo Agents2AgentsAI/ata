@@ -240,3 +240,92 @@ async fn context_window_exceeded_drops_url_attachments_only_once_per_turn() -> R
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn context_window_exceeded_then_file_related_invalid_request_still_recovers() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let args = serde_json::json!({
+        "files": [
+            {"url": "https://example.com/doc.pdf"}
+        ],
+    });
+    let arguments = serde_json::to_string(&args)?;
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call("attach-1", "attach_url_files", &arguments),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let first_failed = mount_sse_once(
+        &server,
+        sse_failed(
+            "resp-2",
+            "context_length_exceeded",
+            "Your input exceeds the context window of this model. Please adjust your input and try again.",
+        ),
+    )
+    .await;
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_function_call("attach-2", "attach_url_files", &arguments),
+            ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+
+    let second_failed = mount_sse_once(
+        &server,
+        sse_failed(
+            "resp-4",
+            "invalid_request_error",
+            "Unsupported file format. Check that the file is a valid PDF.",
+        ),
+    )
+    .await;
+
+    let success = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-5"),
+            ev_assistant_message("msg-1", "continuing without file"),
+            ev_completed("resp-5"),
+        ]),
+    )
+    .await;
+
+    let fixture = test_codex().with_model("gpt-5.1").build(&server).await?;
+    fixture
+        .submit_turn("attach a pdf; recover from context window and file rejection")
+        .await?;
+
+    let first_failed_body = first_failed.single_request().body_json();
+    assert!(
+        request_contains_url_file(&first_failed_body),
+        "expected first failed request to include a url_file block: {first_failed_body:?}"
+    );
+
+    let second_failed_body = second_failed.single_request().body_json();
+    assert!(
+        request_contains_url_file(&second_failed_body),
+        "expected second failed request to include a url_file block: {second_failed_body:?}"
+    );
+
+    let success_body = success.single_request().body_json();
+    assert!(
+        !request_contains_url_file(&success_body),
+        "expected post-recovery request to omit url_file blocks: {success_body:?}"
+    );
+
+    Ok(())
+}
