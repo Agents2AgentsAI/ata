@@ -3814,29 +3814,17 @@ impl ChatWidget {
             return;
         }
 
-        let mut has_image_attachment = !remote_image_urls.is_empty();
-        let mut first_unsupported_attachment: Option<PathBuf> = None;
-        for attachment in &local_images {
-            match detect_attachment_kind(&attachment.path) {
-                AttachmentKind::Image => {
-                    has_image_attachment = true;
-                    items.push(UserInput::LocalImage {
-                        path: attachment.path.clone(),
-                    });
-                }
-                AttachmentKind::File => {
-                    items.push(UserInput::LocalFile {
-                        path: attachment.path.clone(),
-                    });
-                }
-                AttachmentKind::Unsupported => {
-                    if first_unsupported_attachment.is_none() {
-                        first_unsupported_attachment = Some(attachment.path.clone());
-                    }
-                }
-            }
-        }
-        if let Some(path) = first_unsupported_attachment {
+        // Validate: check for unsupported non-file attachments (safety net for
+        // history-restored entries where the file type may have changed on disk).
+        let unsupported_path = local_images
+            .iter()
+            .find(|a| {
+                !a.is_file
+                    && a.path.is_file()
+                    && matches!(detect_attachment_kind(&a.path), AttachmentKind::Unsupported)
+            })
+            .map(|a| a.path.clone());
+        if let Some(path) = unsupported_path {
             self.restore_blocked_attachment_submission(
                 text,
                 text_elements,
@@ -3850,6 +3838,9 @@ impl ChatWidget {
             );
             return;
         }
+
+        let has_image_attachment =
+            !remote_image_urls.is_empty() || local_images.iter().any(|a| !a.is_file);
         if has_image_attachment && !self.current_model_supports_images() {
             self.restore_blocked_image_submission(
                 text,
@@ -3861,10 +3852,22 @@ impl ChatWidget {
             return;
         }
 
+        // Push items in order: remote images, then local attachments.
         for image_url in &remote_image_urls {
             items.push(UserInput::Image {
                 image_url: image_url.clone(),
             });
+        }
+        for attachment in &local_images {
+            if attachment.is_file {
+                items.push(UserInput::LocalFile {
+                    path: attachment.path.clone(),
+                });
+            } else {
+                items.push(UserInput::LocalImage {
+                    path: attachment.path.clone(),
+                });
+            }
         }
 
         if !text.is_empty() {

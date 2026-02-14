@@ -937,14 +937,24 @@ async fn submission_maps_pdf_attachment_to_local_file() {
     let pdf_path = dir.path().join("submitted.pdf");
     std::fs::write(&pdf_path, b"%PDF-1.4\ntest").expect("write pdf");
 
-    let placeholder = "[File #1]";
-    let text = format!("{placeholder} submit");
+    // Legacy [File #N] placeholders are normalized to filename-based [submitted.pdf]
+    // by relabel_attached_images_and_update_placeholders.
+    let initial_placeholder = "[File #1]";
+    let text = format!("{initial_placeholder} submit");
     let text_elements = vec![TextElement::new(
-        (0..placeholder.len()).into(),
-        Some(placeholder.to_string()),
+        (0..initial_placeholder.len()).into(),
+        Some(initial_placeholder.to_string()),
     )];
     chat.bottom_pane
-        .set_composer_text(text.clone(), text_elements.clone(), vec![pdf_path.clone()]);
+        .set_composer_text(text, text_elements, vec![pdf_path.clone()]);
+
+    // After relabeling, the placeholder becomes [submitted.pdf].
+    let normalized_placeholder = "[submitted.pdf]";
+    let expected_text = format!("{normalized_placeholder} submit");
+    let expected_elements = vec![TextElement::new(
+        (0..normalized_placeholder.len()).into(),
+        Some(normalized_placeholder.to_string()),
+    )];
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -957,8 +967,8 @@ async fn submission_maps_pdf_attachment_to_local_file() {
     assert_eq!(
         items[1],
         UserInput::Text {
-            text,
-            text_elements,
+            text: expected_text,
+            text_elements: expected_elements,
         }
     );
 }
@@ -2060,6 +2070,7 @@ async fn make_chatwidget_with_provider(
         status_line_branch_pending: false,
         status_line_branch_lookup_complete: false,
         turn_runtime_metrics: Default::default(),
+        turn_sleep_inhibitor: codex_utils_sleep_inhibitor::SleepInhibitor::new(false),
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx, temp_dir)
