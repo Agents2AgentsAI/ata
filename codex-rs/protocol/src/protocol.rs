@@ -20,6 +20,8 @@ use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::WindowsSandboxLevel;
 use crate::custom_prompts::CustomPrompt;
+use crate::document_reader::PresentDocumentEvent;
+use crate::document_reader::UpdateDocumentSectionEvent;
 use crate::dynamic_tools::DynamicToolCallRequest;
 use crate::dynamic_tools::DynamicToolResponse;
 use crate::dynamic_tools::DynamicToolSpec;
@@ -1041,6 +1043,12 @@ pub enum EventMsg {
     SkillsUpdateAvailable,
 
     PlanUpdate(UpdatePlanArgs),
+
+    /// Agent presented a long document in sectioned reading mode.
+    PresentDocument(PresentDocumentEvent),
+
+    /// Agent updated a section of a document currently in reading mode.
+    UpdateDocumentSection(UpdateDocumentSectionEvent),
 
     TurnAborted(TurnAbortedEvent),
 

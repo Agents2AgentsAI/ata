@@ -1,17 +1,19 @@
 ---
 name: cross-paper-report
-description: Generate integrated cross-paper explanations and final markdown/PDF reports from KB cards. Use when a user asks to explain, compare, synthesize, understand, or deep-dive into one or more knowledge base cards, or asks how cards relate or work together.
+description: Generate integrated cross-paper explanations and PDF reports from KB cards. Use when a user asks to explain, compare, synthesize, understand, or deep-dive into one or more knowledge base cards, or asks how cards relate or work together.
 ---
 
 # Cross-Paper Report
 
-You MUST produce three deliverables — no exceptions, no shortcuts:
+> **When to use this skill vs. alternatives:**
+> This skill produces exhaustive deep reports (800+ words per paper, TikZ diagrams, full comparative synthesis). For quick orientations, use `$research-briefing` instead — it gives a 2-4 page overview with 3-5 sentences per paper. For conversation-derived reports that capture what you specifically discussed, use `$conversation-report` instead. Use this skill when the user wants a complete technical reference document.
 
-1. **Deep narrative explanation** in the chat (800-2500 words per card)
-2. **Markdown file** saved to the KB via `kb_write_file`
-3. **LaTeX PDF** compiled via `latex_compile` with TikZ diagrams
+You MUST produce two deliverables — no exceptions, no shortcuts:
 
-A short summary is NEVER acceptable. This task is NOT complete until all three deliverables exist. Do NOT ask the user whether they want a PDF — always produce it.
+1. **Deep narrative explanation** in the chat (focal cards: 800–2500 words; supporting cards: 400–600 words; see Tiered Depth Strategy)
+2. **LaTeX PDF** compiled via `latex_compile` with TikZ diagrams
+
+A short summary is NEVER acceptable. This task is NOT complete until both deliverables exist. Do NOT ask the user whether they want a PDF — always produce it. The PDF is the archival artifact; the chat shows it live. No separate markdown file — the PDF replaces it.
 
 ## Default Narrative Style (Self-Contained Walkthrough)
 
@@ -25,7 +27,7 @@ Unless the user requests a different format, write in a teaching-first style tha
   - why it was needed,
   - what simpler alternative would fail and why.
 - Introduce analogies before dense formalism for non-obvious components.
-- Keep paragraphs short and use explicit transitions (`Now`, `Next`, `At inference`, `Why this matters`).
+- Split long paragraphs (6+ sentences) into multiple paragraphs for readability — but never cut content to make paragraphs shorter. Use explicit transitions (`Now`, `Next`, `At inference`, `Why this matters`).
 - Keep equations, but always follow each with variable definitions plus an intuitive explanation.
 - For multi-card outputs, close with a dedicated prose section named `How the Papers Relate` (not just a table).
 - **Voice**: Use plain, direct language — simple words, short sentences, no academic stiffness. Use **second-person ("you") for procedural walkthroughs** of how the method works ("You take two frames…", "You delete the old MLP head and initialize a new one…"). Use **neutral third-person for framing, results, and analysis** ("LAPA tackles a fundamental bottleneck…", "The same codebook entries produce similar motions…"). Do NOT open problem statements with "You want to…" — that sounds like a tutorial, not a technical discussion.
@@ -56,47 +58,102 @@ Before diving into full technical detail, each card explanation should establish
 
 Call `kb_status` first. The response includes `kb_path` — use that value wherever this document says `<kb_path>`.
 
+## Scale Detection
+
+After reading all requested cards, check the count:
+
+- **Standard mode** (≤ 12 cards): Follow Phases 1–3 as written below. Every card gets a full deep walkthrough in one pass.
+- **Large-set mode** (> 12 cards): Jump to the **Large-Set Synthesis** section at the end of this document. Do NOT attempt standard Phases 1–3 for large sets — producing 800+ words per card for 20+ papers in a single agent pass will collapse into shallow summaries that violate the depth contract. The large-set workflow uses clustering and parallel subagents to preserve per-card depth at scale.
+
+## Phase 0: Related Card Discovery
+
+After reading the requested cards but before writing explanations, check whether the KB contains other cards that are topically relevant and would strengthen the report.
+
+1. Call `kb_list_cards` to see all available cards.
+2. For each requested card, scan its `tags`, `connections`, and the topics mentioned in its body. Identify other KB cards that share tags, are cited in connections, or address closely related methods.
+3. If relevant unrequested cards exist, present them to the user:
+   > "Your KB also has cards for [list] which are related to this topic. Want me to include any of them? Adding them would strengthen the comparison by covering [specific dimension, e.g., 'alternative action representations' or 'data augmentation methods']."
+4. If the user approves additions, include them in the card set for Phases 1–2. Re-check Scale Detection with the updated count.
+
+This step prevents narrow reports that miss important context available in the KB. Skip only if the user explicitly says "only these cards."
+
+**Subagent context:** Skip Phase 0 entirely when running as a cluster subagent in the Large-Set Synthesis workflow. Cluster subagents work only on their assigned cards — discovering additional cards would cause cross-contamination between clusters. Phase 0 runs only in the main agent before clustering.
+
 ## Phase 1: Deep Technical Explanation of Each Card
 
 Read all requested cards via `kb_read_card` (or `kb_list_cards` + `kb_read_card` when the user says "all" or refers to a broad set).
 
-For EACH card, write a deep technical walkthrough in **narrative prose**. This phase applies whether the user asks about one card or many.
+### Coverage-First Principle
 
-**Hard depth floor: 800 words minimum per card.** Architecture-heavy papers should reach 1500-2500 words. If your card explanation is under 800 words, you have not explained the method — you have summarized it, which violates this skill's contract.
+**Coverage is mandatory. Never drop cards to save depth budget.** If the user asks about a topic and 10 cards are relevant, all 10 must appear in the report. Do NOT select a subset of "representative" cards and skip the rest — that produces a report with blind spots. If producing full depth for every card exceeds a single pass, use the Tiered Depth Strategy below or the Large-Set Synthesis workflow.
 
-**Per-section depth rule:** Every stage in a stage-by-stage walkthrough must be **at least 2-3 full paragraphs** — not a single sentence. A one-sentence stage description (e.g., "The Stage 1 encoder pseudo-labels actionless videos with latent tokens; a 7B VLM predicts those tokens from image + language") is a summary, not an explanation. Each stage must explain what happens, why it works, what would fail without it, and use concrete numbers/dimensions.
+The wrong tradeoff: "I'll only cover 3 of 10 relevant papers so I can go deep on each." The right tradeoff: "I'll cover all 10 papers, going deepest on the most important ones."
 
-### Structure per Card
+### Tiered Depth Strategy
 
-1. **The problem.** Open by stating what gap or limitation this work addresses. Situate it relative to prior work: "Where [prior approach] addresses X by doing Y, this paper asks a different question: Z." This should be 3-6 sentences establishing the reader's context.
+When the card set is moderate (5–12 cards), assign each card to a depth tier:
 
-2. **Architecture deep dive.** Describe the full model architecture in narrative prose, focusing on what each component does and why:
-   - **Backbone / encoder / decoder** — What is the core network type and what role does it play? Explain the architecture conceptually (e.g., "a diffusion Transformer that denoises latent sequences step by step").
-   - **Input representation** — How are raw inputs tokenized or embedded before entering the model? Explain the encoding strategy and why it was chosen.
-   - **Output heads** — What does the model predict and how are outputs decoded back to the action/control space? Explain the design rationale.
-   - **Key modules** — Describe any non-standard components: cross-attention between modalities, adaptive layer norm, codebook quantization, mixture-of-experts routing, etc. For each, explain the mechanism and why it's needed.
-   - End with a **Details:** block collecting exact specifics: model variant name, layer count, hidden dims, attention heads, patch sizes, resolution, token dimensions, sequence lengths, positional encoding type, output dimensions, chunk sizes, prediction horizons, parameter counts.
+- **Focal cards** (the 2–4 most novel, complex, or central papers): Full 800–2500 word treatment with multi-paragraph stage walkthroughs, worked examples, full-paragraph equation intuitions, and Details blocks. These are the papers where the reader needs to understand the complete mechanism.
 
-3. **Training pipeline.** Describe how the model is trained end-to-end:
-   - **Stages** — Is training single-stage or multi-stage? For each stage, explain the objective, what data is used and why, which components are frozen vs. trained, and the rationale for each choice.
-   - **Data strategy** — What data is used at each stage and why? How is cross-embodiment or cross-domain data handled? Explain the strategy conceptually.
-   - **Loss functions** — Explain every loss term: what it optimizes and why. For compound losses, explain the weighting rationale. Include mathematical form in the Key Equations section.
-   - **Inference pipeline** — How does the trained model run at test time? Describe the full forward pass from raw observation to executed action, including iterative processes and their purpose.
-   - End with a **Details:** block collecting: optimizer name, learning rate schedule, batch size, gradient clipping, mixed precision, distributed strategy, step/epoch counts, GPU-hours, noise schedule parameters, EMA decay, codebook sizes, temperature values, action chunk lengths, latency numbers, control frequency.
+- **Supporting cards** (the remaining papers): Substantive 400–600 word treatment covering: the problem (2–3 sentences), core idea and what makes it different (1 paragraph), key mechanism with enough detail to understand what it does and why (1–2 paragraphs), key results with interpretation (1 paragraph), and how it connects to the focal cards (2–3 sentences). This is shorter than a focal walkthrough but far more than a one-sentence summary.
 
-4. **Key equations.** Reproduce important equations and define every variable. Do not skip terms or hand-wave over notation. After defining variables, write a **full-paragraph intuitive explanation** (3-5 sentences minimum) of what the equation does and why it works — not a one-liner like "continuous motion is snapped to a symbol." The reader should finish the paragraph thinking "I see why that works," not just "I see what the symbols mean."
+**Tier assignment criteria:** Assign to focal tier based on: (1) novelty of the method, (2) complexity requiring detailed explanation, (3) centrality to the user's question, (4) architectural uniqueness vs. being a variant of another card. Present the tier assignment to the user before writing.
 
-5. **Analogies.** For non-obvious concepts, provide an analogy that builds intuition before the formal explanation. Example: "Think of this as building an action dictionary from scratch."
+**Subagent context:** When running as a cluster subagent, treat all cards as focal (no tiering) and skip user confirmation. Clusters are already sized (4–8 cards) for full-depth treatment.
 
-6. **Results with interpretation.** Report specific numbers, baselines, and what the gaps tell us. Do not merely restate tables — interpret what the ablations reveal about which components matter and why. Pay special attention to ablations that isolate individual architectural or training decisions.
+**For 1–4 cards:** All cards are focal. No tiering needed — every card gets full 800+ word treatment.
 
-7. **Limitations woven in.** Weave limitations and failure modes into the narrative at the point where they arise from specific design choices, rather than listing them separately at the end.
+**For 13+ cards:** Use the Large-Set Synthesis workflow instead (which handles tiering within clusters).
 
-8. **Walkthrough readability check.** Ensure the final card explanation reads as a coherent self-contained walkthrough, not an encyclopedic dump of facts.
+### Per-Card Depth Rules
 
-9. **Basics-first check.** Confirm the reader can understand the mechanism from plain-language pipeline explanation before reading equations.
+**Focal cards — hard depth floor: 800 words minimum.** Architecture-heavy papers should reach 1500–2500 words. If your focal card explanation is under 800 words, you have not explained the method — you have summarized it.
+
+**Supporting cards — hard depth floor: 400 words minimum.** If your supporting card explanation is under 400 words, you have not covered the method — you have name-dropped it.
+
+**Per-section depth rule (focal cards):** Every stage in a stage-by-stage walkthrough must be **at least 2–3 full paragraphs** — not a single sentence. A one-sentence stage description (e.g., "The Stage 1 encoder pseudo-labels actionless videos with latent tokens; a 7B VLM predicts those tokens from image + language") is a summary, not an explanation. Each stage must explain what happens, why it works, what would fail without it, and use concrete numbers/dimensions.
+
+**Per-section depth rule (supporting cards):** Each major mechanism must be at least 1 full paragraph (4–6 sentences) — not a single sentence. The reader should understand what the method does and why, even without a full stage walkthrough.
+
+### Elements per Focal Card
+
+The following are the elements that a focal card walkthrough should cover. The agent decides the ordering and flow — organize them in whatever sequence tells the clearest story for this particular paper. Do NOT treat this as a rigid numbered checklist. Integrate equations, diagrams, and analogies at the points where they naturally arise, not in separate sections at the end.
+
+- **The problem.** Open by stating what gap or limitation this work addresses. Situate it relative to prior work: "Where [prior approach] addresses X by doing Y, this paper asks a different question: Z." This should be 3-6 sentences establishing the reader's context.
+
+- **Architecture.** Describe the model architecture in narrative prose: backbone type and role, input tokenization/embedding strategy and why it was chosen, output heads and how predictions are decoded, and any non-standard modules (cross-attention, codebook quantization, MoE routing, adaptive normalization) with explanation of why they are needed. End with a **Details:** block collecting exact specifics (model variant, layer count, hidden dims, attention heads, patch sizes, sequence lengths, parameter counts, etc.).
+
+- **Training pipeline.** Walk through how the model is trained: stages (objectives, data, frozen vs. trained components, rationale for each), data strategy (cross-embodiment, cross-domain handling), loss functions (what each term optimizes, weighting rationale), and inference pipeline (full forward pass from observation to action). End with a **Details:** block (optimizer, LR schedule, batch size, step counts, GPU-hours, latency, control frequency, etc.).
+
+- **Equations with intuition.** When the paper introduces important equations, present them **at the point in the narrative where they naturally belong** — inside the architecture section, inside a training stage, wherever they arise. Do not collect them into a separate "Key Equations" section at the end. After each equation, define every variable and write a **full-paragraph intuitive explanation** (3–5 sentences) of what the equation does and why it works. The reader should finish thinking "I see why that works," not just "I see what the symbols mean."
+
+- **Analogies.** For non-obvious concepts, introduce an analogy **before** the formal explanation, right where the concept appears. Do not defer analogies to a separate section.
+
+- **Diagrams.** TikZ diagrams and card figures should appear **near the text they illustrate**, not collected at the end of the walkthrough. An architecture diagram belongs in the architecture discussion; a training flow diagram belongs in the training pipeline discussion.
+
+- **Results with interpretation.** Report specific numbers, baselines, and what the gaps tell us. Interpret what ablations reveal about which components matter and why.
+
+- **Limitations woven in.** Weave limitations and failure modes into the narrative at the points where they arise from specific design choices, not in a separate section at the end.
+
+**Quality checks before moving to the next card:**
+- The walkthrough reads as a coherent self-contained narrative, not an encyclopedic dump of facts.
+- The reader can understand the mechanism from plain-language explanation before encountering equations.
+- Equations, diagrams, and analogies are integrated throughout — nothing is deferred to a "collected at the end" section.
+
+### Structure per Supporting Card
+
+Supporting cards use a condensed but substantive format (400–600 words):
+
+1. **The problem and core idea** (1 paragraph): What gap this paper addresses and what it does differently from prior work. Frame relative to focal cards where possible.
+2. **Key mechanism** (1–2 paragraphs): The central technical contribution explained with enough detail that the reader understands what it does and why. Include at least one concrete number or worked example.
+3. **Key results** (2–4 sentences): Specific headline numbers with interpretation of what they mean.
+4. **Connection to focal cards** (2–3 sentences): How this paper relates to the focal papers — shared techniques, complementary approaches, or contrasting design choices.
+
+Supporting cards do NOT need: full stage-by-stage walkthroughs, Details blocks, key equations sections, or analogies. Those are reserved for focal cards. But the reader must still understand the method well enough to follow the cross-card comparison.
 
 ## Phase 2: Cross-Card Comparative Synthesis
+
+**Research context awareness:** Before writing the comparison, read `research-context.md` from the KB root via `kb_read_file` (if it exists). If the user has documented priorities (e.g., "inference latency matters most"), frame comparative dimensions around those priorities — lead with the dimensions the user cares about, de-emphasize dimensions they've marked as unimportant.
 
 Produce this phase when 2 or more cards are involved. Skip for single-card requests.
 
@@ -118,17 +175,47 @@ In that final section:
 
 Use specifics throughout. Every comparison claim should cite a concrete detail from each card.
 
-## Phase 3: Save Markdown
+## Depth Gate (Mandatory Before Phase 3)
 
-Write the full explanation (Phase 1 + Phase 2) using `kb_write_file` with path `explanations/<descriptive-name>.md`. The `<descriptive-name>` should reflect the content (e.g. `lapa-groot-cosmos-deep-dive.md`, `diffusion-policy-methods-compared.md`). Parent directories are created automatically.
+Before proceeding to LaTeX, verify depth mechanically:
 
-Also present the full explanation in the chat response so the user sees it immediately.
+1. **Per-card word count.** For each card's section in the chat explanation, estimate word count. Focal cards must be at least 800 words; supporting cards must be at least 400 words. If ANY card section is below its tier's floor, STOP and expand it before proceeding. Re-read the relevant KB card via `kb_read_card` and deepen the shallow section.
+2. **Equation intuitions.** Check that every equation has a full-paragraph intuition (3–5 sentences explaining why it works and what happens at boundary conditions), not a one-liner like "continuous motion is snapped to a symbol."
+3. **Stage walkthrough depth.** Check that every stage in a stage-by-stage walkthrough has 2–3 full paragraphs — not a single sentence. A one-sentence stage description violates the depth contract.
+4. **Comparison specificity.** Check that the cross-card comparison has at least one full paragraph per dimension with concrete numbers and implementation details traced from individual cards — not generic claims like "X is bigger than Y."
 
-## Phase 4: Generate LaTeX PDF
+If depth is insufficient at any checkpoint, expand before proceeding. Do NOT proceed to LaTeX with shallow content — the PDF is the permanent artifact and must meet the depth floor.
+
+## Phase 3: Convert to LaTeX PDF
 
 This phase is MANDATORY. Do not skip it. Do not ask the user first.
 
-Call `latex_compile` to produce a typeset PDF. The PDF is the primary deliverable — it should look like a well-typeset technical report, not a wall of text.
+**Phase 3 is FORMAT CONVERSION, not content generation.** You already wrote the full content in Phases 1–2 and presented it in the chat. Phase 3 takes that content and wraps it in LaTeX markup. You are translating format, not rewriting or summarizing. No editorial judgment, no compression, no "tightening." Every sentence from the chat explanation appears in the LaTeX.
+
+### Conversion Procedure (Section by Section)
+
+Process the chat explanation one section at a time. For each section:
+
+1. **Copy the prose** from the chat explanation into the LaTeX `\section` or `\subsection`.
+2. **Add LaTeX formatting**: wrap equations in `equation`/`align` environments, convert bold/italic to `\textbf`/`\textit`, convert lists to `itemize`/`enumerate`, add `\vspace` for spacing.
+3. **Verify paragraph count**: count the paragraphs in the chat explanation and count them in the LaTeX section. They must match. If the chat section has 5 paragraphs, the LaTeX section must have 5 paragraphs.
+4. **Add TikZ diagrams** and `\includegraphics` figures at the appropriate points within the section (not all at the end).
+5. Move to the next section.
+
+Do NOT "write the LaTeX document from scratch." Do NOT summarize the chat explanation into a shorter LaTeX version. Do NOT combine multiple paragraphs into one. The LaTeX is the chat explanation with formatting applied — nothing added, nothing removed.
+
+### Why This Matters
+
+The PDF is the permanent artifact. When the agent treats Phase 3 as "write a LaTeX report," it produces a compressed summary — each multi-paragraph stage walkthrough collapses into a single bold sentence (e.g., "**Stage 1: Tokenize control.** Continuous action dimensions are discretized into 256 bins"). This is a Phase 3 failure, not a Phase 1 failure. The content was already written correctly; it was lost during format conversion.
+
+### Paragraph-Count Gate (Blocking)
+
+Before calling `latex_compile`, verify for EVERY section:
+- Count paragraphs in the chat explanation version of the section.
+- Count paragraphs in the LaTeX version of the section.
+- If the LaTeX has fewer paragraphs than the chat explanation, you have compressed. Go back and restore the missing paragraphs.
+
+**Word count check:** The LaTeX source content (excluding `\begin`, `\end`, preamble, and markup commands) should be within 20% of the chat explanation word count. If the LaTeX content is less than 80% of the chat explanation length, you have compressed and must restore content before compiling.
 
 **Packages:** `latex_compile` will auto-install missing packages via `tlmgr` if available. Use these freely in the preamble:
 - `geometry`, `graphicx`, `hyperref`, `amsmath`, `amssymb` — universally available
@@ -142,7 +229,7 @@ Do NOT use obscure or legacy packages. If compilation fails with "File not found
 - `\bigskip` before and after diagrams and key equations.
 - Figures and equations should be separated from body text — never crammed between paragraphs without spacing.
 - Use `\begin{tcolorbox}` (from the `tcolorbox` package) or `\fbox` for key takeaways, analogies, or important definitions — this visually breaks up the text.
-- Aim for short paragraphs (3-5 sentences). If a paragraph exceeds 6 sentences, split it.
+- Split paragraphs longer than 6 sentences into multiple paragraphs for readability — but never cut content to make them shorter.
 - Use itemize/enumerate lists when enumerating design choices, ablation results, or comparison points — but always with explanatory sentences, not bare bullets.
 
 **Equations:** Use proper LaTeX math environments. Inline math for terms referenced in prose (`$\mathcal{L}_\text{recon}$`), `equation` or `align` environments for key equations that deserve their own line and number.
@@ -185,36 +272,192 @@ Not every explanation needs all diagram types. Use judgment — a single-card ex
 - For side-by-side comparison of figures from different cards, use `minipage`: `\begin{figure}[h]\begin{minipage}{0.48\textwidth}\centering\includegraphics[width=\textwidth]{...}\caption{...}\end{minipage}\hfill\begin{minipage}{0.48\textwidth}\centering\includegraphics[width=\textwidth]{...}\caption{...}\end{minipage}\end{figure}`.
 - Place figures near the text that discusses them, not all at the end.
 
-**Compile:** Call `latex_compile` with `output_dir` set to `<kb_path>/explanations/` and a `filename` matching the markdown name (without extension). If compilation fails, read the errors, fix the LaTeX, and retry. Common fixes: escape underscores in text, fix unmatched braces, add missing TikZ libraries to the preamble.
+**Compile:** Call `latex_compile` with `output_dir` set to `<kb_path>/explanations/` and a descriptive `filename` (e.g. `lapa-groot-cosmos-deep-dive`). If compilation fails, read the errors, fix the LaTeX, and retry. Common fixes: escape underscores in text, fix unmatched braces, add missing TikZ libraries to the preamble.
 
 **Open:** After successful compilation, open the PDF for the user with `open <pdf_path>` (macOS) or `xdg-open <pdf_path>` (Linux).
+
+## Presentation
+
+When the deep narrative explanation is complete, call `present_document` to present it in sectioned reading mode so the user can navigate the report section by section. Set `document_id` to a unique slug (e.g. the report filename without extension), `title` to the report title, and `content` to the full markdown narrative. End your response after calling this tool and wait for user interaction.
+
+If the user asks follow-up questions about a specific section, enhance that section with additional depth or clarification and call `update_document_section` with the section index and refined content.
 
 ## Completion Checklist
 
 Before reporting done, verify ALL of these:
-- [ ] Deep narrative prose in chat (800 words minimum per card — if under 800 words, expand before proceeding)
-- [ ] Markdown saved via `kb_write_file` to `explanations/<name>.md`
+- [ ] All relevant cards included (none dropped for depth budget — use tiered depth if needed)
+- [ ] Deep narrative prose in chat (focal cards: 800+ words; supporting cards: 400+ words)
+- [ ] LaTeX paragraph count matches chat explanation paragraph count for every section (Phase 3 conversion gate)
 - [ ] PDF generated via `latex_compile` with at least one TikZ diagram
 - [ ] If compilation failed: errors were fixed and `latex_compile` was retried
 - [ ] PDF opened for the user via `open` / `xdg-open`
 
-## Anti-Patterns
+## Anti-Patterns (Things You Must NEVER Do)
 
-Do NOT produce any of the following as the primary output format:
+Every item below is a failure. If you catch yourself doing any of these, stop and fix it before proceeding.
 
-- **Skeletal stage walkthroughs** — compressing each stage to a single sentence (e.g., "Stage 2: The encoder pseudo-labels videos; a VLM predicts those tokens"). Each stage must be 2-3 paragraphs explaining what, why, and how with concrete numbers.
-- **One-line equation intuitions** — writing "Intuition: continuous motion is snapped to a symbol" after an equation. Intuition must be a full paragraph (3-5 sentences) that explains why the equation works and what happens at the boundary conditions.
-- **Shallow bullet-point summaries** — "Core idea: uses VQ-VAE for latent actions" with no elaboration of how or why
-- **Comparison tables** as the sole comparison mechanism — tables flatten technical nuance into cells
-- **One-liner role descriptions** — "Role in a stack: pretraining backbone" without technical substance
-- **Title/tag parroting** — restating card titles and tags without walking through the actual mechanism
-- **Text-only LaTeX** — if producing a PDF, it must include at least one TikZ diagram; a wall of text with equations is not sufficient
-- **Skipping the PDF** — the PDF is mandatory, not optional
-
-These formats are acceptable only as secondary navigation aids alongside the deep narrative prose.
+- NEVER compress a stage walkthrough into a single sentence. A stage like "Stage 2: The encoder pseudo-labels videos; a VLM predicts those tokens" is a failure — every stage must be 2–3 full paragraphs.
+- NEVER write a one-line equation intuition. "Intuition: continuous motion is snapped to a symbol" is a failure — every equation intuition must be a full paragraph (3–5 sentences).
+- NEVER write shallow bullet-point summaries like "Core idea: uses VQ-VAE for latent actions" without explaining how or why the mechanism works.
+- NEVER use a comparison table as the sole comparison mechanism. Tables flatten nuance — they can only appear alongside full-paragraph prose comparisons.
+- NEVER write one-liner role descriptions like "Role in a stack: pretraining backbone" — that has zero technical substance.
+- NEVER parrot card titles and tags as if they were an explanation. Restating "LAPA: Latent Action Pretraining" without walking through the mechanism is not an explanation.
+- NEVER produce a text-only LaTeX PDF without at least one TikZ diagram. A wall of text with equations is not a report.
+- NEVER skip the PDF. The PDF is mandatory — do not ask the user, do not treat it as optional.
+- NEVER rewrite the chat explanation content when converting to LaTeX. Phase 3 is format conversion, not fresh writing. If your LaTeX has fewer paragraphs than the chat explanation in any section, you have compressed and must restore the missing content.
+- NEVER cover only the explicitly requested cards when the KB has closely related cards. Failing to check for related cards (Phase 0) produces a report with blind spots.
+- NEVER drop cards to save depth budget. Covering 3 of 10 relevant papers deeply is worse than covering all 10 at mixed depth. Use Tiered Depth or Large-Set Synthesis instead of cutting cards.
 
 ## Style Reference
 
 Read `references/style-exemplar.md` for a concrete example of the target depth and style. It shows one card's deep explanation and one comparison dimension demonstrating how to trace ideas across papers.
 
 Read `references/tikz-reference.tex` for reusable TikZ patterns for architecture, comparison, and flow diagrams.
+
+---
+
+## Large-Set Synthesis (> 12 cards)
+
+When the card set exceeds 12, a single-pass deep walkthrough will collapse into surface-level summaries — the agent runs out of output capacity before covering every card at 800+ words. This section defines the mandatory hierarchical synthesis workflow that preserves per-card depth at scale.
+
+**Do NOT skip this workflow for large sets.** The standard Phases 1–3 are designed for 2–12 cards. For 13+ cards, always use this workflow instead.
+
+### Step 1: Cluster Assignment
+
+Group the N cards into 3–6 thematic clusters based on:
+- Card tags and topic overlap
+- Temporal ordering (publication year, methodological era)
+- Methodological similarity (shared techniques, shared problem framing)
+
+Each cluster should contain **4–8 cards**. If a card bridges multiple clusters, assign it to the most relevant one and note the bridge in the meta-synthesis.
+
+Name each cluster descriptively (e.g., "Sim2Real Foundations and Adaptive Randomization", "Action Representation Engineering", "Unified World-Model Policies").
+
+Present the proposed clustering to the user before launching subagents. Include:
+- Cluster name and 1-sentence rationale for the grouping
+- List of card IDs in each cluster
+- Any bridge cards and which cluster they are assigned to
+- A **shared terminology glossary**: Define 5–10 key terms that span multiple clusters (e.g., "action tokenization", "flow matching", "VQ-VAE", "sim-to-real gap") with brief definitions. Include this glossary in every subagent prompt so all clusters use consistent language in their cross-cluster interface sections.
+
+### Step 2: Per-Cluster Sub-Reports (Parallel Subagents)
+
+Launch **one subagent per cluster**, all in parallel. Each subagent runs the full standard cross-paper-report workflow (Phases 1–3) on its cluster's cards only:
+
+- Full 800–2500 word per-card deep walkthroughs with all cards treated as focal (Phase 1)
+- Within-cluster comparative synthesis (Phase 2)
+- Depth Gate verification before proceeding
+- Within-cluster TikZ diagrams (Phase 3 diagram generation only — do NOT compile a standalone PDF per cluster)
+
+**Subagent prompt template:**
+
+> Invoke the `cross-paper-report` skill for cards `[card-id-1]`, `[card-id-2]`, ..., `[card-id-N]`. The KB path is `[kb_path]`. This is a cluster sub-report titled "[Cluster Name]".
+>
+> Follow the skill's standard workflow (Phases 1–3) with these overrides:
+> - **Skip Phase 0** (Related Card Discovery) — you work only on the assigned cards. Do NOT call `kb_list_cards` to discover additional cards.
+> - **All cards are focal** — no tiered depth. Every card gets the full 800–2500 word treatment.
+> - **No user confirmation** — do not present tier assignments or card additions for approval. Execute autonomously.
+> - **Shared terminology glossary:** [paste the glossary from Step 1 here so all subagents use consistent terms]
+> - Produce deep per-card walkthroughs (800+ words each) and within-cluster comparative synthesis.
+> - Generate TikZ diagram source code but do NOT call `latex_compile` — the main agent handles final compilation.
+> - Return to the main agent:
+>   1. The full content (per-card walkthroughs + within-cluster synthesis)
+>   2. All TikZ source blocks
+>   3. A 3–5 sentence cluster summary
+>   4. A **cross-cluster interface** section containing: (a) key technical terms defined and used in this cluster with definitions, (b) 2–3 key equations with paper attribution, (c) specific numbers/results that the meta-synthesis may reference for cross-cluster comparison, (d) bridge points — concepts in this cluster that connect to papers in other clusters
+
+**Subagent failure handling:** If a cluster subagent fails (timeout, tool error, or returns empty content), do NOT block the entire report. Log the failure, proceed with the remaining cluster results, and note the gap in the meta-synthesis: "Cluster [name] could not be synthesized due to [reason]. The following cards are missing from this report: [list]." Offer to retry the failed cluster.
+
+### Step 3: Meta-Synthesis (Main Agent)
+
+After all cluster subagents complete, the main agent produces a meta-synthesis document that connects the clusters. This is NOT a summary of the sub-reports — it is a new analytical layer that traces ideas, techniques, and design choices across cluster boundaries.
+
+**Source material:** Use the **cross-cluster interface** sections returned by each subagent as your primary data source for concrete cross-cluster tracing. These sections contain the key equations, specific numbers, defined terms, and bridge points needed to write substantive comparisons without re-reading every sub-report in full.
+
+The meta-synthesis must contain these sections:
+
+1. **Scope and Framing** (1–2 paragraphs): What the full paper set covers, how the clusters relate at a high level, and what central question connects them.
+
+2. **Cross-Cluster Evolution Tracing**: For 2–3 key technical concepts that span multiple clusters (e.g., action tokenization, sim-to-real transfer, world modeling, data scaling), write a dedicated subsection tracing how the concept evolves:
+   - Which paper introduced it and with what specific implementation
+   - How later papers in other clusters adopted, modified, or replaced it
+   - Concrete numbers and design choices from individual papers (pulled from sub-reports)
+   - What the evolution reveals about what works and what doesn't
+
+3. **Design Space Mapping**: A structured comparison of key architectural choices across ALL clusters, with concrete examples:
+   - Backbone type × action representation × training strategy
+   - Data source × data scale × grounding mechanism
+   - Inference pattern × latency × planning capability
+   - This should be detailed prose with specific numbers, not a bare table
+
+4. **Failure Mode Lineage**: How each cluster's limitations motivated the next cluster's innovations. Trace with specific design choices and numbers — e.g., "RT-1's 256-bin action discretization created [specific problem], which FAST addressed with DCT+BPE compression achieving [specific improvement]."
+
+5. **Key Equations Across the Stack**: Select 3–5 equations that appear across multiple clusters. For each, provide the full equation, variable definitions, and a **full-paragraph intuition** (5+ sentences) explaining what it does, why it works, what happens at boundary conditions, and how different papers instantiate it differently.
+
+6. **How the Papers Relate**: Final integrative prose section with subsections:
+   - Different Starting Points (what assumption each cluster begins from)
+   - Shared Technical DNA (techniques that recur across clusters)
+   - Data Strategy Evolution (how data approaches change across eras)
+   - What This Suggests About the Field (trajectory and practical implications)
+
+7. **Practical Takeaways**: Actionable guidance for practitioners, grounded in specific findings from the papers.
+
+### Step 4: Assemble and Compile Final PDF
+
+Combine all sub-reports and meta-synthesis into one LaTeX document:
+
+```latex
+\title{[Descriptive Title]}
+\author{Auto-generated from KB}
+\date{\today}
+\tableofcontents
+
+% One section per cluster, containing the sub-report content
+\section{[Cluster 1 Name]}
+  % Full per-card walkthroughs + within-cluster comparison + TikZ diagrams
+
+\section{[Cluster 2 Name]}
+  % ...
+
+% Meta-synthesis as final major sections
+\section{Cross-Cluster Synthesis}
+  % Evolution tracing, design space mapping, failure mode lineage
+
+\section{Key Equations Across the Stack}
+  % Cross-cluster equations with deep intuitions
+
+\section{How the Papers Relate}
+  % Integrative narrative
+
+\section{Practical Takeaways}
+  % Actionable guidance
+```
+
+The final PDF must contain:
+- Every per-card deep walkthrough from every cluster sub-report
+- Within-cluster TikZ diagrams from each sub-report
+- At least one cross-cluster comparison TikZ diagram in the meta-synthesis (e.g., a field trajectory diagram or design space comparison)
+- All key equations with full-paragraph intuitions
+
+Compile via `latex_compile` with `output_dir` set to `<kb_path>/explanations/` and open the resulting PDF.
+
+### Large-Set Completion Checklist
+
+Before reporting done, verify ALL of these:
+- [ ] Cards clustered into 3–6 groups of 4–8 cards each
+- [ ] Shared terminology glossary defined and included in every subagent prompt
+- [ ] Every cluster sub-report meets the depth floor (800+ words per card, all cards focal)
+- [ ] Every cluster subagent returned a cross-cluster interface section
+- [ ] Failed subagents (if any) are noted with missing card lists and retry offered
+- [ ] Meta-synthesis contains all required sections (evolution tracing, design space mapping, failure mode lineage, equations, How the Papers Relate)
+- [ ] Meta-synthesis uses concrete data from cross-cluster interface sections, not generic claims
+- [ ] Final PDF compiled via `latex_compile` with per-cluster TikZ diagrams + at least one cross-cluster TikZ diagram
+- [ ] PDF opened for the user
+
+### Large-Set Anti-Patterns
+
+These are the specific failure modes that large-set synthesis must avoid:
+
+- **One-sentence-per-paper contribution maps** — listing card IDs with a single sentence each. Every card must have its full 800+ word walkthrough inside its cluster sub-report.
+- **Thematic overview without per-card depth** — writing a coherent narrative about the "field trajectory" while skipping the per-card technical walkthroughs. The meta-synthesis sits ON TOP of per-card depth, not instead of it.
+- **Equations without cross-cluster tracing** — including equations but not explaining how different papers instantiate the same equation differently.
+- **Generic comparison claims** — "X is better than Y" without concrete numbers, architectural specifics, or implementation details from the actual papers.

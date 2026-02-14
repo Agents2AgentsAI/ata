@@ -71,4 +71,18 @@ pub(crate) trait BottomPaneView: Renderable {
     ) -> Option<RequestUserInputEvent> {
         Some(request)
     }
+
+    /// Forward a document section update to this view (no-op by default).
+    fn handle_document_section_update(
+        &mut self,
+        _document_id: &str,
+        _section_index: usize,
+        _content: String,
+    ) {
+    }
+
+    /// Notify this view that the agent turn has completed. Views that wait for
+    /// tool calls (e.g. document reader waiting for `update_document_section`)
+    /// should use this to clear any "waiting" state.
+    fn handle_turn_complete(&mut self) {}
 }

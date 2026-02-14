@@ -12,7 +12,9 @@ use crate::research::SharedResearchToolkit;
 #[cfg(feature = "research")]
 use crate::research::tool_names::find_mcp_tool_matches;
 use crate::tools::handlers::PLAN_TOOL;
+use crate::tools::handlers::PRESENT_DOCUMENT_TOOL;
 use crate::tools::handlers::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
+use crate::tools::handlers::UPDATE_DOCUMENT_SECTION_TOOL;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::attach_url_files::register_attach_url_files;
@@ -1460,6 +1462,7 @@ pub(crate) fn build_specs_with_toolkits(
     use crate::tools::handlers::CollabHandler;
     #[cfg(feature = "data")]
     use crate::tools::handlers::DataBridgeHandler;
+    use crate::tools::handlers::DocumentReaderHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
@@ -1484,6 +1487,7 @@ pub(crate) fn build_specs_with_toolkits(
     let shell_handler = Arc::new(ShellHandler);
     let unified_exec_handler = Arc::new(UnifiedExecHandler);
     let plan_handler = Arc::new(PlanHandler);
+    let document_reader_handler = Arc::new(DocumentReaderHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let dynamic_tool_handler = Arc::new(DynamicToolHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
@@ -1542,6 +1546,11 @@ pub(crate) fn build_specs_with_toolkits(
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
+
+    builder.push_spec(PRESENT_DOCUMENT_TOOL.clone());
+    builder.push_spec(UPDATE_DOCUMENT_SECTION_TOOL.clone());
+    builder.register_handler("present_document", document_reader_handler.clone());
+    builder.register_handler("update_document_section", document_reader_handler);
 
     if config.js_repl_enabled {
         builder.push_spec(create_js_repl_tool());
@@ -2030,6 +2039,8 @@ mod tests {
             create_list_mcp_resource_templates_tool(),
             create_read_mcp_resource_tool(),
             PLAN_TOOL.clone(),
+            PRESENT_DOCUMENT_TOOL.clone(),
+            UPDATE_DOCUMENT_SECTION_TOOL.clone(),
             create_request_user_input_tool(),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {
@@ -2315,6 +2326,8 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "present_document",
+                "update_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2338,6 +2351,8 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "present_document",
+                "update_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2363,6 +2378,8 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "present_document",
+                "update_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2388,6 +2405,8 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "present_document",
+                "update_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2411,6 +2430,8 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "present_document",
+                "update_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2434,6 +2455,8 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "present_document",
+                "update_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2457,6 +2480,8 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "present_document",
+                "update_document_section",
                 "request_user_input",
                 "web_search",
                 "view_image",
@@ -2479,6 +2504,8 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "present_document",
+                "update_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2504,6 +2531,8 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "present_document",
+                "update_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
