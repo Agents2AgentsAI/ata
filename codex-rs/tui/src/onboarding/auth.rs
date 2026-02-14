@@ -1237,7 +1237,7 @@ mod tests {
         let (widget, _tmp) = widget_default();
         let mut terminal = Terminal::new(VT100Backend::new(80, 22)).expect("terminal");
         terminal
-            .draw(|f| (&widget).render_ref(f.area(), f.buffer_mut()))
+            .draw(|f| widget.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
         insta::assert_snapshot!(terminal.backend());
     }
@@ -1249,7 +1249,7 @@ mod tests {
             SignInState::ProviderOauthSuccessMessage(ProviderOption::Gemini);
         let mut terminal = Terminal::new(VT100Backend::new(90, 22)).expect("terminal");
         terminal
-            .draw(|f| (&widget).render_ref(f.area(), f.buffer_mut()))
+            .draw(|f| widget.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
         insta::assert_snapshot!(terminal.backend());
     }
