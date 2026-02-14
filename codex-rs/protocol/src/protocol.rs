@@ -20,6 +20,8 @@ use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::WindowsSandboxLevel;
 use crate::custom_prompts::CustomPrompt;
+use crate::document_reader::AppendDocumentSectionEvent;
+use crate::document_reader::PatchDocumentSectionEvent;
 use crate::document_reader::PresentDocumentEvent;
 use crate::document_reader::UpdateDocumentSectionEvent;
 use crate::dynamic_tools::DynamicToolCallRequest;
@@ -1049,6 +1051,12 @@ pub enum EventMsg {
 
     /// Agent updated a section of a document currently in reading mode.
     UpdateDocumentSection(UpdateDocumentSectionEvent),
+
+    /// Agent appended content to a section of a document in reading mode.
+    AppendDocumentSection(AppendDocumentSectionEvent),
+
+    /// Agent patched (find-and-replace) a section of a document in reading mode.
+    PatchDocumentSection(PatchDocumentSectionEvent),
 
     TurnAborted(TurnAbortedEvent),
 
