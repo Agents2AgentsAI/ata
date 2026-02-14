@@ -72,12 +72,31 @@ pub(crate) trait BottomPaneView: Renderable {
         Some(request)
     }
 
-    /// Forward a document section update to this view (no-op by default).
+    /// Forward a document section update (full replace) to this view (no-op by default).
     fn handle_document_section_update(
         &mut self,
         _document_id: &str,
         _section_index: usize,
         _content: String,
+    ) {
+    }
+
+    /// Forward a document section append to this view (no-op by default).
+    fn handle_document_section_append(
+        &mut self,
+        _document_id: &str,
+        _section_index: usize,
+        _content: String,
+    ) {
+    }
+
+    /// Forward a document section patch (find-and-replace) to this view (no-op by default).
+    fn handle_document_section_patch(
+        &mut self,
+        _document_id: &str,
+        _section_index: usize,
+        _old_text: &str,
+        _new_text: &str,
     ) {
     }
 

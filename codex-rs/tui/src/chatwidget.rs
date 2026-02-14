@@ -1175,6 +1175,11 @@ impl ChatWidget {
     }
 
     fn on_agent_message(&mut self, message: String) {
+        // While the document reader is active, suppress chat history output —
+        // the agent's response goes through update_document_section instead.
+        if self.bottom_pane.is_document_reader_active() {
+            return;
+        }
         // If we have a stream_controller, then the final agent message is redundant and will be a
         // duplicate of what has already been streamed.
         if self.stream_controller.is_none() && !message.is_empty() {
@@ -1186,6 +1191,12 @@ impl ChatWidget {
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
+        // While the document reader is active, suppress streaming into the
+        // chat history — the agent's response should arrive via
+        // `update_document_section` into the card instead.
+        if self.bottom_pane.is_document_reader_active() {
+            return;
+        }
         self.handle_streaming_delta(delta);
     }
 
@@ -1809,6 +1820,20 @@ impl ChatWidget {
         ev: codex_protocol::document_reader::UpdateDocumentSectionEvent,
     ) {
         self.bottom_pane.update_document_section(&ev);
+    }
+
+    fn on_append_document_section(
+        &mut self,
+        ev: codex_protocol::document_reader::AppendDocumentSectionEvent,
+    ) {
+        self.bottom_pane.append_document_section(&ev);
+    }
+
+    fn on_patch_document_section(
+        &mut self,
+        ev: codex_protocol::document_reader::PatchDocumentSectionEvent,
+    ) {
+        self.bottom_pane.patch_document_section(&ev);
     }
 
     fn on_exec_approval_request(&mut self, _id: String, ev: ExecApprovalRequestEvent) {
@@ -4114,6 +4139,8 @@ impl ChatWidget {
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
             EventMsg::PresentDocument(ev) => self.on_present_document(ev),
             EventMsg::UpdateDocumentSection(ev) => self.on_update_document_section(ev),
+            EventMsg::AppendDocumentSection(ev) => self.on_append_document_section(ev),
+            EventMsg::PatchDocumentSection(ev) => self.on_patch_document_section(ev),
             EventMsg::ExecApprovalRequest(ev) => {
                 // For replayed events, synthesize an empty id (these should not occur).
                 self.on_exec_approval_request(id.unwrap_or_default(), ev)

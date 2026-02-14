@@ -256,9 +256,12 @@ This complements the card (which is a structured summary) with the full analytic
 
 ## Presentation
 
-When the synthesis is complete, call `present_document` to present it in sectioned reading mode. Set `document_id` to a unique slug, `title` to the synthesis title, and `content` to the full markdown analysis. End your response after calling this tool and wait for user interaction.
+IMPORTANT: When the synthesis is complete, you MUST call `present_document` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the synthesis title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
 
-If the user asks follow-up questions about a specific section, enhance that section and call `update_document_section` with the section index and refined content.
+When the user asks follow-up questions about a specific section, use the most efficient update tool:
+- `append_to_section` — to add new information at the end of a section (most common for follow-up questions)
+- `patch_document_section` — to change specific text within a section (for corrections or targeted edits)
+- `update_document_section` — to fully rewrite a section (only when the entire section needs to change)
 
 ## Graceful Degradation
 

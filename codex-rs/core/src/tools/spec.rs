@@ -11,6 +11,8 @@ use crate::features::Features;
 use crate::research::SharedResearchToolkit;
 #[cfg(feature = "research")]
 use crate::research::tool_names::find_mcp_tool_matches;
+use crate::tools::handlers::APPEND_TO_SECTION_TOOL;
+use crate::tools::handlers::PATCH_DOCUMENT_SECTION_TOOL;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::PRESENT_DOCUMENT_TOOL;
 use crate::tools::handlers::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
@@ -1549,8 +1551,12 @@ pub(crate) fn build_specs_with_toolkits(
 
     builder.push_spec(PRESENT_DOCUMENT_TOOL.clone());
     builder.push_spec(UPDATE_DOCUMENT_SECTION_TOOL.clone());
+    builder.push_spec(APPEND_TO_SECTION_TOOL.clone());
+    builder.push_spec(PATCH_DOCUMENT_SECTION_TOOL.clone());
     builder.register_handler("present_document", document_reader_handler.clone());
-    builder.register_handler("update_document_section", document_reader_handler);
+    builder.register_handler("update_document_section", document_reader_handler.clone());
+    builder.register_handler("append_to_section", document_reader_handler.clone());
+    builder.register_handler("patch_document_section", document_reader_handler);
 
     if config.js_repl_enabled {
         builder.push_spec(create_js_repl_tool());
@@ -2041,6 +2047,8 @@ mod tests {
             PLAN_TOOL.clone(),
             PRESENT_DOCUMENT_TOOL.clone(),
             UPDATE_DOCUMENT_SECTION_TOOL.clone(),
+            APPEND_TO_SECTION_TOOL.clone(),
+            PATCH_DOCUMENT_SECTION_TOOL.clone(),
             create_request_user_input_tool(),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {
@@ -2328,6 +2336,8 @@ mod tests {
                 "update_plan",
                 "present_document",
                 "update_document_section",
+                "append_to_section",
+                "patch_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2353,6 +2363,8 @@ mod tests {
                 "update_plan",
                 "present_document",
                 "update_document_section",
+                "append_to_section",
+                "patch_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2380,6 +2392,8 @@ mod tests {
                 "update_plan",
                 "present_document",
                 "update_document_section",
+                "append_to_section",
+                "patch_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2407,6 +2421,8 @@ mod tests {
                 "update_plan",
                 "present_document",
                 "update_document_section",
+                "append_to_section",
+                "patch_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2432,6 +2448,8 @@ mod tests {
                 "update_plan",
                 "present_document",
                 "update_document_section",
+                "append_to_section",
+                "patch_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2457,6 +2475,8 @@ mod tests {
                 "update_plan",
                 "present_document",
                 "update_document_section",
+                "append_to_section",
+                "patch_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2482,6 +2502,8 @@ mod tests {
                 "update_plan",
                 "present_document",
                 "update_document_section",
+                "append_to_section",
+                "patch_document_section",
                 "request_user_input",
                 "web_search",
                 "view_image",
@@ -2506,6 +2528,8 @@ mod tests {
                 "update_plan",
                 "present_document",
                 "update_document_section",
+                "append_to_section",
+                "patch_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2533,6 +2557,8 @@ mod tests {
                 "update_plan",
                 "present_document",
                 "update_document_section",
+                "append_to_section",
+                "patch_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",

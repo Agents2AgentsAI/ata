@@ -278,9 +278,12 @@ Not every explanation needs all diagram types. Use judgment — a single-card ex
 
 ## Presentation
 
-When the deep narrative explanation is complete, call `present_document` to present it in sectioned reading mode so the user can navigate the report section by section. Set `document_id` to a unique slug (e.g. the report filename without extension), `title` to the report title, and `content` to the full markdown narrative. End your response after calling this tool and wait for user interaction.
+IMPORTANT: When the deep narrative explanation is complete, you MUST call `present_document` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the report title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
 
-If the user asks follow-up questions about a specific section, enhance that section with additional depth or clarification and call `update_document_section` with the section index and refined content.
+When the user asks follow-up questions about a specific section, use the most efficient update tool:
+- `append_to_section` — to add new information at the end of a section (most common for follow-up questions)
+- `patch_document_section` — to change specific text within a section (for corrections or targeted edits)
+- `update_document_section` — to fully rewrite a section (only when the entire section needs to change)
 
 ## Completion Checklist
 

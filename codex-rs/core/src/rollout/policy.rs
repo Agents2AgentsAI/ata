@@ -167,6 +167,8 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::CollabCloseBegin(_)
         | EventMsg::CollabResumeBegin(_)
         | EventMsg::PresentDocument(_)
-        | EventMsg::UpdateDocumentSection(_) => None,
+        | EventMsg::UpdateDocumentSection(_)
+        | EventMsg::AppendDocumentSection(_)
+        | EventMsg::PatchDocumentSection(_) => None,
     }
 }

@@ -802,7 +802,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::CollabResumeEnd(_)
             | EventMsg::DynamicToolCallRequest(_)
             | EventMsg::PresentDocument(_)
-            | EventMsg::UpdateDocumentSection(_) => {}
+            | EventMsg::UpdateDocumentSection(_)
+            | EventMsg::AppendDocumentSection(_)
+            | EventMsg::PatchDocumentSection(_) => {}
         }
         CodexStatus::Running
     }

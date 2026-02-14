@@ -21,7 +21,9 @@ mod test_sync;
 mod unified_exec;
 mod view_image;
 
+pub use document_reader::APPEND_TO_SECTION_TOOL;
 pub use document_reader::DocumentReaderHandler;
+pub use document_reader::PATCH_DOCUMENT_SECTION_TOOL;
 pub use document_reader::PRESENT_DOCUMENT_TOOL;
 pub use document_reader::UPDATE_DOCUMENT_SECTION_TOOL;
 pub use plan::PLAN_TOOL;

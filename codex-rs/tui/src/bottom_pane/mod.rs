@@ -786,6 +786,52 @@ impl BottomPane {
         }
     }
 
+    /// Forward a section append to the active document reader (if matching).
+    pub(crate) fn append_document_section(
+        &mut self,
+        ev: &codex_protocol::document_reader::AppendDocumentSectionEvent,
+    ) {
+        if let Some(view) = self.view_stack.last_mut()
+            && view.view_id() == Some(document_reader::DOCUMENT_READER_VIEW_ID)
+        {
+            view.handle_document_section_append(
+                &ev.document_id,
+                ev.section_index,
+                ev.content.clone(),
+            );
+            self.request_redraw();
+        }
+    }
+
+    /// Forward a section patch (find-and-replace) to the active document reader.
+    pub(crate) fn patch_document_section(
+        &mut self,
+        ev: &codex_protocol::document_reader::PatchDocumentSectionEvent,
+    ) {
+        if let Some(view) = self.view_stack.last_mut()
+            && view.view_id() == Some(document_reader::DOCUMENT_READER_VIEW_ID)
+        {
+            view.handle_document_section_patch(
+                &ev.document_id,
+                ev.section_index,
+                &ev.old_text,
+                &ev.new_text,
+            );
+            self.request_redraw();
+        }
+    }
+
+    /// Returns `true` when the document reader is the active bottom pane view.
+    ///
+    /// Used by `ChatWidget` to suppress agent message streaming into the chat
+    /// history while the reader is open — responses should go through
+    /// `update_document_section` into the card instead.
+    pub(crate) fn is_document_reader_active(&self) -> bool {
+        self.view_stack
+            .last()
+            .is_some_and(|v| v.view_id() == Some(document_reader::DOCUMENT_READER_VIEW_ID))
+    }
+
     /// Notify the active view that the agent turn has completed.
     ///
     /// Views that wait for tool calls (e.g. document reader waiting for

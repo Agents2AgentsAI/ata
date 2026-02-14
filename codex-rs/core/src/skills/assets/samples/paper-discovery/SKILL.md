@@ -7,6 +7,8 @@ metadata:
 
 # Paper Discovery
 
+**Output format**: Always present final reports using `present_document` (not as regular text). See the Presentation section below.
+
 Two modes of operation:
 
 1. **Explore mode** (`explore:<question or topic>`) -- You have a research question or want to learn about a topic. Get a structured landscape briefing: main approaches, best papers for each, state of the art, and a reading plan.
@@ -29,7 +31,7 @@ Two modes of operation:
 This skill is discovery-first. After discovery, the user has three paths:
 
 1. **Quick orientation** — `$research-briefing` gives a 2-4 page overview with core ideas per paper (recommended first step)
-2. **Full deep analysis** — `$paper-synthesis` to create deep per-paper cards, then `$cross-paper-report` for the integrated narrative + markdown + PDF
+2. **Full deep analysis** — `$paper-synthesis` to create deep per-paper cards, then `$cross-paper-report` for the integrated narrative + PDF
 3. **Interactive exploration** — Chat about specific papers, ask follow-ups, then `$conversation-report` when ready to capture what was discussed
 
 For multi-paper requests that ask for a final explained report, enforce the full pipeline: `paper-discovery` → `paper-synthesis` → `cross-paper-report`. Do not mark the request complete until step 3 is done.
@@ -38,7 +40,7 @@ For multi-paper requests that ask for a final explained report, enforce the full
 
 The pipeline adapts based on the number of shortlisted papers:
 
-- **≤ 12 papers**: Standard pipeline. `cross-paper-report` runs Phases 1–4 in a single pass with full 800+ words per card.
+- **≤ 12 papers**: Standard pipeline. `cross-paper-report` runs Phases 1–3 in a single pass with full 800+ words per card.
 - **> 12 papers**: `cross-paper-report` automatically activates **large-set mode** — it clusters papers into groups of 4–8, launches parallel subagents for per-cluster deep reports, then produces a meta-synthesis connecting the clusters. No manual intervention is needed; scale detection is built into the `cross-paper-report` skill.
 
 When presenting the reading plan in explore mode, note the expected pipeline mode:
@@ -189,6 +191,17 @@ Organize papers into tiers:
 3. **Cutting Edge** (3-5 papers): Recent papers (last 1-2 years) with the newest results or approaches.
 4. **Deep Dives** (optional, 2-4 papers): Highly specialized papers for specific subtopics the user might want to explore further.
 
+### Citation Formatting Rules
+
+**Keep DOIs, arXiv IDs, and long URLs out of prose paragraphs.** They break reading flow and add no value inline.
+
+- **In narrative sections** (The Landscape, Approaches, recommendations): cite as **Author (Year)** only. Example: "Domain randomization (Tobin et al., 2017) is the canonical sim-to-real lever." Never: "Domain randomization (Tobin et al., 2017; arXiv 1703.06907; DOI 10.xxx)."
+- **In the Reading Plan**: include IDs on their own line as a synthesis command: `→ $paper-synthesis 1703.06907`. This is where IDs belong — actionable, not decorative.
+- **In a References section at the end**: list full citations with IDs. This is the one place DOIs and arXiv IDs appear in full.
+- **For web sources**: cite as `(source name)` in prose; collect full URLs in References.
+
+The same rule applies to both explore mode and discovery mode output.
+
 ### Explore Phase 4: Present the Briefing
 
 ```
@@ -198,7 +211,8 @@ Organize papers into tiers:
 ### The Landscape
 
 [2-3 paragraph overview: What is this field about? What are the main challenges?
-What are the dominant paradigms? Where is the field heading?]
+What are the dominant paradigms? Where is the field heading?
+Cite papers as Author (Year) only — no IDs inline.]
 
 ### Approaches
 
@@ -219,14 +233,14 @@ What are the dominant paradigms? Where is the field heading?]
 1. **[Title]** -- [Authors] ([Year])
    [Why to read this first -- 1 sentence]
    Discovery: [provenance, e.g., "Bridge paper — cited by 4 seed papers"]
-   → `$paper-synthesis [DOI or arXiv ID]`
+   → `$paper-synthesis [arXiv ID or DOI]`
 
 #### Core Methods
 2. **[Title]** -- [Authors] ([Year])
    Approach: [which approach cluster]
    [What you'll learn -- 1 sentence]
    Discovery: [provenance]
-   → `$paper-synthesis [DOI or arXiv ID]`
+   → `$paper-synthesis [arXiv ID or DOI]`
 ...
 
 #### Cutting Edge
@@ -238,8 +252,14 @@ What should someone entering this area pay attention to?]
 
 ### Next Steps
 - `$research-briefing` — Quick 2-3 page orientation of the discovered papers (recommended first step)
-- `$paper-synthesis [DOI]` → `$cross-paper-report` — Full deep analysis pipeline
+- `$paper-synthesis [ID]` → `$cross-paper-report` — Full deep analysis pipeline
 - Chat interactively about specific papers, then `$conversation-report` when ready
+
+### References
+[Full citations with IDs — the one place DOIs and arXiv IDs appear:]
+- Tobin et al., "Domain Randomization for Transferring Deep Neural Networks from Simulation to the Real World," 2017. arXiv:1703.06907
+- Mahler et al., "Dex-Net 2.0," RSS 2017. DOI:10.15607/rss.2017.xiii.058
+- ...
 ```
 
 ### Explore Mode Graceful Degradation
@@ -399,10 +419,10 @@ Sort by composite score descending.
 
 #### Discovery Report
 
-Present the top 15-20 papers as a numbered list:
+Present the top 15-20 papers as a numbered list. Follow the Citation Formatting Rules above — IDs appear only in the per-paper metadata line and the References section, never in prose.
 
 ```
-## Paper Discovery Discovery Report
+## Paper Discovery Report
 ### [Date] | Mode: [full-kb / topic:X / authors / recent]
 
 Found N new papers across M discovery strategies.
@@ -413,10 +433,12 @@ Found N new papers across M discovery strategies.
    Citations: [N] | Score: [composite]
    Discovery: [rationale, e.g., "Cited by 3 KB papers + recommended by S2 based on your VLA papers"]
    Abstract: [first 200 chars]...
-   IDs: DOI:[doi] | arXiv:[id]
-   → Suggested: `$paper-synthesis [DOI]`
+   → `$paper-synthesis [arXiv ID or DOI]`
 
 2. ...
+
+### References
+[Full citations with IDs collected here]
 ```
 
 #### Group by Topic
@@ -436,6 +458,9 @@ After the ranked list, group papers by topic area with brief rationale for each 
 
 ## Presentation
 
-When a discovery or explore mode report is complete, call `present_document` to present it in sectioned reading mode. Set `document_id` to a unique slug, `title` to the report title, and `content` to the full markdown. End your response after calling this tool and wait for user interaction.
+IMPORTANT: When a discovery or explore mode report is complete, you MUST call `present_document` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the report title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
 
-If the user asks follow-up questions about a specific section, enhance that section and call `update_document_section` with the section index and refined content.
+When the user asks follow-up questions about a specific section, use the most efficient update tool:
+- `append_to_section` — to add new information at the end of a section (most common for follow-up questions)
+- `patch_document_section` — to change specific text within a section (for corrections or targeted edits)
+- `update_document_section` — to fully rewrite a section (only when the entire section needs to change)
