@@ -1688,6 +1688,7 @@ dependencies = [
  "codex-file-search",
  "codex-git",
  "codex-hooks",
+ "codex-kb",
  "codex-keyring-store",
  "codex-network-proxy",
  "codex-otel",
@@ -1992,19 +1993,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "codex-kb-mcp"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "clap",
- "codex-kb",
- "rmcp",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]

@@ -361,6 +361,9 @@ pub struct Config {
     /// Optional non-secret data tool settings from `[data]`.
     pub data: Option<DataToolsToml>,
 
+    /// Optional KB settings from `[kb]`.
+    pub kb: Option<KbToml>,
+
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
@@ -1028,6 +1031,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub data: Option<DataToolsToml>,
 
+    /// Optional KB settings.
+    #[serde(default)]
+    pub kb: Option<KbToml>,
+
     /// Memories subsystem settings.
     pub memories: Option<MemoriesToml>,
 
@@ -1175,6 +1182,13 @@ pub struct DataToolsToml {
     pub huggingface_token: Option<String>,
     pub kaggle_username: Option<String>,
     pub kaggle_key: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct KbToml {
+    /// Path to the knowledge base directory. Defaults to `<codex_home>/knowledge-base`.
+    pub kb_path: Option<String>,
 }
 
 impl From<ToolsToml> for Tools {
@@ -1873,6 +1887,7 @@ impl Config {
             web_search_mode: constrained_web_search_mode.value,
             research: cfg.research.clone(),
             data: cfg.data.clone(),
+            kb: cfg.kb.clone(),
             use_experimental_unified_exec_tool,
             ghost_snapshot,
             features,
@@ -4189,6 +4204,7 @@ model_verbosity = "high"
                 web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
                 research: None,
                 data: None,
+                kb: None,
                 use_experimental_unified_exec_tool: !cfg!(windows),
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
@@ -4301,6 +4317,7 @@ model_verbosity = "high"
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             research: None,
             data: None,
+            kb: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -4411,6 +4428,7 @@ model_verbosity = "high"
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             research: None,
             data: None,
+            kb: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -4507,6 +4525,7 @@ model_verbosity = "high"
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             research: None,
             data: None,
+            kb: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),

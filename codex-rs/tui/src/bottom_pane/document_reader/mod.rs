@@ -28,6 +28,7 @@ use ratatui::widgets::Widget;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::time::Instant;
 
 mod render;
 
@@ -83,10 +84,11 @@ pub(crate) struct DocumentReaderView {
     app_event_tx: AppEventSender,
     complete: bool,
     /// Tracks which sections have a pending agent update (by section index).
-    /// Maps section index → the user's question text.
-    pending_sections: HashMap<usize, String>,
+    /// Maps section index → (question text, submission time).
+    pending_sections: HashMap<usize, (String, Instant)>,
     /// Tracks which section indices the user has viewed (for exit feedback).
     visited_sections: HashSet<usize>,
+    animations_enabled: bool,
 
     // Embedded textarea for follow-up questions.
     textarea: TextArea,
@@ -99,6 +101,7 @@ impl DocumentReaderView {
         title: String,
         content: String,
         app_event_tx: AppEventSender,
+        animations_enabled: bool,
     ) -> Self {
         let sections = parse_sections(&title, &content);
         let mut visited_sections = HashSet::new();
@@ -116,8 +119,18 @@ impl DocumentReaderView {
             complete: false,
             pending_sections: HashMap::new(),
             visited_sections,
+            animations_enabled,
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
+        }
+    }
+
+    /// If the resolved section is the one currently being viewed, dismiss
+    /// the composer so the user sees the updated content.
+    fn resolve_pending(&mut self, section_index: usize) {
+        self.pending_sections.remove(&section_index);
+        if section_index == self.current_section && self.focus == ReaderFocus::Composer {
+            self.focus = ReaderFocus::Content;
         }
     }
 
@@ -138,7 +151,7 @@ impl DocumentReaderView {
             section.content = body;
             section.recently_updated = true;
             section.invalidate_cache();
-            self.pending_sections.remove(&section_index);
+            self.resolve_pending(section_index);
         }
     }
 
@@ -151,7 +164,7 @@ impl DocumentReaderView {
             section.content.push_str(&content);
             section.recently_updated = true;
             section.invalidate_cache();
-            self.pending_sections.remove(&section_index);
+            self.resolve_pending(section_index);
         }
     }
 
@@ -163,7 +176,7 @@ impl DocumentReaderView {
                 section.recently_updated = true;
                 section.invalidate_cache();
             }
-            self.pending_sections.remove(&section_index);
+            self.resolve_pending(section_index);
         }
     }
 
@@ -256,13 +269,16 @@ impl DocumentReaderView {
             .unwrap_or("");
 
         let context = format!(
-            "[The user is viewing Document \"{}\" in reading mode, currently on Section {}: \"{}\"]\n\n\
-             {}\n\n\
-             IMPORTANT: To update this section with your answer, you MUST call \
-             `update_document_section` (or `append_to_section` / `patch_document_section`) \
-             with document_id=\"{}\" and section_index={}. Do NOT output plain text \u{2014} \
-             it will not be visible to the user. Only tool calls update the document.",
-            self.title, self.current_section, heading, text, self.document_id, self.current_section,
+            "[The user is reading \"{title}\" and asked about the section titled \"{heading}\"]\n\n\
+             {text}\n\n\
+             Reply by calling: append_to_section(document_id=\"{doc_id}\", section_index={idx}, content=\"...\")\n\
+             This adds your answer below the existing section content. Do NOT rewrite the section. \
+             Do NOT output plain text; only tool calls are visible to the user.",
+            title = self.title,
+            heading = heading,
+            text = text,
+            doc_id = self.document_id,
+            idx = self.current_section,
         );
 
         self.app_event_tx.send(AppEvent::CodexOp(Op::UserInput {
@@ -272,10 +288,11 @@ impl DocumentReaderView {
             }],
             final_output_json_schema: None,
         }));
-        self.pending_sections.insert(self.current_section, text);
+        self.pending_sections
+            .insert(self.current_section, (text, Instant::now()));
         self.textarea = TextArea::new();
         *self.textarea_state.borrow_mut() = TextAreaState::default();
-        self.focus = ReaderFocus::Content;
+        // Keep composer focused — it will render the question + spinner while pending.
     }
 
     fn input_height(&self, _width: u16) -> u16 {
@@ -324,6 +341,9 @@ impl DocumentReaderView {
     }
 
     fn handle_composer_key(&mut self, key_event: KeyEvent) {
+        // While the current section has a pending answer, block editing.
+        let pending = self.pending_sections.contains_key(&self.current_section);
+
         match key_event {
             KeyEvent {
                 code: KeyCode::Esc, ..
@@ -332,6 +352,9 @@ impl DocumentReaderView {
                 code: KeyCode::Tab, ..
             } => {
                 self.focus = ReaderFocus::Content;
+            }
+            _ if pending => {
+                // Ignore all other keys while waiting for the agent.
             }
             KeyEvent {
                 code: KeyCode::Enter,
@@ -424,8 +447,13 @@ impl BottomPaneView for DocumentReaderView {
     fn handle_turn_complete(&mut self) {
         // If any sections were pending updates but the turn ended without
         // the agent calling an update tool, clear all pending state so the
-        // user isn't stuck with permanent "thinking..." indicators.
-        self.pending_sections.clear();
+        // user isn't stuck with permanent spinner indicators.
+        if !self.pending_sections.is_empty() {
+            self.pending_sections.clear();
+            if self.focus == ReaderFocus::Composer {
+                self.focus = ReaderFocus::Content;
+            }
+        }
     }
 }
 
@@ -511,10 +539,9 @@ impl Renderable for DocumentReaderView {
         );
         y += 1;
 
-        // Header — show "thinking..." only when the current section is pending.
+        // Header — no longer shows "thinking..." here; the spinner is in the composer.
         let current_pending = self.pending_sections.contains_key(&self.current_section);
-        let header =
-            render::header_line(&self.title, section_num, section_count, current_pending, w);
+        let header = render::header_line(&self.title, section_num, section_count, false, w);
         Paragraph::new(header).render(
             Rect {
                 y,
@@ -544,7 +571,7 @@ impl Renderable for DocumentReaderView {
                 let mut raw_lines = section.rendered_lines(inner_width);
 
                 // Append pending indicator if the current section has a pending question.
-                if let Some(question) = self.pending_sections.get(&self.current_section) {
+                if let Some((question, _)) = self.pending_sections.get(&self.current_section) {
                     raw_lines.extend(render::pending_indicator_lines(question, inner_width));
                 }
 
@@ -577,7 +604,7 @@ impl Renderable for DocumentReaderView {
                     .get(self.current_section)
                     .map(|s| {
                         let mut count = s.rendered_lines(inner_width).len();
-                        if let Some(q) = self.pending_sections.get(&self.current_section) {
+                        if let Some((q, _)) = self.pending_sections.get(&self.current_section) {
                             count += render::pending_indicator_lines(q, inner_width).len();
                         }
                         count.saturating_sub(self.scroll_offset as usize)
@@ -634,51 +661,96 @@ impl Renderable for DocumentReaderView {
 
         // Composer (if focused)
         if self.focus == ReaderFocus::Composer {
-            let input_h = self.input_height(w.saturating_sub(4));
-            by = by.saturating_sub(input_h);
-            // Render composer with side borders approximated by the TextArea's own chrome.
-            // We inset the textarea by 2 chars on each side to sit inside the card.
-            let ta_area = Rect {
-                x: area.x + 2,
-                y: by,
-                width: w.saturating_sub(4),
-                height: input_h,
+            // When a question is pending, show the question text + spinner instead
+            // of the editable textarea.
+            let pending_data = if current_pending {
+                self.pending_sections.get(&self.current_section).cloned()
+            } else {
+                None
             };
-            // Draw side borders for the composer rows.
-            for row in 0..input_h {
-                let ry = by + row;
-                if ry < bottom {
-                    // Left border
-                    if let Some(cell) = buf.cell_mut((area.x, ry)) {
-                        cell.set_symbol("│");
-                        cell.set_style(ratatui::style::Style::default().dim());
-                    }
-                    if let Some(cell) = buf.cell_mut((area.x + 1, ry)) {
-                        cell.set_symbol(" ");
-                    }
-                    // Right border
-                    let rx = area.x + w.saturating_sub(1);
-                    if let Some(cell) = buf.cell_mut((rx, ry)) {
-                        cell.set_symbol("│");
-                        cell.set_style(ratatui::style::Style::default().dim());
-                    }
-                    if rx > 0
-                        && let Some(cell) = buf.cell_mut((rx - 1, ry))
-                    {
-                        cell.set_symbol(" ");
+
+            if let Some((question, start_time)) = pending_data {
+                // Render the question + animated spinner in the composer area.
+                let inner_w = w.saturating_sub(4);
+                let display = format!("\u{25B8} {question}");
+                let wrapped_lines = textwrap::wrap(&display, inner_w.max(1) as usize);
+                let mut composer_lines: Vec<Line<'static>> = wrapped_lines
+                    .iter()
+                    .map(|cow| Line::from(cow.to_string().dim().italic()))
+                    .collect();
+                let spin = crate::exec_cell::spinner(Some(start_time), self.animations_enabled);
+                composer_lines.push(Line::from(vec![spin, " ".into()]));
+
+                let input_h = (composer_lines.len() as u16).clamp(1, 4);
+                by = by.saturating_sub(input_h);
+                let ta_area = Rect {
+                    x: area.x + 2,
+                    y: by,
+                    width: inner_w,
+                    height: input_h,
+                };
+                // Draw side borders.
+                for row in 0..input_h {
+                    let ry = by + row;
+                    if ry < bottom {
+                        if let Some(cell) = buf.cell_mut((area.x, ry)) {
+                            cell.set_symbol("│");
+                            cell.set_style(ratatui::style::Style::default().dim());
+                        }
+                        if let Some(cell) = buf.cell_mut((area.x + 1, ry)) {
+                            cell.set_symbol(" ");
+                        }
+                        let rx = area.x + w.saturating_sub(1);
+                        if let Some(cell) = buf.cell_mut((rx, ry)) {
+                            cell.set_symbol("│");
+                            cell.set_style(ratatui::style::Style::default().dim());
+                        }
+                        if rx > 0
+                            && let Some(cell) = buf.cell_mut((rx - 1, ry))
+                        {
+                            cell.set_symbol(" ");
+                        }
                     }
                 }
-            }
-            let mut state = self.textarea_state.borrow_mut();
-            StatefulWidgetRef::render_ref(&(&self.textarea), ta_area, buf, &mut state);
-            // Placeholder text.
-            if self.textarea.text().is_empty() {
-                let placeholder = if current_pending {
-                    "Waiting for update..."
-                } else {
-                    "Ask about this section..."
+                Paragraph::new(composer_lines).render(ta_area, buf);
+            } else {
+                let input_h = self.input_height(w.saturating_sub(4));
+                by = by.saturating_sub(input_h);
+                let ta_area = Rect {
+                    x: area.x + 2,
+                    y: by,
+                    width: w.saturating_sub(4),
+                    height: input_h,
                 };
-                Paragraph::new(placeholder.dim().italic()).render(ta_area, buf);
+                // Draw side borders for the composer rows.
+                for row in 0..input_h {
+                    let ry = by + row;
+                    if ry < bottom {
+                        if let Some(cell) = buf.cell_mut((area.x, ry)) {
+                            cell.set_symbol("│");
+                            cell.set_style(ratatui::style::Style::default().dim());
+                        }
+                        if let Some(cell) = buf.cell_mut((area.x + 1, ry)) {
+                            cell.set_symbol(" ");
+                        }
+                        let rx = area.x + w.saturating_sub(1);
+                        if let Some(cell) = buf.cell_mut((rx, ry)) {
+                            cell.set_symbol("│");
+                            cell.set_style(ratatui::style::Style::default().dim());
+                        }
+                        if rx > 0
+                            && let Some(cell) = buf.cell_mut((rx - 1, ry))
+                        {
+                            cell.set_symbol(" ");
+                        }
+                    }
+                }
+                let mut state = self.textarea_state.borrow_mut();
+                StatefulWidgetRef::render_ref(&(&self.textarea), ta_area, buf, &mut state);
+                // Placeholder text.
+                if self.textarea.text().is_empty() {
+                    Paragraph::new("Ask about this section...".dim().italic()).render(ta_area, buf);
+                }
             }
 
             // Separator above composer
@@ -766,6 +838,12 @@ fn parse_sections(_title: &str, content: &str) -> Vec<DocumentSection> {
         recently_updated: false,
     });
 
+    // Drop the empty preamble section when the document starts with `## `.
+    if sections.len() > 1 && sections[0].heading.is_empty() && sections[0].content.trim().is_empty()
+    {
+        sections.remove(0);
+    }
+
     sections
 }
 
@@ -812,6 +890,7 @@ mod tests {
             "Test Report".to_string(),
             test_content(),
             tx,
+            true,
         )
     }
 
@@ -859,19 +938,20 @@ mod tests {
     fn parse_sections_single_heading() {
         let content = "## Only Section\nContent here";
         let sections = parse_sections("Title", content);
-        assert_eq!(sections.len(), 2);
-        assert_eq!(sections[0].heading, "");
-        assert!(sections[0].content.is_empty());
-        assert_eq!(sections[1].heading, "Only Section");
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].heading, "Only Section");
+        assert_eq!(sections[0].content, "Content here");
     }
 
     #[test]
     fn parse_sections_empty_sections() {
         let content = "## A\n## B\n## C";
         let sections = parse_sections("Title", content);
-        assert_eq!(sections.len(), 4);
+        // Empty preamble is dropped, leaving 3 sections.
+        assert_eq!(sections.len(), 3);
+        assert_eq!(sections[0].heading, "A");
+        assert!(sections[0].content.is_empty());
         assert!(sections[1].content.is_empty());
-        assert!(sections[2].content.is_empty());
     }
 
     // -----------------------------------------------------------------------
@@ -1153,9 +1233,9 @@ mod tests {
 
         // Should be waiting for update on section 2.
         assert!(view.pending_sections.contains_key(&2));
-        // Composer should be cleared and focus returned to content.
+        // Composer should be cleared and focus stays on composer (shows question + spinner).
         assert!(view.textarea.text().is_empty());
-        assert_eq!(view.focus, ReaderFocus::Content);
+        assert_eq!(view.focus, ReaderFocus::Composer);
 
         // Verify the Op was emitted with section context.
         let mut found_op = false;
@@ -1174,7 +1254,7 @@ mod tests {
                     "context should include the question: {text}"
                 );
                 assert!(
-                    text.contains("Section 2"),
+                    text.contains("section_index=2"),
                     "context should include section index: {text}"
                 );
                 found_op = true;
@@ -1207,7 +1287,8 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
 
-        view.pending_sections.insert(1, "test question".into());
+        view.pending_sections
+            .insert(1, ("test question".into(), Instant::now()));
         view.update_section(1, "Updated methodology content.".to_string());
 
         assert!(
@@ -1239,7 +1320,8 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
 
-        view.pending_sections.insert(99, "test question".into());
+        view.pending_sections
+            .insert(99, ("test question".into(), Instant::now()));
         view.update_section(99, "Does not exist.".to_string());
 
         // pending should stay since the update was ignored (section doesn't exist).
@@ -1252,7 +1334,8 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
 
-        view.pending_sections.insert(2, "test question".into());
+        view.pending_sections
+            .insert(2, ("test question".into(), Instant::now()));
 
         // Matching document_id should update.
         view.handle_document_section_update("test-doc", 2, "New results.".to_string());
@@ -1260,7 +1343,8 @@ mod tests {
         assert_eq!(view.sections[2].content, "New results.");
 
         // Non-matching document_id should be ignored.
-        view.pending_sections.insert(0, "test question".into());
+        view.pending_sections
+            .insert(0, ("test question".into(), Instant::now()));
         view.handle_document_section_update("other-doc", 0, "Ignored.".to_string());
         assert!(view.pending_sections.contains_key(&0));
     }
@@ -1276,8 +1360,10 @@ mod tests {
         let mut view = make_view(tx);
 
         // Simulate submitting follow-ups for sections 1 and 2.
-        view.pending_sections.insert(1, "test question".into());
-        view.pending_sections.insert(2, "test question".into());
+        view.pending_sections
+            .insert(1, ("test question".into(), Instant::now()));
+        view.pending_sections
+            .insert(2, ("test question".into(), Instant::now()));
 
         // Turn completes without the agent calling update tools.
         view.handle_turn_complete();
@@ -1362,7 +1448,7 @@ mod tests {
         view.handle_key_event(key(KeyCode::Enter));
 
         assert!(view.pending_sections.contains_key(&2));
-        assert_eq!(view.focus, ReaderFocus::Content);
+        assert_eq!(view.focus, ReaderFocus::Composer);
 
         // Drain the UserInput event.
         let mut got_input = false;
@@ -1463,7 +1549,8 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
 
-        view.pending_sections.insert(1, "test question".into());
+        view.pending_sections
+            .insert(1, ("test question".into(), Instant::now()));
         view.append_to_section(1, "Additional details here.".to_string());
 
         assert!(view.sections[1].content.contains("Method details here."));
@@ -1498,7 +1585,8 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
 
-        view.pending_sections.insert(1, "test question".into());
+        view.pending_sections
+            .insert(1, ("test question".into(), Instant::now()));
         view.patch_section(1, "Method details here.", "Improved method details.");
 
         assert_eq!(view.sections[1].content, "Improved method details.");
@@ -1513,7 +1601,8 @@ mod tests {
         let mut view = make_view(tx);
 
         let original = view.sections[1].content.clone();
-        view.pending_sections.insert(1, "test question".into());
+        view.pending_sections
+            .insert(1, ("test question".into(), Instant::now()));
         view.patch_section(1, "nonexistent text", "replacement");
 
         // Content unchanged since old_text wasn't found.
@@ -1552,8 +1641,10 @@ mod tests {
         let mut view = make_view(tx);
 
         // Simulate asking about sections 1 and 3.
-        view.pending_sections.insert(1, "test question".into());
-        view.pending_sections.insert(3, "test question".into());
+        view.pending_sections
+            .insert(1, ("test question".into(), Instant::now()));
+        view.pending_sections
+            .insert(3, ("test question".into(), Instant::now()));
 
         // Update section 1 — only section 1 should clear.
         view.update_section(1, "Updated.".to_string());
@@ -1572,7 +1663,8 @@ mod tests {
         let mut view = make_view(tx);
 
         // Ask about section 0, then navigate away.
-        view.pending_sections.insert(0, "test question".into());
+        view.pending_sections
+            .insert(0, ("test question".into(), Instant::now()));
         view.handle_content_key(key(KeyCode::Char('n')));
         assert_eq!(view.current_section, 1);
 
