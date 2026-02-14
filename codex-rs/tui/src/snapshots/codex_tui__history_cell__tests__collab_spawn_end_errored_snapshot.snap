@@ -1,0 +1,10 @@
+---
+source: tui/src/history_cell.rs
+expression: rendered
+---
+• Agent spawned
+  └ call: call_123
+    agent: not created
+    status: errored
+    error: collab manager unavailable
+    prompt: You are helping me improve RepoMaster (arXiv:2505.21577).
