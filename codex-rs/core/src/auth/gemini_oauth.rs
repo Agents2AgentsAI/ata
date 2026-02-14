@@ -18,6 +18,7 @@ use super::login_with_provider_oauth;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
+use crate::util::redact_error_body;
 
 pub const GEMINI_OAUTH_CLIENT_ID_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_CLIENT_ID";
 pub const GEMINI_OAUTH_CLIENT_SECRET_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_CLIENT_SECRET";
@@ -330,8 +331,9 @@ async fn refresh_access_token(
             ));
         }
 
+        let redacted_body = redact_error_body(&body);
         return Err(CodexErr::Api(format!(
-            "Gemini OAuth token refresh failed ({status}): {body}"
+            "Gemini OAuth token refresh failed ({status}): {redacted_body}"
         )));
     }
 
@@ -831,6 +833,155 @@ mod tests {
                 AuthCredentialsStoreMode::File,
             ),
             None,
+        );
+    }
+
+    #[tokio::test]
+    #[serial(gemini_oauth_env)]
+    async fn load_code_assist_project_is_persisted_as_managed_project() {
+        let codex_home = tempdir().expect("tempdir");
+        let code_assist_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1internal:loadCodeAssist"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{
+                    "cloudaicompanionProject":"managed-from-load",
+                    "currentTier":{"id":"free-tier","isDefault":true}
+                }"#,
+            ))
+            .expect(1)
+            .mount(&code_assist_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1internal:onboardUser"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&code_assist_server)
+            .await;
+
+        let _base_url_guard = EnvVarGuard::set(
+            GEMINI_CODE_ASSIST_BASE_URL_ENV_VAR,
+            &code_assist_server.uri(),
+        );
+        let _project_guard = EnvVarGuard::set(GEMINI_PROJECT_ENV_VAR, "");
+        let _project_id_guard = EnvVarGuard::set(GEMINI_PROJECT_ID_ENV_VAR, "");
+
+        let credential = ProviderOauthCredential {
+            access: "existing-access".to_string(),
+            refresh: "existing-refresh".to_string(),
+            expires: Some(Utc::now() + Duration::hours(1)),
+            email: Some("user@example.com".to_string()),
+            project_id: None,
+            managed_project_id: None,
+        };
+        login_with_provider_oauth(
+            codex_home.path(),
+            PROVIDER_GEMINI,
+            credential.clone(),
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store oauth");
+
+        let context = ensure_gemini_oauth_context(
+            codex_home.path(),
+            AuthCredentialsStoreMode::File,
+            credential,
+        )
+        .await
+        .expect("context should resolve");
+        assert_eq!(context.project_id, "managed-from-load");
+
+        let persisted = get_provider_oauth_credential(
+            codex_home.path(),
+            PROVIDER_GEMINI,
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("oauth credential should exist");
+        assert_eq!(
+            persisted.managed_project_id.as_deref(),
+            Some("managed-from-load")
+        );
+    }
+
+    #[tokio::test]
+    #[serial(gemini_oauth_env)]
+    async fn onboard_user_polling_resolves_and_persists_project() {
+        let codex_home = tempdir().expect("tempdir");
+        let code_assist_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1internal:loadCodeAssist"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{
+                    "currentTier":{"id":"free-tier","isDefault":true},
+                    "allowedTiers":[{"id":"free-tier","isDefault":true}]
+                }"#,
+            ))
+            .expect(1)
+            .mount(&code_assist_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1internal:onboardUser"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"{"name":"operations/op-1","done":false}"#),
+            )
+            .expect(1)
+            .mount(&code_assist_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1internal/operations/op-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{
+                    "name":"operations/op-1",
+                    "done":true,
+                    "response":{"cloudaicompanionProject":{"id":"managed-from-onboard"}}
+                }"#,
+            ))
+            .expect(1)
+            .mount(&code_assist_server)
+            .await;
+
+        let _base_url_guard = EnvVarGuard::set(
+            GEMINI_CODE_ASSIST_BASE_URL_ENV_VAR,
+            &code_assist_server.uri(),
+        );
+        let _project_guard = EnvVarGuard::set(GEMINI_PROJECT_ENV_VAR, "");
+        let _project_id_guard = EnvVarGuard::set(GEMINI_PROJECT_ID_ENV_VAR, "");
+
+        let credential = ProviderOauthCredential {
+            access: "existing-access".to_string(),
+            refresh: "existing-refresh".to_string(),
+            expires: Some(Utc::now() + Duration::hours(1)),
+            email: Some("user@example.com".to_string()),
+            project_id: None,
+            managed_project_id: None,
+        };
+        login_with_provider_oauth(
+            codex_home.path(),
+            PROVIDER_GEMINI,
+            credential.clone(),
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store oauth");
+
+        let context = ensure_gemini_oauth_context(
+            codex_home.path(),
+            AuthCredentialsStoreMode::File,
+            credential,
+        )
+        .await
+        .expect("context should resolve");
+        assert_eq!(context.project_id, "managed-from-onboard");
+
+        let persisted = get_provider_oauth_credential(
+            codex_home.path(),
+            PROVIDER_GEMINI,
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("oauth credential should exist");
+        assert_eq!(
+            persisted.managed_project_id.as_deref(),
+            Some("managed-from-onboard")
         );
     }
 }
