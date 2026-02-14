@@ -899,6 +899,7 @@ use codex_api::file_support::FileReferenceCache;
 use codex_api::file_support::FileRoutingError;
 use codex_api::file_support::FileUploadError;
 use codex_api::file_support::file_capabilities_for;
+use codex_api::file_support::map_user_facing_file_error_from_message;
 use codex_api::file_support::maybe_upload_file;
 use codex_api::file_support::upload::AnthropicFileUpload;
 use codex_api::file_support::upload::FileUploadService;
@@ -5140,6 +5141,25 @@ pub(crate) async fn run_turn(
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
 
+    async fn drop_last_turn_url_file_attachments(sess: &Arc<Session>) -> usize {
+        let url_attachments_in_turn = {
+            let mut active = sess.active_turn.lock().await;
+            match active.as_mut() {
+                Some(active_turn) => {
+                    let turn_state = active_turn.turn_state.lock().await;
+                    turn_state.url_attachments_injected()
+                }
+                None => 0,
+            }
+        };
+        let mut state = sess.state.lock().await;
+        state
+            .history
+            .drop_last_turn_url_files(url_attachments_in_turn)
+    }
+
+    let mut url_file_recovery_attempted = false;
+
     loop {
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
@@ -5288,33 +5308,21 @@ pub(crate) async fn run_turn(
                 break;
             }
             Err(CodexErr::ContextWindowExceeded) => {
-                let url_attachments_in_turn = {
-                    let mut active = sess.active_turn.lock().await;
-                    match active.as_mut() {
-                        Some(active_turn) => {
-                            let turn_state = active_turn.turn_state.lock().await;
-                            turn_state.url_attachments_injected()
-                        }
-                        None => 0,
+                if !url_file_recovery_attempted {
+                    let dropped_url_files = drop_last_turn_url_file_attachments(&sess).await;
+                    if dropped_url_files > 0 {
+                        url_file_recovery_attempted = true;
+                        sess.send_event(
+                            &turn_context,
+                            EventMsg::Warning(WarningEvent {
+                                message: format!(
+                                    "Dropped {dropped_url_files} attachment(s) because the context window was exceeded."
+                                ),
+                            }),
+                        )
+                        .await;
+                        continue;
                     }
-                };
-                let dropped_url_files = {
-                    let mut state = sess.state.lock().await;
-                    state
-                        .history
-                        .drop_last_turn_url_files(url_attachments_in_turn)
-                };
-                if dropped_url_files > 0 {
-                    sess.send_event(
-                        &turn_context,
-                        EventMsg::Warning(WarningEvent {
-                            message: format!(
-                                "Dropped {dropped_url_files} attachment(s) because the context window was exceeded."
-                            ),
-                        }),
-                    )
-                    .await;
-                    continue;
                 }
 
                 // Only attempt compaction if there's conversation history
@@ -5342,6 +5350,45 @@ pub(crate) async fn run_turn(
                 // No history to compact — surface clear error.
                 info!("Context window exceeded on initial input; no history to compact");
                 let event = EventMsg::Error(CodexErr::ContextWindowExceeded.to_error_event(None));
+                sess.send_event(&turn_context, event).await;
+                break;
+            }
+            Err(CodexErr::InvalidRequest(ref message))
+                if !url_file_recovery_attempted
+                    && map_user_facing_file_error_from_message(message).is_some() =>
+            {
+                // The API rejected a file attachment (unsupported format, encrypted,
+                // too many pages, stale reference). Drop URL file attachments from
+                // history to prevent an infinite loop where the same unprocessable
+                // file is re-sent on every subsequent turn.
+                //
+                // Use the mapped user_message for the warning (not the raw message)
+                // to avoid leaking internal provider details like file IDs.
+                let user_message = map_user_facing_file_error_from_message(message)
+                    .expect("guard confirmed classification")
+                    .user_message;
+                tracing::debug!(
+                    raw_message = %message,
+                    "file-related InvalidRequest mapped for recovery"
+                );
+                let dropped_url_files = drop_last_turn_url_file_attachments(&sess).await;
+                if dropped_url_files > 0 {
+                    url_file_recovery_attempted = true;
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::Warning(WarningEvent {
+                            message: format!(
+                                "Dropped {dropped_url_files} file attachment(s) that the provider rejected: {user_message}"
+                            ),
+                        }),
+                    )
+                    .await;
+                    continue;
+                }
+                // No URL files to drop — surface the error normally.
+                info!("Turn error (file-related): {user_message}");
+                let event =
+                    EventMsg::Error(CodexErr::InvalidRequest(message.clone()).to_error_event(None));
                 sess.send_event(&turn_context, event).await;
                 break;
             }
