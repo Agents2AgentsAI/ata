@@ -199,6 +199,24 @@ fn paper_fields(include_abstract: bool) -> &'static str {
 }
 
 fn map_paper(paper: SemanticScholarPaper, api_url: &str, source: &str) -> Paper {
+    let arxiv_id = paper
+        .external_ids
+        .as_ref()
+        .and_then(|ids| ids.arxiv_id.clone());
+
+    let mut pdf_url = paper.open_access_pdf.and_then(|pdf| pdf.url);
+    if pdf_url.is_none()
+        && let Some(arxiv_id) = arxiv_id.as_deref()
+    {
+        let normalized = arxiv_id
+            .trim()
+            .trim_start_matches("arXiv:")
+            .trim_start_matches("ARXIV:");
+        if !normalized.is_empty() {
+            pdf_url = Some(format!("https://arxiv.org/pdf/{normalized}.pdf"));
+        }
+    }
+
     let mut mapped = Paper {
         title: paper.title,
         authors: paper
@@ -213,14 +231,11 @@ fn map_paper(paper: SemanticScholarPaper, api_url: &str, source: &str) -> Paper 
         citation_count: paper.citation_count,
         abstract_text: paper.abstract_text,
         doi: paper.external_ids.as_ref().and_then(|ids| ids.doi.clone()),
-        arxiv_id: paper
-            .external_ids
-            .as_ref()
-            .and_then(|ids| ids.arxiv_id.clone()),
+        arxiv_id,
         s2_paper_id: paper.paper_id,
         openalex_id: None,
         url: paper.url,
-        pdf_url: paper.open_access_pdf.and_then(|pdf| pdf.url),
+        pdf_url,
         code_url: None,
         source_meta: None,
     };

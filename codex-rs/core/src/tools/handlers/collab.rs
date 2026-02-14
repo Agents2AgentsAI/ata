@@ -160,7 +160,7 @@ mod spawn {
                 Some(*thread_id),
                 session.services.agent_control.get_status(*thread_id).await,
             ),
-            Err(_) => (None, AgentStatus::NotFound),
+            Err(err) => (None, AgentStatus::Errored(err.to_string())),
         };
         session
             .send_event(
