@@ -779,6 +779,7 @@ impl BottomPane {
             ev.title,
             ev.content,
             self.app_event_tx.clone(),
+            self.animations_enabled,
         );
         self.push_view(Box::new(view));
     }

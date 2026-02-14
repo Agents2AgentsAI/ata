@@ -84,6 +84,12 @@ fn parse_sections(content: &str) -> Vec<CachedSection> {
         content: current_content,
     });
 
+    // Drop the empty preamble section when the document starts with `## `.
+    if sections.len() > 1 && sections[0].heading.is_empty() && sections[0].content.trim().is_empty()
+    {
+        sections.remove(0);
+    }
+
     sections
 }
 
@@ -328,7 +334,10 @@ impl ToolHandler for DocumentReaderHandler {
 
                 // Resolve title and content: use provided values, or fall back to cache.
                 let (title, doc_content) = {
-                    let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut cache = self
+                        .cache
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     match (args.title, args.content) {
                         (Some(t), Some(c)) => {
                             // New document or full replacement — cache it.
@@ -371,10 +380,10 @@ impl ToolHandler for DocumentReaderHandler {
                     )
                     .await;
                 "Document displayed in reading mode. The user can now navigate sections \
-                 and ask follow-up questions. When the user asks about a section, update it \
-                 using update_document_section, append_to_section, or patch_document_section \
-                 with the matching document_id. Do NOT output plain text responses \u{2014} only \
-                 tool calls will be visible to the user."
+                 and ask follow-up questions. When the user asks about a section, use \
+                 `append_to_section` to add your answer below the existing content (preferred). \
+                 Use `update_document_section` only if the user asks you to rewrite a section. \
+                 Do NOT output plain text responses \u{2014} only tool calls are visible to the user."
                     .to_string()
             }
             "update_document_section" => {
@@ -393,22 +402,21 @@ impl ToolHandler for DocumentReaderHandler {
                 }
 
                 // Mirror the update in the cache.
-                if let Ok(mut cache) = self.cache.lock() {
-                    if let Some(doc) = cache.get_mut(&args.document_id) {
-                        if let Some(section) = doc.sections.get_mut(args.section_index) {
-                            // Re-derive heading if content starts with `## `.
-                            if let Some(rest) = args.content.strip_prefix("## ") {
-                                if let Some(nl) = rest.find('\n') {
-                                    section.heading = rest[..nl].trim().to_string();
-                                    section.content = rest[nl + 1..].to_string();
-                                } else {
-                                    section.heading = rest.trim().to_string();
-                                    section.content = String::new();
-                                }
-                            } else {
-                                section.content = args.content.clone();
-                            }
+                if let Ok(mut cache) = self.cache.lock()
+                    && let Some(doc) = cache.get_mut(&args.document_id)
+                    && let Some(section) = doc.sections.get_mut(args.section_index)
+                {
+                    // Re-derive heading if content starts with `## `.
+                    if let Some(rest) = args.content.strip_prefix("## ") {
+                        if let Some(nl) = rest.find('\n') {
+                            section.heading = rest[..nl].trim().to_string();
+                            section.content = rest[nl + 1..].to_string();
+                        } else {
+                            section.heading = rest.trim().to_string();
+                            section.content = String::new();
                         }
+                    } else {
+                        section.content = args.content.clone();
                     }
                 }
 
@@ -441,15 +449,14 @@ impl ToolHandler for DocumentReaderHandler {
                 }
 
                 // Mirror the append in the cache.
-                if let Ok(mut cache) = self.cache.lock() {
-                    if let Some(doc) = cache.get_mut(&args.document_id) {
-                        if let Some(section) = doc.sections.get_mut(args.section_index) {
-                            if !section.content.is_empty() && !section.content.ends_with('\n') {
-                                section.content.push('\n');
-                            }
-                            section.content.push_str(&args.content);
-                        }
+                if let Ok(mut cache) = self.cache.lock()
+                    && let Some(doc) = cache.get_mut(&args.document_id)
+                    && let Some(section) = doc.sections.get_mut(args.section_index)
+                {
+                    if !section.content.is_empty() && !section.content.ends_with('\n') {
+                        section.content.push('\n');
                     }
+                    section.content.push_str(&args.content);
                 }
 
                 session
@@ -482,15 +489,12 @@ impl ToolHandler for DocumentReaderHandler {
                 }
 
                 // Mirror the patch in the cache.
-                if let Ok(mut cache) = self.cache.lock() {
-                    if let Some(doc) = cache.get_mut(&args.document_id) {
-                        if let Some(section) = doc.sections.get_mut(args.section_index) {
-                            if section.content.contains(&args.old_text) {
-                                section.content =
-                                    section.content.replacen(&args.old_text, &args.new_text, 1);
-                            }
-                        }
-                    }
+                if let Ok(mut cache) = self.cache.lock()
+                    && let Some(doc) = cache.get_mut(&args.document_id)
+                    && let Some(section) = doc.sections.get_mut(args.section_index)
+                    && section.content.contains(&args.old_text)
+                {
+                    section.content = section.content.replacen(&args.old_text, &args.new_text, 1);
                 }
 
                 session

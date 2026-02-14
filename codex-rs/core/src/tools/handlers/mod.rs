@@ -7,6 +7,8 @@ mod document_reader;
 mod dynamic;
 mod grep_files;
 mod js_repl;
+#[cfg(feature = "kb")]
+pub(crate) mod kb;
 mod list_dir;
 mod mcp;
 mod mcp_resource;
@@ -38,6 +40,8 @@ pub use dynamic::DynamicToolHandler;
 pub use grep_files::GrepFilesHandler;
 pub use js_repl::JsReplHandler;
 pub use js_repl::JsReplResetHandler;
+#[cfg(feature = "kb")]
+pub(crate) use kb::KbBridgeHandler;
 pub use list_dir::ListDirHandler;
 pub use mcp::McpHandler;
 pub use mcp_resource::McpResourceHandler;

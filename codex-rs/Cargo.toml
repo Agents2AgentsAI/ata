@@ -55,7 +55,6 @@ members = [
     "codex-research-tools",
     "codex-data-tools",
     "codex-kb",
-    "codex-kb-mcp",
     "state",
     "codex-experimental-api-macros",
 ]
