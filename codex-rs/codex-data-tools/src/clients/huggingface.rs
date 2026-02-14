@@ -77,11 +77,7 @@ impl<'a> HuggingFaceClient<'a> {
             .map(|r| self.convert_dataset(r))
             .collect();
 
-        Ok(SearchPage {
-            items: datasets,
-            total_available: None,
-            has_more: false,
-        })
+        Ok(SearchPage { items: datasets })
     }
 
     /// Get dataset information by ID
