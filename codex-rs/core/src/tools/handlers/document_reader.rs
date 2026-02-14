@@ -19,9 +19,102 @@ use codex_protocol::document_reader::UpdateDocumentSectionEvent;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::protocol::EventMsg;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::LazyLock;
+use std::sync::Mutex;
 
-pub struct DocumentReaderHandler;
+// ---------------------------------------------------------------------------
+// Cached document state
+// ---------------------------------------------------------------------------
+
+struct CachedSection {
+    heading: String,
+    content: String,
+}
+
+struct CachedDocument {
+    title: String,
+    sections: Vec<CachedSection>,
+}
+
+impl CachedDocument {
+    /// Reconstruct full markdown from cached sections.
+    fn to_markdown(&self) -> String {
+        let mut out = String::new();
+        for section in &self.sections {
+            if !section.heading.is_empty() {
+                out.push_str("## ");
+                out.push_str(&section.heading);
+                out.push('\n');
+            }
+            out.push_str(&section.content);
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+        out
+    }
+}
+
+/// Parse markdown content into sections split on `## ` headings.
+fn parse_sections(content: &str) -> Vec<CachedSection> {
+    let mut sections = Vec::new();
+    let mut current_heading = String::new();
+    let mut current_content = String::new();
+
+    for line in content.lines() {
+        if let Some(heading_text) = line.strip_prefix("## ") {
+            sections.push(CachedSection {
+                heading: current_heading,
+                content: current_content,
+            });
+            current_heading = heading_text.trim().to_string();
+            current_content = String::new();
+        } else {
+            if !current_content.is_empty() {
+                current_content.push('\n');
+            }
+            current_content.push_str(line);
+        }
+    }
+
+    sections.push(CachedSection {
+        heading: current_heading,
+        content: current_content,
+    });
+
+    sections
+}
+
+// ---------------------------------------------------------------------------
+// Handler
+// ---------------------------------------------------------------------------
+
+pub struct DocumentReaderHandler {
+    /// Caches documents by document_id. Stores the latest state including
+    /// section updates so the agent can re-display without reproducing content.
+    cache: Mutex<HashMap<String, CachedDocument>>,
+}
+
+impl DocumentReaderHandler {
+    pub fn new() -> Self {
+        Self {
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn is_active_document(&self, document_id: &str) -> bool {
+        self.cache
+            .lock()
+            .map(|docs| docs.contains_key(document_id))
+            .unwrap_or(false)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool specs
+// ---------------------------------------------------------------------------
 
 pub static PRESENT_DOCUMENT_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
@@ -52,16 +145,14 @@ pub static PRESENT_DOCUMENT_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         name: "present_document".to_string(),
         description: "Present a long document in sectioned reading mode. The user can navigate \
                        sections and ask follow-up questions. After calling this tool, end your \
-                       response and wait for user interaction."
+                       response and wait for user interaction. To re-display a previously \
+                       presented document (with all section updates intact), pass only the \
+                       document_id — title and content are optional in that case."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec![
-                "document_id".to_string(),
-                "title".to_string(),
-                "content".to_string(),
-            ]),
+            required: Some(vec!["document_id".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -198,6 +289,10 @@ pub static PATCH_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     })
 });
 
+// ---------------------------------------------------------------------------
+// ToolHandler impl
+// ---------------------------------------------------------------------------
+
 #[async_trait]
 impl ToolHandler for DocumentReaderHandler {
     fn kind(&self) -> ToolKind {
@@ -230,6 +325,39 @@ impl ToolHandler for DocumentReaderHandler {
                         "failed to parse present_document arguments: {e}"
                     ))
                 })?;
+
+                // Resolve title and content: use provided values, or fall back to cache.
+                let (title, doc_content) = {
+                    let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+                    match (args.title, args.content) {
+                        (Some(t), Some(c)) => {
+                            // New document or full replacement — cache it.
+                            let sections = parse_sections(&c);
+                            cache.insert(
+                                args.document_id.clone(),
+                                CachedDocument {
+                                    title: t.clone(),
+                                    sections,
+                                },
+                            );
+                            (t, c)
+                        }
+                        _ => {
+                            // Re-display from cache.
+                            if let Some(cached) = cache.get(&args.document_id) {
+                                (cached.title.clone(), cached.to_markdown())
+                            } else {
+                                return Err(FunctionCallError::RespondToModel(format!(
+                                    "No cached document with id \"{}\". \
+                                     Provide title and content when presenting a document \
+                                     for the first time.",
+                                    args.document_id
+                                )));
+                            }
+                        }
+                    }
+                };
+
                 session
                     .send_event(
                         turn.as_ref(),
@@ -237,12 +365,17 @@ impl ToolHandler for DocumentReaderHandler {
                             call_id,
                             turn_id: turn.sub_id.clone(),
                             document_id: args.document_id,
-                            title: args.title,
-                            content: args.content,
+                            title,
+                            content: doc_content,
                         }),
                     )
                     .await;
-                "Document displayed in reading mode".to_string()
+                "Document displayed in reading mode. The user can now navigate sections \
+                 and ask follow-up questions. When the user asks about a section, update it \
+                 using update_document_section, append_to_section, or patch_document_section \
+                 with the matching document_id. Do NOT output plain text responses \u{2014} only \
+                 tool calls will be visible to the user."
+                    .to_string()
             }
             "update_document_section" => {
                 let args: UpdateDocumentSectionArgs =
@@ -251,6 +384,34 @@ impl ToolHandler for DocumentReaderHandler {
                             "failed to parse update_document_section arguments: {e}"
                         ))
                     })?;
+                if !self.is_active_document(&args.document_id) {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "No document with id \"{}\" is currently being viewed. \
+                         Call present_document first to display a document.",
+                        args.document_id
+                    )));
+                }
+
+                // Mirror the update in the cache.
+                if let Ok(mut cache) = self.cache.lock() {
+                    if let Some(doc) = cache.get_mut(&args.document_id) {
+                        if let Some(section) = doc.sections.get_mut(args.section_index) {
+                            // Re-derive heading if content starts with `## `.
+                            if let Some(rest) = args.content.strip_prefix("## ") {
+                                if let Some(nl) = rest.find('\n') {
+                                    section.heading = rest[..nl].trim().to_string();
+                                    section.content = rest[nl + 1..].to_string();
+                                } else {
+                                    section.heading = rest.trim().to_string();
+                                    section.content = String::new();
+                                }
+                            } else {
+                                section.content = args.content.clone();
+                            }
+                        }
+                    }
+                }
+
                 session
                     .send_event(
                         turn.as_ref(),
@@ -271,6 +432,26 @@ impl ToolHandler for DocumentReaderHandler {
                         "failed to parse append_to_section arguments: {e}"
                     ))
                 })?;
+                if !self.is_active_document(&args.document_id) {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "No document with id \"{}\" is currently being viewed. \
+                         Call present_document first to display a document.",
+                        args.document_id
+                    )));
+                }
+
+                // Mirror the append in the cache.
+                if let Ok(mut cache) = self.cache.lock() {
+                    if let Some(doc) = cache.get_mut(&args.document_id) {
+                        if let Some(section) = doc.sections.get_mut(args.section_index) {
+                            if !section.content.is_empty() && !section.content.ends_with('\n') {
+                                section.content.push('\n');
+                            }
+                            section.content.push_str(&args.content);
+                        }
+                    }
+                }
+
                 session
                     .send_event(
                         turn.as_ref(),
@@ -292,6 +473,26 @@ impl ToolHandler for DocumentReaderHandler {
                             "failed to parse patch_document_section arguments: {e}"
                         ))
                     })?;
+                if !self.is_active_document(&args.document_id) {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "No document with id \"{}\" is currently being viewed. \
+                         Call present_document first to display a document.",
+                        args.document_id
+                    )));
+                }
+
+                // Mirror the patch in the cache.
+                if let Ok(mut cache) = self.cache.lock() {
+                    if let Some(doc) = cache.get_mut(&args.document_id) {
+                        if let Some(section) = doc.sections.get_mut(args.section_index) {
+                            if section.content.contains(&args.old_text) {
+                                section.content =
+                                    section.content.replacen(&args.old_text, &args.new_text, 1);
+                            }
+                        }
+                    }
+                }
+
                 session
                     .send_event(
                         turn.as_ref(),

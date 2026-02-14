@@ -51,27 +51,31 @@ pub(super) fn header_line(
     waiting: bool,
     width: u16,
 ) -> Line<'static> {
+    // Account for "│ " + " │" side borders (4 chars).
+    let inner_width = (width as usize).saturating_sub(4);
+
     let left = if waiting {
-        format!(" {title}  thinking...")
+        format!("{title}  thinking...")
     } else {
-        format!(" {title}")
+        title.to_string()
     };
-    let right = format!(" {section_num}/{section_count} ");
-    let padding = (width as usize)
+    let right = format!("{section_num}/{section_count}");
+    let padding = inner_width
         .saturating_sub(left.len())
         .saturating_sub(right.len());
 
     let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.push("│ ".dim());
     if waiting {
-        // Title part
-        let title_part = format!(" {title}  ");
+        let title_part = format!("{title}  ");
         spans.push(title_part.cyan().bold());
         spans.push("thinking...".dim().italic());
     } else {
-        spans.push(format!(" {title}").cyan().bold());
+        spans.push(title.to_string().cyan().bold());
     }
     spans.push(Span::from(" ".repeat(padding)));
     spans.push(right.dim());
+    spans.push(" │".dim());
 
     Line::from(spans)
 }
@@ -169,4 +173,37 @@ pub(super) fn bordered_line(inner: Line<'static>, width: u16, updated: bool) -> 
         spans.push(" │".dim());
     }
     Line::from(spans)
+}
+
+/// Render a pending-question indicator to append below section content.
+///
+/// Shows a dashed separator, the user's question, and a "thinking..." line.
+pub(super) fn pending_indicator_lines(question: &str, width: u16) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // Blank line before separator.
+    lines.push(Line::from(""));
+
+    // Light dashed separator.
+    let dash_count = (width as usize) / 2;
+    let dashes: String = std::iter::repeat_n("\u{2500} ", dash_count)
+        .collect::<String>()
+        .trim_end()
+        .to_string();
+    lines.push(Line::from(dashes.dim()));
+
+    // User's question, word-wrapped via textwrap.
+    let full_text = format!("You asked: \"{question}\"");
+    let wrap_width = width.max(1) as usize;
+    for wrapped_line in textwrap::wrap(&full_text, wrap_width) {
+        lines.push(Line::from(wrapped_line.into_owned().dim().italic()));
+    }
+
+    // Thinking indicator.
+    lines.push(Line::from(vec![
+        "\u{2022} ".dim(),
+        "thinking...".dim().italic(),
+    ]));
+
+    lines
 }

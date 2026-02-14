@@ -1513,7 +1513,7 @@ pub(crate) fn build_specs_with_toolkits(
     let shell_handler = Arc::new(ShellHandler);
     let unified_exec_handler = Arc::new(UnifiedExecHandler);
     let plan_handler = Arc::new(PlanHandler);
-    let document_reader_handler = Arc::new(DocumentReaderHandler);
+    let document_reader_handler = Arc::new(DocumentReaderHandler::new());
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let dynamic_tool_handler = Arc::new(DynamicToolHandler);
     let view_image_handler = Arc::new(ViewImageHandler);

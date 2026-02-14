@@ -4,15 +4,22 @@ use serde::Serialize;
 use ts_rs::TS;
 
 /// Arguments for the `present_document` tool call.
+///
+/// When `title` and `content` are provided, the document is cached and displayed.
+/// When only `document_id` is provided, the most recent cached version (including
+/// any section updates) is re-displayed.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct PresentDocumentArgs {
     /// Unique slug identifying this document for targeted updates.
     pub document_id: String,
-    /// Display title for the document.
-    pub title: String,
+    /// Display title for the document. Optional when re-displaying a cached document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Full markdown content; sections are split on `## ` headings.
-    pub content: String,
+    /// Optional when re-displaying a cached document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
 }
 
 /// Arguments for the `update_document_section` tool call (full replacement).
@@ -103,14 +110,23 @@ mod tests {
     fn present_document_args_round_trip() {
         let args = PresentDocumentArgs {
             document_id: "report-1".to_string(),
-            title: "My Report".to_string(),
-            content: "## Intro\nHello\n## Body\nWorld".to_string(),
+            title: Some("My Report".to_string()),
+            content: Some("## Intro\nHello\n## Body\nWorld".to_string()),
         };
         let json = serde_json::to_string(&args).expect("serialize");
         let decoded: PresentDocumentArgs = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(args.document_id, decoded.document_id);
         assert_eq!(args.title, decoded.title);
         assert_eq!(args.content, decoded.content);
+    }
+
+    #[test]
+    fn present_document_args_id_only() {
+        let json = r#"{"document_id":"report-1"}"#;
+        let decoded: PresentDocumentArgs = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(decoded.document_id, "report-1");
+        assert_eq!(decoded.title, None);
+        assert_eq!(decoded.content, None);
     }
 
     #[test]
