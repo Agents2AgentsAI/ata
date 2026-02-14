@@ -894,26 +894,32 @@ impl ChatComposer {
 
         self.textarea.set_text_with_elements(&text, &text_elements);
 
+        let full_text = self.textarea.text().to_string();
+        let image_placeholders: HashSet<&str> = text_elements
+            .iter()
+            .filter_map(|elem| elem.placeholder(&full_text))
+            .collect();
+
         for (idx, path) in local_image_paths.into_iter().enumerate() {
             let n = idx + 1;
             let filename_ph = file_placeholder_for_path(&path);
             let legacy_file_ph = local_file_label_text(n);
             let image_ph = local_image_label_text(self.remote_image_urls.len() + n);
-            if image_placeholders.contains(&filename_ph) {
+            if image_placeholders.contains(filename_ph.as_str()) {
                 // New-format filename placeholder (e.g. [report.pdf]).
                 self.attached_images.push(AttachedImage {
                     placeholder: filename_ph,
                     path,
                     is_file: true,
                 });
-            } else if image_placeholders.contains(&legacy_file_ph) {
+            } else if image_placeholders.contains(legacy_file_ph.as_str()) {
                 // Legacy [File #N] format (from older history entries).
                 self.attached_images.push(AttachedImage {
                     placeholder: legacy_file_ph,
                     path,
                     is_file: true,
                 });
-            } else if image_placeholders.contains(&image_ph) {
+            } else if image_placeholders.contains(image_ph.as_str()) {
                 self.attached_images.push(AttachedImage {
                     placeholder: image_ph,
                     path,
@@ -1046,8 +1052,9 @@ impl ChatComposer {
 
     /// Insert an image attachment placeholder and track it for the next submission.
     pub fn attach_image(&mut self, path: PathBuf) {
-        let image_number =
-            self.remote_image_urls.len() + self.attached_images.iter().filter(|a| !a.is_file).count() + 1;
+        let image_number = self.remote_image_urls.len()
+            + self.attached_images.iter().filter(|a| !a.is_file).count()
+            + 1;
         let placeholder = local_image_label_text(image_number);
         // Insert as an element to match large paste placeholder behavior:
         // styled distinctly and treated atomically for cursor/mutations.

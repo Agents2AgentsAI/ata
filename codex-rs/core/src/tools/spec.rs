@@ -1456,7 +1456,14 @@ pub(crate) fn build_specs_with_research(
     dynamic_tools: &[DynamicToolSpec],
     research_toolkit: Option<&Arc<SharedResearchToolkit>>,
 ) -> ToolRegistryBuilder {
-    build_specs_with_toolkits(config, mcp_tools, app_tools, dynamic_tools, research_toolkit, None)
+    build_specs_with_toolkits(
+        config,
+        mcp_tools,
+        app_tools,
+        dynamic_tools,
+        research_toolkit,
+        None,
+    )
 }
 
 pub(crate) fn build_specs_with_toolkits(
@@ -1988,7 +1995,8 @@ mod tests {
         )]);
 
         let (tools, _) =
-            build_specs_with_research(&tools_config, Some(mcp_tools), None, &[], Some(&toolkit)).build();
+            build_specs_with_research(&tools_config, Some(mcp_tools), None, &[], Some(&toolkit))
+                .build();
         assert_contains_tool_names(&tools, &["paper_search"]);
         assert!(
             !tools
