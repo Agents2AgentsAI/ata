@@ -5158,7 +5158,8 @@ pub(crate) async fn run_turn(
             .drop_last_turn_url_files(url_attachments_in_turn)
     }
 
-    let mut url_file_recovery_attempted = false;
+    let mut context_window_url_file_recovery_attempted = false;
+    let mut file_rejection_url_file_recovery_attempted = false;
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -5308,10 +5309,10 @@ pub(crate) async fn run_turn(
                 break;
             }
             Err(CodexErr::ContextWindowExceeded) => {
-                if !url_file_recovery_attempted {
+                if !context_window_url_file_recovery_attempted {
                     let dropped_url_files = drop_last_turn_url_file_attachments(&sess).await;
                     if dropped_url_files > 0 {
-                        url_file_recovery_attempted = true;
+                        context_window_url_file_recovery_attempted = true;
                         sess.send_event(
                             &turn_context,
                             EventMsg::Warning(WarningEvent {
@@ -5354,7 +5355,7 @@ pub(crate) async fn run_turn(
                 break;
             }
             Err(CodexErr::InvalidRequest(ref message))
-                if !url_file_recovery_attempted
+                if !file_rejection_url_file_recovery_attempted
                     && map_user_facing_file_error_from_message(message).is_some() =>
             {
                 // The API rejected a file attachment (unsupported format, encrypted,
@@ -5373,7 +5374,7 @@ pub(crate) async fn run_turn(
                 );
                 let dropped_url_files = drop_last_turn_url_file_attachments(&sess).await;
                 if dropped_url_files > 0 {
-                    url_file_recovery_attempted = true;
+                    file_rejection_url_file_recovery_attempted = true;
                     sess.send_event(
                         &turn_context,
                         EventMsg::Warning(WarningEvent {
