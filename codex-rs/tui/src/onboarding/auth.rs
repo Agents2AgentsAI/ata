@@ -1026,7 +1026,7 @@ impl AuthModeWidget {
                 let request_frame = self.request_frame.clone();
                 let auth_manager = self.auth_manager.clone();
                 let codex_home = self.codex_home.clone();
-                let fallback_state = fallback_state.clone();
+                let fallback_state = fallback_state;
                 tokio::spawn(async move {
                     let auth_url = server.auth_url.clone();
                     {
