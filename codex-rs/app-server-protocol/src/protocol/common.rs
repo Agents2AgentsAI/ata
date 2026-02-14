@@ -758,6 +758,13 @@ pub struct FuzzyFileSearchSessionUpdatedNotification {
     pub files: Vec<FuzzyFileSearchResult>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FuzzyFileSearchSessionCompletedNotification {
+    pub session_id: String,
+}
+
 server_notification_definitions! {
     /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
@@ -791,6 +798,7 @@ server_notification_definitions! {
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
     FuzzyFileSearchSessionUpdated => "fuzzyFileSearch/sessionUpdated" (FuzzyFileSearchSessionUpdatedNotification),
+    FuzzyFileSearchSessionCompleted => "fuzzyFileSearch/sessionCompleted" (FuzzyFileSearchSessionCompletedNotification),
 
     /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
@@ -1127,6 +1135,25 @@ mod tests {
     }
 
     #[test]
+    fn serialize_account_login_gemini() -> Result<()> {
+        let request = ClientRequest::LoginAccount {
+            request_id: RequestId::Integer(7),
+            params: v2::LoginAccountParams::Gemini,
+        };
+        assert_eq!(
+            json!({
+                "method": "account/login/start",
+                "id": 7,
+                "params": {
+                    "type": "gemini"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_account_logout() -> Result<()> {
         let request = ClientRequest::LogoutAccount {
             request_id: RequestId::Integer(4),
@@ -1210,6 +1237,17 @@ mod tests {
                 "planType": "plus",
             }),
             serde_json::to_value(&chatgpt)?,
+        );
+
+        let gemini = v2::Account::Gemini {
+            email: "dev@example.com".to_string(),
+        };
+        assert_eq!(
+            json!({
+                "type": "gemini",
+                "email": "dev@example.com",
+            }),
+            serde_json::to_value(&gemini)?,
         );
 
         Ok(())

@@ -926,6 +926,39 @@
           ],
           "title": "OutputTextContentItem",
           "type": "object"
+        },
+        {
+          "properties": {
+            "filename": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mime_type": {
+              "description": "MIME type for provider adapters or tools that need a type hint. Not part of the stable public wire shape.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "url_file"
+              ],
+              "title": "UrlFileContentItemType",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "title": "UrlFileContentItem",
+          "type": "object"
         }
       ]
     },
@@ -3790,6 +3823,17 @@
         "path",
         "root",
         "score"
+      ],
+      "type": "object"
+    },
+    "FuzzyFileSearchSessionCompletedNotification": {
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
       ],
       "type": "object"
     },
@@ -8391,6 +8435,26 @@
         "params"
       ],
       "title": "FuzzyFileSearch/sessionUpdatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "fuzzyFileSearch/sessionCompleted"
+          ],
+          "title": "FuzzyFileSearch/sessionCompletedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/FuzzyFileSearchSessionCompletedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "FuzzyFileSearch/sessionCompletedNotification",
       "type": "object"
     },
     {

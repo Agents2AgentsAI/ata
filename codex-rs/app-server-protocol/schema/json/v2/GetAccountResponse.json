@@ -42,6 +42,26 @@
           ],
           "title": "ChatgptAccount",
           "type": "object"
+        },
+        {
+          "properties": {
+            "email": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "gemini"
+              ],
+              "title": "GeminiAccountType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "email",
+            "type"
+          ],
+          "title": "GeminiAccount",
+          "type": "object"
         }
       ]
     },
@@ -71,11 +91,15 @@
         }
       ]
     },
+    "requiresGeminiAuth": {
+      "type": "boolean"
+    },
     "requiresOpenaiAuth": {
       "type": "boolean"
     }
   },
   "required": [
+    "requiresGeminiAuth",
     "requiresOpenaiAuth"
   ],
   "title": "GetAccountResponse",

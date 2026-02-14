@@ -1,0 +1,19 @@
+---
+source: tui/src/onboarding/auth.rs
+expression: terminal.backend()
+---
+✓ Signed in with Google Gemini
+
+  Before you start:
+
+  Decide how much autonomy you want to grant Ata
+  For more details see the Ata docs:
+  https://github.com/openai/codex
+
+  Ata can make mistakes
+  Review the code it writes and commands it runs
+
+  Powered by your provider account
+  Usage follows your provider plan and policy
+
+  Press Enter to continue

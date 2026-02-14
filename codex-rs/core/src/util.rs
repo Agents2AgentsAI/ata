@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use codex_protocol::ThreadId;
+use codex_utils_sanitizer::redact_secrets;
 use rand::Rng;
 use tracing::debug;
 use tracing::error;
@@ -67,6 +68,62 @@ pub(crate) fn try_parse_error_message(text: &str) -> String {
     text.to_string()
 }
 
+const REDACTED_SECRET: &str = "[REDACTED_SECRET]";
+
+pub(crate) fn redact_error_body(body: &str) -> String {
+    let redacted_json = serde_json::from_str::<serde_json::Value>(body)
+        .map(|mut value| {
+            redact_sensitive_json_fields(&mut value);
+            serde_json::to_string(&value).unwrap_or_else(|_| body.to_string())
+        })
+        .unwrap_or_else(|_| body.to_string());
+
+    redact_secrets(redacted_json)
+}
+
+fn redact_sensitive_json_fields(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, nested) in map.iter_mut() {
+                if is_sensitive_error_key(key) {
+                    *nested = serde_json::Value::String(REDACTED_SECRET.to_string());
+                } else {
+                    redact_sensitive_json_fields(nested);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_sensitive_json_fields(item);
+            }
+        }
+        serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => {}
+    }
+}
+
+fn is_sensitive_error_key(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "access_token"
+            | "refresh_token"
+            | "id_token"
+            | "token"
+            | "authorization"
+            | "authorization_code"
+            | "code_verifier"
+            | "client_secret"
+            | "secret"
+            | "password"
+            | "api_key"
+            | "apikey"
+    ) || lower.ends_with("_token")
+        || lower.ends_with("_api_key")
+}
+
 pub fn resolve_path(base: &Path, path: &PathBuf) -> PathBuf {
     if path.is_absolute() {
         path.clone()
@@ -104,6 +161,7 @@ pub fn resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn test_try_parse_error_message() {
@@ -127,6 +185,32 @@ mod tests {
         let text = r#"{"message": "test"}"#;
         let message = try_parse_error_message(text);
         assert_eq!(message, r#"{"message": "test"}"#);
+    }
+
+    #[test]
+    fn redact_error_body_redacts_sensitive_json_fields() {
+        let input = r#"{
+            "access_token": "acc-1234567890",
+            "refresh_token": "ref-1234567890",
+            "nested": {
+                "authorization_code": "auth-1234567890",
+                "ok": "value"
+            }
+        }"#;
+
+        let redacted = redact_error_body(input);
+        let parsed: serde_json::Value = serde_json::from_str(&redacted).expect("valid json");
+
+        assert_eq!(parsed["access_token"], REDACTED_SECRET);
+        assert_eq!(parsed["refresh_token"], REDACTED_SECRET);
+        assert_eq!(parsed["nested"]["authorization_code"], REDACTED_SECRET);
+        assert_eq!(parsed["nested"]["ok"], "value");
+    }
+
+    #[test]
+    fn redact_error_body_redacts_bearer_tokens_in_plain_text() {
+        let redacted = redact_error_body("Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345");
+        assert_eq!(redacted, "Authorization: Bearer [REDACTED_SECRET]");
     }
 
     #[test]

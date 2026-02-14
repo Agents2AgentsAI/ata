@@ -6,11 +6,17 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 
 use super::ModelClientSession;
+use super::gemini_code_assist::stream_gemini_code_assist;
 use super::provider_streaming::ParseSseEventResult;
 use super::provider_streaming::build_reasoning_value;
+use super::provider_streaming::extract_sse_data_line;
+use super::provider_streaming::filter_out_created;
 use super::provider_streaming::map_api_err_to_codex_err;
 use super::provider_streaming::serialize_input_items;
 use super::provider_streaming::spawn_provider_sse_stream;
+use crate::auth::GeminiAuthSource;
+use crate::auth::PROVIDER_GEMINI;
+use crate::auth::resolve_gemini_auth_source;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
@@ -27,19 +33,55 @@ pub(super) async fn stream_gemini_api(
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
 ) -> Result<ResponseStream> {
+    let auth_source =
+        if session.client.state.provider.name_to_provider_id() == Some(PROVIDER_GEMINI) {
+            resolve_gemini_auth_source(
+                &session.client.state.codex_home,
+                session.client.state.cli_auth_credentials_store_mode,
+            )
+        } else {
+            match session.client.state.provider.api_key_with_auth(
+                &session.client.state.codex_home,
+                session.client.state.cli_auth_credentials_store_mode,
+            )? {
+                Some(api_key) => GeminiAuthSource::ApiKey(api_key),
+                None => GeminiAuthSource::Missing,
+            }
+        };
+
+    match auth_source {
+        GeminiAuthSource::ApiKey(api_key) => {
+            stream_gemini_with_api_key(session, prompt, model_info, effort, summary, api_key).await
+        }
+        GeminiAuthSource::Oauth(oauth_credential) => {
+            stream_gemini_code_assist(
+                session,
+                prompt,
+                model_info,
+                effort,
+                summary,
+                oauth_credential,
+            )
+            .await
+        }
+        GeminiAuthSource::Missing => Err(CodexErr::Api(
+            "Missing Gemini credentials. Set GOOGLE_API_KEY or run `ata login --provider gemini --with-oauth`."
+                .to_string(),
+        )),
+    }
+}
+
+async fn stream_gemini_with_api_key(
+    session: &ModelClientSession,
+    prompt: &Prompt,
+    model_info: &ModelInfo,
+    effort: Option<ReasoningEffortConfig>,
+    summary: ReasoningSummaryConfig,
+    api_key: String,
+) -> Result<ResponseStream> {
     let input = prompt.get_formatted_input();
     let instructions = &prompt.base_instructions.text;
     let tools = create_tools_json_for_responses_api(&prompt.tools)?;
-
-    let api_key = session
-        .client
-        .state
-        .provider
-        .api_key_with_auth(
-            &session.client.state.codex_home,
-            session.client.state.cli_auth_credentials_store_mode,
-        )?
-        .ok_or_else(|| CodexErr::Api("Missing GOOGLE_API_KEY".to_string()))?;
 
     let adapter = GeminiAdapter::new();
     let input_values = serialize_input_items(&input)?;
@@ -90,60 +132,43 @@ pub(super) async fn stream_gemini_api(
         stream_state,
         vec![ResponseEvent::Created],
         |event_str, state| {
-            let data = if let Some(data_line) = event_str
-                .lines()
-                .find_map(|line| line.strip_prefix("data: "))
-            {
-                data_line
-            } else if let Some(data_line) = event_str.strip_prefix("data:") {
-                data_line.trim()
-            } else {
+            let Some(data) = extract_sse_data_line(event_str) else {
                 return ParseSseEventResult::Continue;
             };
-
-            if data.trim() == "[DONE]" {
-                return ParseSseEventResult::Emit(vec![ResponseEvent::Completed {
-                    response_id: String::new(),
-                    token_usage: None,
-                    can_append: false,
-                }]);
-            }
-
-            match codex_api::sse::gemini::parse_gemini_chunk(data, state) {
-                Ok(events) => {
-                    let events = filter_out_created(events);
-                    if events.is_empty() {
-                        ParseSseEventResult::Continue
-                    } else {
-                        ParseSseEventResult::Emit(events)
-                    }
-                }
-                Err(err) => ParseSseEventResult::Fatal(map_api_err_to_codex_err(err)),
-            }
+            parse_gemini_sse_data(&data, state, false)
         },
         |buffer, state| {
-            if let Some(data_line) = buffer.lines().find(|line| line.starts_with("data: ")) {
-                let data = &data_line[6..];
-                if data.trim() == "[DONE]" {
-                    return ParseSseEventResult::Continue;
-                }
-
-                if let Ok(events) = codex_api::sse::gemini::parse_gemini_chunk(data, state) {
-                    let events = filter_out_created(events);
-                    if !events.is_empty() {
-                        return ParseSseEventResult::Emit(events);
-                    }
-                }
-            }
-
-            ParseSseEventResult::Continue
+            let Some(data) = extract_sse_data_line(buffer) else {
+                return ParseSseEventResult::Continue;
+            };
+            parse_gemini_sse_data(&data, state, true)
         },
     ))
 }
 
-fn filter_out_created(events: Vec<ResponseEvent>) -> Vec<ResponseEvent> {
-    events
-        .into_iter()
-        .filter(|event| !matches!(event, ResponseEvent::Created))
-        .collect()
+fn parse_gemini_sse_data(
+    data: &str,
+    state: &mut GeminiStreamState,
+    ignore_parse_errors: bool,
+) -> ParseSseEventResult {
+    if data.trim() == "[DONE]" {
+        return ParseSseEventResult::Emit(vec![ResponseEvent::Completed {
+            response_id: String::new(),
+            token_usage: None,
+            can_append: false,
+        }]);
+    }
+
+    match codex_api::sse::gemini::parse_gemini_chunk(data, state) {
+        Ok(events) => {
+            let events = filter_out_created(events);
+            if events.is_empty() {
+                ParseSseEventResult::Continue
+            } else {
+                ParseSseEventResult::Emit(events)
+            }
+        }
+        Err(err) if ignore_parse_errors => ParseSseEventResult::Continue,
+        Err(err) => ParseSseEventResult::Fatal(map_api_err_to_codex_err(err)),
+    }
 }
