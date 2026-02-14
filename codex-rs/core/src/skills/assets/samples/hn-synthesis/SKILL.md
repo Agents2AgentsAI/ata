@@ -254,6 +254,12 @@ kb_write_file(
 
 This complements the card (which is a structured summary) with the full analytical narrative.
 
+## Presentation
+
+When the synthesis is complete, call `present_document` to present it in sectioned reading mode. Set `document_id` to a unique slug, `title` to the synthesis title, and `content` to the full markdown analysis. End your response after calling this tool and wait for user interaction.
+
+If the user asks follow-up questions about a specific section, enhance that section and call `update_document_section` with the section index and refined content.
+
 ## Graceful Degradation
 
 - **No KB tools configured**: Output the full synthesis in chat; skip card storage.

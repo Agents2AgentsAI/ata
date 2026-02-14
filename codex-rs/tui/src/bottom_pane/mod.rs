@@ -40,6 +40,7 @@ use std::time::Duration;
 
 mod app_link_view;
 mod approval_overlay;
+pub(crate) mod document_reader;
 mod multi_select_picker;
 mod request_user_input;
 mod status_line_setup;
@@ -750,6 +751,50 @@ impl BottomPane {
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.push_view(view);
+    }
+
+    /// Show the sectioned document reader for a `PresentDocument` event.
+    pub(crate) fn show_document_reader(
+        &mut self,
+        ev: codex_protocol::document_reader::PresentDocumentEvent,
+    ) {
+        let view = document_reader::DocumentReaderView::new(
+            ev.document_id,
+            ev.title,
+            ev.content,
+            self.app_event_tx.clone(),
+        );
+        self.push_view(Box::new(view));
+    }
+
+    /// Forward a section update to the active document reader (if matching).
+    pub(crate) fn update_document_section(
+        &mut self,
+        ev: &codex_protocol::document_reader::UpdateDocumentSectionEvent,
+    ) {
+        if let Some(view) = self.view_stack.last_mut()
+            && view.view_id() == Some(document_reader::DOCUMENT_READER_VIEW_ID)
+        {
+            // We know this is a DocumentReaderView because of the view_id.
+            // Use the trait method to forward the update.
+            view.handle_document_section_update(
+                &ev.document_id,
+                ev.section_index,
+                ev.content.clone(),
+            );
+            self.request_redraw();
+        }
+    }
+
+    /// Notify the active view that the agent turn has completed.
+    ///
+    /// Views that wait for tool calls (e.g. document reader waiting for
+    /// `update_document_section`) use this to clear stale "waiting" state.
+    pub(crate) fn notify_turn_complete(&mut self) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.handle_turn_complete();
+            self.request_redraw();
+        }
     }
 
     /// Called when the agent requests user approval.

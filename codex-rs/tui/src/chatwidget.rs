@@ -1351,6 +1351,9 @@ impl ChatWidget {
         self.pending_status_indicator_restore = false;
         self.agent_turn_running = false;
         self.update_task_running_state();
+        // Notify the active bottom pane view (e.g. document reader) that the
+        // turn ended so it can clear any stale "waiting" state.
+        self.bottom_pane.notify_turn_complete();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
@@ -1794,6 +1797,18 @@ impl ChatWidget {
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
         self.saw_plan_update_this_turn = true;
         self.add_to_history(history_cell::new_plan_update(update));
+    }
+
+    fn on_present_document(&mut self, ev: codex_protocol::document_reader::PresentDocumentEvent) {
+        self.flush_active_cell();
+        self.bottom_pane.show_document_reader(ev);
+    }
+
+    fn on_update_document_section(
+        &mut self,
+        ev: codex_protocol::document_reader::UpdateDocumentSectionEvent,
+    ) {
+        self.bottom_pane.update_document_section(&ev);
     }
 
     fn on_exec_approval_request(&mut self, _id: String, ev: ExecApprovalRequestEvent) {
@@ -4097,6 +4112,8 @@ impl ChatWidget {
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
+            EventMsg::PresentDocument(ev) => self.on_present_document(ev),
+            EventMsg::UpdateDocumentSection(ev) => self.on_update_document_section(ev),
             EventMsg::ExecApprovalRequest(ev) => {
                 // For replayed events, synthesize an empty id (these should not occur).
                 self.on_exec_approval_request(id.unwrap_or_default(), ev)

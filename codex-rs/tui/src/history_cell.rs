@@ -2079,6 +2079,62 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
     PlainHistoryCell { lines }
 }
 
+// ---------------------------------------------------------------------------
+// DocumentCell — collapsed transcript entry for a document reading session.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+pub(crate) struct DocumentCell {
+    pub(crate) title: String,
+    pub(crate) section_headings: Vec<String>,
+    pub(crate) final_content: String,
+}
+
+pub(crate) fn new_document_cell(
+    title: String,
+    section_headings: Vec<String>,
+    final_content: String,
+) -> DocumentCell {
+    DocumentCell {
+        title,
+        section_headings,
+        final_content,
+    }
+}
+
+impl HistoryCell for DocumentCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(
+            vec![
+                "\u{2022} ".dim(),
+                "Document: ".bold(),
+                self.title.clone().into(),
+            ]
+            .into(),
+        );
+        for heading in &self.section_headings {
+            lines.push(vec!["    \u{00A7} ".dim(), heading.clone().dim()].into());
+        }
+        let section_count = self.section_headings.len();
+        lines.push(
+            format!("    ({section_count} sections)")
+                .dim()
+                .italic()
+                .into(),
+        );
+        lines
+    }
+
+    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines = self.display_lines(width);
+        lines.push(Line::from(""));
+        let wrap_width = width.saturating_sub(2).max(1) as usize;
+        append_markdown(&self.final_content, Some(wrap_width), &mut lines);
+        lines
+    }
+}
+
 pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<dyn HistoryCell> {
     let full_reasoning_buffer = full_reasoning_buffer.trim();
     if let Some(open) = full_reasoning_buffer.find("**") {
