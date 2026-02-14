@@ -1193,10 +1193,12 @@ async fn blocked_image_restore_with_remote_images_keeps_local_placeholder_mappin
         LocalImageAttachment {
             placeholder: first_placeholder.to_string(),
             path: PathBuf::from("/tmp/blocked-first.png"),
+            is_file: false,
         },
         LocalImageAttachment {
             placeholder: second_placeholder.to_string(),
             path: PathBuf::from("/tmp/blocked-second.png"),
+            is_file: false,
         },
     ];
     let remote_image_urls = vec!["https://example.com/blocked-remote.png".to_string()];
@@ -1237,10 +1239,12 @@ async fn queued_restore_with_remote_images_keeps_local_placeholder_mapping() {
         LocalImageAttachment {
             placeholder: first_placeholder.to_string(),
             path: PathBuf::from("/tmp/queued-first.png"),
+            is_file: false,
         },
         LocalImageAttachment {
             placeholder: second_placeholder.to_string(),
             path: PathBuf::from("/tmp/queued-second.png"),
+            is_file: false,
         },
     ];
     let remote_image_urls = vec!["https://example.com/queued-remote.png".to_string()];
@@ -1576,6 +1580,7 @@ async fn remap_preserves_file_placeholders() {
         text,
         text_elements: elements,
         local_images: attachments,
+        remote_image_urls: Vec::new(),
         mention_bindings: Vec::new(),
     };
     let mut next_label = 3usize;
