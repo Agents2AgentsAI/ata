@@ -8,8 +8,8 @@ const ANNOUNCEMENT_TIP_URL: &str =
 
 const IS_MACOS: bool = cfg!(target_os = "macos");
 
-const PAID_TOOLTIP: &str = "*New* Try the **Ata App** with 2x rate limits until *April 2nd*. Run 'ata app' or visit https://chatgpt.com/codex";
-const PAID_TOOLTIP_NON_MAC: &str = "*New* 2x rate limits until *April 2nd*.";
+const PAID_TOOLTIP: &str = "Run 'ata app' or visit https://agents2agents.ai/ata";
+const PAID_TOOLTIP_NON_MAC: &str = "Run 'ata app' or visit https://agents2agents.ai/ata";
 const OTHER_TOOLTIP: &str =
     "*New* Build faster with the **Ata App**. Run 'ata app' or visit https://agents2agents.ai/ata";
 const OTHER_TOOLTIP_NON_MAC: &str = "*New* Build faster with Ata.";

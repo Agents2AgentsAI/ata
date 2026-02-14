@@ -20,6 +20,21 @@ pub const PROVIDER_GEMINI: &str = "gemini";
 pub const ANTHROPIC_API_KEY_ENV_VAR: &str = "ANTHROPIC_API_KEY";
 pub const GOOGLE_API_KEY_ENV_VAR: &str = "GOOGLE_API_KEY";
 
+/// OAuth credential payload stored for provider-based login.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ProviderOauthCredential {
+    pub access: String,
+    pub refresh: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_project_id: Option<String>,
+}
+
 /// Credential types that can be stored for a provider.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -28,10 +43,14 @@ pub enum ProviderCredential {
     Api { key: String },
     /// OAuth-based authentication (for future use).
     Oauth {
-        access: String,
-        refresh: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        expires: Option<DateTime<Utc>>,
+        #[serde(flatten)]
+        credential: ProviderOauthCredential,
+    },
+    /// API key + OAuth credentials for the same provider.
+    ApiAndOauth {
+        key: String,
+        #[serde(flatten)]
+        credential: ProviderOauthCredential,
     },
 }
 
@@ -44,11 +63,26 @@ pub enum ProviderAuthSource {
     Environment,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderAuthMethod {
+    ApiKey,
+    Oauth,
+    ApiKeyAndOauth,
+}
+
 /// Information about a configured provider's auth status.
 #[derive(Debug, Clone)]
 pub struct ProviderAuthStatus {
     pub provider_id: String,
     pub source: ProviderAuthSource,
+    pub method: ProviderAuthMethod,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum GeminiAuthSource {
+    ApiKey(String),
+    Oauth(ProviderOauthCredential),
+    Missing,
 }
 
 impl AuthDotJson {
@@ -74,26 +108,96 @@ impl AuthDotJson {
         self.providers.get(provider_id).and_then(|cred| match cred {
             ProviderCredential::Api { key } => Some(key.as_str()),
             ProviderCredential::Oauth { .. } => None,
+            ProviderCredential::ApiAndOauth { key, .. } => Some(key.as_str()),
+        })
+    }
+
+    /// Get OAuth credential for a specific provider from the providers map.
+    pub fn get_provider_oauth_credential(
+        &self,
+        provider_id: &str,
+    ) -> Option<ProviderOauthCredential> {
+        self.providers.get(provider_id).and_then(|cred| match cred {
+            ProviderCredential::Api { .. } => None,
+            ProviderCredential::Oauth { credential } => Some(credential.clone()),
+            ProviderCredential::ApiAndOauth { credential, .. } => Some(credential.clone()),
         })
     }
 
     /// Check if there are any provider API keys configured.
     pub fn has_any_provider_api_key(&self) -> bool {
-        self.providers
-            .values()
-            .any(|cred| matches!(cred, ProviderCredential::Api { .. }))
+        self.providers.values().any(|cred| {
+            matches!(
+                cred,
+                ProviderCredential::Api { .. } | ProviderCredential::ApiAndOauth { .. }
+            )
+        })
+    }
+
+    /// Check if there are any provider OAuth credentials configured.
+    pub fn has_any_provider_oauth_credential(&self) -> bool {
+        self.providers.values().any(|cred| {
+            matches!(
+                cred,
+                ProviderCredential::Oauth { .. } | ProviderCredential::ApiAndOauth { .. }
+            )
+        })
     }
 
     /// Set credential for a specific provider in the providers map.
     pub fn set_provider_credential(&mut self, provider_id: &str, credential: ProviderCredential) {
+        let merged = match (self.providers.get(provider_id), credential) {
+            (
+                Some(ProviderCredential::Oauth {
+                    credential: existing_oauth,
+                }),
+                ProviderCredential::Api { key },
+            ) => ProviderCredential::ApiAndOauth {
+                key,
+                credential: existing_oauth.clone(),
+            },
+            (
+                Some(ProviderCredential::ApiAndOauth {
+                    credential: existing_oauth,
+                    ..
+                }),
+                ProviderCredential::Api { key },
+            ) => ProviderCredential::ApiAndOauth {
+                key,
+                credential: existing_oauth.clone(),
+            },
+            (
+                Some(ProviderCredential::Api { key }),
+                ProviderCredential::Oauth {
+                    credential: incoming_oauth,
+                },
+            ) => ProviderCredential::ApiAndOauth {
+                key: key.clone(),
+                credential: incoming_oauth,
+            },
+            (
+                Some(ProviderCredential::ApiAndOauth {
+                    key: existing_key, ..
+                }),
+                ProviderCredential::Oauth {
+                    credential: incoming_oauth,
+                },
+            ) => ProviderCredential::ApiAndOauth {
+                key: existing_key.clone(),
+                credential: incoming_oauth,
+            },
+            (_, incoming) => incoming,
+        };
+
         if provider_id == PROVIDER_OPENAI {
-            self.openai_api_key = match &credential {
+            self.openai_api_key = match &merged {
                 ProviderCredential::Api { key } => Some(key.clone()),
                 ProviderCredential::Oauth { .. } => None,
+                ProviderCredential::ApiAndOauth { key, .. } => Some(key.clone()),
             };
         }
 
-        self.providers.insert(provider_id.to_string(), credential);
+        self.providers.insert(provider_id.to_string(), merged);
         self.version = Some(AUTH_JSON_VERSION);
     }
 
@@ -105,6 +209,47 @@ impl AuthDotJson {
                 key: api_key.to_string(),
             },
         );
+    }
+
+    /// Set OAuth credential for a specific provider in the providers map.
+    pub fn set_provider_oauth_credential(
+        &mut self,
+        provider_id: &str,
+        credential: ProviderOauthCredential,
+    ) {
+        self.set_provider_credential(provider_id, ProviderCredential::Oauth { credential });
+    }
+
+    /// Remove only OAuth credentials for a specific provider.
+    /// Preserves stored API keys when credentials are `ApiAndOauth`.
+    pub fn clear_provider_oauth_credential(&mut self, provider_id: &str) -> bool {
+        let Some(existing) = self.providers.get(provider_id).cloned() else {
+            return false;
+        };
+
+        let changed = match existing {
+            ProviderCredential::Api { .. } => false,
+            ProviderCredential::Oauth { .. } => {
+                self.providers.remove(provider_id);
+                true
+            }
+            ProviderCredential::ApiAndOauth { key, .. } => {
+                self.providers
+                    .insert(provider_id.to_string(), ProviderCredential::Api { key });
+                true
+            }
+        };
+
+        if changed {
+            if provider_id == PROVIDER_OPENAI {
+                self.openai_api_key = self
+                    .get_provider_api_key(PROVIDER_OPENAI)
+                    .map(std::string::ToString::to_string);
+            }
+            self.version = Some(AUTH_JSON_VERSION);
+        }
+
+        changed
     }
 
     /// Remove credentials for a specific provider.
@@ -152,7 +297,10 @@ pub(super) fn set_provider_credential(
 ) -> std::io::Result<()> {
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
     let mut auth_dot_json = storage.load()?.unwrap_or_default();
-    let is_api_credential = matches!(credential, ProviderCredential::Api { .. });
+    let is_api_credential = matches!(
+        &credential,
+        ProviderCredential::Api { .. } | ProviderCredential::ApiAndOauth { .. }
+    );
     auth_dot_json.set_provider_credential(provider_id, credential);
     if is_api_credential {
         auth_dot_json.auth_mode = Some(ApiAuthMode::ApiKey);
@@ -174,6 +322,22 @@ pub fn login_with_provider_api_key(
         ProviderCredential::Api {
             key: api_key.to_string(),
         },
+        auth_credentials_store_mode,
+    )
+}
+
+/// Store OAuth credentials for a specific provider.
+/// Updates existing auth.json if present, preserving other provider credentials.
+pub fn login_with_provider_oauth(
+    codex_home: &Path,
+    provider_id: &str,
+    credential: ProviderOauthCredential,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> std::io::Result<()> {
+    set_provider_credential(
+        codex_home,
+        provider_id,
+        ProviderCredential::Oauth { credential },
         auth_credentials_store_mode,
     )
 }
@@ -206,6 +370,45 @@ pub fn get_provider_api_key(
     }
 }
 
+/// Get the OAuth credential for a specific provider from stored credentials.
+pub fn get_provider_oauth_credential(
+    codex_home: &Path,
+    provider_id: &str,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> Option<ProviderOauthCredential> {
+    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
+    match storage.load() {
+        Ok(Some(auth)) => auth.get_provider_oauth_credential(provider_id),
+        Ok(None) => None,
+        Err(err) => {
+            tracing::warn!(
+                provider_id = provider_id,
+                error = %err,
+                "Failed to load auth storage for provider OAuth credential. Check file permissions or keyring access."
+            );
+            None
+        }
+    }
+}
+
+/// Resolve Gemini auth source with deterministic precedence:
+/// API key first, then OAuth, then missing.
+pub fn resolve_gemini_auth_source(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> GeminiAuthSource {
+    if let Some(api_key) =
+        get_provider_api_key(codex_home, PROVIDER_GEMINI, auth_credentials_store_mode)
+    {
+        return GeminiAuthSource::ApiKey(api_key);
+    }
+
+    match get_provider_oauth_credential(codex_home, PROVIDER_GEMINI, auth_credentials_store_mode) {
+        Some(oauth) => GeminiAuthSource::Oauth(oauth),
+        None => GeminiAuthSource::Missing,
+    }
+}
+
 /// List all configured providers with their auth status.
 pub fn list_configured_providers(
     codex_home: &Path,
@@ -218,6 +421,7 @@ pub fn list_configured_providers(
             result.push(ProviderAuthStatus {
                 provider_id: provider_id.to_string(),
                 source: ProviderAuthSource::Environment,
+                method: ProviderAuthMethod::ApiKey,
             });
         }
     }
@@ -232,14 +436,27 @@ pub fn list_configured_providers(
                 result.push(ProviderAuthStatus {
                     provider_id: PROVIDER_OPENAI.to_string(),
                     source: ProviderAuthSource::Stored,
+                    method: ProviderAuthMethod::Oauth,
                 });
             }
 
             for provider_id in auth.configured_providers() {
                 if !result.iter().any(|p| p.provider_id == provider_id) {
+                    let method = auth
+                        .providers
+                        .get(&provider_id)
+                        .map(|credential| match credential {
+                            ProviderCredential::Api { .. } => ProviderAuthMethod::ApiKey,
+                            ProviderCredential::Oauth { .. } => ProviderAuthMethod::Oauth,
+                            ProviderCredential::ApiAndOauth { .. } => {
+                                ProviderAuthMethod::ApiKeyAndOauth
+                            }
+                        })
+                        .unwrap_or(ProviderAuthMethod::ApiKey);
                     result.push(ProviderAuthStatus {
                         provider_id,
                         source: ProviderAuthSource::Stored,
+                        method,
                     });
                 }
             }
@@ -279,6 +496,29 @@ pub(super) fn remove_provider(
     Ok(removed)
 }
 
+/// Remove only OAuth credentials for a specific provider while preserving API keys.
+/// Returns true if OAuth credentials were removed, false if there were none to clear.
+pub fn clear_provider_oauth_credential(
+    codex_home: &Path,
+    provider_id: &str,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> std::io::Result<bool> {
+    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
+    let Some(mut auth) = storage.load()? else {
+        return Ok(false);
+    };
+
+    let cleared = auth.clear_provider_oauth_credential(provider_id);
+    if cleared {
+        if auth.providers.is_empty() && auth.tokens.is_none() {
+            storage.delete()?;
+        } else {
+            storage.save(&auth)?;
+        }
+    }
+    Ok(cleared)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,12 +550,39 @@ mod tests {
     #[test]
     fn provider_credential_oauth_serialization() {
         let cred = ProviderCredential::Oauth {
-            access: "access-token".to_string(),
-            refresh: "refresh-token".to_string(),
-            expires: Some(Utc::now()),
+            credential: ProviderOauthCredential {
+                access: "access-token".to_string(),
+                refresh: "refresh-token".to_string(),
+                expires: Some(Utc::now()),
+                email: Some("user@example.com".to_string()),
+                project_id: Some("project-id".to_string()),
+                managed_project_id: Some("managed-project-id".to_string()),
+            },
         };
         let json = serde_json::to_string(&cred).unwrap();
         assert!(json.contains("\"type\":\"oauth\""));
+        assert!(json.contains("\"access\":\"access-token\""));
+
+        let deserialized: ProviderCredential = serde_json::from_str(&json).unwrap();
+        assert_eq!(cred, deserialized);
+    }
+
+    #[test]
+    fn provider_credential_api_and_oauth_serialization() {
+        let cred = ProviderCredential::ApiAndOauth {
+            key: "AIza-1".to_string(),
+            credential: ProviderOauthCredential {
+                access: "access-token".to_string(),
+                refresh: "refresh-token".to_string(),
+                expires: Some(Utc::now()),
+                email: Some("user@example.com".to_string()),
+                project_id: Some("project-id".to_string()),
+                managed_project_id: Some("managed-project-id".to_string()),
+            },
+        };
+        let json = serde_json::to_string(&cred).unwrap();
+        assert!(json.contains("\"type\":\"api_and_oauth\""));
+        assert!(json.contains("\"key\":\"AIza-1\""));
         assert!(json.contains("\"access\":\"access-token\""));
 
         let deserialized: ProviderCredential = serde_json::from_str(&json).unwrap();
@@ -384,6 +651,115 @@ mod tests {
         );
         assert_eq!(auth.version, Some(AUTH_JSON_VERSION));
         assert!(auth.openai_api_key.is_none());
+    }
+
+    #[test]
+    fn auth_dot_json_set_provider_oauth_credential() {
+        let mut auth = AuthDotJson::default();
+        let credential = ProviderOauthCredential {
+            access: "access-token".to_string(),
+            refresh: "refresh-token".to_string(),
+            expires: None,
+            email: Some("user@example.com".to_string()),
+            project_id: Some("project-id".to_string()),
+            managed_project_id: Some("managed-project-id".to_string()),
+        };
+
+        auth.set_provider_oauth_credential(PROVIDER_GEMINI, credential.clone());
+
+        assert_eq!(auth.get_provider_api_key(PROVIDER_GEMINI), None);
+        assert_eq!(
+            auth.get_provider_oauth_credential(PROVIDER_GEMINI),
+            Some(credential),
+        );
+    }
+
+    #[test]
+    fn auth_dot_json_set_provider_oauth_preserves_existing_provider_api_key() {
+        let mut auth = AuthDotJson::default();
+        let oauth = ProviderOauthCredential {
+            access: "access-token".to_string(),
+            refresh: "refresh-token".to_string(),
+            expires: None,
+            email: Some("user@example.com".to_string()),
+            project_id: None,
+            managed_project_id: Some("managed-project".to_string()),
+        };
+
+        auth.set_provider_api_key(PROVIDER_GEMINI, "AIza-1");
+        auth.set_provider_oauth_credential(PROVIDER_GEMINI, oauth.clone());
+
+        assert_eq!(auth.get_provider_api_key(PROVIDER_GEMINI), Some("AIza-1"));
+        assert_eq!(
+            auth.get_provider_oauth_credential(PROVIDER_GEMINI),
+            Some(oauth),
+        );
+    }
+
+    #[test]
+    fn auth_dot_json_set_provider_api_key_preserves_existing_provider_oauth() {
+        let mut auth = AuthDotJson::default();
+        let oauth = ProviderOauthCredential {
+            access: "access-token".to_string(),
+            refresh: "refresh-token".to_string(),
+            expires: None,
+            email: Some("user@example.com".to_string()),
+            project_id: None,
+            managed_project_id: Some("managed-project".to_string()),
+        };
+
+        auth.set_provider_oauth_credential(PROVIDER_GEMINI, oauth.clone());
+        auth.set_provider_api_key(PROVIDER_GEMINI, "AIza-1");
+
+        assert_eq!(auth.get_provider_api_key(PROVIDER_GEMINI), Some("AIza-1"));
+        assert_eq!(
+            auth.get_provider_oauth_credential(PROVIDER_GEMINI),
+            Some(oauth),
+        );
+    }
+
+    #[test]
+    fn auth_dot_json_clear_provider_oauth_credential_removes_oauth_only() {
+        let mut auth = AuthDotJson::default();
+        let oauth = ProviderOauthCredential {
+            access: "access-token".to_string(),
+            refresh: "refresh-token".to_string(),
+            expires: None,
+            email: Some("user@example.com".to_string()),
+            project_id: None,
+            managed_project_id: Some("managed-project".to_string()),
+        };
+        auth.set_provider_oauth_credential(PROVIDER_GEMINI, oauth);
+
+        let cleared = auth.clear_provider_oauth_credential(PROVIDER_GEMINI);
+
+        assert!(cleared);
+        assert_eq!(auth.get_provider_oauth_credential(PROVIDER_GEMINI), None);
+        assert_eq!(auth.get_provider_api_key(PROVIDER_GEMINI), None);
+    }
+
+    #[test]
+    fn auth_dot_json_clear_provider_oauth_credential_preserves_api_key() {
+        let mut auth = AuthDotJson::default();
+        let oauth = ProviderOauthCredential {
+            access: "access-token".to_string(),
+            refresh: "refresh-token".to_string(),
+            expires: None,
+            email: Some("user@example.com".to_string()),
+            project_id: None,
+            managed_project_id: Some("managed-project".to_string()),
+        };
+        auth.set_provider_api_key(PROVIDER_GEMINI, "AIza-test");
+        auth.set_provider_oauth_credential(PROVIDER_GEMINI, oauth);
+
+        let cleared = auth.clear_provider_oauth_credential(PROVIDER_GEMINI);
+
+        assert!(cleared);
+        assert_eq!(
+            auth.get_provider_api_key(PROVIDER_GEMINI),
+            Some("AIza-test")
+        );
+        assert_eq!(auth.get_provider_oauth_credential(PROVIDER_GEMINI), None);
     }
 
     #[test]
@@ -562,6 +938,152 @@ mod tests {
 
     #[test]
     #[serial(codex_api_key)]
+    fn resolve_gemini_auth_source_prefers_api_key_over_oauth() {
+        let dir = tempdir().unwrap();
+        let _google_guard = EnvVarGuard::set(GOOGLE_API_KEY_ENV_VAR, "");
+        let oauth_credential = ProviderOauthCredential {
+            access: "oauth-access".to_string(),
+            refresh: "oauth-refresh".to_string(),
+            expires: None,
+            email: None,
+            project_id: None,
+            managed_project_id: None,
+        };
+
+        login_with_provider_oauth(
+            dir.path(),
+            PROVIDER_GEMINI,
+            oauth_credential,
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("should store oauth credential");
+
+        let _google_guard = EnvVarGuard::set(GOOGLE_API_KEY_ENV_VAR, "AIza-env");
+        let source = resolve_gemini_auth_source(dir.path(), AuthCredentialsStoreMode::File);
+        assert_eq!(source, GeminiAuthSource::ApiKey("AIza-env".to_string()));
+    }
+
+    #[test]
+    #[serial(codex_api_key)]
+    fn resolve_gemini_auth_source_uses_oauth_when_api_key_missing() {
+        let dir = tempdir().unwrap();
+        let _google_guard = EnvVarGuard::set(GOOGLE_API_KEY_ENV_VAR, "");
+        let oauth_credential = ProviderOauthCredential {
+            access: "oauth-access".to_string(),
+            refresh: "oauth-refresh".to_string(),
+            expires: None,
+            email: Some("user@example.com".to_string()),
+            project_id: Some("project-id".to_string()),
+            managed_project_id: Some("managed-project-id".to_string()),
+        };
+
+        login_with_provider_oauth(
+            dir.path(),
+            PROVIDER_GEMINI,
+            oauth_credential.clone(),
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("should store oauth credential");
+
+        let source = resolve_gemini_auth_source(dir.path(), AuthCredentialsStoreMode::File);
+        assert_eq!(source, GeminiAuthSource::Oauth(oauth_credential));
+    }
+
+    #[test]
+    #[serial(codex_api_key)]
+    fn login_with_provider_oauth_preserves_existing_provider_api_key() {
+        let dir = tempdir().unwrap();
+        let _google_guard = EnvVarGuard::set(GOOGLE_API_KEY_ENV_VAR, "");
+
+        login_with_provider_api_key(
+            dir.path(),
+            PROVIDER_GEMINI,
+            "AIza-stored",
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store gemini api key");
+        login_with_provider_oauth(
+            dir.path(),
+            PROVIDER_GEMINI,
+            ProviderOauthCredential {
+                access: "oauth-access".to_string(),
+                refresh: "oauth-refresh".to_string(),
+                expires: None,
+                email: Some("user@example.com".to_string()),
+                project_id: None,
+                managed_project_id: Some("managed-project".to_string()),
+            },
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store gemini oauth");
+
+        assert_eq!(
+            get_provider_api_key(dir.path(), PROVIDER_GEMINI, AuthCredentialsStoreMode::File),
+            Some("AIza-stored".to_string())
+        );
+        assert!(
+            get_provider_oauth_credential(
+                dir.path(),
+                PROVIDER_GEMINI,
+                AuthCredentialsStoreMode::File
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    #[serial(codex_api_key)]
+    fn login_with_provider_api_key_preserves_existing_provider_oauth() {
+        let dir = tempdir().unwrap();
+        let _google_guard = EnvVarGuard::set(GOOGLE_API_KEY_ENV_VAR, "");
+
+        login_with_provider_oauth(
+            dir.path(),
+            PROVIDER_GEMINI,
+            ProviderOauthCredential {
+                access: "oauth-access".to_string(),
+                refresh: "oauth-refresh".to_string(),
+                expires: None,
+                email: Some("user@example.com".to_string()),
+                project_id: None,
+                managed_project_id: Some("managed-project".to_string()),
+            },
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store gemini oauth");
+        login_with_provider_api_key(
+            dir.path(),
+            PROVIDER_GEMINI,
+            "AIza-stored",
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store gemini api key");
+
+        assert_eq!(
+            get_provider_api_key(dir.path(), PROVIDER_GEMINI, AuthCredentialsStoreMode::File),
+            Some("AIza-stored".to_string())
+        );
+        let oauth = get_provider_oauth_credential(
+            dir.path(),
+            PROVIDER_GEMINI,
+            AuthCredentialsStoreMode::File,
+        );
+        assert!(oauth.is_some());
+        assert_eq!(oauth.unwrap().refresh, "oauth-refresh");
+    }
+
+    #[test]
+    #[serial(codex_api_key)]
+    fn resolve_gemini_auth_source_missing_when_unconfigured() {
+        let dir = tempdir().unwrap();
+        let _google_guard = EnvVarGuard::set(GOOGLE_API_KEY_ENV_VAR, "");
+
+        let source = resolve_gemini_auth_source(dir.path(), AuthCredentialsStoreMode::File);
+        assert_eq!(source, GeminiAuthSource::Missing);
+    }
+
+    #[test]
+    #[serial(codex_api_key)]
     fn list_configured_providers_shows_stored() {
         let dir = tempdir().unwrap();
         let _openai_guard = EnvVarGuard::set(OPENAI_API_KEY_ENV_VAR, "");
@@ -589,12 +1111,14 @@ mod tests {
         let openai = providers.iter().find(|p| p.provider_id == PROVIDER_OPENAI);
         assert!(openai.is_some());
         assert_eq!(openai.unwrap().source, ProviderAuthSource::Stored);
+        assert_eq!(openai.unwrap().method, ProviderAuthMethod::ApiKey);
 
         let anthropic = providers
             .iter()
             .find(|p| p.provider_id == PROVIDER_ANTHROPIC);
         assert!(anthropic.is_some());
         assert_eq!(anthropic.unwrap().source, ProviderAuthSource::Stored);
+        assert_eq!(anthropic.unwrap().method, ProviderAuthMethod::ApiKey);
     }
 
     #[test]
@@ -610,6 +1134,74 @@ mod tests {
             .find(|p| p.provider_id == PROVIDER_ANTHROPIC);
         assert!(anthropic.is_some());
         assert_eq!(anthropic.unwrap().source, ProviderAuthSource::Environment);
+        assert_eq!(anthropic.unwrap().method, ProviderAuthMethod::ApiKey);
+    }
+
+    #[test]
+    #[serial(codex_api_key)]
+    fn list_configured_providers_shows_oauth_method() {
+        let dir = tempdir().unwrap();
+        let _openai_guard = EnvVarGuard::set(OPENAI_API_KEY_ENV_VAR, "");
+        let _anthropic_guard = EnvVarGuard::set(ANTHROPIC_API_KEY_ENV_VAR, "");
+        let _google_guard = EnvVarGuard::set(GOOGLE_API_KEY_ENV_VAR, "");
+
+        login_with_provider_oauth(
+            dir.path(),
+            PROVIDER_GEMINI,
+            ProviderOauthCredential {
+                access: "oauth-access".to_string(),
+                refresh: "oauth-refresh".to_string(),
+                expires: None,
+                email: Some("user@example.com".to_string()),
+                project_id: None,
+                managed_project_id: Some("managed-project".to_string()),
+            },
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store gemini oauth");
+
+        let providers = list_configured_providers(dir.path(), AuthCredentialsStoreMode::File);
+        let gemini = providers.iter().find(|p| p.provider_id == PROVIDER_GEMINI);
+        assert!(gemini.is_some());
+        assert_eq!(gemini.unwrap().source, ProviderAuthSource::Stored);
+        assert_eq!(gemini.unwrap().method, ProviderAuthMethod::Oauth);
+    }
+
+    #[test]
+    #[serial(codex_api_key)]
+    fn list_configured_providers_shows_api_and_oauth_method() {
+        let dir = tempdir().unwrap();
+        let _openai_guard = EnvVarGuard::set(OPENAI_API_KEY_ENV_VAR, "");
+        let _anthropic_guard = EnvVarGuard::set(ANTHROPIC_API_KEY_ENV_VAR, "");
+        let _google_guard = EnvVarGuard::set(GOOGLE_API_KEY_ENV_VAR, "");
+
+        login_with_provider_api_key(
+            dir.path(),
+            PROVIDER_GEMINI,
+            "AIza-1",
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store gemini api key");
+        login_with_provider_oauth(
+            dir.path(),
+            PROVIDER_GEMINI,
+            ProviderOauthCredential {
+                access: "oauth-access".to_string(),
+                refresh: "oauth-refresh".to_string(),
+                expires: None,
+                email: Some("user@example.com".to_string()),
+                project_id: None,
+                managed_project_id: Some("managed-project".to_string()),
+            },
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("store gemini oauth");
+
+        let providers = list_configured_providers(dir.path(), AuthCredentialsStoreMode::File);
+        let gemini = providers.iter().find(|p| p.provider_id == PROVIDER_GEMINI);
+        assert!(gemini.is_some());
+        assert_eq!(gemini.unwrap().source, ProviderAuthSource::Stored);
+        assert_eq!(gemini.unwrap().method, ProviderAuthMethod::ApiKeyAndOauth);
     }
 
     #[test]

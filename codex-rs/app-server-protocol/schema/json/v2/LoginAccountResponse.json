@@ -44,6 +44,31 @@
     },
     {
       "properties": {
+        "authUrl": {
+          "description": "URL the client should open in a browser to initiate the OAuth flow.",
+          "type": "string"
+        },
+        "loginId": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "gemini"
+          ],
+          "title": "Geminiv2::LoginAccountResponseType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authUrl",
+        "loginId",
+        "type"
+      ],
+      "title": "Geminiv2::LoginAccountResponse",
+      "type": "object"
+    },
+    {
+      "properties": {
         "type": {
           "enum": [
             "chatgptAuthTokens"

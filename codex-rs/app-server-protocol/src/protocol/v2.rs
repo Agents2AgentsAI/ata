@@ -949,6 +949,10 @@ pub enum Account {
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
     Chatgpt { email: String, plan_type: PlanType },
+
+    #[serde(rename = "gemini", rename_all = "camelCase")]
+    #[ts(rename = "gemini", rename_all = "camelCase")]
+    Gemini { email: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
@@ -966,6 +970,9 @@ pub enum LoginAccountParams {
     #[serde(rename = "chatgpt")]
     #[ts(rename = "chatgpt")]
     Chatgpt,
+    #[serde(rename = "gemini")]
+    #[ts(rename = "gemini")]
+    Gemini,
     /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
     /// The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.
     #[experimental("account/login/start.chatgptAuthTokens")]
@@ -999,6 +1006,13 @@ pub enum LoginAccountResponse {
     Chatgpt {
         // Use plain String for identifiers to avoid TS/JSON Schema quirks around uuid-specific types.
         // Convert to/from UUIDs at the application layer as needed.
+        login_id: String,
+        /// URL the client should open in a browser to initiate the OAuth flow.
+        auth_url: String,
+    },
+    #[serde(rename = "gemini", rename_all = "camelCase")]
+    #[ts(rename = "gemini", rename_all = "camelCase")]
+    Gemini {
         login_id: String,
         /// URL the client should open in a browser to initiate the OAuth flow.
         auth_url: String,
@@ -1098,6 +1112,7 @@ pub struct GetAccountParams {
 pub struct GetAccountResponse {
     pub account: Option<Account>,
     pub requires_openai_auth: bool,
+    pub requires_gemini_auth: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]

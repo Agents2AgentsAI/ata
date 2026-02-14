@@ -20,6 +20,7 @@ use ratatui::widgets::Wrap;
 
 use super::auth::ApiKeyInputState;
 use super::auth::AuthModeWidget;
+use super::auth::ProviderAuthMethod;
 use super::auth::SignInState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,7 +39,7 @@ impl ProviderOption {
         }
     }
 
-    fn display_name(self) -> &'static str {
+    pub(crate) fn display_name(self) -> &'static str {
         match self {
             Self::OpenAI => "OpenAI",
             Self::Anthropic => "Anthropic",
@@ -95,22 +96,51 @@ impl AuthModeWidget {
                     self.request_frame.schedule_frame();
                 }
                 KeyCode::Char('1') => {
-                    self.start_provider_api_key_entry(ProviderOption::OpenAI);
+                    self.start_provider_configuration(ProviderOption::OpenAI);
                 }
                 KeyCode::Char('2') => {
-                    self.start_provider_api_key_entry(ProviderOption::Anthropic);
+                    self.start_provider_configuration(ProviderOption::Anthropic);
                 }
                 KeyCode::Char('3') => {
-                    self.start_provider_api_key_entry(ProviderOption::Gemini);
+                    self.start_provider_configuration(ProviderOption::Gemini);
                 }
                 KeyCode::Char('l') | KeyCode::Char('L') => {
                     self.show_provider_list();
                 }
                 KeyCode::Enter => {
-                    self.start_provider_api_key_entry(self.highlighted_provider);
+                    self.start_provider_configuration(self.highlighted_provider);
                 }
                 KeyCode::Esc => {
                     *self.sign_in_state.write().unwrap() = SignInState::PickMode;
+                    self.request_frame.schedule_frame();
+                }
+                _ => {}
+            }
+            return true;
+        }
+
+        if let SignInState::PickProviderAuthMethod(provider) = sign_in_state {
+            match key_event.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.move_provider_auth_method_highlight(-1);
+                    self.request_frame.schedule_frame();
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.move_provider_auth_method_highlight(1);
+                    self.request_frame.schedule_frame();
+                }
+                KeyCode::Char('1') => {
+                    self.start_provider_api_key_entry(*provider);
+                }
+                KeyCode::Char('2') => {
+                    self.start_provider_oauth_login(*provider);
+                }
+                KeyCode::Enter => match self.highlighted_provider_auth_method {
+                    ProviderAuthMethod::ApiKey => self.start_provider_api_key_entry(*provider),
+                    ProviderAuthMethod::Oauth => self.start_provider_oauth_login(*provider),
+                },
+                KeyCode::Esc => {
+                    *self.sign_in_state.write().unwrap() = SignInState::PickProvider;
                     self.request_frame.schedule_frame();
                 }
                 _ => {}
@@ -130,6 +160,7 @@ impl AuthModeWidget {
     pub(super) fn start_provider_selection(&mut self) {
         self.error = None;
         self.highlighted_provider = ProviderOption::OpenAI;
+        self.highlighted_provider_auth_method = ProviderAuthMethod::ApiKey;
         *self.sign_in_state.write().unwrap() = SignInState::PickProvider;
         self.request_frame.schedule_frame();
     }
@@ -187,6 +218,67 @@ impl AuthModeWidget {
             .render(area, buf);
     }
 
+    pub(super) fn render_pick_provider_auth_method(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        provider: ProviderOption,
+    ) {
+        let provider_name = provider.display_name();
+        let mut lines: Vec<Line> = vec![
+            Line::from(vec![
+                "> ".into(),
+                format!("Configure {provider_name}").bold(),
+            ]),
+            "".into(),
+            "  Select an authentication method:".into(),
+            "".into(),
+        ];
+
+        for (idx, (method, title, description)) in [
+            (
+                ProviderAuthMethod::ApiKey,
+                "API key",
+                "Use usage-based billing with your own API key",
+            ),
+            (
+                ProviderAuthMethod::Oauth,
+                "OAuth (Gemini Code Assist)",
+                "Sign in with your Google account and use Code Assist",
+            ),
+        ]
+        .iter()
+        .copied()
+        .enumerate()
+        {
+            let is_selected = self.highlighted_provider_auth_method == method;
+            let caret = if is_selected { ">" } else { " " };
+            if is_selected {
+                lines.push(Line::from(vec![
+                    format!("{caret} {}. ", idx + 1).cyan().dim(),
+                    title.cyan(),
+                ]));
+                lines.push(format!("     {description}").cyan().dim().into());
+            } else {
+                lines.push(format!("  {}. {title}", idx + 1).into());
+                lines.push(format!("     {description}").dim().into());
+            }
+            lines.push("".into());
+        }
+
+        lines.push("  Press Enter to continue".dim().into());
+        lines.push("  Press Esc to go back".dim().into());
+
+        if let Some(error) = &self.error {
+            lines.push("".into());
+            lines.push(error.as_str().red().into());
+        }
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+
     pub(super) fn render_provider_list(&self, area: Rect, buf: &mut Buffer) {
         let providers =
             list_configured_providers(&self.codex_home, self.cli_auth_credentials_store_mode);
@@ -230,6 +322,32 @@ impl AuthModeWidget {
         let next_index =
             (current_index as isize + delta).rem_euclid(options.len() as isize) as usize;
         self.highlighted_provider = options[next_index];
+    }
+
+    fn move_provider_auth_method_highlight(&mut self, delta: isize) {
+        let options = [ProviderAuthMethod::ApiKey, ProviderAuthMethod::Oauth];
+        let current_index = options
+            .iter()
+            .position(|option| *option == self.highlighted_provider_auth_method)
+            .unwrap_or(0);
+        let next_index =
+            (current_index as isize + delta).rem_euclid(options.len() as isize) as usize;
+        self.highlighted_provider_auth_method = options[next_index];
+    }
+
+    fn start_provider_configuration(&mut self, provider: ProviderOption) {
+        if provider == ProviderOption::Gemini {
+            self.start_provider_auth_method_picker(provider);
+        } else {
+            self.start_provider_api_key_entry(provider);
+        }
+    }
+
+    fn start_provider_auth_method_picker(&mut self, provider: ProviderOption) {
+        self.error = None;
+        self.highlighted_provider_auth_method = ProviderAuthMethod::ApiKey;
+        *self.sign_in_state.write().unwrap() = SignInState::PickProviderAuthMethod(provider);
+        self.request_frame.schedule_frame();
     }
 
     fn start_provider_api_key_entry(&mut self, provider: ProviderOption) {
