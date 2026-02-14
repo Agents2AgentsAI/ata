@@ -26,6 +26,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 mod render;
@@ -82,8 +83,10 @@ pub(crate) struct DocumentReaderView {
     app_event_tx: AppEventSender,
     complete: bool,
     /// Tracks which sections have a pending agent update (by section index).
-    /// "thinking..." shows only when the current section is in this set.
-    pending_sections: HashSet<usize>,
+    /// Maps section index → the user's question text.
+    pending_sections: HashMap<usize, String>,
+    /// Tracks which section indices the user has viewed (for exit feedback).
+    visited_sections: HashSet<usize>,
 
     // Embedded textarea for follow-up questions.
     textarea: TextArea,
@@ -98,6 +101,10 @@ impl DocumentReaderView {
         app_event_tx: AppEventSender,
     ) -> Self {
         let sections = parse_sections(&title, &content);
+        let mut visited_sections = HashSet::new();
+        if !sections.is_empty() {
+            visited_sections.insert(0);
+        }
         Self {
             document_id,
             title,
@@ -107,7 +114,8 @@ impl DocumentReaderView {
             focus: ReaderFocus::Content,
             app_event_tx,
             complete: false,
-            pending_sections: HashSet::new(),
+            pending_sections: HashMap::new(),
+            visited_sections,
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
         }
@@ -187,6 +195,7 @@ impl DocumentReaderView {
             self.clear_updated_flag();
             self.current_section += 1;
             self.scroll_offset = 0;
+            self.visited_sections.insert(self.current_section);
         }
     }
 
@@ -195,6 +204,7 @@ impl DocumentReaderView {
             self.clear_updated_flag();
             self.current_section -= 1;
             self.scroll_offset = 0;
+            self.visited_sections.insert(self.current_section);
         }
     }
 
@@ -213,6 +223,23 @@ impl DocumentReaderView {
         );
         self.app_event_tx
             .send(AppEvent::InsertHistoryCell(Box::new(cell)));
+
+        // Send brief feedback to the agent about user interaction.
+        let total = self.sections.len();
+        let viewed = self.visited_sections.len();
+        let feedback = format!(
+            "[The user closed the document reader for \"{}\". \
+             They viewed {viewed} of {total} sections.]",
+            self.title,
+        );
+        self.app_event_tx.send(AppEvent::CodexOp(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: feedback,
+                text_elements: vec![],
+            }],
+            final_output_json_schema: None,
+        }));
+
         self.complete = true;
     }
 
@@ -229,8 +256,13 @@ impl DocumentReaderView {
             .unwrap_or("");
 
         let context = format!(
-            "[Document \"{}\" \u{2014} Section {}: \"{}\"]\n\n{}",
-            self.title, self.current_section, heading, text
+            "[The user is viewing Document \"{}\" in reading mode, currently on Section {}: \"{}\"]\n\n\
+             {}\n\n\
+             IMPORTANT: To update this section with your answer, you MUST call \
+             `update_document_section` (or `append_to_section` / `patch_document_section`) \
+             with document_id=\"{}\" and section_index={}. Do NOT output plain text \u{2014} \
+             it will not be visible to the user. Only tool calls update the document.",
+            self.title, self.current_section, heading, text, self.document_id, self.current_section,
         );
 
         self.app_event_tx.send(AppEvent::CodexOp(Op::UserInput {
@@ -240,7 +272,7 @@ impl DocumentReaderView {
             }],
             final_output_json_schema: None,
         }));
-        self.pending_sections.insert(self.current_section);
+        self.pending_sections.insert(self.current_section, text);
         self.textarea = TextArea::new();
         *self.textarea_state.borrow_mut() = TextAreaState::default();
         self.focus = ReaderFocus::Content;
@@ -272,11 +304,13 @@ impl DocumentReaderView {
             KeyCode::Home => {
                 self.current_section = 0;
                 self.scroll_offset = 0;
+                self.visited_sections.insert(0);
             }
             KeyCode::End => {
                 if !self.sections.is_empty() {
                     self.current_section = self.sections.len() - 1;
                     self.scroll_offset = 0;
+                    self.visited_sections.insert(self.current_section);
                 }
             }
             KeyCode::Tab => {
@@ -478,7 +512,7 @@ impl Renderable for DocumentReaderView {
         y += 1;
 
         // Header — show "thinking..." only when the current section is pending.
-        let current_pending = self.pending_sections.contains(&self.current_section);
+        let current_pending = self.pending_sections.contains_key(&self.current_section);
         let header =
             render::header_line(&self.title, section_num, section_count, current_pending, w);
         Paragraph::new(header).render(
@@ -507,7 +541,13 @@ impl Renderable for DocumentReaderView {
             let inner_width = w.saturating_sub(4);
             if let Some(section) = self.sections.get(self.current_section) {
                 let updated = section.recently_updated;
-                let raw_lines = section.rendered_lines(inner_width);
+                let mut raw_lines = section.rendered_lines(inner_width);
+
+                // Append pending indicator if the current section has a pending question.
+                if let Some(question) = self.pending_sections.get(&self.current_section) {
+                    raw_lines.extend(render::pending_indicator_lines(question, inner_width));
+                }
+
                 let visible: Vec<Line<'static>> = raw_lines
                     .into_iter()
                     .skip(self.scroll_offset as usize)
@@ -536,9 +576,11 @@ impl Renderable for DocumentReaderView {
                     .sections
                     .get(self.current_section)
                     .map(|s| {
-                        s.rendered_lines(inner_width)
-                            .len()
-                            .saturating_sub(self.scroll_offset as usize)
+                        let mut count = s.rendered_lines(inner_width).len();
+                        if let Some(q) = self.pending_sections.get(&self.current_section) {
+                            count += render::pending_indicator_lines(q, inner_width).len();
+                        }
+                        count.saturating_sub(self.scroll_offset as usize)
                     })
                     .unwrap_or(0);
                 let filled = rendered_count.min(content_height as usize);
@@ -621,9 +663,10 @@ impl Renderable for DocumentReaderView {
                         cell.set_style(ratatui::style::Style::default().dim());
                     }
                     if rx > 0
-                        && let Some(cell) = buf.cell_mut((rx - 1, ry)) {
-                            cell.set_symbol(" ");
-                        }
+                        && let Some(cell) = buf.cell_mut((rx - 1, ry))
+                    {
+                        cell.set_symbol(" ");
+                    }
                 }
             }
             let mut state = self.textarea_state.borrow_mut();
@@ -691,9 +734,9 @@ impl Renderable for DocumentReaderView {
 ///
 /// Content before the first `## ` becomes section 0 with the document title
 /// as heading.
-fn parse_sections(title: &str, content: &str) -> Vec<DocumentSection> {
+fn parse_sections(_title: &str, content: &str) -> Vec<DocumentSection> {
     let mut sections = Vec::new();
-    let mut current_heading = title.to_string();
+    let mut current_heading = String::new();
     let mut current_content = String::new();
 
     for line in content.lines() {
@@ -785,7 +828,7 @@ mod tests {
         let content = "Intro text\n## Methodology\nMethod content\n## Results\nResult content";
         let sections = parse_sections("My Report", content);
         assert_eq!(sections.len(), 3);
-        assert_eq!(sections[0].heading, "My Report");
+        assert_eq!(sections[0].heading, "");
         assert_eq!(sections[0].content, "Intro text");
         assert_eq!(sections[1].heading, "Methodology");
         assert_eq!(sections[1].content, "Method content");
@@ -798,7 +841,7 @@ mod tests {
         let content = "Some preamble\nMore preamble\n## First\nBody";
         let sections = parse_sections("Title", content);
         assert_eq!(sections.len(), 2);
-        assert_eq!(sections[0].heading, "Title");
+        assert_eq!(sections[0].heading, "");
         assert!(sections[0].content.contains("preamble"));
         assert_eq!(sections[1].heading, "First");
         assert_eq!(sections[1].content, "Body");
@@ -809,7 +852,7 @@ mod tests {
         let content = "Just a single block of text\nwith multiple lines";
         let sections = parse_sections("Title", content);
         assert_eq!(sections.len(), 1);
-        assert_eq!(sections[0].heading, "Title");
+        assert_eq!(sections[0].heading, "");
     }
 
     #[test]
@@ -817,7 +860,7 @@ mod tests {
         let content = "## Only Section\nContent here";
         let sections = parse_sections("Title", content);
         assert_eq!(sections.len(), 2);
-        assert_eq!(sections[0].heading, "Title");
+        assert_eq!(sections[0].heading, "");
         assert!(sections[0].content.is_empty());
         assert_eq!(sections[1].heading, "Only Section");
     }
@@ -1109,7 +1152,7 @@ mod tests {
         view.handle_composer_key(key(KeyCode::Enter));
 
         // Should be waiting for update on section 2.
-        assert!(view.pending_sections.contains(&2));
+        assert!(view.pending_sections.contains_key(&2));
         // Composer should be cleared and focus returned to content.
         assert!(view.textarea.text().is_empty());
         assert_eq!(view.focus, ReaderFocus::Content);
@@ -1164,11 +1207,11 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
 
-        view.pending_sections.insert(1);
+        view.pending_sections.insert(1, "test question".into());
         view.update_section(1, "Updated methodology content.".to_string());
 
         assert!(
-            !view.pending_sections.contains(&1),
+            !view.pending_sections.contains_key(&1),
             "update should clear pending flag"
         );
         assert_eq!(view.sections[1].content, "Updated methodology content.");
@@ -1196,11 +1239,11 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
 
-        view.pending_sections.insert(99);
+        view.pending_sections.insert(99, "test question".into());
         view.update_section(99, "Does not exist.".to_string());
 
         // pending should stay since the update was ignored (section doesn't exist).
-        assert!(view.pending_sections.contains(&99));
+        assert!(view.pending_sections.contains_key(&99));
     }
 
     #[test]
@@ -1209,17 +1252,17 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
 
-        view.pending_sections.insert(2);
+        view.pending_sections.insert(2, "test question".into());
 
         // Matching document_id should update.
         view.handle_document_section_update("test-doc", 2, "New results.".to_string());
-        assert!(!view.pending_sections.contains(&2));
+        assert!(!view.pending_sections.contains_key(&2));
         assert_eq!(view.sections[2].content, "New results.");
 
         // Non-matching document_id should be ignored.
-        view.pending_sections.insert(0);
+        view.pending_sections.insert(0, "test question".into());
         view.handle_document_section_update("other-doc", 0, "Ignored.".to_string());
-        assert!(view.pending_sections.contains(&0));
+        assert!(view.pending_sections.contains_key(&0));
     }
 
     // -----------------------------------------------------------------------
@@ -1233,8 +1276,8 @@ mod tests {
         let mut view = make_view(tx);
 
         // Simulate submitting follow-ups for sections 1 and 2.
-        view.pending_sections.insert(1);
-        view.pending_sections.insert(2);
+        view.pending_sections.insert(1, "test question".into());
+        view.pending_sections.insert(2, "test question".into());
 
         // Turn completes without the agent calling update tools.
         view.handle_turn_complete();
@@ -1318,17 +1361,18 @@ mod tests {
         view.handle_key_event(key(KeyCode::Char('e')));
         view.handle_key_event(key(KeyCode::Enter));
 
-        assert!(view.pending_sections.contains(&2));
+        assert!(view.pending_sections.contains_key(&2));
         assert_eq!(view.focus, ReaderFocus::Content);
 
         // Drain the UserInput event.
         let mut got_input = false;
         while let Ok(ev) = rx.try_recv() {
             if let AppEvent::CodexOp(Op::UserInput { items, .. }) = ev
-                && let UserInput::Text { text, .. } = &items[0] {
-                    assert!(text.contains("more"));
-                    got_input = true;
-                }
+                && let UserInput::Text { text, .. } = &items[0]
+            {
+                assert!(text.contains("more"));
+                got_input = true;
+            }
         }
         assert!(got_input, "expected follow-up submission");
 
@@ -1347,7 +1391,7 @@ mod tests {
             2,
             "## Results\nExpanded result findings with more detail.".to_string(),
         );
-        assert!(!view.pending_sections.contains(&2));
+        assert!(!view.pending_sections.contains_key(&2));
 
         let mut buf = Buffer::empty(area);
         view.render(area, &mut buf);
@@ -1419,7 +1463,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
 
-        view.pending_sections.insert(1);
+        view.pending_sections.insert(1, "test question".into());
         view.append_to_section(1, "Additional details here.".to_string());
 
         assert!(view.sections[1].content.contains("Method details here."));
@@ -1429,7 +1473,7 @@ mod tests {
                 .contains("Additional details here.")
         );
         assert!(view.sections[1].recently_updated);
-        assert!(!view.pending_sections.contains(&1));
+        assert!(!view.pending_sections.contains_key(&1));
     }
 
     #[test]
@@ -1454,12 +1498,12 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
 
-        view.pending_sections.insert(1);
+        view.pending_sections.insert(1, "test question".into());
         view.patch_section(1, "Method details here.", "Improved method details.");
 
         assert_eq!(view.sections[1].content, "Improved method details.");
         assert!(view.sections[1].recently_updated);
-        assert!(!view.pending_sections.contains(&1));
+        assert!(!view.pending_sections.contains_key(&1));
     }
 
     #[test]
@@ -1469,13 +1513,13 @@ mod tests {
         let mut view = make_view(tx);
 
         let original = view.sections[1].content.clone();
-        view.pending_sections.insert(1);
+        view.pending_sections.insert(1, "test question".into());
         view.patch_section(1, "nonexistent text", "replacement");
 
         // Content unchanged since old_text wasn't found.
         assert_eq!(view.sections[1].content, original);
         // But pending should still be cleared.
-        assert!(!view.pending_sections.contains(&1));
+        assert!(!view.pending_sections.contains_key(&1));
     }
 
     #[test]
@@ -1508,13 +1552,13 @@ mod tests {
         let mut view = make_view(tx);
 
         // Simulate asking about sections 1 and 3.
-        view.pending_sections.insert(1);
-        view.pending_sections.insert(3);
+        view.pending_sections.insert(1, "test question".into());
+        view.pending_sections.insert(3, "test question".into());
 
         // Update section 1 — only section 1 should clear.
         view.update_section(1, "Updated.".to_string());
-        assert!(!view.pending_sections.contains(&1));
-        assert!(view.pending_sections.contains(&3));
+        assert!(!view.pending_sections.contains_key(&1));
+        assert!(view.pending_sections.contains_key(&3));
 
         // Update section 3.
         view.update_section(3, "Also updated.".to_string());
@@ -1528,12 +1572,12 @@ mod tests {
         let mut view = make_view(tx);
 
         // Ask about section 0, then navigate away.
-        view.pending_sections.insert(0);
+        view.pending_sections.insert(0, "test question".into());
         view.handle_content_key(key(KeyCode::Char('n')));
         assert_eq!(view.current_section, 1);
 
         // Section 0 should still be pending.
-        assert!(view.pending_sections.contains(&0));
+        assert!(view.pending_sections.contains_key(&0));
 
         // Render — should NOT show "thinking..." since current section (1) is not pending.
         let area = Rect::new(0, 0, 60, 20);
