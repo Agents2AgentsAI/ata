@@ -174,6 +174,9 @@ use codex_core::ThreadManager;
 use codex_core::ThreadSortKey as CoreThreadSortKey;
 use codex_core::auth::AuthMode as CoreAuthMode;
 use codex_core::auth::CLIENT_ID;
+use codex_core::auth::PROVIDER_GEMINI;
+use codex_core::auth::get_provider_api_key;
+use codex_core::auth::get_provider_oauth_credential;
 use codex_core::auth::login_with_api_key;
 use codex_core::auth::login_with_chatgpt_auth_tokens;
 use codex_core::config::Config;
@@ -213,8 +216,10 @@ use codex_core::state_db::StateDbHandle;
 use codex_core::state_db::get_state_db;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_feedback::CodexFeedback;
+use codex_login::GeminiServerOptions;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
+use codex_login::run_gemini_login_server;
 use codex_login::run_login_server;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -795,6 +800,9 @@ impl CodexMessageProcessor {
             LoginAccountParams::Chatgpt => {
                 self.login_chatgpt_v2(request_id).await;
             }
+            LoginAccountParams::Gemini => {
+                self.login_gemini_v2(request_id).await;
+            }
             LoginAccountParams::ChatgptAuthTokens {
                 access_token,
                 chatgpt_account_id,
@@ -1179,6 +1187,121 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn login_gemini_common(
+        &self,
+    ) -> std::result::Result<GeminiServerOptions, JSONRPCErrorError> {
+        let config = self.config.as_ref();
+        if self.auth_manager.is_external_auth_active() {
+            return Err(self.external_auth_active_error());
+        }
+
+        if matches!(config.forced_login_method, Some(ForcedLoginMethod::Chatgpt)) {
+            return Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "OAuth login is disabled. Use ChatGPT login instead.".to_string(),
+                data: None,
+            });
+        }
+
+        Ok(GeminiServerOptions {
+            open_browser: false,
+            ..GeminiServerOptions::new(
+                config.codex_home.clone(),
+                config.cli_auth_credentials_store_mode,
+            )
+        })
+    }
+
+    async fn login_gemini_v2(&mut self, request_id: ConnectionRequestId) {
+        match self.login_gemini_common().await {
+            Ok(opts) => match run_gemini_login_server(opts) {
+                Ok(server) => {
+                    let login_id = Uuid::new_v4();
+                    let shutdown_handle = server.cancel_handle();
+
+                    {
+                        let mut guard = self.active_login.lock().await;
+                        if let Some(existing) = guard.take() {
+                            drop(existing);
+                        }
+                        *guard = Some(ActiveLogin {
+                            shutdown_handle: shutdown_handle.clone(),
+                            login_id,
+                        });
+                    }
+
+                    let outgoing_clone = self.outgoing.clone();
+                    let active_login = self.active_login.clone();
+                    let auth_manager = self.auth_manager.clone();
+                    let auth_url = server.auth_url.clone();
+                    tokio::spawn(async move {
+                        let (success, error_msg) = match tokio::time::timeout(
+                            LOGIN_CHATGPT_TIMEOUT,
+                            server.block_until_done(),
+                        )
+                        .await
+                        {
+                            Ok(Ok(())) => (true, None),
+                            Ok(Err(err)) => (false, Some(format!("Login server error: {err}"))),
+                            Err(_elapsed) => {
+                                shutdown_handle.shutdown();
+                                (false, Some("Login timed out".to_string()))
+                            }
+                        };
+
+                        let payload = AccountLoginCompletedNotification {
+                            login_id: Some(login_id.to_string()),
+                            success,
+                            error: error_msg,
+                        };
+                        outgoing_clone
+                            .send_server_notification(ServerNotification::AccountLoginCompleted(
+                                payload,
+                            ))
+                            .await;
+
+                        if success {
+                            auth_manager.reload();
+                            let payload = AccountUpdatedNotification {
+                                auth_mode: auth_manager
+                                    .auth_cached()
+                                    .as_ref()
+                                    .map(CodexAuth::api_auth_mode),
+                            };
+                            outgoing_clone
+                                .send_server_notification(ServerNotification::AccountUpdated(
+                                    payload,
+                                ))
+                                .await;
+                        }
+
+                        let mut guard = active_login.lock().await;
+                        if guard.as_ref().map(|l| l.login_id) == Some(login_id) {
+                            *guard = None;
+                        }
+                    });
+
+                    let response = LoginAccountResponse::Gemini {
+                        login_id: login_id.to_string(),
+                        auth_url,
+                    };
+                    self.outgoing.send_response(request_id, response).await;
+                }
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("failed to start login server: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                }
+            },
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+            }
+        }
+    }
+
     async fn cancel_login_chatgpt_common(
         &mut self,
         login_id: Uuid,
@@ -1459,13 +1582,47 @@ impl CodexMessageProcessor {
 
         self.refresh_token_if_requested(do_refresh).await;
 
+        let provider_name = self.config.model_provider.name.to_lowercase();
+        let provider_is_gemini = matches!(provider_name.as_str(), "gemini" | "google gemini");
+        let gemini_api_key = if provider_is_gemini {
+            get_provider_api_key(
+                &self.config.codex_home,
+                PROVIDER_GEMINI,
+                self.config.cli_auth_credentials_store_mode,
+            )
+            .is_some()
+        } else {
+            false
+        };
+        let gemini_oauth = if provider_is_gemini {
+            get_provider_oauth_credential(
+                &self.config.codex_home,
+                PROVIDER_GEMINI,
+                self.config.cli_auth_credentials_store_mode,
+            )
+        } else {
+            None
+        };
+        let requires_gemini_auth = provider_is_gemini && !gemini_api_key && gemini_oauth.is_none();
+
         // Whether auth is required for the active model provider.
         let requires_openai_auth = self.config.model_provider.requires_openai_auth;
 
         if !requires_openai_auth {
+            let account = if let Some(email) = gemini_oauth
+                .as_ref()
+                .and_then(|credential| credential.email.clone())
+            {
+                Some(Account::Gemini { email })
+            } else if gemini_api_key {
+                Some(Account::ApiKey {})
+            } else {
+                None
+            };
             let response = GetAccountResponse {
-                account: None,
+                account,
                 requires_openai_auth,
+                requires_gemini_auth,
             };
             self.outgoing.send_response(request_id, response).await;
             return;
@@ -1502,6 +1659,7 @@ impl CodexMessageProcessor {
         let response = GetAccountResponse {
             account,
             requires_openai_auth,
+            requires_gemini_auth,
         };
         self.outgoing.send_response(request_id, response).await;
     }
@@ -2689,6 +2847,13 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_resume(&mut self, request_id: ConnectionRequestId, params: ThreadResumeParams) {
+        if self
+            .resume_running_thread(request_id.clone(), &params)
+            .await
+        {
+            return;
+        }
+
         let ThreadResumeParams {
             thread_id,
             history,
@@ -2706,77 +2871,21 @@ impl CodexMessageProcessor {
         } = params;
 
         let thread_history = if let Some(history) = history {
-            if history.is_empty() {
-                self.send_invalid_request_error(
-                    request_id,
-                    "history must not be empty".to_string(),
-                )
-                .await;
+            let Some(thread_history) = self
+                .resume_thread_from_history(request_id.clone(), history.as_slice())
+                .await
+            else {
                 return;
-            }
-            InitialHistory::Forked(history.into_iter().map(RolloutItem::ResponseItem).collect())
-        } else if let Some(path) = path {
-            match RolloutRecorder::get_rollout_history(&path).await {
-                Ok(initial_history) => initial_history,
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to load rollout `{}`: {err}", path.display()),
-                    )
-                    .await;
-                    return;
-                }
-            }
+            };
+            thread_history
         } else {
-            let existing_thread_id = match ThreadId::from_string(&thread_id) {
-                Ok(id) => id,
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("invalid thread id: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
+            let Some(thread_history) = self
+                .resume_thread_from_rollout(request_id.clone(), &thread_id, path.as_ref())
+                .await
+            else {
+                return;
             };
-
-            let path = match find_thread_path_by_id_str(
-                &self.config.codex_home,
-                &existing_thread_id.to_string(),
-            )
-            .await
-            {
-                Ok(Some(p)) => p,
-                Ok(None) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("no rollout found for thread id {existing_thread_id}"),
-                    )
-                    .await;
-                    return;
-                }
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to locate thread id {existing_thread_id}: {err}"),
-                    )
-                    .await;
-                    return;
-                }
-            };
-
-            match RolloutRecorder::get_rollout_history(&path).await {
-                Ok(initial_history) => initial_history,
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to load rollout `{}`: {err}", path.display()),
-                    )
-                    .await;
-                    return;
-                }
-            }
+            thread_history
         };
 
         let history_cwd = thread_history.session_cwd();
@@ -2857,41 +2966,17 @@ impl CodexMessageProcessor {
                     );
                 }
 
-                let mut thread = match read_summary_from_rollout(
-                    rollout_path.as_path(),
-                    fallback_model_provider.as_str(),
-                )
-                .await
-                {
-                    Ok(summary) => summary_to_thread(summary),
-                    Err(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!(
-                                "failed to load rollout `{}` for thread {thread_id}: {err}",
-                                rollout_path.display()
-                            ),
-                        )
-                        .await;
-                        return;
-                    }
+                let Some(thread) = self
+                    .load_thread_from_rollout_or_send_internal(
+                        request_id.clone(),
+                        thread_id,
+                        rollout_path.as_path(),
+                        fallback_model_provider.as_str(),
+                    )
+                    .await
+                else {
+                    return;
                 };
-                match read_rollout_items_from_rollout(rollout_path.as_path()).await {
-                    Ok(items) => {
-                        thread.turns = build_turns_from_rollout_items(&items);
-                    }
-                    Err(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!(
-                                "failed to load rollout `{}` for thread {thread_id}: {err}",
-                                rollout_path.display()
-                            ),
-                        )
-                        .await;
-                        return;
-                    }
-                }
 
                 let response = ThreadResumeResponse {
                     thread,
@@ -2912,6 +2997,278 @@ impl CodexMessageProcessor {
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn resume_running_thread(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: &ThreadResumeParams,
+    ) -> bool {
+        if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
+            && let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await
+        {
+            if params.history.is_some() {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!(
+                        "cannot resume thread {existing_thread_id} with history while it is already running"
+                    ),
+                )
+                .await;
+                return true;
+            }
+
+            let rollout_path = if let Some(path) = existing_thread.rollout_path() {
+                if path.exists() {
+                    path
+                } else {
+                    match find_thread_path_by_id_str(
+                        &self.config.codex_home,
+                        &existing_thread_id.to_string(),
+                    )
+                    .await
+                    {
+                        Ok(Some(path)) => path,
+                        Ok(None) => {
+                            self.send_invalid_request_error(
+                                request_id,
+                                format!("no rollout found for thread id {existing_thread_id}"),
+                            )
+                            .await;
+                            return true;
+                        }
+                        Err(err) => {
+                            self.send_invalid_request_error(
+                                request_id,
+                                format!("failed to locate thread id {existing_thread_id}: {err}"),
+                            )
+                            .await;
+                            return true;
+                        }
+                    }
+                }
+            } else {
+                match find_thread_path_by_id_str(
+                    &self.config.codex_home,
+                    &existing_thread_id.to_string(),
+                )
+                .await
+                {
+                    Ok(Some(path)) => path,
+                    Ok(None) => {
+                        self.send_invalid_request_error(
+                            request_id,
+                            format!("no rollout found for thread id {existing_thread_id}"),
+                        )
+                        .await;
+                        return true;
+                    }
+                    Err(err) => {
+                        self.send_invalid_request_error(
+                            request_id,
+                            format!("failed to locate thread id {existing_thread_id}: {err}"),
+                        )
+                        .await;
+                        return true;
+                    }
+                }
+            };
+
+            if let Some(requested_path) = params.path.as_ref()
+                && requested_path != &rollout_path
+            {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!(
+                        "cannot resume running thread {existing_thread_id} with mismatched path: requested `{}`, active `{}`",
+                        requested_path.display(),
+                        rollout_path.display()
+                    ),
+                )
+                .await;
+                return true;
+            }
+
+            if let Err(err) = self
+                .ensure_conversation_listener(
+                    existing_thread_id,
+                    request_id.connection_id,
+                    false,
+                    ApiVersion::V2,
+                )
+                .await
+            {
+                tracing::warn!(
+                    "failed to attach listener for thread {}: {}",
+                    existing_thread_id,
+                    err.message
+                );
+            }
+
+            let config_snapshot = existing_thread.config_snapshot().await;
+            let mismatch_details = collect_resume_override_mismatches(params, &config_snapshot);
+            if !mismatch_details.is_empty() {
+                tracing::warn!(
+                    "thread/resume overrides ignored for running thread {}: {}",
+                    existing_thread_id,
+                    mismatch_details.join("; ")
+                );
+            }
+
+            let Some(thread) = self
+                .load_thread_from_rollout_or_send_internal(
+                    request_id.clone(),
+                    existing_thread_id,
+                    rollout_path.as_path(),
+                    config_snapshot.model_provider_id.as_str(),
+                )
+                .await
+            else {
+                return true;
+            };
+
+            let ThreadConfigSnapshot {
+                model,
+                model_provider_id,
+                approval_policy,
+                sandbox_policy,
+                cwd,
+                reasoning_effort,
+                ..
+            } = config_snapshot;
+            let response = ThreadResumeResponse {
+                thread,
+                model,
+                model_provider: model_provider_id,
+                cwd,
+                approval_policy: approval_policy.into(),
+                sandbox: sandbox_policy.into(),
+                reasoning_effort,
+            };
+            self.outgoing.send_response(request_id, response).await;
+            return true;
+        }
+        false
+    }
+
+    async fn resume_thread_from_history(
+        &self,
+        request_id: ConnectionRequestId,
+        history: &[ResponseItem],
+    ) -> Option<InitialHistory> {
+        if history.is_empty() {
+            self.send_invalid_request_error(request_id, "history must not be empty".to_string())
+                .await;
+            return None;
+        }
+        Some(InitialHistory::Forked(
+            history
+                .iter()
+                .cloned()
+                .map(RolloutItem::ResponseItem)
+                .collect(),
+        ))
+    }
+
+    async fn resume_thread_from_rollout(
+        &self,
+        request_id: ConnectionRequestId,
+        thread_id: &str,
+        path: Option<&PathBuf>,
+    ) -> Option<InitialHistory> {
+        let rollout_path = if let Some(path) = path {
+            path.clone()
+        } else {
+            let existing_thread_id = match ThreadId::from_string(thread_id) {
+                Ok(id) => id,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid thread id: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return None;
+                }
+            };
+
+            match find_thread_path_by_id_str(
+                &self.config.codex_home,
+                &existing_thread_id.to_string(),
+            )
+            .await
+            {
+                Ok(Some(path)) => path,
+                Ok(None) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("no rollout found for thread id {existing_thread_id}"),
+                    )
+                    .await;
+                    return None;
+                }
+                Err(err) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to locate thread id {existing_thread_id}: {err}"),
+                    )
+                    .await;
+                    return None;
+                }
+            }
+        };
+
+        match RolloutRecorder::get_rollout_history(&rollout_path).await {
+            Ok(initial_history) => Some(initial_history),
+            Err(err) => {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("failed to load rollout `{}`: {err}", rollout_path.display()),
+                )
+                .await;
+                None
+            }
+        }
+    }
+
+    async fn load_thread_from_rollout_or_send_internal(
+        &self,
+        request_id: ConnectionRequestId,
+        thread_id: ThreadId,
+        rollout_path: &Path,
+        fallback_provider: &str,
+    ) -> Option<Thread> {
+        let mut thread = match read_summary_from_rollout(rollout_path, fallback_provider).await {
+            Ok(summary) => summary_to_thread(summary),
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!(
+                        "failed to load rollout `{}` for thread {thread_id}: {err}",
+                        rollout_path.display()
+                    ),
+                )
+                .await;
+                return None;
+            }
+        };
+        match read_rollout_items_from_rollout(rollout_path).await {
+            Ok(items) => {
+                thread.turns = build_turns_from_rollout_items(&items);
+                Some(thread)
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!(
+                        "failed to load rollout `{}` for thread {thread_id}: {err}",
+                        rollout_path.display()
+                    ),
+                )
+                .await;
+                None
             }
         }
     }
@@ -4724,9 +5081,10 @@ impl CodexMessageProcessor {
         all_connectors: Option<&[AppInfo]>,
         accessible_connectors: Option<&[AppInfo]>,
     ) -> Vec<AppInfo> {
+        let all_connectors_loaded = all_connectors.is_some();
         let all = all_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
         let accessible = accessible_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
-        connectors::merge_connectors_with_accessible(all, accessible)
+        connectors::merge_connectors_with_accessible(all, accessible, all_connectors_loaded)
     }
 
     fn paginate_apps(
@@ -5809,6 +6167,101 @@ impl CodexMessageProcessor {
             Err(_) => None,
         }
     }
+}
+
+fn collect_resume_override_mismatches(
+    request: &ThreadResumeParams,
+    config_snapshot: &ThreadConfigSnapshot,
+) -> Vec<String> {
+    let mut mismatch_details = Vec::new();
+
+    if let Some(requested_model) = request.model.as_deref()
+        && requested_model != config_snapshot.model
+    {
+        mismatch_details.push(format!(
+            "model requested={requested_model} active={}",
+            config_snapshot.model
+        ));
+    }
+    if let Some(requested_provider) = request.model_provider.as_deref()
+        && requested_provider != config_snapshot.model_provider_id
+    {
+        mismatch_details.push(format!(
+            "model_provider requested={requested_provider} active={}",
+            config_snapshot.model_provider_id
+        ));
+    }
+    if let Some(requested_cwd) = request.cwd.as_deref() {
+        let requested_cwd_path = std::path::PathBuf::from(requested_cwd);
+        if requested_cwd_path != config_snapshot.cwd {
+            mismatch_details.push(format!(
+                "cwd requested={} active={}",
+                requested_cwd_path.display(),
+                config_snapshot.cwd.display()
+            ));
+        }
+    }
+    if let Some(requested_approval) = request.approval_policy.as_ref() {
+        let active_approval: AskForApproval = config_snapshot.approval_policy.into();
+        if requested_approval != &active_approval {
+            mismatch_details.push(format!(
+                "approval_policy requested={requested_approval:?} active={active_approval:?}"
+            ));
+        }
+    }
+    if let Some(requested_sandbox) = request.sandbox.as_ref() {
+        let sandbox_matches = matches!(
+            (requested_sandbox, &config_snapshot.sandbox_policy),
+            (
+                SandboxMode::ReadOnly,
+                codex_protocol::protocol::SandboxPolicy::ReadOnly { .. }
+            ) | (
+                SandboxMode::WorkspaceWrite,
+                codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
+            ) | (
+                SandboxMode::DangerFullAccess,
+                codex_protocol::protocol::SandboxPolicy::DangerFullAccess
+            ) | (
+                SandboxMode::DangerFullAccess,
+                codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. }
+            )
+        );
+        if !sandbox_matches {
+            mismatch_details.push(format!(
+                "sandbox requested={requested_sandbox:?} active={:?}",
+                config_snapshot.sandbox_policy
+            ));
+        }
+    }
+    if let Some(requested_personality) = request.personality.as_ref()
+        && config_snapshot.personality.as_ref() != Some(requested_personality)
+    {
+        mismatch_details.push(format!(
+            "personality requested={requested_personality:?} active={:?}",
+            config_snapshot.personality
+        ));
+    }
+
+    if request.config.is_some() {
+        mismatch_details
+            .push("config overrides were provided and ignored while running".to_string());
+    }
+    if request.base_instructions.is_some() {
+        mismatch_details
+            .push("baseInstructions override was provided and ignored while running".to_string());
+    }
+    if request.developer_instructions.is_some() {
+        mismatch_details.push(
+            "developerInstructions override was provided and ignored while running".to_string(),
+        );
+    }
+    if request.persist_extended_history {
+        mismatch_details.push(
+            "persistExtendedHistory override was provided and ignored while running".to_string(),
+        );
+    }
+
+    mismatch_details
 }
 
 fn skills_to_info(

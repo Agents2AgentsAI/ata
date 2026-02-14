@@ -21,6 +21,7 @@ pub fn render_skills_section(skills: &[SkillMetadata]) -> Option<String> {
     lines.push(
         r###"- Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.
 - Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.
+- Sub-agents: A spawned sub-agent runs in a different thread and does not inherit skill injections from the parent thread. If you want the sub-agent to use a skill, mention `$SkillName` in the sub-agent's first message or pass a structured `skill` input item when calling `spawn_agent`.
 - Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.
 - How to use a skill (progressive disclosure):
   1) After deciding to use a skill, open its `SKILL.md`. Read only enough to follow the workflow.

@@ -9,8 +9,10 @@ use codex_core::auth::read_openai_api_key_from_env;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::edit::default_model_for_provider;
 use codex_login::DeviceCode;
+use codex_login::GeminiServerOptions;
 use codex_login::ServerOptions;
 use codex_login::ShutdownHandle;
+use codex_login::run_gemini_login_server;
 use codex_login::run_login_server;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -64,7 +66,11 @@ pub(crate) enum SignInState {
     ApiKeySuccessMessage,
     ApiKeyConfigured,
     PickProvider, // Select which provider to configure
+    PickProviderAuthMethod(ProviderOption),
     ProviderList, // Show all configured providers
+    ProviderOauthContinueInBrowser(ProviderOauthContinueInBrowserState),
+    ProviderOauthSuccessMessage(ProviderOption),
+    ProviderConfigured,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,6 +114,13 @@ pub(crate) struct ContinueInBrowserState {
 }
 
 #[derive(Clone)]
+pub(crate) struct ProviderOauthContinueInBrowserState {
+    provider: ProviderOption,
+    auth_url: String,
+    shutdown_flag: Option<ShutdownHandle>,
+}
+
+#[derive(Clone)]
 pub(crate) struct ContinueWithDeviceCodeState {
     device_code: Option<DeviceCode>,
     cancel: Option<Arc<Notify>>,
@@ -119,6 +132,20 @@ impl Drop for ContinueInBrowserState {
             handle.shutdown();
         }
     }
+}
+
+impl Drop for ProviderOauthContinueInBrowserState {
+    fn drop(&mut self) {
+        if let Some(handle) = &self.shutdown_flag {
+            handle.shutdown();
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProviderAuthMethod {
+    ApiKey,
+    Oauth,
 }
 
 impl KeyboardHandler for AuthModeWidget {
@@ -163,6 +190,9 @@ impl KeyboardHandler for AuthModeWidget {
                 SignInState::ChatGptSuccessMessage => {
                     *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccess;
                 }
+                SignInState::ProviderOauthSuccessMessage(_) => {
+                    *self.sign_in_state.write().unwrap() = SignInState::ProviderConfigured;
+                }
                 _ => {}
             },
             KeyCode::Esc => {
@@ -179,6 +209,16 @@ impl KeyboardHandler for AuthModeWidget {
                             cancel.notify_one();
                         }
                         *sign_in_state = SignInState::PickMode;
+                        drop(sign_in_state);
+                        self.request_frame.schedule_frame();
+                    }
+                    SignInState::PickProviderAuthMethod(_) => {
+                        *sign_in_state = SignInState::PickProvider;
+                        drop(sign_in_state);
+                        self.request_frame.schedule_frame();
+                    }
+                    SignInState::ProviderOauthContinueInBrowser(_) => {
+                        *sign_in_state = SignInState::PickProvider;
                         drop(sign_in_state);
                         self.request_frame.schedule_frame();
                     }
@@ -199,6 +239,7 @@ pub(crate) struct AuthModeWidget {
     pub request_frame: FrameRequester,
     pub highlighted_mode: SignInOption,
     pub highlighted_provider: ProviderOption,
+    pub highlighted_provider_auth_method: ProviderAuthMethod,
     pub error: Option<String>,
     pub sign_in_state: Arc<RwLock<SignInState>>,
     pub codex_home: PathBuf,
@@ -447,6 +488,39 @@ impl AuthModeWidget {
             .render(area, buf);
     }
 
+    fn render_provider_oauth_continue_in_browser(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        provider: ProviderOption,
+        auth_url: &str,
+    ) {
+        let provider_name = provider.display_name();
+        let mut spans = vec!["  ".into()];
+        if self.animations_enabled {
+            self.request_frame
+                .schedule_frame_in(std::time::Duration::from_millis(100));
+            spans.extend(shimmer_spans(&format!(
+                "Finish signing in with {provider_name}"
+            )));
+        } else {
+            spans.push(format!("Finish signing in with {provider_name}").into());
+        }
+        let mut lines = vec![spans.into(), "".into()];
+
+        if !auth_url.is_empty() {
+            lines.push("  If the link doesn't open automatically, open the following link to authenticate:".into());
+            lines.push("".into());
+            lines.push(Line::from(vec!["  ".into(), auth_url.cyan().underlined()]));
+            lines.push("".into());
+        }
+
+        lines.push("  Press Esc to cancel".dim().into());
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+
     fn render_chatgpt_success_message(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
             "✓ Signed in with your ChatGPT account".fg(Color::Green).into(),
@@ -454,11 +528,12 @@ impl AuthModeWidget {
             "  Before you start:".into(),
             "".into(),
             "  Decide how much autonomy you want to grant Ata".into(),
-            Line::from(vec![
-                "  For more details see the ".into(),
-                "\u{1b}]8;;https://github.com/openai/codex\u{7}Ata docs\u{1b}]8;;\u{7}".underlined(),
-            ])
-            .dim(),
+            "  For more details see the Ata docs:".dim().into(),
+            "  https://github.com/openai/codex"
+                .cyan()
+                .underlined()
+                .dim()
+                .into(),
             "".into(),
             "  Ata can make mistakes".into(),
             "  Review the code it writes and commands it runs".dim().into(),
@@ -497,12 +572,12 @@ impl AuthModeWidget {
             "  Before you start:".into(),
             "".into(),
             "  Decide how much autonomy you want to grant Ata".into(),
-            Line::from(vec![
-                "  For more details see the ".into(),
-                "\u{1b}]8;;https://github.com/openai/codex\u{7}Ata docs\u{1b}]8;;\u{7}"
-                    .underlined(),
-            ])
-            .dim(),
+            "  For more details see the Ata docs:".dim().into(),
+            "  https://github.com/openai/codex"
+                .cyan()
+                .underlined()
+                .dim()
+                .into(),
             "".into(),
             "  Ata can make mistakes".into(),
             "  Review the code it writes and commands it runs"
@@ -520,11 +595,61 @@ impl AuthModeWidget {
             .render(area, buf);
     }
 
+    fn render_provider_oauth_success_message(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        provider: ProviderOption,
+    ) {
+        let provider_name = provider.display_name();
+        let lines = vec![
+            format!("✓ Signed in with {provider_name}")
+                .fg(Color::Green)
+                .into(),
+            "".into(),
+            "  Before you start:".into(),
+            "".into(),
+            "  Decide how much autonomy you want to grant Ata".into(),
+            "  For more details see the Ata docs:".dim().into(),
+            "  https://github.com/openai/codex"
+                .cyan()
+                .underlined()
+                .dim()
+                .into(),
+            "".into(),
+            "  Ata can make mistakes".into(),
+            "  Review the code it writes and commands it runs"
+                .dim()
+                .into(),
+            "".into(),
+            "  Powered by your provider account".into(),
+            "  Usage follows your provider plan and policy".dim().into(),
+            "".into(),
+            "  Press Enter to continue".fg(Color::Cyan).into(),
+        ];
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+
     fn render_api_key_configured(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
             "✓ API key configured".fg(Color::Green).into(),
             "".into(),
             "  Ata will use usage-based billing with your API key.".into(),
+        ];
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+
+    fn render_provider_configured(&self, area: Rect, buf: &mut Buffer) {
+        let lines = vec![
+            "✓ Provider configured".fg(Color::Green).into(),
+            "".into(),
+            "  Ata will use your configured provider credentials.".into(),
         ];
 
         Paragraph::new(lines)
@@ -867,6 +992,94 @@ impl AuthModeWidget {
         );
         headless_chatgpt_login::start_headless_chatgpt_login(self, opts);
     }
+
+    pub(super) fn start_provider_oauth_login(&mut self, provider: ProviderOption) {
+        self.error = None;
+        let fallback_state = self
+            .sign_in_state
+            .read()
+            .ok()
+            .map(|guard| match &*guard {
+                SignInState::PickProviderAuthMethod(_) => {
+                    SignInState::PickProviderAuthMethod(provider)
+                }
+                _ => SignInState::PickMode,
+            })
+            .unwrap_or(SignInState::PickMode);
+        if provider != ProviderOption::Gemini {
+            self.error = Some(format!(
+                "OAuth login is currently available only for {}.",
+                ProviderOption::Gemini.display_name()
+            ));
+            *self.sign_in_state.write().unwrap() = fallback_state;
+            self.request_frame.schedule_frame();
+            return;
+        }
+
+        let opts = GeminiServerOptions::new(
+            self.codex_home.clone(),
+            self.cli_auth_credentials_store_mode,
+        );
+        match run_gemini_login_server(opts) {
+            Ok(server) => {
+                let sign_in_state = self.sign_in_state.clone();
+                let request_frame = self.request_frame.clone();
+                let auth_manager = self.auth_manager.clone();
+                let codex_home = self.codex_home.clone();
+                let fallback_state = fallback_state;
+                tokio::spawn(async move {
+                    let auth_url = server.auth_url.clone();
+                    {
+                        *sign_in_state.write().unwrap() =
+                            SignInState::ProviderOauthContinueInBrowser(
+                                ProviderOauthContinueInBrowserState {
+                                    provider,
+                                    auth_url,
+                                    shutdown_flag: Some(server.cancel_handle()),
+                                },
+                            );
+                    }
+                    request_frame.schedule_frame();
+                    match server.block_until_done().await {
+                        Ok(()) => {
+                            auth_manager.reload();
+                            let provider_id = provider.provider_id();
+                            let default_model = default_model_for_provider(provider_id);
+                            if let Err(err) = ConfigEditsBuilder::new(&codex_home)
+                                .set_model(default_model, None, Some(provider_id.to_string()))
+                                .apply_blocking()
+                            {
+                                tracing::error!(
+                                    "failed to set default model for provider {provider_id}: {err}"
+                                );
+                            }
+                            *sign_in_state.write().unwrap() =
+                                SignInState::ProviderOauthSuccessMessage(provider);
+                            request_frame.schedule_frame();
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                provider_id = provider.provider_id(),
+                                error = %err,
+                                "provider oauth login failed"
+                            );
+                            if sign_in_state.read().is_ok_and(|guard| {
+                                matches!(&*guard, SignInState::ProviderOauthContinueInBrowser(state) if state.provider == provider)
+                            }) {
+                                *sign_in_state.write().unwrap() = fallback_state;
+                                request_frame.schedule_frame();
+                            }
+                        }
+                    }
+                });
+            }
+            Err(err) => {
+                self.error = Some(format!("Failed to start provider OAuth login: {err}"));
+                *self.sign_in_state.write().unwrap() = fallback_state;
+                self.request_frame.schedule_frame();
+            }
+        }
+    }
 }
 
 impl StepStateProvider for AuthModeWidget {
@@ -880,8 +1093,13 @@ impl StepStateProvider for AuthModeWidget {
             | SignInState::ChatGptSuccessMessage
             | SignInState::ApiKeySuccessMessage
             | SignInState::PickProvider
-            | SignInState::ProviderList => StepState::InProgress,
-            SignInState::ChatGptSuccess | SignInState::ApiKeyConfigured => StepState::Complete,
+            | SignInState::PickProviderAuthMethod(_)
+            | SignInState::ProviderList
+            | SignInState::ProviderOauthContinueInBrowser(_)
+            | SignInState::ProviderOauthSuccessMessage(_) => StepState::InProgress,
+            SignInState::ChatGptSuccess
+            | SignInState::ApiKeyConfigured
+            | SignInState::ProviderConfigured => StepState::Complete,
         }
     }
 }
@@ -917,8 +1135,25 @@ impl WidgetRef for AuthModeWidget {
             SignInState::PickProvider => {
                 self.render_pick_provider(area, buf);
             }
+            SignInState::PickProviderAuthMethod(provider) => {
+                self.render_pick_provider_auth_method(area, buf, *provider);
+            }
             SignInState::ProviderList => {
                 self.render_provider_list(area, buf);
+            }
+            SignInState::ProviderOauthContinueInBrowser(state) => {
+                self.render_provider_oauth_continue_in_browser(
+                    area,
+                    buf,
+                    state.provider,
+                    &state.auth_url,
+                );
+            }
+            SignInState::ProviderOauthSuccessMessage(provider) => {
+                self.render_provider_oauth_success_message(area, buf, *provider);
+            }
+            SignInState::ProviderConfigured => {
+                self.render_provider_configured(area, buf);
             }
         }
     }
@@ -927,10 +1162,37 @@ impl WidgetRef for AuthModeWidget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_backend::VT100Backend;
     use pretty_assertions::assert_eq;
+    use ratatui::Terminal;
     use tempfile::TempDir;
 
     use codex_core::auth::AuthCredentialsStoreMode;
+
+    fn widget_default() -> (AuthModeWidget, TempDir) {
+        let codex_home = TempDir::new().unwrap();
+        let codex_home_path = codex_home.path().to_path_buf();
+        let widget = AuthModeWidget {
+            request_frame: FrameRequester::test_dummy(),
+            highlighted_mode: SignInOption::ChatGpt,
+            highlighted_provider: ProviderOption::OpenAI,
+            highlighted_provider_auth_method: ProviderAuthMethod::ApiKey,
+            error: None,
+            sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
+            codex_home: codex_home_path.clone(),
+            cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+            login_status: LoginStatus::NotAuthenticated,
+            auth_manager: AuthManager::shared(
+                codex_home_path,
+                false,
+                AuthCredentialsStoreMode::File,
+            ),
+            forced_chatgpt_workspace_id: None,
+            forced_login_method: None,
+            animations_enabled: false,
+        };
+        (widget, codex_home)
+    }
 
     fn widget_forced_chatgpt() -> (AuthModeWidget, TempDir) {
         let codex_home = TempDir::new().unwrap();
@@ -939,6 +1201,7 @@ mod tests {
             request_frame: FrameRequester::test_dummy(),
             highlighted_mode: SignInOption::ChatGpt,
             highlighted_provider: ProviderOption::OpenAI,
+            highlighted_provider_auth_method: ProviderAuthMethod::ApiKey,
             error: None,
             sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
             codex_home: codex_home_path.clone(),
@@ -954,6 +1217,41 @@ mod tests {
             animations_enabled: true,
         };
         (widget, codex_home)
+    }
+
+    #[test]
+    fn pick_mode_displays_configure_providers_when_api_allowed() {
+        let (widget, _tmp) = widget_default();
+        assert_eq!(
+            widget.displayed_sign_in_options(),
+            vec![
+                SignInOption::ChatGpt,
+                SignInOption::DeviceCode,
+                SignInOption::ConfigureProviders,
+            ],
+        );
+    }
+
+    #[test]
+    fn pick_mode_snapshot_includes_configure_providers() {
+        let (widget, _tmp) = widget_default();
+        let mut terminal = Terminal::new(VT100Backend::new(80, 22)).expect("terminal");
+        terminal
+            .draw(|f| widget.render_ref(f.area(), f.buffer_mut()))
+            .expect("draw");
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn provider_oauth_success_snapshot_has_clean_docs_url() {
+        let (widget, _tmp) = widget_default();
+        *widget.sign_in_state.write().unwrap() =
+            SignInState::ProviderOauthSuccessMessage(ProviderOption::Gemini);
+        let mut terminal = Terminal::new(VT100Backend::new(90, 22)).expect("terminal");
+        terminal
+            .draw(|f| widget.render_ref(f.area(), f.buffer_mut()))
+            .expect("draw");
+        insta::assert_snapshot!(terminal.backend());
     }
 
     #[test]

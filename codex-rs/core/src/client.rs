@@ -28,6 +28,7 @@
 
 mod anthropic;
 mod gemini;
+mod gemini_code_assist;
 mod provider_streaming;
 
 use std::sync::Arc;
@@ -646,7 +647,6 @@ impl ModelClientSession {
         &mut self,
         otel_manager: &OtelManager,
         model_info: &ModelInfo,
-        turn_metadata_header: Option<&str>,
     ) -> std::result::Result<(), ApiError> {
         if !self.client.responses_websocket_enabled(model_info) || self.client.websockets_disabled()
         {
@@ -669,7 +669,7 @@ impl ModelClientSession {
                 client_setup.api_provider,
                 client_setup.api_auth,
                 Some(Arc::clone(&self.turn_state)),
-                turn_metadata_header,
+                None,
             )
             .await?;
         self.connection = Some(connection);

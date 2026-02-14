@@ -112,6 +112,39 @@
           ],
           "title": "OutputTextContentItem",
           "type": "object"
+        },
+        {
+          "properties": {
+            "filename": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mime_type": {
+              "description": "MIME type for provider adapters or tools that need a type hint. Not part of the stable public wire shape.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "url_file"
+              ],
+              "title": "UrlFileContentItemType",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "title": "UrlFileContentItem",
+          "type": "object"
         }
       ]
     },

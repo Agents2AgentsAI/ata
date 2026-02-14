@@ -318,8 +318,13 @@ pub(crate) fn auth_provider_from_auth(
 
     if let Some(auth) = auth {
         let token = auth.get_token()?;
+        let token = if token.trim().is_empty() {
+            None
+        } else {
+            Some(token)
+        };
         Ok(CoreAuthProvider {
-            token: Some(token),
+            token,
             account_id: auth.get_account_id(),
         })
     } else {
