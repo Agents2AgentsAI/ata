@@ -535,6 +535,13 @@ Examples:
 - Opt out of legacy session setup event: `codex/event/session_configured`
 - Opt out of streamed agent text deltas: `item/agentMessage/delta`
 
+### Fuzzy file search events (experimental)
+
+The fuzzy file search session API emits per-query notifications:
+
+- `fuzzyFileSearch/sessionUpdated` — `{ sessionId, query, files }` with the current matching files for the active query.
+- `fuzzyFileSearch/sessionCompleted` — `{ sessionId, query }` once indexing/matching for that query has completed.
+
 ### Turn events
 
 The app-server streams JSON-RPC notifications while a turn is running. Each turn starts with `turn/started` (initial `turn`) and ends with `turn/completed` (final `turn` status). Token usage events stream separately via `thread/tokenUsage/updated`. Clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
@@ -853,13 +860,14 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 
 - **API key (`apiKey`)**: Caller supplies an OpenAI API key via `account/login/start` with `type: "apiKey"`. The API key is saved and used for API requests.
 - **ChatGPT managed (`chatgpt`)** (recommended): Codex owns the ChatGPT OAuth flow and refresh tokens. Start via `account/login/start` with `type: "chatgpt"`; Codex persists tokens to disk and refreshes them automatically.
+- **Gemini managed (`gemini`)**: Codex owns the Google OAuth flow for Gemini Code Assist. Start via `account/login/start` with `type: "gemini"`; Codex persists provider OAuth credentials to disk.
 
 ### API Overview
 
 - `account/read` — fetch current account info; optionally refresh tokens.
-- `account/login/start` — begin login (`apiKey`, `chatgpt`).
+- `account/login/start` — begin login (`apiKey`, `chatgpt`, `gemini`).
 - `account/login/completed` (notify) — emitted when a login attempt finishes (success or error).
-- `account/login/cancel` — cancel a pending ChatGPT login by `loginId`.
+- `account/login/cancel` — cancel a pending login flow by `loginId`.
 - `account/logout` — sign out; triggers `account/updated`.
 - `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, or `null`).
 - `account/rateLimits/read` — fetch ChatGPT rate limits; updates arrive via `account/rateLimits/updated` (notify).
@@ -877,16 +885,18 @@ Request:
 Response examples:
 
 ```json
-{ "id": 1, "result": { "account": null, "requiresOpenaiAuth": false } } // No OpenAI auth needed (e.g., OSS/local models)
-{ "id": 1, "result": { "account": null, "requiresOpenaiAuth": true } }  // OpenAI auth required (typical for OpenAI-hosted models)
-{ "id": 1, "result": { "account": { "type": "apiKey" }, "requiresOpenaiAuth": true } }
-{ "id": 1, "result": { "account": { "type": "chatgpt", "email": "user@example.com", "planType": "pro" }, "requiresOpenaiAuth": true } }
+{ "id": 1, "result": { "account": null, "requiresOpenaiAuth": false, "requiresGeminiAuth": false } } // No OpenAI auth needed (e.g., OSS/local models)
+{ "id": 1, "result": { "account": null, "requiresOpenaiAuth": true, "requiresGeminiAuth": false } }  // OpenAI auth required (typical for OpenAI-hosted models)
+{ "id": 1, "result": { "account": { "type": "apiKey" }, "requiresOpenaiAuth": true, "requiresGeminiAuth": false } }
+{ "id": 1, "result": { "account": { "type": "chatgpt", "email": "user@example.com", "planType": "pro" }, "requiresOpenaiAuth": true, "requiresGeminiAuth": false } }
+{ "id": 1, "result": { "account": { "type": "gemini", "email": "user@example.com" }, "requiresOpenaiAuth": false, "requiresGeminiAuth": false } }
 ```
 
 Field notes:
 
 - `refreshToken` (bool): set `true` to force a token refresh.
 - `requiresOpenaiAuth` reflects the active provider; when `false`, Codex can run without OpenAI credentials.
+- `requiresGeminiAuth` is `true` when the active provider is Gemini and no Gemini credentials are configured.
 
 ### 2) Log in with an API key
 
@@ -922,22 +932,36 @@ Field notes:
    { "method": "account/updated", "params": { "authMode": "chatgpt" } }
    ```
 
-### 4) Cancel a ChatGPT login
+### 4) Cancel a pending login
 
 ```json
 { "method": "account/login/cancel", "id": 4, "params": { "loginId": "<uuid>" } }
 { "method": "account/login/completed", "params": { "loginId": "<uuid>", "success": false, "error": "…" } }
 ```
 
-### 5) Logout
+### 5) Log in with Gemini (browser flow)
 
 ```json
-{ "method": "account/logout", "id": 5 }
-{ "id": 5, "result": {} }
+{ "method": "account/login/start", "id": 5, "params": { "type": "gemini" } }
+{ "id": 5, "result": { "type": "gemini", "loginId": "<uuid>", "authUrl": "https://accounts.google.com/…" } }
+```
+
+Wait for notifications:
+
+```json
+{ "method": "account/login/completed", "params": { "loginId": "<uuid>", "success": true, "error": null } }
 { "method": "account/updated", "params": { "authMode": null } }
 ```
 
-### 6) Rate limits (ChatGPT)
+### 6) Logout
+
+```json
+{ "method": "account/logout", "id": 6 }
+{ "id": 6, "result": {} }
+{ "method": "account/updated", "params": { "authMode": null } }
+```
+
+### 7) Rate limits (ChatGPT)
 
 ```json
 { "method": "account/rateLimits/read", "id": 6 }

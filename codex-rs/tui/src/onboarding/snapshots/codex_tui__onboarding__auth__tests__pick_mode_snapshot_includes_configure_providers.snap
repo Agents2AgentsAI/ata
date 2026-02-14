@@ -1,0 +1,17 @@
+---
+source: tui/src/onboarding/auth.rs
+expression: terminal.backend()
+---
+  Sign in to use Ata as part of your paid plan or connect
+  an API key for usage-based billing
+
+> 1. Sign in with ChatGPT
+     Usage included with Plus, Pro, Team, and Enterprise plans
+
+  2. Sign in with Device Code
+     Sign in from another device with a one-time code
+
+  3. Configure providers
+     Set up API keys for providers (OpenAI, Anthropic, Gemini)
+
+  Press Enter to continue

@@ -5,6 +5,7 @@ use codex_core::auth::CLIENT_ID;
 use codex_core::auth::PROVIDER_ANTHROPIC;
 use codex_core::auth::PROVIDER_GEMINI;
 use codex_core::auth::PROVIDER_OPENAI;
+use codex_core::auth::ProviderAuthMethod;
 use codex_core::auth::ProviderAuthSource;
 use codex_core::auth::get_provider_api_key;
 use codex_core::auth::list_configured_providers;
@@ -15,8 +16,10 @@ use codex_core::auth::provider_env_var;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::edit::default_model_for_provider;
+use codex_login::GeminiServerOptions;
 use codex_login::ServerOptions;
 use codex_login::run_device_code_login;
+use codex_login::run_gemini_login_server;
 use codex_login::run_login_server;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_utils_cli::CliConfigOverrides;
@@ -28,6 +31,7 @@ const CHATGPT_LOGIN_DISABLED_MESSAGE: &str =
     "ChatGPT login is disabled. Use API key login instead.";
 const API_KEY_LOGIN_DISABLED_MESSAGE: &str =
     "API key login is disabled. Use ChatGPT login instead.";
+const OAUTH_LOGIN_DISABLED_MESSAGE: &str = "OAuth login is disabled. Use ChatGPT login instead.";
 const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
 
 fn print_login_server_start(actual_port: u16, auth_url: &str) {
@@ -124,6 +128,61 @@ pub async fn run_login_with_provider_api_key(
         }
         Err(e) => {
             eprintln!("Error logging in: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Login with OAuth for a specific provider.
+/// Currently supported only for Gemini.
+pub async fn run_login_with_provider_oauth(
+    cli_config_overrides: CliConfigOverrides,
+    provider: Option<String>,
+) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+
+    if matches!(config.forced_login_method, Some(ForcedLoginMethod::Chatgpt)) {
+        eprintln!("{OAUTH_LOGIN_DISABLED_MESSAGE}");
+        std::process::exit(1);
+    }
+
+    let provider_id = validate_provider_id(provider.as_deref());
+    if provider_id != PROVIDER_GEMINI {
+        eprintln!(
+            "OAuth login is currently supported only for provider: {PROVIDER_GEMINI}. Use --with-api-key for {provider_id}."
+        );
+        std::process::exit(1);
+    }
+
+    let opts = GeminiServerOptions::new(
+        config.codex_home.clone(),
+        config.cli_auth_credentials_store_mode,
+    );
+    match run_gemini_login_server(opts) {
+        Ok(server) => {
+            print_login_server_start(server.actual_port, &server.auth_url);
+            match server.block_until_done().await {
+                Ok(()) => {
+                    let default_model = default_model_for_provider(provider_id);
+                    if let Err(err) = ConfigEditsBuilder::new(&config.codex_home)
+                        .set_model(default_model, None, Some(provider_id.to_string()))
+                        .apply_blocking()
+                    {
+                        eprintln!(
+                            "Warning: failed to set default model for provider {provider_id}: {err}"
+                        );
+                    }
+                    eprintln!("{LOGIN_SUCCESS_MESSAGE} for provider: {provider_id}");
+                    std::process::exit(0);
+                }
+                Err(err) => {
+                    eprintln!("Error logging in: {err}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!("Error logging in: {err}");
             std::process::exit(1);
         }
     }
@@ -301,17 +360,21 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
         if chatgpt_auth {
             std::process::exit(0);
         }
-        eprintln!("No API keys configured");
+        eprintln!("No provider credentials configured");
         std::process::exit(1);
     }
 
-    eprintln!("Configured API keys:");
+    eprintln!("Configured provider credentials:");
     for provider in &providers {
         let source = match provider.source {
             ProviderAuthSource::Stored => "stored",
             ProviderAuthSource::Environment => "env",
         };
-        eprintln!("  {} ({})", provider.provider_id, source);
+        eprintln!(
+            "  {} ({source}, {})",
+            provider.provider_id,
+            auth_method_label(provider.method)
+        );
     }
     std::process::exit(0);
 }
@@ -327,7 +390,7 @@ pub async fn run_list_providers(cli_config_overrides: CliConfigOverrides) -> ! {
         eprintln!("No providers configured");
         eprintln!();
         eprintln!("To configure a provider, run:");
-        eprintln!("  ata auth login --provider <provider>");
+        eprintln!("  ata login --provider <provider>");
         eprintln!();
         eprintln!("Available providers: openai, anthropic, gemini");
         std::process::exit(0);
@@ -349,7 +412,12 @@ pub async fn run_list_providers(cli_config_overrides: CliConfigOverrides) -> ! {
             String::new()
         };
 
-        eprintln!("  {} ({}){}", provider.provider_id, source, hint);
+        eprintln!(
+            "  {} ({source}, {}){}",
+            provider.provider_id,
+            auth_method_label(provider.method),
+            hint
+        );
     }
     std::process::exit(0);
 }
@@ -465,6 +533,14 @@ fn safe_format_key(key: &str) -> String {
     let prefix = &key[..8];
     let suffix = &key[key.len() - 5..];
     format!("{prefix}***{suffix}")
+}
+
+fn auth_method_label(method: ProviderAuthMethod) -> &'static str {
+    match method {
+        ProviderAuthMethod::ApiKey => "api_key",
+        ProviderAuthMethod::Oauth => "oauth",
+        ProviderAuthMethod::ApiKeyAndOauth => "api_key+oauth",
+    }
 }
 
 #[cfg(test)]

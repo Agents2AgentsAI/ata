@@ -3,6 +3,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::data::SharedDataToolkit;
 use crate::function_tool::FunctionCallError;
+use crate::mcp_connection_manager::ToolInfo;
 use crate::research::SharedResearchToolkit;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::SharedTurnDiffTracker;
@@ -47,9 +48,10 @@ impl ToolRouter {
     pub fn from_config(
         config: &ToolsConfig,
         mcp_tools: Option<HashMap<String, Tool>>,
+        app_tools: Option<HashMap<String, ToolInfo>>,
         dynamic_tools: &[DynamicToolSpec],
     ) -> Self {
-        let builder = build_specs(config, mcp_tools, dynamic_tools);
+        let builder = build_specs(config, mcp_tools, app_tools, dynamic_tools);
         let (specs, registry) = builder.build();
 
         Self { registry, specs }
@@ -59,14 +61,21 @@ impl ToolRouter {
     pub fn from_config_with_research(
         config: &ToolsConfig,
         mcp_tools: Option<HashMap<String, Tool>>,
+        app_tools: Option<HashMap<String, ToolInfo>>,
         dynamic_tools: &[DynamicToolSpec],
         research_toolkit: Option<&Arc<SharedResearchToolkit>>,
     ) -> Self {
         if research_toolkit.is_none() {
-            return Self::from_config(config, mcp_tools, dynamic_tools);
+            return Self::from_config(config, mcp_tools, app_tools, dynamic_tools);
         }
 
-        let builder = build_specs_with_research(config, mcp_tools, dynamic_tools, research_toolkit);
+        let builder = build_specs_with_research(
+            config,
+            mcp_tools,
+            app_tools,
+            dynamic_tools,
+            research_toolkit,
+        );
         let (specs, registry) = builder.build();
 
         Self { registry, specs }
@@ -75,6 +84,7 @@ impl ToolRouter {
     pub fn from_config_with_toolkits(
         config: &ToolsConfig,
         mcp_tools: Option<HashMap<String, Tool>>,
+        app_tools: Option<HashMap<String, ToolInfo>>,
         dynamic_tools: &[DynamicToolSpec],
         research_toolkit: Option<&Arc<SharedResearchToolkit>>,
         data_toolkit: Option<&Arc<SharedDataToolkit>>,
@@ -83,6 +93,7 @@ impl ToolRouter {
             return Self::from_config_with_research(
                 config,
                 mcp_tools,
+                app_tools,
                 dynamic_tools,
                 research_toolkit,
             );
@@ -91,6 +102,7 @@ impl ToolRouter {
         let builder = build_specs_with_toolkits(
             config,
             mcp_tools,
+            app_tools,
             dynamic_tools,
             research_toolkit,
             data_toolkit,
@@ -287,6 +299,7 @@ mod tests {
             .await
             .list_all_tools()
             .await;
+        let app_tools = Some(mcp_tools.clone());
         let router = ToolRouter::from_config(
             &turn.tools_config,
             Some(
@@ -295,6 +308,7 @@ mod tests {
                     .map(|(name, tool)| (name, tool.tool))
                     .collect(),
             ),
+            app_tools,
             turn.dynamic_tools.as_slice(),
         );
 
@@ -338,6 +352,7 @@ mod tests {
             .await
             .list_all_tools()
             .await;
+        let app_tools = Some(mcp_tools.clone());
         let router = ToolRouter::from_config(
             &turn.tools_config,
             Some(
@@ -346,6 +361,7 @@ mod tests {
                     .map(|(name, tool)| (name, tool.tool))
                     .collect(),
             ),
+            app_tools,
             turn.dynamic_tools.as_slice(),
         );
 

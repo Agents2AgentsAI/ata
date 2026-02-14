@@ -232,7 +232,7 @@ impl ModelProviderInfo {
     }
 
     /// Map provider name to provider ID for multi-provider storage lookup.
-    fn name_to_provider_id(&self) -> Option<&'static str> {
+    pub(crate) fn name_to_provider_id(&self) -> Option<&'static str> {
         match self.name.to_lowercase().as_str() {
             "openai" => Some(crate::auth::PROVIDER_OPENAI),
             "anthropic" => Some(crate::auth::PROVIDER_ANTHROPIC),
