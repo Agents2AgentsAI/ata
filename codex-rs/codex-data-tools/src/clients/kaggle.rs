@@ -104,19 +104,12 @@ impl<'a> KaggleClient<'a> {
             })
             .await?;
 
-        let page_size = request.page_size.unwrap_or(20) as usize;
-        let has_more = response.len() >= page_size;
-
         let datasets: Vec<Dataset> = response
             .into_iter()
             .map(|r| self.convert_dataset(r))
             .collect();
 
-        Ok(SearchPage {
-            items: datasets,
-            total_available: None, // Kaggle API doesn't return total
-            has_more,
-        })
+        Ok(SearchPage { items: datasets })
     }
 
     /// Get dataset information by ref (owner/dataset-slug)
@@ -181,18 +174,6 @@ impl<'a> KaggleClient<'a> {
             .into_iter()
             .map(|f| self.convert_file(f))
             .collect())
-    }
-
-    /// Get download URL for a dataset
-    /// Note: Kaggle downloads are ZIP files of the entire dataset
-    #[allow(dead_code)]
-    pub fn get_download_url(&self, owner: &str, slug: &str) -> String {
-        format!(
-            "{}/datasets/download/{}/{}",
-            self.base_url,
-            urlencoding::encode(owner),
-            urlencoding::encode(slug)
-        )
     }
 
     /// Get download URL for a specific file
@@ -329,44 +310,6 @@ impl<'a> KaggleClient<'a> {
     ) -> Result<u64> {
         let url = self.get_competition_file_download_url(competition, file_name);
 
-        if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| DataError::Download {
-                url: url.clone(),
-                message: format!("Failed to create directory: {e}"),
-            })?;
-        }
-
-        let response = self
-            .http
-            .execute_response(DataApi::Kaggle, || {
-                self.add_auth(self.http.client().get(&url))
-            })
-            .await?;
-
-        let bytes = response.bytes().await.map_err(|e| DataError::Download {
-            url: url.clone(),
-            message: format!("Failed to read response: {e}"),
-        })?;
-
-        std::fs::write(output_path, &bytes).map_err(|e| DataError::Download {
-            url: url.clone(),
-            message: format!("Failed to write file: {e}"),
-        })?;
-
-        Ok(bytes.len() as u64)
-    }
-
-    /// Download entire dataset as a ZIP file
-    #[allow(dead_code)]
-    pub async fn download_dataset(
-        &self,
-        owner: &str,
-        slug: &str,
-        output_path: &std::path::Path,
-    ) -> Result<u64> {
-        let url = self.get_download_url(owner, slug);
-
-        // Ensure parent directory exists
         if let Some(parent) = output_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| DataError::Download {
                 url: url.clone(),

@@ -16,6 +16,8 @@ use crate::error::Result as CodexResult;
 use crate::features::Feature;
 use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
+#[cfg(feature = "kb")]
+use crate::kb::SharedKbToolkit;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
@@ -44,7 +46,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use tokio::runtime::Handle;
 use tokio::runtime::RuntimeFlavor;
-#[cfg(any(feature = "research", feature = "data"))]
+#[cfg(any(feature = "research", feature = "data", feature = "kb"))]
 use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
@@ -146,6 +148,8 @@ pub(crate) struct ThreadManagerState {
     research_toolkit: OnceCell<Arc<SharedResearchToolkit>>,
     #[cfg(feature = "data")]
     data_toolkit: OnceCell<Arc<SharedDataToolkit>>,
+    #[cfg(feature = "kb")]
+    kb_toolkit: OnceCell<Arc<SharedKbToolkit>>,
     skills_manager: Arc<SkillsManager>,
     file_watcher: Arc<FileWatcher>,
     session_source: SessionSource,
@@ -171,6 +175,8 @@ impl ThreadManager {
                 research_toolkit: OnceCell::new(),
                 #[cfg(feature = "data")]
                 data_toolkit: OnceCell::new(),
+                #[cfg(feature = "kb")]
+                kb_toolkit: OnceCell::new(),
                 skills_manager,
                 file_watcher,
                 auth_manager,
@@ -226,6 +232,8 @@ impl ThreadManager {
                 research_toolkit: OnceCell::new(),
                 #[cfg(feature = "data")]
                 data_toolkit: OnceCell::new(),
+                #[cfg(feature = "kb")]
+                kb_toolkit: OnceCell::new(),
                 skills_manager,
                 file_watcher,
                 auth_manager,
@@ -584,6 +592,38 @@ impl ThreadManagerState {
         } else {
             None
         };
+        let kb_toolkit = if config.features.enabled(Feature::Kb) {
+            #[cfg(feature = "kb")]
+            {
+                let kb_path = config
+                    .kb
+                    .as_ref()
+                    .and_then(|kb| kb.kb_path.as_ref())
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| config.codex_home.join("knowledge-base"));
+                Some(
+                    self.kb_toolkit
+                        .get_or_init(|| async {
+                            let kb = codex_kb::KnowledgeBase::new(kb_path);
+                            if let Err(err) = kb.init() {
+                                tracing::error!("failed to initialize knowledge base: {err}");
+                            }
+                            Arc::new(kb)
+                        })
+                        .await
+                        .clone(),
+                )
+            }
+            #[cfg(not(feature = "kb"))]
+            {
+                warn!(
+                    "kb feature flag is enabled in config, but codex-core was built without `--features kb`"
+                );
+                None
+            }
+        } else {
+            None
+        };
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(
@@ -598,6 +638,7 @@ impl ThreadManagerState {
             dynamic_tools,
             research_toolkit,
             data_toolkit,
+            kb_toolkit,
             persist_extended_history,
         )
         .await?;

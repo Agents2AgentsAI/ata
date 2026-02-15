@@ -167,6 +167,20 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
             }),
         },
         ToolDef {
+            id: "kb_reset",
+            native_name: "kb_reset",
+            mcp_name: "kb_reset",
+            description: "Reset the entire knowledge base, removing ALL cards, topics, assets, explanations, and other generated content. The empty directory structure (cards/, topics/, index.json) is re-created. This is irreversible.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "confirm": { "type": "boolean", "description": "Must be true to confirm the reset" }
+                },
+                "required": ["confirm"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDef {
             id: "kb_list_cards",
             native_name: "kb_list_cards",
             mcp_name: "kb_list_cards",

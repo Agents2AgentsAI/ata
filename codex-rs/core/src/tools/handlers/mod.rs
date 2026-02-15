@@ -3,9 +3,12 @@ pub(crate) mod attach_url_files;
 pub(crate) mod collab;
 #[cfg(feature = "data")]
 pub(crate) mod data;
+mod document_reader;
 mod dynamic;
 mod grep_files;
 mod js_repl;
+#[cfg(feature = "kb")]
+pub(crate) mod kb;
 mod list_dir;
 mod mcp;
 mod mcp_resource;
@@ -20,6 +23,11 @@ mod test_sync;
 mod unified_exec;
 mod view_image;
 
+pub use document_reader::APPEND_TO_SECTION_TOOL;
+pub use document_reader::DocumentReaderHandler;
+pub use document_reader::PATCH_DOCUMENT_SECTION_TOOL;
+pub use document_reader::PRESENT_DOCUMENT_TOOL;
+pub use document_reader::UPDATE_DOCUMENT_SECTION_TOOL;
 pub use plan::PLAN_TOOL;
 use serde::Deserialize;
 
@@ -32,6 +40,8 @@ pub use dynamic::DynamicToolHandler;
 pub use grep_files::GrepFilesHandler;
 pub use js_repl::JsReplHandler;
 pub use js_repl::JsReplResetHandler;
+#[cfg(feature = "kb")]
+pub(crate) use kb::KbBridgeHandler;
 pub use list_dir::ListDirHandler;
 pub use mcp::McpHandler;
 pub use mcp_resource::McpResourceHandler;
