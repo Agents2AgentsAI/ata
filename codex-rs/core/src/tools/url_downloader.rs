@@ -423,7 +423,7 @@ fn temp_path_for(path: &Path) -> PathBuf {
     path.with_file_name(format!("{file_name}.part"))
 }
 
-fn cache_entry_dir(codex_home: &Path, normalized_cache_key: &str) -> PathBuf {
+pub(crate) fn cache_entry_dir(codex_home: &Path, normalized_cache_key: &str) -> PathBuf {
     codex_home
         .join("cache")
         .join("remote-files")
@@ -434,6 +434,26 @@ fn url_hash(normalized_cache_key: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(normalized_cache_key.as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+/// Pre-populate the download cache for a URL so that the download path
+/// finds a cached entry without making a network request.
+#[cfg(test)]
+pub(crate) async fn prepopulate_pdf_cache(
+    codex_home: &Path,
+    url: &ValidatedUrl,
+    content: &[u8],
+) -> PathBuf {
+    let dir = cache_entry_dir(codex_home, url.normalized_cache_key());
+    fs::create_dir_all(&dir)
+        .await
+        .expect("create cache dir for test");
+    let filename = url.derive_pdf_filename(None);
+    let path = dir.join(filename);
+    fs::write(&path, content)
+        .await
+        .expect("write test cache file");
+    path
 }
 
 #[cfg(test)]
