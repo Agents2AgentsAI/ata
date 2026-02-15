@@ -12,8 +12,11 @@ use crate::types::PdfExtractFiguresResult;
 
 const PDFFIGURES2_JAR_ENV: &str = "PDFFIGURES2_JAR";
 const PDFFIGURES2_JAR_URL_ENV: &str = "PDFFIGURES2_JAR_URL";
+/// GitHub API asset URL for the pdffigures2 fat JAR. Uses the API endpoint
+/// (not the browser download URL) so it works with private repos when
+/// `GH_TOKEN` / `GITHUB_TOKEN` is set. Override with `PDFFIGURES2_JAR_URL`.
 const PDFFIGURES2_JAR_DEFAULT_URL: &str =
-    "https://github.com/openai/codex/releases/download/research-tools-v0/pdffigures2.jar";
+    "https://api.github.com/repos/Agents2AgentsAI/codex/releases/assets/356426212";
 const PDFFIGURES2_JAR_FILENAME: &str = "pdffigures2.jar";
 const JAR_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 /// Minimum size for a valid pdffigures2 fat JAR (~30 MB; 1 MB sanity check).
@@ -194,6 +197,31 @@ fn tools_cache_dir() -> PathBuf {
         .join("codex-research-tools")
 }
 
+/// Resolve a GitHub token from env vars or the `gh` CLI.
+async fn resolve_github_token() -> Option<String> {
+    if let Ok(token) = std::env::var("GH_TOKEN") {
+        return Some(token);
+    }
+    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+        return Some(token);
+    }
+    // Fall back to `gh auth token`.
+    let output = Command::new("gh")
+        .args(["auth", "token"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .await
+        .ok()?;
+    if output.status.success() {
+        let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !token.is_empty() {
+            return Some(token);
+        }
+    }
+    None
+}
+
 /// Download the pdffigures2 fat JAR to `dest`, writing to a temp file first
 /// and then renaming for atomicity.
 async fn download_jar(url: &str, cache_dir: &Path, dest: &Path) -> std::result::Result<(), String> {
@@ -203,11 +231,26 @@ async fn download_jar(url: &str, cache_dir: &Path, dest: &Path) -> std::result::
 
     let client = reqwest::Client::builder()
         .timeout(JAR_DOWNLOAD_TIMEOUT)
+        .user_agent("codex-research-tools")
         .build()
         .map_err(|e| format!("failed to build HTTP client: {e}"))?;
 
-    let response = client
-        .get(url)
+    let mut request = client.get(url);
+
+    // For GitHub release assets on private repos, authenticate with a token
+    // if available. Checks `GH_TOKEN`, `GITHUB_TOKEN` env vars, then falls
+    // back to `gh auth token` (the gh CLI's stored credential).
+    if url.contains("github.com") || url.contains("api.github.com") {
+        if let Some(token) = resolve_github_token().await {
+            request = request.header("Authorization", format!("Bearer {token}"));
+        }
+    }
+    // GitHub API requires Accept: application/octet-stream for asset downloads.
+    if url.contains("api.github.com") {
+        request = request.header("Accept", "application/octet-stream");
+    }
+
+    let response = request
         .send()
         .await
         .map_err(|e| format!("failed to download pdffigures2.jar from {url}: {e}"))?;
