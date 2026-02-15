@@ -21,6 +21,7 @@ pub enum ResearchApi {
     Zotero,
     GitHub,
     HackerNews,
+    Patents,
 }
 
 impl fmt::Display for ResearchApi {
@@ -32,6 +33,7 @@ impl fmt::Display for ResearchApi {
             Self::Zotero => write!(f, "zotero"),
             Self::GitHub => write!(f, "github"),
             Self::HackerNews => write!(f, "hackernews"),
+            Self::Patents => write!(f, "patents"),
         }
     }
 }

@@ -23,6 +23,27 @@ use card::validate_card;
 use error::Result;
 use index::KbIndex;
 
+const RESEARCH_CONTEXT_FILE: &str = "research-context.md";
+const RESEARCH_JOURNAL_FILE: &str = "research-journal.md";
+
+const RESEARCH_CONTEXT_TEMPLATE: &str = "\
+## Research Context
+
+### Project
+
+### Priorities
+
+### Not Interested In
+
+### Framings That Work
+
+### Key Decisions Made
+";
+
+const RESEARCH_JOURNAL_TEMPLATE: &str = "\
+# Research Journal
+";
+
 /// Result returned from `write_card`.
 #[derive(Debug, Serialize)]
 pub struct WriteCardResult {
@@ -129,7 +150,8 @@ impl KnowledgeBase {
         }
     }
 
-    /// Initialize the KB directory structure (cards/, topics/, index.json).
+    /// Initialize the KB directory structure (cards/, topics/, index.json,
+    /// research-context.md, research-journal.md).
     pub fn init(&self) -> Result<()> {
         std::fs::create_dir_all(self.kb_path.join("cards"))?;
         std::fs::create_dir_all(self.kb_path.join("topics"))?;
@@ -137,6 +159,14 @@ impl KnowledgeBase {
         if !index_path.exists() {
             let idx = KbIndex::default();
             idx.write_to(&index_path)?;
+        }
+        let context_path = self.kb_path.join(RESEARCH_CONTEXT_FILE);
+        if !context_path.exists() {
+            write_atomically(&context_path, RESEARCH_CONTEXT_TEMPLATE)?;
+        }
+        let journal_path = self.kb_path.join(RESEARCH_JOURNAL_FILE);
+        if !journal_path.exists() {
+            write_atomically(&journal_path, RESEARCH_JOURNAL_TEMPLATE)?;
         }
         Ok(())
     }
@@ -708,6 +738,8 @@ mod tests {
         assert!(dir.path().join("cards").is_dir());
         assert!(dir.path().join("topics").is_dir());
         assert!(dir.path().join("index.json").is_file());
+        assert!(dir.path().join("research-context.md").is_file());
+        assert!(dir.path().join("research-journal.md").is_file());
     }
 
     #[tokio::test]
@@ -995,6 +1027,8 @@ mod tests {
         assert!(dir.path().join("cards").is_dir());
         assert!(dir.path().join("topics").is_dir());
         assert!(dir.path().join("index.json").is_file());
+        assert!(dir.path().join("research-context.md").is_file());
+        assert!(dir.path().join("research-journal.md").is_file());
 
         // Old content is gone.
         assert!(!dir.path().join("assets").exists());

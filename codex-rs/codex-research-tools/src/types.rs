@@ -806,3 +806,62 @@ pub struct HnGetThreadParams {
     pub max_depth: Option<u32>,
     pub max_comments: Option<u32>,
 }
+
+// ---------------------------------------------------------------------------
+// Patent types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct PatentSearchParams {
+    pub query: String,
+    pub inventor: Option<String>,
+    pub assignee: Option<String>,
+    pub cpc_code: Option<String>,
+    pub date_from: Option<String>,
+    pub date_to: Option<String>,
+    pub sort_by: Option<String>,
+    pub size: Option<u32>,
+    pub after: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct PatentItem {
+    pub patent_id: String,
+    pub title: String,
+    pub abstract_text: Option<String>,
+    pub grant_date: Option<String>,
+    pub inventors: Vec<String>,
+    pub assignees: Vec<String>,
+    pub cpc_codes: Vec<String>,
+    pub citation_count: Option<u32>,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct PatentSearchResult {
+    pub patents: Vec<PatentItem>,
+    pub total_hits: u64,
+    pub has_more: bool,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct PatentGetParams {
+    pub patent_id: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct PatentDetail {
+    pub patent_id: String,
+    pub title: String,
+    pub abstract_text: Option<String>,
+    pub grant_date: Option<String>,
+    pub filing_date: Option<String>,
+    pub inventors: Vec<String>,
+    pub assignees: Vec<String>,
+    pub cpc_codes: Vec<String>,
+    pub claims_text: Option<String>,
+    pub citation_count: Option<u32>,
+    pub cited_by_count: Option<u32>,
+    pub url: String,
+}

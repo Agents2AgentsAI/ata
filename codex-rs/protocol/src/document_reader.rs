@@ -3,7 +3,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
-/// Arguments for the `present_document` tool call.
+/// Arguments for the `present_reading_view` tool call.
 ///
 /// When `title` and `content` are provided, the document is cached and displayed.
 /// When only `document_id` is provided, the most recent cached version (including
@@ -26,7 +26,7 @@ pub struct PresentDocumentArgs {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateDocumentSectionArgs {
-    /// The document to update (must match a previous `present_document` call).
+    /// The document to update (must match a previous `present_reading_view` call).
     pub document_id: String,
     /// 0-based section index to replace.
     pub section_index: usize,
@@ -38,7 +38,7 @@ pub struct UpdateDocumentSectionArgs {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct AppendToSectionArgs {
-    /// The document to update (must match a previous `present_document` call).
+    /// The document to update (must match a previous `present_reading_view` call).
     pub document_id: String,
     /// 0-based section index to append to.
     pub section_index: usize,
@@ -50,7 +50,7 @@ pub struct AppendToSectionArgs {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct PatchDocumentSectionArgs {
-    /// The document to update (must match a previous `present_document` call).
+    /// The document to update (must match a previous `present_reading_view` call).
     pub document_id: String,
     /// 0-based section index to patch.
     pub section_index: usize,
@@ -60,7 +60,7 @@ pub struct PatchDocumentSectionArgs {
     pub new_text: String,
 }
 
-/// Event emitted when the agent calls `present_document`.
+/// Event emitted when the agent calls `present_reading_view`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 pub struct PresentDocumentEvent {
     pub call_id: String,

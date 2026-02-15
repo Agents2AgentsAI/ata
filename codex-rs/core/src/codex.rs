@@ -1208,6 +1208,7 @@ pub(crate) struct Session {
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
+    pub(crate) document_cache: crate::tools::handlers::DocumentCache,
     next_internal_sub_id: AtomicU64,
 }
 
@@ -1973,6 +1974,7 @@ impl Session {
             active_turn: Mutex::new(None),
             services,
             js_repl,
+            document_cache: crate::tools::handlers::DocumentCache::new(),
             next_internal_sub_id: AtomicU64::new(0),
         });
 
@@ -7983,6 +7985,7 @@ mod tests {
             active_turn: Mutex::new(None),
             services,
             js_repl,
+            document_cache: crate::tools::handlers::DocumentCache::new(),
             next_internal_sub_id: AtomicU64::new(0),
         };
 
@@ -8136,6 +8139,7 @@ mod tests {
             active_turn: Mutex::new(None),
             services,
             js_repl,
+            document_cache: crate::tools::handlers::DocumentCache::new(),
             next_internal_sub_id: AtomicU64::new(0),
         });
 

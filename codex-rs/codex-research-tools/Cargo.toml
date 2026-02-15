@@ -15,7 +15,8 @@ repo_analysis = ["dep:regex", "dep:walkdir"]
 latex = ["dep:flate2"]
 pdf_images = []
 hackernews = []
-all = ["paper_search", "zotero", "repo_analysis", "latex", "pdf_images", "hackernews"]
+patents = []
+all = ["paper_search", "zotero", "repo_analysis", "latex", "pdf_images", "hackernews", "patents"]
 
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }

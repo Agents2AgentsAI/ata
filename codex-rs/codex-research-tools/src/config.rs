@@ -15,6 +15,7 @@ pub struct ResearchConfig {
     pub zotero_user_id: Option<String>,
     pub openalex_email: Option<String>,
     pub github_token: Option<String>,
+    pub patents_api_key: Option<String>,
     pub zotero_library_type: Option<String>,
     pub zotero_group_id: Option<String>,
     pub zotero_storage_dir: Option<String>,
@@ -24,6 +25,7 @@ pub struct ResearchConfig {
     pub zotero_base_url: String,
     pub github_api_base_url: String,
     pub hn_base_url: String,
+    pub patents_base_url: String,
 
     pub connect_timeout: Duration,
     pub request_timeout: Duration,
@@ -43,6 +45,7 @@ pub struct CacheTtls {
     pub repo_analysis: Duration,
     pub repo_health: Duration,
     pub hn_search: Duration,
+    pub patent_search: Duration,
     pub negative: Duration,
 }
 
@@ -61,6 +64,7 @@ pub struct RateLimitOverrides {
     pub zotero: Option<ApiRateLimit>,
     pub github: Option<ApiRateLimit>,
     pub hackernews: Option<ApiRateLimit>,
+    pub patents: Option<ApiRateLimit>,
 }
 
 impl Default for CacheTtls {
@@ -72,6 +76,7 @@ impl Default for CacheTtls {
             repo_analysis: Duration::from_secs(60 * 60),
             repo_health: Duration::from_secs(15 * 60),
             hn_search: Duration::from_secs(5 * 60),
+            patent_search: Duration::from_secs(10 * 60),
             negative: Duration::from_secs(30),
         }
     }
@@ -95,6 +100,7 @@ impl Default for ResearchConfig {
             zotero_user_id: None,
             openalex_email: None,
             github_token: None,
+            patents_api_key: None,
             zotero_library_type: None,
             zotero_group_id: None,
             zotero_storage_dir: None,
@@ -104,6 +110,7 @@ impl Default for ResearchConfig {
             zotero_base_url: DEFAULT_REMOTE_ZOTERO_BASE_URL.to_string(),
             github_api_base_url: "https://api.github.com".to_string(),
             hn_base_url: "https://hn.algolia.com/api/v1".to_string(),
+            patents_base_url: "https://serpapi.com".to_string(),
             connect_timeout: Duration::from_secs(10),
             request_timeout: Duration::from_secs(30),
             tool_timeout: Duration::from_secs(60),
@@ -149,6 +156,7 @@ impl ResearchConfig {
             zotero_user_id: std::env::var("ZOTERO_USER_ID").ok(),
             openalex_email: std::env::var("OPENALEX_EMAIL").ok(),
             github_token: std::env::var("GITHUB_TOKEN").ok(),
+            patents_api_key: std::env::var("SERPAPI_API_KEY").ok(),
             zotero_library_type: std::env::var("ZOTERO_LIBRARY_TYPE").ok(),
             zotero_group_id: std::env::var("ZOTERO_GROUP_ID").ok(),
             zotero_storage_dir: std::env::var("ZOTERO_STORAGE_DIR").ok(),
@@ -163,6 +171,8 @@ impl ResearchConfig {
                 .unwrap_or_else(|_| "https://api.github.com".to_string()),
             hn_base_url: std::env::var("HN_BASE_URL")
                 .unwrap_or_else(|_| "https://hn.algolia.com/api/v1".to_string()),
+            patents_base_url: std::env::var("SERPAPI_BASE_URL")
+                .unwrap_or_else(|_| "https://serpapi.com".to_string()),
             ..Self::default()
         };
 
@@ -210,6 +220,10 @@ impl ResearchConfig {
                 ResearchApi::HackerNews,
                 ApiRateLimit::new(10, Duration::from_secs(1), 3),
             ),
+            (
+                ResearchApi::Patents,
+                ApiRateLimit::new(45, Duration::from_secs(60), 3),
+            ),
         ]);
 
         for (api, override_limit) in [
@@ -225,6 +239,7 @@ impl ResearchConfig {
                 ResearchApi::HackerNews,
                 self.rate_limit_overrides.hackernews,
             ),
+            (ResearchApi::Patents, self.rate_limit_overrides.patents),
         ] {
             if let Some(rule) = override_limit {
                 limits.insert(api, rule);
@@ -246,6 +261,7 @@ impl fmt::Debug for ResearchConfig {
             .field("zotero_user_id", &self.zotero_user_id)
             .field("openalex_email", &self.openalex_email)
             .field("github_token", &redact(&self.github_token))
+            .field("patents_api_key", &redact(&self.patents_api_key))
             .field("zotero_library_type", &self.zotero_library_type)
             .field("zotero_group_id", &self.zotero_group_id)
             .field("zotero_storage_dir", &self.zotero_storage_dir)
@@ -255,6 +271,7 @@ impl fmt::Debug for ResearchConfig {
             .field("zotero_base_url", &self.zotero_base_url)
             .field("github_api_base_url", &self.github_api_base_url)
             .field("hn_base_url", &self.hn_base_url)
+            .field("patents_base_url", &self.patents_base_url)
             .field("connect_timeout", &self.connect_timeout)
             .field("request_timeout", &self.request_timeout)
             .field("tool_timeout", &self.tool_timeout)

@@ -16,6 +16,10 @@ use codex_research_tools::types::LatexCompileParams;
 use codex_research_tools::types::PaginationParams;
 use codex_research_tools::types::PaperRecommendationParams;
 use codex_research_tools::types::PaperSearchParams;
+#[cfg(feature = "research-patents")]
+use codex_research_tools::types::PatentGetParams;
+#[cfg(feature = "research-patents")]
+use codex_research_tools::types::PatentSearchParams;
 #[cfg(feature = "research-pdf-images")]
 use codex_research_tools::types::PdfExtractFiguresParams;
 use codex_research_tools::types::ZoteroAdvancedSearchParams;
@@ -195,6 +199,16 @@ impl ResearchBridgeHandler {
             "hn_get_thread" => dispatch_with_params!(HnGetThreadParams, |params| self
                 .toolkit
                 .hn_get_thread(params)),
+            #[cfg(feature = "research-patents")]
+            "patent_search" => {
+                dispatch_with_params!(PatentSearchParams, |params| self
+                    .toolkit
+                    .patent_search(params))
+            }
+            #[cfg(feature = "research-patents")]
+            "patent_get" => {
+                dispatch_with_params!(PatentGetParams, |params| self.toolkit.patent_get(params))
+            }
             #[cfg(feature = "research-pdf-images")]
             "pdf_extract_figures" => {
                 dispatch_with_params!(PdfExtractFiguresParams, |params| self
@@ -322,6 +336,9 @@ where
     }
     if config.github_token.is_none() {
         config.github_token = resolve_secret("GITHUB_TOKEN");
+    }
+    if config.patents_api_key.is_none() {
+        config.patents_api_key = resolve_secret("SERPAPI_API_KEY");
     }
 }
 

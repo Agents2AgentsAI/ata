@@ -774,12 +774,20 @@ impl BottomPane {
         &mut self,
         ev: codex_protocol::document_reader::PresentDocumentEvent,
     ) {
+        // If the active view is already a document reader for the same document,
+        // don't push a new view (which would reset navigation to section 0).
+        if let Some(view) = self.view_stack.last()
+            && view.view_id() == Some(document_reader::DOCUMENT_READER_VIEW_ID)
+        {
+            return;
+        }
         let view = document_reader::DocumentReaderView::new(
             ev.document_id,
             ev.title,
             ev.content,
             self.app_event_tx.clone(),
             self.animations_enabled,
+            self.frame_requester.clone(),
         );
         self.push_view(Box::new(view));
     }

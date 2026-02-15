@@ -6,6 +6,8 @@ pub(crate) mod hackernews;
 pub(crate) mod latex;
 #[cfg(feature = "paper_search")]
 pub(crate) mod paper_search;
+#[cfg(feature = "patents")]
+pub(crate) mod patents;
 #[cfg(feature = "pdf_images")]
 pub(crate) mod pdf_images;
 #[cfg(feature = "repo_analysis")]

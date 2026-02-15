@@ -11,6 +11,9 @@ pub(crate) mod github;
 #[cfg(feature = "hackernews")]
 pub(crate) mod hackernews;
 
+#[cfg(feature = "patents")]
+pub(crate) mod patents;
+
 #[cfg(feature = "zotero")]
 pub(crate) mod zotero;
 

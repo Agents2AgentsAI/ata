@@ -34,6 +34,10 @@ use types::PaginationParams;
 use types::PaperDetail;
 use types::PaperRecommendationParams;
 use types::PaperSearchParams;
+use types::PatentDetail;
+use types::PatentGetParams;
+use types::PatentSearchParams;
+use types::PatentSearchResult;
 use types::PdfExtractFiguresParams;
 use types::PdfExtractFiguresResult;
 use types::RecommendationResult;
@@ -672,5 +676,27 @@ impl ResearchToolkit {
         Err(ResearchError::NotImplemented {
             tool: "hn_get_thread",
         })
+    }
+
+    #[cfg(feature = "patents")]
+    pub async fn patent_search(&self, params: PatentSearchParams) -> Result<PatentSearchResult> {
+        tools::patents::patent_search(self, params).await
+    }
+
+    #[cfg(not(feature = "patents"))]
+    pub async fn patent_search(&self, _params: PatentSearchParams) -> Result<PatentSearchResult> {
+        Err(ResearchError::NotImplemented {
+            tool: "patent_search",
+        })
+    }
+
+    #[cfg(feature = "patents")]
+    pub async fn patent_get(&self, params: PatentGetParams) -> Result<PatentDetail> {
+        tools::patents::patent_get(self, params).await
+    }
+
+    #[cfg(not(feature = "patents"))]
+    pub async fn patent_get(&self, _params: PatentGetParams) -> Result<PatentDetail> {
+        Err(ResearchError::NotImplemented { tool: "patent_get" })
     }
 }
