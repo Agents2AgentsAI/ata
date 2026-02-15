@@ -156,7 +156,6 @@ Before synthesizing, always attempt to read the full paper text. Choose the path
 
 1. Use `zotero_search` to find the paper(s) by title, author, or topic. Also call `zotero_get_collections` to check if a collection matches the topic — if so, use `zotero_get_collection_items` to retrieve its contents. If the user names a specific collection, use `zotero_get_collection_items` directly.
 2. For each paper found, call `zotero_get_item` with `include_attachments=true` and `include_fulltext_resolution=true`.
-<<<<<<< HEAD
 3. If `document_resolution.preferred_url` (PDF URL) is present, fetch the paper with `attach_url_files` and treat that attached document as the primary source (this preserves figures/tables). After `attach_url_files` succeeds, the PDF content is injected into your conversation context automatically — you can read and analyze it immediately. Do not search for a downloaded file on disk or use shell commands to extract text.
 4. If no URL is available but `document_resolution.local_path` is present, use that local PDF path as the primary source.
 5. Do not call `zotero_get_fulltext` for paper synthesis. Indexed fulltext is lossy (no figures/tables) and is not an acceptable primary source when PDF resolution is required. Similarly, do not use `pdftotext` or any shell-based text extraction — the model reads PDFs natively via `attach_url_files`.

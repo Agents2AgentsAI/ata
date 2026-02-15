@@ -1846,8 +1846,18 @@ impl CodexMessageProcessor {
         let timeout_ms = params
             .timeout_ms
             .and_then(|timeout_ms| u64::try_from(timeout_ms).ok());
+        let managed_network_requirements_enabled =
+            self.config.managed_network_requirements_enabled();
         let started_network_proxy = match self.config.permissions.network.as_ref() {
-            Some(spec) => match spec.start_proxy().await {
+            Some(spec) => match spec
+                .start_proxy(
+                    self.config.permissions.sandbox_policy.get(),
+                    None,
+                    None,
+                    managed_network_requirements_enabled,
+                )
+                .await
+            {
                 Ok(started) => Some(started),
                 Err(err) => {
                     let error = JSONRPCErrorError {
@@ -1870,6 +1880,7 @@ impl CodexMessageProcessor {
             network: started_network_proxy
                 .as_ref()
                 .map(codex_core::config::StartedNetworkProxy::proxy),
+            network_attempt_id: None,
             sandbox_permissions: SandboxPermissions::UseDefault,
             windows_sandbox_level,
             justification: None,
@@ -3750,10 +3761,15 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ModelListParams,
     ) {
-        let ModelListParams { limit, cursor } = params;
+        let ModelListParams {
+            limit,
+            cursor,
+            include_hidden,
+        } = params;
         let mut config = (*config).clone();
         config.features.enable(Feature::RemoteModels);
-        let models = supported_models(thread_manager, &config).await;
+        let models =
+            supported_models(thread_manager, &config, include_hidden.unwrap_or(false)).await;
         let total = models.len();
 
         if total == 0 {
