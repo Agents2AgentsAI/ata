@@ -94,29 +94,49 @@ fn parse_sections(content: &str) -> Vec<CachedSection> {
 }
 
 // ---------------------------------------------------------------------------
-// Handler
+// Session-scoped cache
 // ---------------------------------------------------------------------------
 
-pub struct DocumentReaderHandler {
-    /// Caches documents by document_id. Stores the latest state including
-    /// section updates so the agent can re-display without reproducing content.
-    cache: Mutex<HashMap<String, CachedDocument>>,
+/// Opaque cache stored on `Session` so documents survive across `ToolRouter`
+/// rebuilds within the same session.
+///
+/// The `ToolRouter` (and therefore the `DocumentReaderHandler`) is recreated on
+/// every sampling-request roundtrip.  A per-instance cache would lose
+/// previously presented documents, causing `append_to_section` /
+/// `update_document_section` to fail with "No document with id …".
+///
+/// Storing the cache on `Session` mirrors how other cross-turn state (e.g.
+/// `JsReplHandle`, `FileReferenceCache`) is managed.
+pub struct DocumentCache {
+    docs: Mutex<HashMap<String, CachedDocument>>,
 }
 
-impl DocumentReaderHandler {
+impl DocumentCache {
     pub fn new() -> Self {
         Self {
-            cache: Mutex::new(HashMap::new()),
+            docs: Mutex::new(HashMap::new()),
         }
     }
 
-    fn is_active_document(&self, document_id: &str) -> bool {
-        self.cache
+    fn contains(&self, document_id: &str) -> bool {
+        self.docs
             .lock()
-            .map(|docs| docs.contains_key(document_id))
+            .map(|d| d.contains_key(document_id))
             .unwrap_or(false)
     }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, CachedDocument>> {
+        self.docs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
+
+// ---------------------------------------------------------------------------
+// Handler
+// ---------------------------------------------------------------------------
+
+pub struct DocumentReaderHandler;
 
 // ---------------------------------------------------------------------------
 // Tool specs
@@ -148,12 +168,16 @@ pub static PRESENT_DOCUMENT_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     );
 
     ToolSpec::Function(ResponsesApiTool {
-        name: "present_document".to_string(),
-        description: "Present a long document in sectioned reading mode. The user can navigate \
-                       sections and ask follow-up questions. After calling this tool, end your \
-                       response and wait for user interaction. To re-display a previously \
-                       presented document (with all section updates intact), pass only the \
-                       document_id — title and content are optional in that case."
+        name: "present_reading_view".to_string(),
+        description: "Present structured content in a sectioned reading view that the user can \
+                       navigate and ask follow-up questions about. Use this instead of inline \
+                       text whenever your response is a structured explanation with multiple \
+                       sections — paper walkthroughs, deep dives, research briefings, organized \
+                       reports, or any long-form content (roughly 500+ words) with ## headings. \
+                       Do NOT use this for short answers, confirmations, or conversational \
+                       replies. After calling this tool, end your response and wait for user \
+                       interaction. To re-display a previously presented document (with all \
+                       section updates intact), pass only the document_id."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -170,7 +194,8 @@ pub static UPDATE_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         "document_id".to_string(),
         JsonSchema::String {
             description: Some(
-                "The document to update (must match a previous present_document call)".to_string(),
+                "The document to update (must match a previous present_reading_view call)"
+                    .to_string(),
             ),
         },
     );
@@ -211,7 +236,8 @@ pub static APPEND_TO_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         "document_id".to_string(),
         JsonSchema::String {
             description: Some(
-                "The document to update (must match a previous present_document call)".to_string(),
+                "The document to update (must match a previous present_reading_view call)"
+                    .to_string(),
             ),
         },
     );
@@ -252,7 +278,8 @@ pub static PATCH_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         "document_id".to_string(),
         JsonSchema::String {
             description: Some(
-                "The document to update (must match a previous present_document call)".to_string(),
+                "The document to update (must match a previous present_reading_view call)"
+                    .to_string(),
             ),
         },
     );
@@ -324,20 +351,19 @@ impl ToolHandler for DocumentReaderHandler {
             }
         };
 
+        let doc_cache = &session.document_cache;
+
         let content = match tool_name.as_str() {
-            "present_document" => {
+            "present_reading_view" => {
                 let args: PresentDocumentArgs = serde_json::from_str(&arguments).map_err(|e| {
                     FunctionCallError::RespondToModel(format!(
-                        "failed to parse present_document arguments: {e}"
+                        "failed to parse present_reading_view arguments: {e}"
                     ))
                 })?;
 
                 // Resolve title and content: use provided values, or fall back to cache.
                 let (title, doc_content) = {
-                    let mut cache = self
-                        .cache
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let mut cache = doc_cache.lock();
                     match (args.title, args.content) {
                         (Some(t), Some(c)) => {
                             // New document or full replacement — cache it.
@@ -393,30 +419,31 @@ impl ToolHandler for DocumentReaderHandler {
                             "failed to parse update_document_section arguments: {e}"
                         ))
                     })?;
-                if !self.is_active_document(&args.document_id) {
+                if !doc_cache.contains(&args.document_id) {
                     return Err(FunctionCallError::RespondToModel(format!(
                         "No document with id \"{}\" is currently being viewed. \
-                         Call present_document first to display a document.",
+                         Call present_reading_view first to display a document.",
                         args.document_id
                     )));
                 }
 
                 // Mirror the update in the cache.
-                if let Ok(mut cache) = self.cache.lock()
-                    && let Some(doc) = cache.get_mut(&args.document_id)
-                    && let Some(section) = doc.sections.get_mut(args.section_index)
                 {
-                    // Re-derive heading if content starts with `## `.
-                    if let Some(rest) = args.content.strip_prefix("## ") {
-                        if let Some(nl) = rest.find('\n') {
-                            section.heading = rest[..nl].trim().to_string();
-                            section.content = rest[nl + 1..].to_string();
+                    let mut cache = doc_cache.lock();
+                    if let Some(doc) = cache.get_mut(&args.document_id)
+                        && let Some(section) = doc.sections.get_mut(args.section_index)
+                    {
+                        if let Some(rest) = args.content.strip_prefix("## ") {
+                            if let Some(nl) = rest.find('\n') {
+                                section.heading = rest[..nl].trim().to_string();
+                                section.content = rest[nl + 1..].to_string();
+                            } else {
+                                section.heading = rest.trim().to_string();
+                                section.content = String::new();
+                            }
                         } else {
-                            section.heading = rest.trim().to_string();
-                            section.content = String::new();
+                            section.content = args.content.clone();
                         }
-                    } else {
-                        section.content = args.content.clone();
                     }
                 }
 
@@ -432,7 +459,9 @@ impl ToolHandler for DocumentReaderHandler {
                         }),
                     )
                     .await;
-                "Section updated".to_string()
+                "Section updated. The user can see the change immediately. \
+                 Do NOT call present_reading_view again."
+                    .to_string()
             }
             "append_to_section" => {
                 let args: AppendToSectionArgs = serde_json::from_str(&arguments).map_err(|e| {
@@ -440,23 +469,25 @@ impl ToolHandler for DocumentReaderHandler {
                         "failed to parse append_to_section arguments: {e}"
                     ))
                 })?;
-                if !self.is_active_document(&args.document_id) {
+                if !doc_cache.contains(&args.document_id) {
                     return Err(FunctionCallError::RespondToModel(format!(
                         "No document with id \"{}\" is currently being viewed. \
-                         Call present_document first to display a document.",
+                         Call present_reading_view first to display a document.",
                         args.document_id
                     )));
                 }
 
                 // Mirror the append in the cache.
-                if let Ok(mut cache) = self.cache.lock()
-                    && let Some(doc) = cache.get_mut(&args.document_id)
-                    && let Some(section) = doc.sections.get_mut(args.section_index)
                 {
-                    if !section.content.is_empty() && !section.content.ends_with('\n') {
-                        section.content.push('\n');
+                    let mut cache = doc_cache.lock();
+                    if let Some(doc) = cache.get_mut(&args.document_id)
+                        && let Some(section) = doc.sections.get_mut(args.section_index)
+                    {
+                        if !section.content.is_empty() && !section.content.ends_with('\n') {
+                            section.content.push('\n');
+                        }
+                        section.content.push_str(&args.content);
                     }
-                    section.content.push_str(&args.content);
                 }
 
                 session
@@ -471,7 +502,9 @@ impl ToolHandler for DocumentReaderHandler {
                         }),
                     )
                     .await;
-                "Content appended to section".to_string()
+                "Content appended to section. The user can see the change immediately. \
+                 Do NOT call present_reading_view again."
+                    .to_string()
             }
             "patch_document_section" => {
                 let args: PatchDocumentSectionArgs =
@@ -480,21 +513,24 @@ impl ToolHandler for DocumentReaderHandler {
                             "failed to parse patch_document_section arguments: {e}"
                         ))
                     })?;
-                if !self.is_active_document(&args.document_id) {
+                if !doc_cache.contains(&args.document_id) {
                     return Err(FunctionCallError::RespondToModel(format!(
                         "No document with id \"{}\" is currently being viewed. \
-                         Call present_document first to display a document.",
+                         Call present_reading_view first to display a document.",
                         args.document_id
                     )));
                 }
 
                 // Mirror the patch in the cache.
-                if let Ok(mut cache) = self.cache.lock()
-                    && let Some(doc) = cache.get_mut(&args.document_id)
-                    && let Some(section) = doc.sections.get_mut(args.section_index)
-                    && section.content.contains(&args.old_text)
                 {
-                    section.content = section.content.replacen(&args.old_text, &args.new_text, 1);
+                    let mut cache = doc_cache.lock();
+                    if let Some(doc) = cache.get_mut(&args.document_id)
+                        && let Some(section) = doc.sections.get_mut(args.section_index)
+                        && section.content.contains(&args.old_text)
+                    {
+                        section.content =
+                            section.content.replacen(&args.old_text, &args.new_text, 1);
+                    }
                 }
 
                 session
@@ -510,7 +546,9 @@ impl ToolHandler for DocumentReaderHandler {
                         }),
                     )
                     .await;
-                "Section patched".to_string()
+                "Section patched. The user can see the change immediately. \
+                 Do NOT call present_reading_view again."
+                    .to_string()
             }
             other => {
                 return Err(FunctionCallError::RespondToModel(format!(

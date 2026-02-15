@@ -668,6 +668,52 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
         ]);
     }
 
+    #[cfg(feature = "patents")]
+    {
+        defs.extend([
+            ToolDef {
+                id: "patent_search",
+                native_name: "patent_search",
+                mcp_name: "search_patents",
+                description: "Search USPTO patents by keyword, inventor, assignee, CPC classification code, and date range. Returns patent titles, abstracts, inventors, assignees, CPC codes, and citation counts.",
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Text search across patent title and abstract" },
+                        "inventor": { "type": "string", "description": "Filter by inventor name" },
+                        "assignee": { "type": "string", "description": "Filter by assignee/organization" },
+                        "cpc_code": { "type": "string", "description": "Filter by CPC classification code prefix" },
+                        "date_from": { "type": "string", "description": "Publication date start (YYYY-MM-DD)" },
+                        "date_to": { "type": "string", "description": "Publication date end (YYYY-MM-DD)" },
+                        "sort_by": {
+                            "type": "string",
+                            "enum": ["relevance", "date"],
+                            "description": "Sort order (default: relevance)"
+                        },
+                        "size": { "type": "integer", "minimum": 10, "maximum": 100, "description": "Results per page (10-100, default 25)" },
+                        "after": { "type": "string", "description": "Cursor for next page (from previous response)" }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }),
+            },
+            ToolDef {
+                id: "patent_get",
+                native_name: "patent_get",
+                mcp_name: "get_patent",
+                description: "Get detailed patent information by patent number, including title, abstract, inventors, assignees, CPC codes, filing date, and citation counts.",
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "patent_id": { "type": "string", "description": "Patent number (e.g. \"11234567\")" }
+                    },
+                    "required": ["patent_id"],
+                    "additionalProperties": false
+                }),
+            },
+        ]);
+    }
+
     #[cfg(feature = "pdf_images")]
     {
         defs.push(ToolDef {

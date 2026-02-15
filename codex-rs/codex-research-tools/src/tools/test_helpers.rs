@@ -25,5 +25,6 @@ fn permissive_rate_limit_overrides() -> RateLimitOverrides {
         zotero: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
         github: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
         hackernews: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
+        patents: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
     }
 }

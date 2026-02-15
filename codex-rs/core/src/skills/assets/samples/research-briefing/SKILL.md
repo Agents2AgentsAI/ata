@@ -24,6 +24,7 @@ Rules:
 - Use the pattern: "[Paper] does [one concrete thing]. The trick is [specific mechanism]. Tradeoff: [what you gain vs. what you lose]."
 - Per-paper depth: 3-5 sentences max. Must include the one core idea (plainly stated), one specific number or result, how it relates to the other approaches, and what it trades off.
 - **Citation formatting**: cite as **Author (Year)** in prose. Never put DOIs or arXiv IDs inline in paragraphs — they break reading flow. Collect full references (with IDs) in a References section at the end of the briefing if the user needs them for follow-up.
+- **Never reference the KB in explanations.** Do not say "as summarized in your KB" or "your KB card says." The KB is infrastructure — present content as if you understand the papers directly.
 
 ## Phase 0: Source KB Cards
 
@@ -113,7 +114,7 @@ For full technical walkthroughs of any paper above:
 
 ## Presentation
 
-IMPORTANT: When the briefing is complete, you MUST call `present_document` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the briefing title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
+IMPORTANT: When the briefing is complete, you MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the briefing title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
 
 When the user asks follow-up questions about a specific section, use the most efficient update tool:
 - `append_to_section` — to add new information at the end of a section (most common for follow-up questions)

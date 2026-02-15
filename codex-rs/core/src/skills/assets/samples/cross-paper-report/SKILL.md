@@ -32,6 +32,7 @@ Unless the user requests a different format, write in a teaching-first style tha
 - For multi-card outputs, close with a dedicated prose section named `How the Papers Relate` (not just a table).
 - **Voice**: Use plain, direct language — simple words, short sentences, no academic stiffness. Use **second-person ("you") for procedural walkthroughs** of how the method works ("You take two frames…", "You delete the old MLP head and initialize a new one…"). Use **neutral third-person for framing, results, and analysis** ("LAPA tackles a fundamental bottleneck…", "The same codebook entries produce similar motions…"). Do NOT open problem statements with "You want to…" — that sounds like a tutorial, not a technical discussion.
 - **Define every technical term inline on first use** in plain language before using it further. If you mention "flow matching" or "VQ-VAE", immediately explain what it is and why it matters — never assume the reader already knows.
+- **Never reference the KB in explanations.** Do not say "as summarized in your KB" or "your KB card says." The KB is infrastructure — present content as if you understand the papers directly.
 - **Use concrete worked examples with specific numbers** to build intuition (e.g., "8 possible values × 4 positions = 4,096 latent actions"). Specificity builds intuition faster than abstraction. However, keep model variant names, exact tensor shapes, hyperparameter values, and architecture identifiers out of the narrative paragraphs — collect them in the Details block (see next rule).
 - **Details block at the end of each subsection.** After the narrative paragraphs of each subsection (each Stage, each major section), add a **Details:** line that collects reference specifics: model names and variants, exact dimensions and tensor shapes, hyperparameter values, tokenizer identifiers, layer counts, hidden dims, optimizer settings, etc. The narrative should be fully understandable without reading the Details block — it is a reference appendix for precision, not part of the conceptual flow. Example:
   > **Details:** Base model: Cosmos-Predict2-2B Video2World. Tokenizer: Wan2.1. Input: (1+T)×H×W×3 → (1+T')×H'×W'×16 (T'=T/4, H'=H/8, W'=W/8). Text encoder: T5-XXL.
@@ -278,7 +279,7 @@ Not every explanation needs all diagram types. Use judgment — a single-card ex
 
 ## Presentation
 
-IMPORTANT: When the deep narrative explanation is complete, you MUST call `present_document` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the report title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
+IMPORTANT: When the deep narrative explanation is complete, you MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the report title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
 
 When the user asks follow-up questions about a specific section, use the most efficient update tool:
 - `append_to_section` — to add new information at the end of a section (most common for follow-up questions)

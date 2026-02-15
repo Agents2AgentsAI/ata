@@ -1543,7 +1543,7 @@ pub(crate) fn build_specs_with_toolkits(
     let shell_handler = Arc::new(ShellHandler);
     let unified_exec_handler = Arc::new(UnifiedExecHandler);
     let plan_handler = Arc::new(PlanHandler);
-    let document_reader_handler = Arc::new(DocumentReaderHandler::new());
+    let document_reader_handler = Arc::new(DocumentReaderHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let dynamic_tool_handler = Arc::new(DynamicToolHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
@@ -1607,7 +1607,7 @@ pub(crate) fn build_specs_with_toolkits(
     builder.push_spec(UPDATE_DOCUMENT_SECTION_TOOL.clone());
     builder.push_spec(APPEND_TO_SECTION_TOOL.clone());
     builder.push_spec(PATCH_DOCUMENT_SECTION_TOOL.clone());
-    builder.register_handler("present_document", document_reader_handler.clone());
+    builder.register_handler("present_reading_view", document_reader_handler.clone());
     builder.register_handler("update_document_section", document_reader_handler.clone());
     builder.register_handler("append_to_section", document_reader_handler.clone());
     builder.register_handler("patch_document_section", document_reader_handler);
@@ -2429,7 +2429,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
-                "present_document",
+                "present_reading_view",
                 "update_document_section",
                 "append_to_section",
                 "patch_document_section",
@@ -2456,7 +2456,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
-                "present_document",
+                "present_reading_view",
                 "update_document_section",
                 "append_to_section",
                 "patch_document_section",
@@ -2485,7 +2485,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
-                "present_document",
+                "present_reading_view",
                 "update_document_section",
                 "append_to_section",
                 "patch_document_section",
@@ -2514,7 +2514,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
-                "present_document",
+                "present_reading_view",
                 "update_document_section",
                 "append_to_section",
                 "patch_document_section",
@@ -2541,7 +2541,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
-                "present_document",
+                "present_reading_view",
                 "update_document_section",
                 "append_to_section",
                 "patch_document_section",
@@ -2568,7 +2568,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
-                "present_document",
+                "present_reading_view",
                 "update_document_section",
                 "append_to_section",
                 "patch_document_section",
@@ -2595,7 +2595,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
-                "present_document",
+                "present_reading_view",
                 "update_document_section",
                 "append_to_section",
                 "patch_document_section",
@@ -2621,7 +2621,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
-                "present_document",
+                "present_reading_view",
                 "update_document_section",
                 "append_to_section",
                 "patch_document_section",
@@ -2650,7 +2650,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
-                "present_document",
+                "present_reading_view",
                 "update_document_section",
                 "append_to_section",
                 "patch_document_section",

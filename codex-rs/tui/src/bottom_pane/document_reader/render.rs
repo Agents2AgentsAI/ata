@@ -98,9 +98,40 @@ pub(super) fn separator(width: u16) -> Line<'static> {
     Line::from(format!("├{}┤", "─".repeat(inner)).dim())
 }
 
+/// Build a separator with a centered text indicator (e.g. " ▼ scroll for more ").
+pub(super) fn separator_with_indicator(width: u16, label: &str) -> Line<'static> {
+    let inner = (width as usize).saturating_sub(2);
+    if inner <= label.len() {
+        // Not enough room for the label — fall back to a plain separator.
+        return separator(width);
+    }
+    let remaining = inner - label.len();
+    let left = remaining / 2;
+    let right = remaining - left;
+    Line::from(vec![
+        Span::from(format!("├{}", "─".repeat(left))).dim(),
+        Span::from(label.to_string()).dim(),
+        Span::from(format!("{}┤", "─".repeat(right))).dim(),
+    ])
+}
+
 /// Build the keyboard hints line shown below the content area.
-pub(super) fn hints_line(composer_focused: bool, width: u16) -> Line<'static> {
-    let hints = if composer_focused {
+pub(super) fn hints_line(
+    composer_focused: bool,
+    search_focused: bool,
+    has_active_search: bool,
+    visual_mode: bool,
+    width: u16,
+) -> Line<'static> {
+    let hints: Vec<Span<'static>> = if search_focused {
+        vec![
+            "Enter".dim().bold(),
+            ": search".dim(),
+            " | ".dim(),
+            "Esc".dim().bold(),
+            ": cancel".dim(),
+        ]
+    } else if composer_focused {
         vec![
             "Tab".dim().bold(),
             ": content".dim(),
@@ -111,13 +142,41 @@ pub(super) fn hints_line(composer_focused: bool, width: u16) -> Line<'static> {
             "Esc".dim().bold(),
             ": back".dim(),
         ]
+    } else if visual_mode {
+        vec![
+            "j/k".dim().bold(),
+            ": select".dim(),
+            " | ".dim(),
+            "Tab".dim().bold(),
+            ": ask about".dim(),
+            " | ".dim(),
+            "Esc".dim().bold(),
+            ": cancel".dim(),
+        ]
+    } else if has_active_search {
+        vec![
+            "n/N".dim().bold(),
+            ": match".dim(),
+            " | ".dim(),
+            "/".dim().bold(),
+            ": search".dim(),
+            " | ".dim(),
+            "Esc".dim().bold(),
+            ": clear".dim(),
+            " | ".dim(),
+            "q".dim().bold(),
+            ": done".dim(),
+        ]
     } else {
         vec![
-            "Enter/h/l".dim().bold(),
+            "h/l".dim().bold(),
             ": navigate".dim(),
             " | ".dim(),
             "j/k".dim().bold(),
             ": scroll".dim(),
+            " | ".dim(),
+            "v".dim().bold(),
+            ": select".dim(),
             " | ".dim(),
             "Tab".dim().bold(),
             ": ask".dim(),
@@ -173,6 +232,162 @@ pub(super) fn bordered_line(inner: Line<'static>, width: u16, updated: bool) -> 
         spans.push(" │".dim());
     }
     Line::from(spans)
+}
+
+/// Wrap a content line in card side borders with visual-selection highlighting.
+///
+/// The line content is rendered with reversed style (light-on-dark) and the
+/// side borders are colored cyan.
+pub(super) fn bordered_line_selected(inner: Line<'static>, width: u16) -> Line<'static> {
+    let inner_width: usize = inner
+        .spans
+        .iter()
+        .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
+    let pad = (width as usize)
+        .saturating_sub(4) // "│ " + " │"
+        .saturating_sub(inner_width);
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(inner.spans.len() + 4);
+    spans.push("│ ".cyan());
+    for span in inner.spans {
+        spans.push(Span::styled(
+            span.content.into_owned(),
+            span.style.reversed(),
+        ));
+    }
+    if pad > 0 {
+        spans.push(Span::from(" ".repeat(pad)).reversed());
+    }
+    spans.push(" │".cyan());
+    Line::from(spans)
+}
+
+/// Draw side borders ("│") for a range of rows within the card.
+///
+/// Used by the composer and search bar rendering to add card borders around
+/// their content rows.
+pub(super) fn draw_side_borders(
+    buf: &mut ratatui::buffer::Buffer,
+    area_x: u16,
+    width: u16,
+    start_y: u16,
+    row_count: u16,
+    bottom: u16,
+) {
+    for row in 0..row_count {
+        let ry = start_y + row;
+        if ry < bottom {
+            if let Some(cell) = buf.cell_mut((area_x, ry)) {
+                cell.set_symbol("│");
+                cell.set_style(ratatui::style::Style::default().dim());
+            }
+            if let Some(cell) = buf.cell_mut((area_x + 1, ry)) {
+                cell.set_symbol(" ");
+            }
+            let rx = area_x + width.saturating_sub(1);
+            if let Some(cell) = buf.cell_mut((rx, ry)) {
+                cell.set_symbol("│");
+                cell.set_style(ratatui::style::Style::default().dim());
+            }
+            if rx > 0
+                && let Some(cell) = buf.cell_mut((rx - 1, ry))
+            {
+                cell.set_symbol(" ");
+            }
+        }
+    }
+}
+
+/// Highlight all occurrences of `query` in a rendered line (case-insensitive).
+///
+/// Matched substrings are rendered with reversed style. The original spans are
+/// split at match boundaries so that only the matched characters get the
+/// highlight style.
+pub(super) fn apply_search_highlights(line: Line<'static>, query: &str) -> Line<'static> {
+    if query.is_empty() {
+        return line;
+    }
+
+    // Flatten all spans into a single string so we can search across span boundaries.
+    let full_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    let full_lower = full_text.to_lowercase();
+    let query_lower = query.to_lowercase();
+
+    // Find all match byte ranges.
+    let mut match_ranges: Vec<(usize, usize)> = Vec::new();
+    let mut start = 0;
+    while let Some(pos) = full_lower[start..].find(&query_lower) {
+        let abs_start = start + pos;
+        let abs_end = abs_start + query.len();
+        match_ranges.push((abs_start, abs_end));
+        start = abs_start + 1;
+    }
+
+    if match_ranges.is_empty() {
+        return line;
+    }
+
+    // Rebuild spans, splitting at match boundaries.
+    let mut new_spans: Vec<Span<'static>> = Vec::new();
+    let mut byte_cursor = 0usize; // position in full_text
+    let mut match_idx = 0;
+
+    for span in line.spans {
+        let span_text: &str = span.content.as_ref();
+        let span_start = byte_cursor;
+        let span_end = span_start + span_text.len();
+        let base_style = span.style;
+
+        let mut pos_in_span = 0usize;
+
+        while pos_in_span < span_text.len() && match_idx < match_ranges.len() {
+            let (m_start, m_end) = match_ranges[match_idx];
+
+            if m_end <= span_start + pos_in_span {
+                // Match is entirely before current position.
+                match_idx += 1;
+                continue;
+            }
+
+            if m_start >= span_end {
+                // Match is entirely after this span.
+                break;
+            }
+
+            // Part before this match (within current span).
+            let local_match_start = m_start.saturating_sub(span_start).max(pos_in_span);
+            if local_match_start > pos_in_span {
+                let before = &span_text[pos_in_span..local_match_start];
+                new_spans.push(Span::styled(before.to_string(), base_style));
+            }
+
+            // The matched part (within current span).
+            let local_match_end = m_end.saturating_sub(span_start).min(span_text.len());
+            if local_match_start < local_match_end {
+                let matched = &span_text[local_match_start..local_match_end];
+                new_spans.push(Span::styled(matched.to_string(), base_style.reversed()));
+            }
+
+            pos_in_span = local_match_end;
+
+            if span_start + pos_in_span >= m_end {
+                match_idx += 1;
+            } else {
+                break;
+            }
+        }
+
+        // Remainder of span after all matches.
+        if pos_in_span < span_text.len() {
+            let rest = &span_text[pos_in_span..];
+            new_spans.push(Span::styled(rest.to_string(), base_style));
+        }
+
+        byte_cursor = span_end;
+    }
+
+    Line::from(new_spans)
 }
 
 /// Render a pending-question indicator to append below section content.

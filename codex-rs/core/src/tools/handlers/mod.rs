@@ -24,6 +24,7 @@ mod unified_exec;
 mod view_image;
 
 pub use document_reader::APPEND_TO_SECTION_TOOL;
+pub use document_reader::DocumentCache;
 pub use document_reader::DocumentReaderHandler;
 pub use document_reader::PATCH_DOCUMENT_SECTION_TOOL;
 pub use document_reader::PRESENT_DOCUMENT_TOOL;

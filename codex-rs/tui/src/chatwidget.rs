@@ -1305,6 +1305,10 @@ impl ChatWidget {
         // (between **/**) as the chunk header. Show this header as status.
         self.reasoning_buffer.push_str(&delta);
 
+        if self.bottom_pane.is_document_reader_active() {
+            return;
+        }
+
         if self.unified_exec_wait_streak.is_some() {
             // Unified exec waiting should take precedence over reasoning-derived status headers.
             self.request_redraw();
@@ -1323,7 +1327,7 @@ impl ChatWidget {
     fn on_agent_reasoning_final(&mut self) {
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
-        if !self.full_reasoning_buffer.is_empty() {
+        if !self.full_reasoning_buffer.is_empty() && !self.bottom_pane.is_document_reader_active() {
             let cell =
                 history_cell::new_reasoning_summary_block(self.full_reasoning_buffer.clone());
             self.add_boxed_history(cell);
