@@ -1530,6 +1530,7 @@ dependencies = [
  "codex-login",
  "codex-mcp-server",
  "codex-protocol",
+ "codex-research-tools",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
  "codex-stdio-to-uds",

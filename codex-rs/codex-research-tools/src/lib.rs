@@ -8,6 +8,10 @@ pub mod tool_specs;
 pub mod types;
 
 mod clients;
+#[cfg(all(feature = "latex", feature = "pdf_images"))]
+pub mod setup {
+    pub use crate::tools::setup::*;
+}
 mod text_utils;
 mod tools;
 

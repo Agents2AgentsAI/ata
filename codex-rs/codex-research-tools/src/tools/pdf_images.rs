@@ -77,7 +77,7 @@ const JAVA_CANDIDATE_PATHS: &[&str] = &[
 /// 1. `$PATH` (via `which java`)
 /// 2. macOS `/usr/libexec/java_home` helper
 /// 3. Well-known Homebrew / Linux paths
-async fn probe_java() -> Option<PathBuf> {
+pub(crate) async fn probe_java() -> Option<PathBuf> {
     // 1. Check $PATH.
     if let Ok(which) = Command::new("which").arg("java").output().await
         && which.status.success()
@@ -116,7 +116,7 @@ async fn probe_java() -> Option<PathBuf> {
 }
 
 /// Locate a working `java` binary, auto-installing if necessary.
-async fn find_java() -> std::result::Result<PathBuf, String> {
+pub(crate) async fn find_java() -> std::result::Result<PathBuf, String> {
     if let Some(java) = probe_java().await {
         return Ok(java);
     }
@@ -148,8 +148,13 @@ async fn find_java() -> std::result::Result<PathBuf, String> {
     })
 }
 
+/// Probe for pdftocairo on `$PATH` without installing anything.
+pub(crate) async fn probe_pdftocairo() -> bool {
+    super::system_deps::is_on_path(PDFTOCAIRO_BIN).await
+}
+
 /// Ensure pdftocairo (from poppler-utils) is available, auto-installing if necessary.
-async fn ensure_pdftocairo() -> std::result::Result<(), String> {
+pub(crate) async fn ensure_pdftocairo() -> std::result::Result<(), String> {
     if super::system_deps::is_on_path(PDFTOCAIRO_BIN).await {
         return Ok(());
     }
@@ -237,13 +242,33 @@ async fn download_jar(url: &str, cache_dir: &Path, dest: &Path) -> std::result::
     Ok(())
 }
 
+/// Probe for an existing pdffigures2 JAR without downloading anything.
+pub(crate) fn probe_pdffigures2_jar() -> Option<PathBuf> {
+    // 1. Explicit env var.
+    if let Ok(p) = std::env::var(PDFFIGURES2_JAR_ENV) {
+        let path = PathBuf::from(&p);
+        if path.exists() {
+            return Some(path);
+        }
+        return None;
+    }
+
+    // 2. Check cache directory.
+    let cached_jar = tools_cache_dir().join(PDFFIGURES2_JAR_FILENAME);
+    if cached_jar.exists() {
+        return Some(cached_jar);
+    }
+
+    None
+}
+
 /// Locate or auto-download the pdffigures2 JAR.
 ///
 /// Resolution order:
 /// 1. `PDFFIGURES2_JAR` env var (backward compat)
 /// 2. Cached JAR in platform cache dir
 /// 3. Download from `PDFFIGURES2_JAR_URL` (or built-in default URL)
-async fn ensure_pdffigures2_jar() -> std::result::Result<PathBuf, String> {
+pub(crate) async fn ensure_pdffigures2_jar() -> std::result::Result<PathBuf, String> {
     // 1. Explicit env var takes precedence.
     if let Ok(p) = std::env::var(PDFFIGURES2_JAR_ENV) {
         let path = PathBuf::from(&p);

@@ -144,7 +144,7 @@ pub(super) fn hints_line(
         ]
     } else if visual_mode {
         vec![
-            "j/k".dim().bold(),
+            "hjkl".dim().bold(),
             ": select".dim(),
             " | ".dim(),
             "Tab".dim().bold(),
@@ -169,11 +169,11 @@ pub(super) fn hints_line(
         ]
     } else {
         vec![
-            "h/l".dim().bold(),
-            ": navigate".dim(),
+            "hjkl".dim().bold(),
+            ": move".dim(),
             " | ".dim(),
-            "j/k".dim().bold(),
-            ": scroll".dim(),
+            "n/p".dim().bold(),
+            ": section".dim(),
             " | ".dim(),
             "v".dim().bold(),
             ": select".dim(),
@@ -234,33 +234,74 @@ pub(super) fn bordered_line(inner: Line<'static>, width: u16, updated: bool) -> 
     Line::from(spans)
 }
 
-/// Wrap a content line in card side borders with visual-selection highlighting.
-///
-/// The line content is rendered with reversed style (light-on-dark) and the
-/// side borders are colored cyan.
-pub(super) fn bordered_line_selected(inner: Line<'static>, width: u16) -> Line<'static> {
-    let inner_width: usize = inner
-        .spans
-        .iter()
-        .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
-        .sum();
-    let pad = (width as usize)
-        .saturating_sub(4) // "│ " + " │"
-        .saturating_sub(inner_width);
+/// Apply selection highlight to a character range `[start_col, end_col)` within
+/// a rendered line.  Uses a dark-gray background so it's visually distinct from
+/// bold/emphasized text.  Characters outside the range keep their original style.
+pub(super) fn apply_char_selection(
+    line: Line<'static>,
+    start_col: usize,
+    end_col: usize,
+) -> Line<'static> {
+    use ratatui::style::Color;
+    use ratatui::style::Style;
 
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(inner.spans.len() + 4);
-    spans.push("│ ".cyan());
-    for span in inner.spans {
-        spans.push(Span::styled(
-            span.content.into_owned(),
-            span.style.reversed(),
-        ));
+    let sel_bg = Color::DarkGray;
+
+    // Clamp end_col to total text length so we never try to allocate
+    // huge padding when callers pass usize::MAX.
+    let total_len: usize = line.spans.iter().map(|s| s.content.len()).sum();
+    let end_col = end_col.min(total_len);
+    let start_col = start_col.min(end_col);
+
+    let mut new_spans: Vec<Span<'static>> = Vec::new();
+    let mut char_pos = 0usize;
+
+    for span in line.spans {
+        let span_text: &str = span.content.as_ref();
+        let span_start = char_pos;
+        let span_end = span_start + span_text.len();
+        let base_style = span.style;
+
+        if span_end <= start_col || span_start >= end_col {
+            // Entirely outside selection.
+            new_spans.push(span);
+        } else {
+            // Partially or fully inside selection — split.
+            let local_sel_start = start_col.saturating_sub(span_start);
+            let local_sel_end = end_col.saturating_sub(span_start).min(span_text.len());
+
+            if local_sel_start > 0 {
+                new_spans.push(Span::styled(
+                    span_text[..local_sel_start].to_string(),
+                    base_style,
+                ));
+            }
+            new_spans.push(Span::styled(
+                span_text[local_sel_start..local_sel_end].to_string(),
+                Style {
+                    bg: Some(sel_bg),
+                    ..base_style
+                },
+            ));
+            if local_sel_end < span_text.len() {
+                new_spans.push(Span::styled(
+                    span_text[local_sel_end..].to_string(),
+                    base_style,
+                ));
+            }
+        }
+        char_pos = span_end;
     }
-    if pad > 0 {
-        spans.push(Span::from(" ".repeat(pad)).reversed());
+
+    // If the selection extends beyond the text, fill with highlighted spaces.
+    if end_col > char_pos && start_col < end_col {
+        let extra = end_col - char_pos.max(start_col);
+        if extra > 0 {
+            new_spans.push(Span::from(" ".repeat(extra)).on_dark_gray());
+        }
     }
-    spans.push(" │".cyan());
-    Line::from(spans)
+
+    Line::from(new_spans)
 }
 
 /// Draw side borders ("│") for a range of rows within the card.

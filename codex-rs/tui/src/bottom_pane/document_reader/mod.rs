@@ -88,12 +88,20 @@ struct SearchState {
     current_match_idx: usize,
 }
 
-/// Visual line selection state (vim V-mode).
+/// Whether visual selection is character-wise (v) or line-wise (V).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VisualMode {
+    Char,
+    Line,
+}
+
+/// Visual selection state.
 struct VisualSelect {
+    mode: VisualMode,
     /// The rendered-line index where selection started.
     anchor_line: usize,
-    /// The current cursor line.
-    cursor_line: usize,
+    /// Character column where selection started (only meaningful in Char mode).
+    anchor_col: usize,
 }
 
 /// Which part of the reader has keyboard focus.
@@ -128,6 +136,10 @@ pub(crate) struct DocumentReaderView {
 
     // Vim motions: tracks whether a single `g` was pressed.
     pending_g: bool,
+    // Cursor position (absolute rendered-line index + column in the current
+    // section).  The viewport scrolls to keep cursor_line visible.
+    cursor_line: usize,
+    cursor_col: usize,
     // Content height from the last render, used for half-page scroll.
     last_content_height: Cell<u16>,
     // Inner width from the last render, used by visual select text extraction.
@@ -174,6 +186,8 @@ impl DocumentReaderView {
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
             pending_g: false,
+            cursor_line: 0,
+            cursor_col: 0,
             last_content_height: Cell::new(0),
             last_inner_width: Cell::new(40),
             search_state: None,
@@ -187,8 +201,12 @@ impl DocumentReaderView {
     /// the composer so the user sees the updated content.
     fn resolve_pending(&mut self, section_index: usize) {
         self.pending_sections.remove(&section_index);
-        if section_index == self.current_section && self.focus == ReaderFocus::Composer {
-            self.focus = ReaderFocus::Content;
+        if section_index == self.current_section {
+            // Clear visual selection — the response has arrived.
+            self.visual_select = None;
+            if self.focus == ReaderFocus::Composer {
+                self.focus = ReaderFocus::Content;
+            }
         }
     }
 
@@ -286,6 +304,8 @@ impl DocumentReaderView {
             self.clear_updated_flag();
             self.current_section += 1;
             self.scroll_offset.set(0);
+            self.cursor_line = 0;
+            self.cursor_col = 0;
             self.visited_sections.insert(self.current_section);
         }
     }
@@ -295,6 +315,8 @@ impl DocumentReaderView {
             self.clear_updated_flag();
             self.current_section -= 1;
             self.scroll_offset.set(0);
+            self.cursor_line = 0;
+            self.cursor_col = 0;
             self.visited_sections.insert(self.current_section);
         }
     }
@@ -350,24 +372,45 @@ impl DocumentReaderView {
             .map(|s| s.heading.as_str())
             .unwrap_or("");
 
-        let selection_block = self
-            .selection_context
-            .take()
-            .map(|sel| format!("[Selected text from the section:]\n{sel}\n\n"))
-            .unwrap_or_default();
+        let selection = self.selection_context.take();
+
+        let tool_instructions = if let Some(ref sel) = selection {
+            // The user highlighted specific text — tell the agent to patch
+            // the answer in right after the selection.
+            format!(
+                "The user selected specific text from the section (shown below) and is asking about it.\n\
+                 [Selected text:]\n{sel}\n\n\
+                 Reply by calling: patch_section(document_id=\"{doc_id}\", section_index={idx}, \
+                 old_text=\"<the selected text exactly>\", \
+                 new_text=\"<the selected text>\\n\\n<your answer>\")\n\
+                 This inserts your answer right after the selected passage. \
+                 Reproduce the selected text verbatim as old_text so the patch matches.",
+                doc_id = self.document_id,
+                idx = self.current_section,
+            )
+        } else {
+            // No selection — give the agent the choice of append or patch.
+            format!(
+                "You have two tools to respond:\n\
+                 1. append_to_section(document_id=\"{doc_id}\", section_index={idx}, content=\"...\") \
+                 — adds your answer at the end of the section. Use this for general questions.\n\
+                 2. patch_section(document_id=\"{doc_id}\", section_index={idx}, \
+                 old_text=\"<text from the section>\", \
+                 new_text=\"<that same text>\\n\\n<your answer>\") \
+                 — inserts your answer after a specific passage. Use this when the question is clearly \
+                 about a particular part of the section so the answer appears in context.",
+                doc_id = self.document_id,
+                idx = self.current_section,
+            )
+        };
 
         let context = format!(
             "[The user is reading \"{title}\" and asked about the section titled \"{heading}\"]\n\n\
-             {selection_block}\
              {text}\n\n\
-             Reply by calling: append_to_section(document_id=\"{doc_id}\", section_index={idx}, content=\"...\")\n\
-             This adds your answer below the existing section content. Do NOT rewrite the section. \
-             Do NOT output plain text; only tool calls are visible to the user.",
+             {tool_instructions}\n\
+             Do NOT rewrite the entire section. Do NOT output plain text; only tool calls are visible to the user.",
             title = self.title,
             heading = heading,
-            text = text,
-            doc_id = self.document_id,
-            idx = self.current_section,
         );
 
         self.app_event_tx.send(AppEvent::CodexOp(Op::UserInput {
@@ -390,26 +433,20 @@ impl DocumentReaderView {
     }
 
     fn handle_content_key(&mut self, key_event: KeyEvent) {
-        // Ctrl+d / Ctrl+u: half-page scroll (check before the main match).
+        // Ctrl+d / Ctrl+u: half-page cursor jump (like vim).
         if key_event.modifiers.contains(KeyModifiers::CONTROL) {
             self.pending_g = false;
             match key_event.code {
                 KeyCode::Char('d') => {
-                    let half = (self.last_content_height.get() / 2).max(1);
-                    if let Some(vs) = &mut self.visual_select {
-                        vs.cursor_line = vs.cursor_line.saturating_add(half as usize);
-                    }
-                    self.scroll_offset
-                        .set(self.scroll_offset.get().saturating_add(half));
+                    let half = (self.last_content_height.get() / 2).max(1) as usize;
+                    self.cursor_line = self.cursor_line.saturating_add(half);
+                    self.clamp_and_scroll();
                     return;
                 }
                 KeyCode::Char('u') => {
-                    let half = (self.last_content_height.get() / 2).max(1);
-                    if let Some(vs) = &mut self.visual_select {
-                        vs.cursor_line = vs.cursor_line.saturating_sub(half as usize);
-                    }
-                    self.scroll_offset
-                        .set(self.scroll_offset.get().saturating_sub(half));
+                    let half = (self.last_content_height.get() / 2).max(1) as usize;
+                    self.cursor_line = self.cursor_line.saturating_sub(half);
+                    self.clamp_and_scroll();
                     return;
                 }
                 _ => {}
@@ -421,70 +458,120 @@ impl DocumentReaderView {
             && !key_event.modifiers.contains(KeyModifiers::SHIFT)
         {
             if self.pending_g {
-                // gg: scroll to top / move visual cursor to top.
                 self.pending_g = false;
-                if let Some(vs) = &mut self.visual_select {
-                    vs.cursor_line = 0;
-                }
-                self.scroll_offset.set(0);
+                self.cursor_line = 0;
+                self.cursor_col = 0;
+                self.clamp_and_scroll();
             } else {
                 self.pending_g = true;
             }
             return;
         }
-        // Any non-`g` key clears pending_g.
         self.pending_g = false;
 
-        // --- Visual mode key handling ---
+        // --- Keys shared between normal and visual modes ---
+        match key_event.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.cursor_line = self.cursor_line.saturating_add(1);
+                self.clamp_and_scroll();
+                return;
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.cursor_line = self.cursor_line.saturating_sub(1);
+                self.clamp_and_scroll();
+                return;
+            }
+            KeyCode::Char('h') | KeyCode::Left => {
+                if self.cursor_col == 0 {
+                    // Wrap to end of previous line.
+                    if self.cursor_line > 0 {
+                        self.cursor_line -= 1;
+                        self.cursor_col = usize::MAX; // clamp_and_scroll caps it
+                    }
+                } else {
+                    self.cursor_col -= 1;
+                }
+                self.clamp_and_scroll();
+                return;
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                let line_len = self.current_line_char_len();
+                if self.cursor_col >= line_len {
+                    // Wrap to start of next line.
+                    self.cursor_line += 1;
+                    self.cursor_col = 0;
+                } else {
+                    self.cursor_col += 1;
+                }
+                self.clamp_and_scroll();
+                return;
+            }
+            KeyCode::Char('G') => {
+                self.cursor_line = usize::MAX;
+                self.cursor_col = 0;
+                self.clamp_and_scroll();
+                return;
+            }
+            KeyCode::Char('0') => {
+                self.cursor_col = 0;
+                self.clamp_and_scroll();
+                return;
+            }
+            KeyCode::Char('$') => {
+                self.cursor_col = usize::MAX; // clamp_and_scroll caps it
+                self.clamp_and_scroll();
+                return;
+            }
+            _ => {}
+        }
+
+        // --- Visual mode only ---
         if self.visual_select.is_some() {
             match key_event.code {
-                KeyCode::Char('j') | KeyCode::Down => {
-                    if let Some(vs) = &mut self.visual_select {
-                        vs.cursor_line = vs.cursor_line.saturating_add(1);
-                    }
-                    // Auto-scroll to keep cursor visible.
-                    self.visual_scroll_into_view();
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    if let Some(vs) = &mut self.visual_select {
-                        vs.cursor_line = vs.cursor_line.saturating_sub(1);
-                    }
-                    self.visual_scroll_into_view();
-                }
-                KeyCode::Char('G') => {
-                    let inner_w = self.last_inner_width.get();
-                    let max = self.current_section_line_count(inner_w).saturating_sub(1);
-                    if let Some(vs) = &mut self.visual_select {
-                        vs.cursor_line = max;
-                    }
-                    self.scroll_offset.set(u16::MAX);
-                }
                 KeyCode::Tab => {
-                    // Extract selected text and inject into composer.
                     let inner_w = self.last_inner_width.get();
                     let text = self.selected_text(inner_w);
-                    self.visual_select = None;
                     if let Some(text) = text {
                         self.selection_context = Some(text);
                     }
                     self.focus = ReaderFocus::Composer;
                 }
-                KeyCode::Esc | KeyCode::Char('v') | KeyCode::Char('V') => {
+                KeyCode::Esc => {
                     self.visual_select = None;
+                }
+                // Toggle mode: v → char, V → line.  Same key cancels.
+                KeyCode::Char('v') => {
+                    let is_char = self
+                        .visual_select
+                        .as_ref()
+                        .is_some_and(|vs| vs.mode == VisualMode::Char);
+                    if is_char {
+                        self.visual_select = None;
+                    } else {
+                        // Switch from line to char.
+                        if let Some(vs) = &mut self.visual_select {
+                            vs.mode = VisualMode::Char;
+                        }
+                    }
+                }
+                KeyCode::Char('V') => {
+                    let is_line = self
+                        .visual_select
+                        .as_ref()
+                        .is_some_and(|vs| vs.mode == VisualMode::Line);
+                    if is_line {
+                        self.visual_select = None;
+                    } else if let Some(vs) = &mut self.visual_select {
+                        vs.mode = VisualMode::Line;
+                    }
                 }
                 KeyCode::Char('q') => {
                     self.visual_select = None;
                     self.exit_reading_mode();
                 }
                 // Section navigation cancels visual mode.
-                KeyCode::Char('h')
-                | KeyCode::Char('l')
-                | KeyCode::Char('n')
-                | KeyCode::Char('p')
-                | KeyCode::Left
-                | KeyCode::Right => {
+                KeyCode::Char('n') | KeyCode::Char('p') | KeyCode::PageDown | KeyCode::PageUp => {
                     self.visual_select = None;
-                    // Re-dispatch so the navigation actually happens.
                     self.handle_content_key(key_event);
                 }
                 _ => {}
@@ -492,7 +579,7 @@ impl DocumentReaderView {
             return;
         }
 
-        // --- Normal mode key handling ---
+        // --- Normal mode only ---
         let has_search = self.search_state.is_some();
 
         match key_event.code {
@@ -507,43 +594,40 @@ impl DocumentReaderView {
                 if has_search {
                     self.prev_match();
                 }
-                // When no search, Shift+N is a no-op.
             }
-            KeyCode::Char('l') | KeyCode::Right | KeyCode::PageDown | KeyCode::Enter => {
+            KeyCode::PageDown | KeyCode::Enter => {
                 self.next_section();
             }
-            KeyCode::Char('p') | KeyCode::Char('h') | KeyCode::Left | KeyCode::PageUp => {
+            KeyCode::Char('p') | KeyCode::PageUp => {
                 self.prev_section();
             }
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.scroll_offset
-                    .set(self.scroll_offset.get().saturating_add(1));
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.scroll_offset
-                    .set(self.scroll_offset.get().saturating_sub(1));
-            }
-            KeyCode::Char('G') => {
-                // G: scroll to bottom (render clamps).
-                self.scroll_offset.set(u16::MAX);
-            }
-            KeyCode::Char('v') | KeyCode::Char('V') => {
-                // Enter visual line select mode.
-                let anchor = self.scroll_offset.get() as usize;
+            KeyCode::Char('v') => {
                 self.visual_select = Some(VisualSelect {
-                    anchor_line: anchor,
-                    cursor_line: anchor,
+                    mode: VisualMode::Char,
+                    anchor_line: self.cursor_line,
+                    anchor_col: self.cursor_col,
+                });
+            }
+            KeyCode::Char('V') => {
+                self.visual_select = Some(VisualSelect {
+                    mode: VisualMode::Line,
+                    anchor_line: self.cursor_line,
+                    anchor_col: 0,
                 });
             }
             KeyCode::Home => {
                 self.current_section = 0;
                 self.scroll_offset.set(0);
+                self.cursor_line = 0;
+                self.cursor_col = 0;
                 self.visited_sections.insert(0);
             }
             KeyCode::End => {
                 if !self.sections.is_empty() {
                     self.current_section = self.sections.len() - 1;
                     self.scroll_offset.set(0);
+                    self.cursor_line = 0;
+                    self.cursor_col = 0;
                     self.visited_sections.insert(self.current_section);
                 }
             }
@@ -555,7 +639,6 @@ impl DocumentReaderView {
                 if has_search {
                     self.clear_search();
                 }
-                // When no search, Esc falls through to on_ctrl_c (handled by prefer_esc).
             }
             KeyCode::Tab => {
                 self.focus = ReaderFocus::Composer;
@@ -567,18 +650,49 @@ impl DocumentReaderView {
         }
     }
 
-    /// Keep the visual selection cursor visible by adjusting scroll_offset.
-    fn visual_scroll_into_view(&mut self) {
-        let Some(vs) = &self.visual_select else {
-            return;
-        };
+    /// Character length of the rendered line at `cursor_line`.
+    fn current_line_char_len(&self) -> usize {
+        let inner_w = self.last_inner_width.get();
+        self.sections
+            .get(self.current_section)
+            .and_then(|s| {
+                let lines = s.rendered_lines(inner_w);
+                lines
+                    .get(self.cursor_line)
+                    .map(|l| l.spans.iter().map(|sp| sp.content.len()).sum::<usize>())
+            })
+            .unwrap_or(0)
+    }
+
+    /// Clamp cursor to valid bounds and adjust scroll_offset so that
+    /// `self.cursor_line` is visible.  Must be called after every cursor
+    /// mutation.
+    fn clamp_and_scroll(&mut self) {
+        // Clamp cursor_line to [0, total_lines - 1].
+        let inner_w = self.last_inner_width.get();
+        let total = self
+            .sections
+            .get(self.current_section)
+            .map(|s| s.rendered_lines(inner_w).len())
+            .unwrap_or(0);
+        if total == 0 {
+            self.cursor_line = 0;
+            self.cursor_col = 0;
+        } else {
+            self.cursor_line = self.cursor_line.min(total - 1);
+            // Clamp cursor_col to [0, line_char_len].
+            let line_len = self.current_line_char_len();
+            self.cursor_col = self.cursor_col.min(line_len);
+        }
+
+        // Scroll viewport to keep cursor visible.
         let content_h = self.last_content_height.get() as usize;
         let offset = self.scroll_offset.get() as usize;
-        if vs.cursor_line < offset {
-            self.scroll_offset.set(vs.cursor_line as u16);
-        } else if content_h > 0 && vs.cursor_line >= offset + content_h {
+        if self.cursor_line < offset {
+            self.scroll_offset.set(self.cursor_line as u16);
+        } else if content_h > 0 && self.cursor_line >= offset + content_h {
             self.scroll_offset
-                .set((vs.cursor_line - content_h + 1) as u16);
+                .set((self.cursor_line - content_h + 1) as u16);
         }
     }
 
@@ -620,17 +734,21 @@ impl DocumentReaderView {
     fn handle_search_key(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Enter => {
+                // Finalise search and return to content.
                 self.execute_search();
                 self.focus = ReaderFocus::Content;
             }
             KeyCode::Esc => {
+                self.search_state = None;
                 self.focus = ReaderFocus::Content;
             }
             KeyCode::Backspace => {
                 self.search_input.pop();
+                self.execute_search(); // incremental
             }
             KeyCode::Char(c) => {
                 self.search_input.push(c);
+                self.execute_search(); // incremental
             }
             _ => {}
         }
@@ -645,8 +763,9 @@ impl DocumentReaderView {
 
         let query_lower = query.to_lowercase();
         let mut matches = Vec::new();
+        let section_idx = self.current_section;
 
-        for (section_idx, section) in self.sections.iter().enumerate() {
+        if let Some(section) = self.sections.get(section_idx) {
             // Search in heading.
             let heading_lower = section.heading.to_lowercase();
             let mut start = 0;
@@ -665,35 +784,22 @@ impl DocumentReaderView {
             while let Some(pos) = content_lower[start..].find(&query_lower) {
                 matches.push(SearchMatch {
                     section_idx,
-                    // Offset past the heading so we can map to rendered lines later.
                     byte_offset: heading_byte_len + start + pos,
                 });
                 start += pos + 1;
             }
         }
 
-        if matches.is_empty() {
-            self.search_state = Some(SearchState {
-                query,
-                matches,
-                current_match_idx: 0,
-            });
-            return;
-        }
-
-        // Set current_match_idx to the first match at or after current section.
-        let current_match_idx = matches
-            .iter()
-            .position(|m| m.section_idx >= self.current_section)
-            .unwrap_or(0);
-
+        let has_matches = !matches.is_empty();
         self.search_state = Some(SearchState {
             query,
             matches,
-            current_match_idx,
+            current_match_idx: 0,
         });
 
-        self.jump_to_current_match();
+        if has_matches {
+            self.jump_to_current_match();
+        }
     }
 
     fn next_match(&mut self) {
@@ -751,7 +857,8 @@ impl DocumentReaderView {
         let newlines_before = text[..safe_offset].matches('\n').count() as u16;
         let estimated_line = heading_lines + newlines_before;
 
-        // Center the match in the viewport.
+        // Move cursor to the match and center in viewport.
+        self.cursor_line = estimated_line as usize;
         let half_viewport = self.last_content_height.get() / 2;
         self.scroll_offset
             .set(estimated_line.saturating_sub(half_viewport));
@@ -768,37 +875,97 @@ impl DocumentReaderView {
         }
     }
 
-    /// Extract the plain text of the currently selected lines (visual mode).
+    /// Extract the plain text of the current selection (visual mode).
     fn selected_text(&self, inner_width: u16) -> Option<String> {
         let vs = self.visual_select.as_ref()?;
         let section = self.sections.get(self.current_section)?;
         let lines = section.rendered_lines(inner_width);
-        let start = vs.anchor_line.min(vs.cursor_line);
-        let end = vs.anchor_line.max(vs.cursor_line);
-        let clamped_end = end.min(lines.len().saturating_sub(1));
-        if start >= lines.len() {
+        if lines.is_empty() {
             return None;
         }
-        let selected: String = lines[start..=clamped_end]
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        Some(selected)
+
+        let (start_line, start_col, end_line, end_col) = self.selection_bounds(vs, lines.len())?;
+
+        let line_text = |idx: usize| -> String {
+            lines
+                .get(idx)
+                .map(|l| {
+                    l.spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<String>()
+                })
+                .unwrap_or_default()
+        };
+
+        if vs.mode == VisualMode::Line {
+            let selected: String = (start_line..=end_line)
+                .map(line_text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Some(selected);
+        }
+
+        // Character-wise selection.
+        if start_line == end_line {
+            let text = line_text(start_line);
+            let s = start_col.min(text.len());
+            let e = end_col.min(text.len());
+            return Some(text[s..e].to_string());
+        }
+
+        let mut parts: Vec<String> = Vec::new();
+        // First line: from start_col to end.
+        let first = line_text(start_line);
+        parts.push(
+            first
+                .get(start_col.min(first.len())..)
+                .unwrap_or("")
+                .to_string(),
+        );
+        // Middle lines: full.
+        for idx in (start_line + 1)..end_line {
+            parts.push(line_text(idx));
+        }
+        // Last line: from start to end_col.
+        let last = line_text(end_line);
+        parts.push(
+            last.get(..end_col.min(last.len()))
+                .unwrap_or("")
+                .to_string(),
+        );
+        Some(parts.join("\n"))
     }
 
-    /// Total rendered line count for the current section (used by visual mode
-    /// to clamp cursor bounds).
-    fn current_section_line_count(&self, inner_width: u16) -> usize {
-        self.sections
-            .get(self.current_section)
-            .map(|s| s.rendered_lines(inner_width).len())
-            .unwrap_or(0)
+    /// Compute normalised selection bounds: (start_line, start_col, end_line, end_col).
+    /// For line mode, start_col=0 and end_col=usize::MAX (callers must clamp to
+    /// line width before use).
+    fn selection_bounds(
+        &self,
+        vs: &VisualSelect,
+        total_lines: usize,
+    ) -> Option<(usize, usize, usize, usize)> {
+        if total_lines == 0 {
+            return None;
+        }
+        let max_line = total_lines - 1;
+        let cursor_line = self.cursor_line.min(max_line);
+        let anchor_line = vs.anchor_line.min(max_line);
+
+        if vs.mode == VisualMode::Line {
+            let start = anchor_line.min(cursor_line);
+            let end = anchor_line.max(cursor_line);
+            return Some((start, 0, end, usize::MAX));
+        }
+
+        // Character-wise: order by (line, col).
+        let (start_line, start_col, end_line, end_col) =
+            if (anchor_line, vs.anchor_col) <= (cursor_line, self.cursor_col) {
+                (anchor_line, vs.anchor_col, cursor_line, self.cursor_col)
+            } else {
+                (cursor_line, self.cursor_col, anchor_line, vs.anchor_col)
+            };
+        Some((start_line, start_col, end_line, end_col))
     }
 }
 
@@ -890,6 +1057,7 @@ impl BottomPaneView for DocumentReaderView {
         // user isn't stuck with permanent spinner indicators.
         if !self.pending_sections.is_empty() {
             self.pending_sections.clear();
+            self.visual_select = None;
             if self.focus == ReaderFocus::Composer {
                 self.focus = ReaderFocus::Content;
             }
@@ -1032,6 +1200,9 @@ impl Renderable for DocumentReaderView {
 
                 let total = raw_lines.len();
 
+                // Clamp cursor for rendering (the actual field is clamped
+                // in handle_content_key; here we just guard against stale
+                // values after content changes).
                 // Clamp scroll_offset so it never overshoots the content.
                 let max_offset = total.saturating_sub(content_height as usize) as u16;
                 let offset = self.scroll_offset.get().min(max_offset);
@@ -1059,12 +1230,11 @@ impl Renderable for DocumentReaderView {
                     })
                     .collect();
 
-                // Visual selection range (if active).
-                let visual_range = self.visual_select.as_ref().map(|vs| {
-                    let start = vs.anchor_line.min(vs.cursor_line);
-                    let end = vs.anchor_line.max(vs.cursor_line);
-                    (start, end)
-                });
+                // Compute visual selection bounds (if active).
+                let sel_bounds = self
+                    .visual_select
+                    .as_ref()
+                    .and_then(|vs| self.selection_bounds(vs, total));
 
                 // Render each visible line wrapped in side borders.
                 for (i, line) in visible.into_iter().enumerate() {
@@ -1074,10 +1244,28 @@ impl Renderable for DocumentReaderView {
                     }
                     let abs_line = offset as usize + i;
                     let is_changed = changed_from_rendered.is_some_and(|from| abs_line >= from);
-                    let is_selected =
-                        visual_range.is_some_and(|(s, e)| abs_line >= s && abs_line <= e);
-                    let bordered = if is_selected {
-                        render::bordered_line_selected(line, w)
+
+                    // Apply char-level selection highlight when inside the
+                    // visual selection range, then wrap in side borders.
+                    let bordered = if let Some((sl, sc, el, ec)) = sel_bounds {
+                        if abs_line >= sl && abs_line <= el {
+                            let line_text_len: usize =
+                                line.spans.iter().map(|s| s.content.len()).sum();
+                            let (col_start, col_end) = if sl == el {
+                                (sc.min(line_text_len), ec.min(line_text_len))
+                            } else if abs_line == sl {
+                                (sc.min(line_text_len), line_text_len)
+                            } else if abs_line == el {
+                                (0, ec.min(line_text_len))
+                            } else {
+                                (0, line_text_len)
+                            };
+                            let highlighted =
+                                render::apply_char_selection(line, col_start, col_end);
+                            render::bordered_line(highlighted, w, is_changed)
+                        } else {
+                            render::bordered_line(line, w, is_changed)
+                        }
                     } else {
                         render::bordered_line(line, w, is_changed)
                     };
@@ -1299,7 +1487,31 @@ impl Renderable for DocumentReaderView {
                 let x = area.x + 2 + 1 + self.search_input.len() as u16;
                 Some((x, search_y))
             }
-            ReaderFocus::Content => None,
+            ReaderFocus::Content => {
+                let fixed_top: u16 = 3; // top_border + header + separator
+                let offset = self.scroll_offset.get() as usize;
+                let cursor = self.cursor_line;
+                let content_h = self.last_content_height.get() as usize;
+                if cursor < offset || (content_h > 0 && cursor >= offset + content_h) {
+                    return None; // cursor not in visible viewport
+                }
+                let screen_y = area.y + fixed_top + (cursor - offset) as u16;
+                // Clamp cursor_col to the line's text length.
+                let inner_width = area.width.saturating_sub(4);
+                let line_len = self
+                    .sections
+                    .get(self.current_section)
+                    .map(|s| {
+                        let lines = s.rendered_lines(inner_width);
+                        lines.get(cursor).map_or(0, |l| {
+                            l.spans.iter().map(|sp| sp.content.len()).sum::<usize>()
+                        })
+                    })
+                    .unwrap_or(0);
+                let col = self.cursor_col.min(line_len);
+                let screen_x = area.x + 2 + col as u16; // +2 for "│ " border
+                Some((screen_x, screen_y))
+            }
         }
     }
 }
@@ -1378,13 +1590,20 @@ mod tests {
     }
 
     fn test_content() -> String {
-        "Introduction paragraph.\n\
+        "Introduction paragraph line one.\n\
+         Introduction paragraph line two.\n\
+         Introduction paragraph line three.\n\
+         Introduction paragraph line four.\n\
+         Introduction paragraph line five.\n\
          ## Methodology\n\
          Method details here.\n\
+         More method details.\n\
          ## Results\n\
          Result findings.\n\
+         More result findings.\n\
          ## Discussion\n\
-         Discussion text."
+         Discussion text.\n\
+         More discussion text."
             .to_string()
     }
 
@@ -1477,8 +1696,8 @@ mod tests {
         assert!(snap.contains("Test Report"), "title should be visible");
         assert!(snap.contains("1/4"), "section indicator should show 1/4");
         assert!(
-            snap.contains("navigate"),
-            "hints bar should show navigation keys"
+            snap.contains("move"),
+            "hints bar should show cursor movement keys"
         );
     }
 
@@ -1539,7 +1758,7 @@ mod tests {
         view.handle_content_key(key(KeyCode::Char('n')));
         assert_eq!(view.current_section, 1);
 
-        view.handle_content_key(key(KeyCode::Right));
+        view.handle_content_key(key(KeyCode::Char('n')));
         assert_eq!(view.current_section, 2);
 
         view.handle_content_key(key(KeyCode::PageDown));
@@ -1552,7 +1771,7 @@ mod tests {
         view.handle_content_key(key(KeyCode::Char('p')));
         assert_eq!(view.current_section, 2);
 
-        view.handle_content_key(key(KeyCode::Left));
+        view.handle_content_key(key(KeyCode::Char('p')));
         assert_eq!(view.current_section, 1);
 
         view.handle_content_key(key(KeyCode::PageUp));
@@ -1577,42 +1796,43 @@ mod tests {
     }
 
     #[test]
-    fn scroll_within_section() {
+    fn cursor_moves_within_section() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
 
-        assert_eq!(view.scroll_offset.get(), 0);
+        assert_eq!(view.cursor_line, 0);
 
         view.handle_content_key(key(KeyCode::Char('j')));
-        assert_eq!(view.scroll_offset.get(), 1);
+        assert_eq!(view.cursor_line, 1);
 
         view.handle_content_key(key(KeyCode::Down));
-        assert_eq!(view.scroll_offset.get(), 2);
+        assert_eq!(view.cursor_line, 2);
 
         view.handle_content_key(key(KeyCode::Char('k')));
-        assert_eq!(view.scroll_offset.get(), 1);
+        assert_eq!(view.cursor_line, 1);
 
         view.handle_content_key(key(KeyCode::Up));
-        assert_eq!(view.scroll_offset.get(), 0);
+        assert_eq!(view.cursor_line, 0);
 
         // Should not go below zero.
         view.handle_content_key(key(KeyCode::Char('k')));
-        assert_eq!(view.scroll_offset.get(), 0);
+        assert_eq!(view.cursor_line, 0);
     }
 
     #[test]
-    fn navigation_resets_scroll_offset() {
+    fn navigation_resets_cursor() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
 
         view.handle_content_key(key(KeyCode::Char('j')));
         view.handle_content_key(key(KeyCode::Char('j')));
-        assert_eq!(view.scroll_offset.get(), 2);
+        assert_eq!(view.cursor_line, 2);
 
-        // Navigate to next section — scroll should reset.
+        // Navigate to next section — cursor and scroll should reset.
         view.handle_content_key(key(KeyCode::Char('n')));
+        assert_eq!(view.cursor_line, 0);
         assert_eq!(view.scroll_offset.get(), 0);
         assert_eq!(view.current_section, 1);
     }
@@ -2094,7 +2314,10 @@ mod tests {
             .insert(1, ("test question".into(), Instant::now()));
         view.patch_section(1, "Method details here.", "Improved method details.");
 
-        assert_eq!(view.sections[1].content, "Improved method details.");
+        assert_eq!(
+            view.sections[1].content,
+            "Improved method details.\nMore method details."
+        );
         assert!(view.sections[1].recently_updated);
         assert!(!view.pending_sections.contains_key(&1));
     }
@@ -2130,7 +2353,7 @@ mod tests {
         );
         assert_eq!(
             view.sections[2].content,
-            "Improved result findings with more data."
+            "Improved result findings with more data.\nMore result findings."
         );
         assert!(view.sections[2].recently_updated);
     }

@@ -23,6 +23,7 @@ Unless the user asks for a different style, write explanations as a **self-conta
 - **Voice**: Use plain, direct language — simple words, short sentences, no academic stiffness. Use **second-person ("you") for procedural walkthroughs** of how the method works ("You take two frames from a video…", "You train an encoder-decoder system…"). Use **neutral third-person for framing, results, and analysis** ("LAPA tackles a fundamental bottleneck…", "The same codebook entries produce similar motions…"). Do NOT open problem statements with "You want to…" — that sounds like a tutorial, not a technical discussion.
 - **Define every technical term inline on first use** in plain language before using it further. If you mention "VQ-VAE", immediately explain what it is and why it matters — never assume the reader already knows.
 - **Never reference the KB in explanations.** The KB is infrastructure — the user cares about the paper, not where you stored it. Do not say "as summarized in your KB", "according to your KB card", or "the KB card for X says." Present explanations as if you understand the paper directly. The only time to mention KB cards is when the user explicitly asks about KB status, card IDs, or storage.
+- **No figure-reference sections.** The reading view is text-only — images and figures cannot be displayed. Never include sections like "Figure Pointers", "How to view figures", or "Key Figures" that tell the user to look at specific figures by number. Instead, describe what each important figure shows inline in the narrative (e.g., "The architecture diagram in the paper shows three stages connected by…"). This applies to `present_reading_view` content and chat explanations alike.
 - **Use concrete worked examples with specific numbers** to build intuition (e.g., "8 possible values × 4 positions = 4,096 latent actions"). Specificity builds intuition faster than abstraction. However, keep model variant names, exact tensor shapes, hyperparameter values, and architecture identifiers out of the narrative paragraphs — collect them in the Details block (see next rule).
 - **Details block at the end of each subsection.** After the narrative paragraphs of each subsection (each Stage, each major section), add a **Details:** line that collects reference specifics: model names and variants, exact dimensions and tensor shapes, hyperparameter values, tokenizer identifiers, layer counts, hidden dims, optimizer settings, etc. The narrative should be fully understandable without reading the Details block — it is a reference appendix for precision, not part of the conceptual flow. Example:
   > **Details:** Base model: Cosmos-Predict2-2B Video2World. Tokenizer: Wan2.1. Input: (1+T)×H×W×3 → (1+T')×H'×W'×16 (T'=T/4, H'=H/8, W'=W/8). Text encoder: T5-XXL.
@@ -47,24 +48,15 @@ For explain-style requests, always lead with conceptual clarity before formal de
 
 ### Mandatory Explanation Completion Contract
 
-**This contract applies to the main agent only.** When a subagent is executing paper-synthesis for a specific paper, it writes the KB card and returns — it does NOT invoke cross-paper-report. The main agent decides whether to run cross-paper-report after collecting all subagent results.
+**This contract applies to the main agent only.** Subagents write KB cards and return — they never invoke cross-paper-report or `present_reading_view`.
 
-When the user asks to **explain** a paper (or asks for understanding, deep dive, synthesis, comparison, or report), shallow chat-level summaries are forbidden.
+When the user asks to **explain** a paper (walkthrough, deep dive, understanding, synthesis), shallow chat-level summaries are forbidden. You MUST complete one of these paths:
 
-You MUST complete one of these end-to-end paths:
+1. **KB-first reuse** — Call `kb_status` and `kb_search` (in parallel) for matching paper cards (title, DOI, arXiv ID). If a card with a Deep Dive exists, read it via `kb_read_card` and present via `present_reading_view`. Done.
 
-1. **KB-first reuse path**
-   - Call `kb_status` and then search existing material:
-     - `kb_search` for matching paper cards (title, DOI, arXiv ID, aliases)
-     - `kb_read_file` for existing reports under `explanations/` when relevant names are found
-   - If a matching deep explanation/report exists, return that explanation to the user as the primary answer and cite the KB artifact path.
+2. **Synthesize path** — If no matching card exists, resolve the paper identifier (see Pre-Synthesis routing), launch a subagent to write the card, then read the new card via `kb_read_card` and present via `present_reading_view`. For multiple papers, launch subagents in parallel.
 
-2. **Synthesize-then-report path (required fallback)**
-   - If no matching deep explanation exists, run full `paper-synthesis` for the requested paper(s) to write/update paper cards.
-   - Then run `cross-paper-report` on the new card set to produce the full narrative + PDF.
-   - Return the full explanation output (not a short summary), and include path to the generated PDF: `explanations/<name>.pdf`
-
-Completion is blocked until one path above is finished. Do NOT stop after a brief inline explanation.
+Do NOT invoke cross-paper-report as part of paper-synthesis. Cross-paper-report is a separate skill the user triggers for explicit comparison requests. Do NOT stop after a brief inline explanation — completion requires `present_reading_view`.
 
 ## Execution: Use Subagents
 
@@ -103,18 +95,31 @@ The subagent does NOT need to return the full Type 1 + Type 2 text — that cont
 
 ### Main Agent Role
 
-The main agent's role is to orchestrate subagents and decide when to invoke cross-paper-report. Subagents NEVER invoke cross-paper-report — they only write KB cards.
+The main agent orchestrates subagents and handles presentation. Subagents write KB cards — they never produce final user-facing output or invoke cross-paper-report.
 
-1. Call `kb_status` to get `kb_path`
-2. **Read research context**: If `research-context.md` exists at the KB root (via `kb_read_file`), read the user's priorities. When constructing subagent prompts, include a note: "The user's research priorities are: [priorities from context]. Emphasize sections relevant to these priorities — e.g., if inference latency matters, spend more words on the inference pipeline and latency analysis." This biases per-paper depth toward what the user cares about without changing the synthesis structure.
-3. Resolve which papers to synthesize (search Zotero, resolve URLs, etc.)
-4. Construct complete subagent prompts with the full workflow above
-5. Launch subagents in parallel
-6. Collect subagent reports and tell the user:
-   - Which KB cards were written (card IDs and paths)
-   - Whether figures were extracted
-   - A brief per-paper highlight (from the subagent report)
-7. If the user intent is explanation/deep-dive/report: run the **cross-paper-report workflow** on the newly written cards (see below). This applies for both single-paper and multi-paper requests — cross-paper-report produces the full narrative walkthrough and LaTeX PDF that paper-synthesis subagents do not generate.
+#### Single-Paper Path
+
+When the user asks about ONE paper (explain, walkthrough, deep dive, summarize):
+
+1. Call `kb_status` and `kb_search` **in parallel** to check for an existing card.
+2. If a card with a Deep Dive exists → read it via `kb_read_card` → present via `present_reading_view` → **done, skip remaining steps.**
+3. Resolve the paper identifier using the Pre-Synthesis routing rules (see below). This produces a PDF URL, DOI, or arXiv ID. **Do NOT search Zotero unless the user explicitly mentions Zotero or their library.**
+4. Launch ONE subagent with the standard template (see Subagent Prompt Construction). Include the resolved identifier and `kb_path`.
+5. When the subagent returns, read the newly written card via `kb_read_card`.
+6. Present the Deep Dive content via `present_reading_view`. Title: the paper name (never card IDs or "KB" references).
+
+This path should complete in 3–4 tool-call round-trips in the main agent. Do NOT add unnecessary calls (no `zotero_get_collections`, no `paper_search` alongside `zotero_search`, no reading the SKILL.md via shell commands).
+
+#### Multi-Paper Path
+
+When the user asks about MULTIPLE papers or a broad topic:
+
+1. Call `kb_status` and `kb_search` for each paper **in parallel**. Optionally read `research-context.md` in the same parallel batch to tailor subagent prompts toward user priorities.
+2. For papers that already have cards, skip synthesis. Only synthesize papers that lack cards.
+3. Resolve identifiers for missing papers using Pre-Synthesis routing.
+4. Launch one subagent per missing paper, **in parallel**.
+5. Collect subagent reports and tell the user which cards were written and a brief highlight per paper.
+6. If the user wants comparison, suggest `$cross-paper-report` as a follow-up. Do NOT run it automatically.
 
 #### After Synthesis: Interactive Workflow
 
@@ -124,25 +129,43 @@ After synthesis is complete and the user starts chatting about the papers, the K
 - **`$research-briefing`** — When the user wants a quick orientation of multiple papers before diving deep, suggest this as an alternative to cross-paper-report. Produces a concise 2-4 page overview.
 - **`$conversation-report`** — When the user has been chatting about papers and wants to capture the discussion as a document, suggest this. It organizes the conversation's Q&A into a focused report.
 
-### Cross-Paper Synthesis via cross-paper-report
+#### Post-Reading-View: Persist Follow-Up Insights
 
-After all subagents complete, run the full `cross-paper-report` skill on the set of newly written KB cards. This applies to both multi-paper comparisons and single-paper explanation requests. It produces a much richer output than an inline explanation — it generates:
+When the user asks follow-up questions inside the reading view (via `append_to_section`), those answers are added to the ephemeral reading view document — they are not automatically saved to the KB card. The reading view is a display surface, not storage.
 
-1. **Deep narrative explanation** per card (800-2500 words each) with architecture deep dives, training pipeline walkthroughs, key equations, and analogies
-2. **Cross-card comparative synthesis** tracing shared ideas, divergences, architecture/training differences, and field trajectory
-3. **LaTeX PDF** with TikZ diagrams compiled via `latex_compile`
+When the user exits the reading view and returns to the main conversation:
+
+1. **Check if the reading view Q&A produced insights not already in the KB card.** Typical examples: the user asked "how does X handle Y?" and got a targeted explanation, or asked about a specific failure mode, or asked for a comparison with another method.
+2. **If yes, offer to update the KB card:** "The questions you asked about [topics] produced explanations not in the original card. Want me to add them to the card's Discussion Notes so they're available next time?"
+3. **If the user agrees, use the `$kb-update` protocol** — read the card, append the follow-up insights under Discussion Notes with today's date, write the card back.
+
+This is lightweight and non-blocking — if the user moves on to a different topic, don't interrupt. But if there's a natural pause or the user explicitly returns from the reading view, this is the moment to offer.
+
+### Cross-Paper Comparison (Optional, Multi-Paper Only)
+
+When the user explicitly asks to **compare** multiple papers or wants a **cross-paper report**, suggest running the `cross-paper-report` skill after synthesis is complete. This is a separate skill — never a mandatory follow-up to paper-synthesis.
+
+Cross-paper-report produces:
+1. **Deep comparative narrative** tracing shared ideas, divergences, and field trajectory
+2. **LaTeX PDF** with TikZ diagrams compiled via `latex_compile`
 
 To trigger this, launch a subagent with the following prompt:
 
 > Invoke the `cross-paper-report` skill for cards `paper-lapa` and `paper-groot-n1`. The KB path is `/path/to/knowledge-base`. Follow the skill's full workflow — both deliverables (narrative + PDF) are mandatory.
 
-The Skill tool loads the full cross-paper-report instructions automatically. Do NOT manually reconstruct the cross-paper-report workflow in the subagent prompt.
-
-Do NOT attempt to produce the explanation or comparison yourself inline — the cross-paper-report workflow handles it with far more depth, structure, and visual output (TikZ diagrams, properly typeset PDF).
+Do NOT run cross-paper-report for single-paper explanation requests. The KB card's Deep Dive (1000-2500 words) is the explanation — presenting it via `present_reading_view` is sufficient.
 
 ## Pre-Synthesis: Obtain the Full Paper
 
-Before synthesizing, always attempt to read the full paper text. Choose the path that matches the user's input.
+Before synthesizing, always attempt to read the full paper text. Choose **exactly one** path based on what the user provided.
+
+**Route selection (choose ONE — do NOT call tools from multiple paths):**
+
+- **User gave a URL** (arXiv link, DOI link, PDF URL) → **Path A**. Use the URL directly.
+- **User gave a paper title or author names** (no URL, no Zotero mention) → Use `paper_search` to find the arXiv ID or DOI, then **Path A**.
+- **User mentions Zotero, a collection, or "my library"** → **Path B**.
+
+Do NOT call `zotero_search` or `zotero_get_collections` unless the user explicitly references Zotero. Do NOT call both `paper_search` and `zotero_search` for the same paper.
 
 **CRITICAL: Never use shell commands to download or extract PDF text.** Do NOT use `curl`, `wget`, `pdftotext`, `pdfimages`, `python` scripts, or any other Bash-based approach to fetch or convert PDFs. The model can read PDFs natively when they are attached via `attach_url_files`. Shell-based text extraction loses figures, tables, formatting, and mathematical notation — it is strictly inferior and is forbidden.
 
@@ -155,7 +178,7 @@ Before synthesizing, always attempt to read the full paper text. Choose the path
 
 ### Path B: Zotero (when user mentions Zotero, a collection, or their library)
 
-1. Use `zotero_search` to find the paper(s) by title, author, or topic. Also call `zotero_get_collections` to check if a collection matches the topic — if so, use `zotero_get_collection_items` to retrieve its contents. If the user names a specific collection, use `zotero_get_collection_items` directly.
+1. Use `zotero_search` to find the paper(s) by title, author, or topic. Only call `zotero_get_collections` if the user names a specific collection — do NOT scan all collections speculatively. If the user names a collection, use `zotero_get_collection_items` directly.
 2. For each paper found, call `zotero_get_item` with `include_attachments=true` and `include_fulltext_resolution=true`.
 3. If `document_resolution.preferred_url` (PDF URL) is present, fetch the paper with `attach_url_files` and treat that attached document as the primary source (this preserves figures/tables). After `attach_url_files` succeeds, the PDF content is injected into your conversation context automatically — you can read and analyze it immediately. Do not search for a downloaded file on disk or use shell commands to extract text.
 4. If no URL is available but `document_resolution.local_path` is present, use that local PDF path as the primary source.
@@ -163,7 +186,7 @@ Before synthesizing, always attempt to read the full paper text. Choose the path
 6. Optionally call `zotero_get_notes` to retrieve the user's annotations and highlights — weave these into the synthesis where relevant (e.g. "The authors note X, which the reader flagged as particularly relevant because...").
 7. If neither `preferred_url` nor `local_path` is available, stop and report this as a Zotero metadata inconsistency instead of switching to indexed fulltext.
 
-When the user asks to analyze multiple papers from Zotero (e.g. "synthesize my Zotero collection on diffusion"), launch one subagent per paper in parallel. After all subagents complete, run the `cross-paper-report` skill on the newly written cards to produce the full cross-paper synthesis with narrative prose, markdown, and LaTeX PDF.
+When the user asks to analyze multiple papers from Zotero (e.g. "synthesize my Zotero collection on diffusion"), launch one subagent per paper in parallel. After all subagents complete, present summaries and suggest `$cross-paper-report` if the user wants a comparative deep dive.
 
 ## Type 1: Structured Summary
 
