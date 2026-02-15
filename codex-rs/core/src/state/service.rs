@@ -15,6 +15,7 @@ use crate::models_manager::manager::ModelsManager;
 use crate::research::SharedResearchToolkit;
 use crate::skills::SkillsManager;
 use crate::state_db::StateDbHandle;
+use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_api::file_support::FileReferenceCache;
@@ -49,6 +50,7 @@ pub(crate) struct SessionServices {
     pub(crate) file_watcher: Arc<FileWatcher>,
     pub(crate) agent_control: AgentControl,
     pub(crate) network_proxy: Option<StartedNetworkProxy>,
+    pub(crate) network_approval: Arc<NetworkApprovalService>,
     pub(crate) state_db: Option<StateDbHandle>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
