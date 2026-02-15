@@ -35,6 +35,13 @@ pub(crate) fn spawn_end(ev: CollabAgentSpawnEndEvent) -> PlainHistoryCell {
         detail_line("agent", new_agent),
         status_line(&status),
     ];
+    if let AgentStatus::Errored(error) = &status {
+        let error_preview = truncate_text(
+            &error.split_whitespace().collect::<Vec<_>>().join(" "),
+            COLLAB_AGENT_ERROR_PREVIEW_GRAPHEMES,
+        );
+        details.push(detail_line("error", Span::from(error_preview).dim()));
+    }
     if let Some(line) = prompt_line(&prompt) {
         details.push(line);
     }

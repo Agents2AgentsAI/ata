@@ -42,12 +42,13 @@ async fn responses_mode_stream_cli() {
 
     let home = TempDir::new().unwrap();
     let provider_override = format!(
-        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"responses\" }}",
+        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"OPENAI_API_KEY\", wire_api = \"responses\" }}",
         server.uri()
     );
     let bin = cached_ata_bin().unwrap();
     let mut cmd = AssertCommand::new(bin);
-    cmd.timeout(Duration::from_secs(30));
+    // Allow extra slack when running under parallel test load on developer machines.
+    cmd.timeout(Duration::from_secs(60));
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         // Avoid keyring prompts/latency in CI by forcing file-backed auth storage.
@@ -61,6 +62,9 @@ async fn responses_mode_stream_cli() {
         .arg(&repo_root)
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
+        // Keep skill discovery hermetic; otherwise `$HOME/.agents/skills` can add
+        // unpredictable latency on developer machines.
+        .env("HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
 
@@ -128,7 +132,7 @@ async fn exec_cli_applies_model_instructions_file() {
     // Build a provider override that points at the mock server and instructs
     // Codex to use the Responses API with the dummy env var.
     let provider_override = format!(
-        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"responses\" }}",
+        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"OPENAI_API_KEY\", wire_api = \"responses\" }}",
         server.uri()
     );
 
@@ -151,6 +155,7 @@ async fn exec_cli_applies_model_instructions_file() {
         .arg(&repo_root)
         .arg("hello?\n");
     cmd.env("CODEX_HOME", home.path())
+        .env("HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
 
@@ -197,6 +202,7 @@ async fn responses_api_stream_cli() {
         .arg(&repo_root)
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
+        .env("HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", fixture)
         .env("OPENAI_BASE_URL", "http://unused.local");
@@ -233,6 +239,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .arg(&repo_root)
         .arg(&prompt);
     cmd.env("CODEX_HOME", home.path())
+        .env("HOME", home.path())
         .env(CODEX_API_KEY_ENV_VAR, "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
         // Required for CLI arg parsing even though fixture short-circuits network usage.
@@ -356,6 +363,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .arg("resume")
         .arg("--last");
     cmd2.env("CODEX_HOME", home.path())
+        .env("HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
         .env("OPENAI_BASE_URL", "http://unused.local");
