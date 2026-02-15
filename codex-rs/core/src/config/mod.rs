@@ -2906,9 +2906,16 @@ profile = "project"
                 ..Default::default()
             };
 
+            // Ensure the test is hermetic even if other providers are configured
+            // via environment variables on the developer machine.
+            let overrides = ConfigOverrides {
+                model_provider: Some(PROVIDER_OPENAI.to_string()),
+                ..ConfigOverrides::default()
+            };
+
             let config = Config::load_from_base_config_with_overrides(
                 cfg,
-                ConfigOverrides::default(),
+                overrides,
                 codex_home.path().to_path_buf(),
             )?;
 

@@ -263,7 +263,8 @@ async fn resolve_file_inputs_for_uploads(
         warnings: Vec::new(),
     });
 
-    let (provider_id, capabilities) = file_capabilities_for_provider(provider, config.model.as_deref());
+    let (provider_id, capabilities) =
+        file_capabilities_for_provider(provider, config.model.as_deref());
     if !capabilities.supports_pdf {
         tracing::debug!("skipping file uploads: provider does not support PDF");
         return empty;
@@ -399,7 +400,9 @@ fn prepare_file_inputs(
         )
     });
     if has_file_input && !capabilities.supports_pdf {
-        return Err(FileInputPreparationError::UnsupportedProvider { provider: provider_id });
+        return Err(FileInputPreparationError::UnsupportedProvider {
+            provider: provider_id,
+        });
     }
 
     let max_total_raw_bytes = max_raw_inline_bytes(capabilities.max_inline_payload_bytes);
@@ -599,7 +602,9 @@ pub(super) async fn refresh_uploaded_file_references(
         .flatten()
     else {
         if requires_provider_switch_refresh {
-            return Err(FileReferenceRefreshError::MissingApiKey { provider: provider_id });
+            return Err(FileReferenceRefreshError::MissingApiKey {
+                provider: provider_id,
+            });
         }
         warn!(
             provider_id = %provider_id,
@@ -610,7 +615,9 @@ pub(super) async fn refresh_uploaded_file_references(
 
     let Some(upload_service) = upload_service_for_provider(&provider_id) else {
         if requires_provider_switch_refresh {
-            return Err(FileReferenceRefreshError::MissingUploadService { provider: provider_id });
+            return Err(FileReferenceRefreshError::MissingUploadService {
+                provider: provider_id,
+            });
         }
         warn!(
             provider_id = %provider_id,
@@ -791,7 +798,10 @@ mod tests {
         let provider = ModelProviderInfo::create_gemini_provider();
         let err = prepare_file_inputs(&[UserInput::LocalFile { path }], &provider, None)
             .expect_err("gemini inline limit should reject 21MB file");
-        assert!(matches!(err, FileInputPreparationError::InlineFileTooLarge { .. }));
+        assert!(matches!(
+            err,
+            FileInputPreparationError::InlineFileTooLarge { .. }
+        ));
     }
 
     #[test]
@@ -820,7 +830,10 @@ mod tests {
             None,
         )
         .expect_err("gemini inline payload budget should reject 16MB raw payload");
-        assert!(matches!(err, FileInputPreparationError::InlinePayloadTooLarge { .. }));
+        assert!(matches!(
+            err,
+            FileInputPreparationError::InlinePayloadTooLarge { .. }
+        ));
     }
 
     #[tokio::test]
