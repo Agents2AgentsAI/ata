@@ -28,6 +28,7 @@ codex-cloud-tasks = { path = "../cloud-tasks" }
 codex-utils-cli = { workspace = true }
 codex-core = { workspace = true }
 codex-exec = { workspace = true }
+codex-research-tools = { workspace = true, optional = true }
 codex-execpolicy = { workspace = true }
 codex-login = { workspace = true }
 codex-mcp-server = { workspace = true }
@@ -63,7 +64,7 @@ research-latex = ["codex-core/research-latex"]
 research-pdf-images = ["codex-core/research-pdf-images"]
 research-patents = ["codex-core/research-patents"]
 research-repo = ["codex-core/research-repo"]
-research-all = ["data", "kb", "research-hackernews", "research-latex", "research-patents", "research-pdf-images", "research-repo"]
+research-all = ["data", "kb", "research-hackernews", "research-latex", "research-patents", "research-pdf-images", "research-repo", "dep:codex-research-tools", "codex-research-tools/latex", "codex-research-tools/pdf_images"]
 
 [dev-dependencies]
 assert_cmd = { workspace = true }

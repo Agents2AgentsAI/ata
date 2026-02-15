@@ -39,6 +39,8 @@ mod app_cmd;
 mod desktop_app;
 mod mcp_cmd;
 mod research;
+#[cfg(feature = "research-all")]
+mod setup_research;
 #[cfg(not(windows))]
 mod wsl_paths;
 
@@ -147,6 +149,11 @@ enum Subcommand {
     /// Internal: relay stdio to a Unix domain socket.
     #[clap(hide = true, name = "stdio-to-uds")]
     StdioToUds(StdioToUdsCommand),
+
+    /// Check and install research tool dependencies (pdflatex, java, poppler, pdffigures2).
+    #[cfg(feature = "research-all")]
+    #[clap(name = "setup-research")]
+    SetupResearch(setup_research::SetupResearchArgs),
 
     /// Inspect feature flags.
     Features(FeaturesCli),
@@ -824,6 +831,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             let socket_path = cmd.socket_path;
             tokio::task::spawn_blocking(move || codex_stdio_to_uds::run(socket_path.as_path()))
                 .await??;
+        }
+        #[cfg(feature = "research-all")]
+        Some(Subcommand::SetupResearch(args)) => {
+            setup_research::run(args).await?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {

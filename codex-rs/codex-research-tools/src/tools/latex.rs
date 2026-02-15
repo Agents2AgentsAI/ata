@@ -45,8 +45,16 @@ const TLMGR_CANDIDATE_PATHS: &[&str] = &[
     "/Library/TeX/texbin/tlmgr",
 ];
 
+/// Probe for a working `pdflatex` binary without installing anything.
+pub(crate) async fn probe_engine() -> Option<PathBuf> {
+    if super::system_deps::is_on_path(ENGINE).await {
+        return Some(PathBuf::from(ENGINE));
+    }
+    super::system_deps::find_in_well_known_paths(PDFLATEX_CANDIDATE_PATHS)
+}
+
 /// Locate a working `pdflatex` binary, auto-installing if necessary.
-async fn find_engine() -> Result<PathBuf> {
+pub(crate) async fn find_engine() -> Result<PathBuf> {
     // 1. Check $PATH.
     if super::system_deps::is_on_path(ENGINE).await {
         return Ok(PathBuf::from(ENGINE));
@@ -156,7 +164,7 @@ fn extract_missing_packages(log: &str) -> Vec<String> {
 }
 
 /// Locate `tlmgr` on `$PATH` or at well-known paths.
-async fn find_tlmgr() -> Option<PathBuf> {
+pub(crate) async fn find_tlmgr() -> Option<PathBuf> {
     if super::system_deps::is_on_path("tlmgr").await {
         return Some(PathBuf::from("tlmgr"));
     }

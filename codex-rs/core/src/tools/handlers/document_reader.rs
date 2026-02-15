@@ -175,9 +175,19 @@ pub static PRESENT_DOCUMENT_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
                        sections — paper walkthroughs, deep dives, research briefings, organized \
                        reports, or any long-form content (roughly 500+ words) with ## headings. \
                        Do NOT use this for short answers, confirmations, or conversational \
-                       replies. After calling this tool, end your response and wait for user \
-                       interaction. To re-display a previously presented document (with all \
-                       section updates intact), pass only the document_id."
+                       replies. IMPORTANT: Never mention 'KB', 'knowledge base', 'card', or \
+                       'card ID' in the title or content — the user cares about the subject \
+                       matter, not internal storage. Use the paper/topic name as the title \
+                       (e.g. 'Cosmos Policy Walkthrough', not 'KB Walkthrough: paper-cosmos-policy'). \
+                       Write as if you understand the material directly, not as if you are \
+                       reading from a database entry. FIGURES: The reading view is text-only — \
+                       images and figures cannot be displayed. Never include sections like \
+                       'Figure Pointers' or 'How to view figures' that tell the user to look \
+                       at specific figures. Instead, describe what each important figure shows \
+                       inline in the narrative (e.g. 'The architecture diagram shows three \
+                       stages connected by…'). After calling this tool, end your response \
+                       and wait for user interaction. To re-display a previously presented \
+                       document (with all section updates intact), pass only the document_id."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {

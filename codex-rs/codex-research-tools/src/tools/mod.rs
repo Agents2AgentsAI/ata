@@ -12,6 +12,8 @@ pub(crate) mod patents;
 pub(crate) mod pdf_images;
 #[cfg(feature = "repo_analysis")]
 pub(crate) mod repo_analysis;
+#[cfg(all(feature = "latex", feature = "pdf_images"))]
+pub mod setup;
 #[cfg(any(feature = "pdf_images", feature = "latex"))]
 pub(crate) mod system_deps;
 #[cfg(test)]
