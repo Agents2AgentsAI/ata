@@ -1688,6 +1688,7 @@ dependencies = [
  "codex-file-search",
  "codex-git",
  "codex-hooks",
+ "codex-kb",
  "codex-keyring-store",
  "codex-network-proxy",
  "codex-otel",
@@ -1995,19 +1996,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-kb-mcp"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "clap",
- "codex-kb",
- "rmcp",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "codex-keyring-store"
 version = "0.0.0"
 dependencies = [
@@ -2191,6 +2179,7 @@ dependencies = [
  "codex-git",
  "codex-utils-absolute-path",
  "codex-utils-file",
+ "codex-utils-home-dir",
  "codex-utils-image",
  "icu_decimal",
  "icu_locale_core",
@@ -2215,8 +2204,10 @@ dependencies = [
 name = "codex-research-tools"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "chrono",
  "dashmap",
+ "dirs",
  "flate2",
  "futures",
  "lru 0.16.3",

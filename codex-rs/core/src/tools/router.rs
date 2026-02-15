@@ -3,6 +3,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::data::SharedDataToolkit;
 use crate::function_tool::FunctionCallError;
+use crate::kb::SharedKbToolkit;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::research::SharedResearchToolkit;
 use crate::sandboxing::SandboxPermissions;
@@ -57,6 +58,7 @@ impl ToolRouter {
         Self { registry, specs }
     }
 
+    #[allow(dead_code)]
     pub fn from_config_with_research(
         config: &ToolsConfig,
         mcp_tools: Option<HashMap<String, Tool>>,
@@ -87,8 +89,9 @@ impl ToolRouter {
         dynamic_tools: &[DynamicToolSpec],
         research_toolkit: Option<&Arc<SharedResearchToolkit>>,
         data_toolkit: Option<&Arc<SharedDataToolkit>>,
+        kb_toolkit: Option<&Arc<SharedKbToolkit>>,
     ) -> Self {
-        if data_toolkit.is_none() {
+        if data_toolkit.is_none() && kb_toolkit.is_none() {
             return Self::from_config_with_research(
                 config,
                 mcp_tools,
@@ -105,6 +108,7 @@ impl ToolRouter {
             dynamic_tools,
             research_toolkit,
             data_toolkit,
+            kb_toolkit,
         );
         let (specs, registry) = builder.build();
 

@@ -368,7 +368,11 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::CollabCloseEnd(_)
                     | EventMsg::CollabResumeBegin(_)
                     | EventMsg::CollabResumeEnd(_)
-                    | EventMsg::DeprecationNotice(_) => {
+                    | EventMsg::DeprecationNotice(_)
+                    | EventMsg::PresentDocument(_)
+                    | EventMsg::UpdateDocumentSection(_)
+                    | EventMsg::AppendDocumentSection(_)
+                    | EventMsg::PatchDocumentSection(_) => {
                         // For now, we do not do anything extra for these
                         // events. Note that
                         // send(codex_event_to_notification(&event)) above has

@@ -190,6 +190,52 @@ pub(crate) async fn get_relations(
     })
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct SemanticScholarRecommendationRequest {
+    pub positive_paper_ids: Vec<String>,
+    pub negative_paper_ids: Vec<String>,
+    pub limit: u32,
+    pub include_abstract: bool,
+}
+
+pub(crate) async fn get_recommendations(
+    http: &HttpClient,
+    config: SemanticScholarConfig<'_>,
+    request: &SemanticScholarRecommendationRequest,
+) -> Result<Vec<Paper>> {
+    let fields = paper_fields(request.include_abstract);
+
+    let url = format!(
+        "{base_url}/recommendations/v1/papers/?fields={fields}&limit={limit}",
+        base_url = config.base_url.trim_end_matches("/graph/v1"),
+        fields = urlencoding::encode(fields),
+        limit = request.limit,
+    );
+
+    let body = serde_json::json!({
+        "positivePaperIds": request.positive_paper_ids,
+        "negativePaperIds": request.negative_paper_ids,
+    });
+
+    let response: SemanticScholarRecommendationResponse = http
+        .execute_json(ResearchApi::SemanticScholar, || {
+            let mut req = http.client().post(&url).json(&body);
+            if let Some(api_key) = config.api_key {
+                req = req.header("x-api-key", api_key);
+            }
+            req
+        })
+        .await?;
+
+    let papers = response
+        .recommended_papers
+        .into_iter()
+        .map(|paper| map_paper(paper, &url, SOURCE_SEMANTIC_SCHOLAR))
+        .collect();
+
+    Ok(papers)
+}
+
 fn paper_fields(include_abstract: bool) -> &'static str {
     if include_abstract {
         PAPER_FIELDS_WITH_ABSTRACT
@@ -348,6 +394,12 @@ struct SemanticScholarExternalIds {
     doi: Option<String>,
     #[serde(rename = "ArXiv", alias = "arxiv")]
     arxiv_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SemanticScholarRecommendationResponse {
+    #[serde(rename = "recommendedPapers")]
+    recommended_papers: Vec<SemanticScholarPaper>,
 }
 
 #[derive(Debug, Deserialize)]

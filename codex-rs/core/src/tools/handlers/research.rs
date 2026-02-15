@@ -7,9 +7,14 @@ use async_trait::async_trait;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_research_tools::config::ResearchConfig;
 use codex_research_tools::error::ResearchError;
+#[cfg(feature = "research-hackernews")]
+use codex_research_tools::types::HnGetThreadParams;
+#[cfg(feature = "research-hackernews")]
+use codex_research_tools::types::HnSearchParams;
 #[cfg(feature = "research-latex")]
 use codex_research_tools::types::LatexCompileParams;
 use codex_research_tools::types::PaginationParams;
+use codex_research_tools::types::PaperRecommendationParams;
 use codex_research_tools::types::PaperSearchParams;
 #[cfg(feature = "research-pdf-images")]
 use codex_research_tools::types::PdfExtractFiguresParams;
@@ -118,6 +123,11 @@ impl ResearchBridgeHandler {
                     },
                 ))
             }
+            "paper_recommendations" => {
+                dispatch_with_params!(PaperRecommendationParams, |params| self
+                    .toolkit
+                    .paper_recommendations(params))
+            }
             "zotero_search" => dispatch_with_params!(ZoteroSearchParams, |params| self
                 .toolkit
                 .zotero_search(params)),
@@ -177,6 +187,14 @@ impl ResearchBridgeHandler {
             "latex_compile" => dispatch_with_params!(LatexCompileParams, |params| self
                 .toolkit
                 .latex_compile(params)),
+            #[cfg(feature = "research-hackernews")]
+            "hn_search" => {
+                dispatch_with_params!(HnSearchParams, |params| self.toolkit.hn_search(params))
+            }
+            #[cfg(feature = "research-hackernews")]
+            "hn_get_thread" => dispatch_with_params!(HnGetThreadParams, |params| self
+                .toolkit
+                .hn_get_thread(params)),
             #[cfg(feature = "research-pdf-images")]
             "pdf_extract_figures" => {
                 dispatch_with_params!(PdfExtractFiguresParams, |params| self

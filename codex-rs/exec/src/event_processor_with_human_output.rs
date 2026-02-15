@@ -800,7 +800,11 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::RequestUserInput(_)
             | EventMsg::CollabResumeBegin(_)
             | EventMsg::CollabResumeEnd(_)
-            | EventMsg::DynamicToolCallRequest(_) => {}
+            | EventMsg::DynamicToolCallRequest(_)
+            | EventMsg::PresentDocument(_)
+            | EventMsg::UpdateDocumentSection(_)
+            | EventMsg::AppendDocumentSection(_)
+            | EventMsg::PatchDocumentSection(_) => {}
         }
         CodexStatus::Running
     }

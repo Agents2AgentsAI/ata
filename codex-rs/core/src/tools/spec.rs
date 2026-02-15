@@ -8,12 +8,19 @@ use crate::data::SharedDataToolkit;
 use crate::data::tool_names::find_mcp_tool_matches as find_mcp_data_tool_matches;
 use crate::features::Feature;
 use crate::features::Features;
+use crate::kb::SharedKbToolkit;
+#[cfg(feature = "kb")]
+use crate::kb::tool_names::find_mcp_tool_matches as find_mcp_kb_tool_matches;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::research::SharedResearchToolkit;
 #[cfg(feature = "research")]
 use crate::research::tool_names::find_mcp_tool_matches;
+use crate::tools::handlers::APPEND_TO_SECTION_TOOL;
+use crate::tools::handlers::PATCH_DOCUMENT_SECTION_TOOL;
 use crate::tools::handlers::PLAN_TOOL;
+use crate::tools::handlers::PRESENT_DOCUMENT_TOOL;
 use crate::tools::handlers::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
+use crate::tools::handlers::UPDATE_DOCUMENT_SECTION_TOOL;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::attach_url_files::register_attach_url_files;
@@ -33,7 +40,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
-#[cfg(any(feature = "research", feature = "data"))]
+#[cfg(any(feature = "research", feature = "data", feature = "kb"))]
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -1328,6 +1335,19 @@ fn data_tool_to_openai_tool(
     })
 }
 
+#[cfg(feature = "kb")]
+fn kb_tool_to_openai_tool(
+    tool: &codex_kb::tool_specs::ToolDef,
+) -> Result<ResponsesApiTool, serde_json::Error> {
+    let input_schema = parse_tool_input_schema(&tool.input_schema)?;
+    Ok(ResponsesApiTool {
+        name: tool.native_name.to_string(),
+        description: tool.description.to_string(),
+        strict: false,
+        parameters: input_schema,
+    })
+}
+
 /// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
 /// JsonSchema enum. This function:
 /// - Ensures every schema object has a "type". If missing, infers it from
@@ -1446,9 +1466,18 @@ pub(crate) fn build_specs(
     app_tools: Option<HashMap<String, ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
-    build_specs_with_toolkits(config, mcp_tools, app_tools, dynamic_tools, None, None)
+    build_specs_with_toolkits(
+        config,
+        mcp_tools,
+        app_tools,
+        dynamic_tools,
+        None,
+        None,
+        None,
+    )
 }
 
+#[allow(dead_code)]
 pub(crate) fn build_specs_with_research(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
@@ -1463,6 +1492,7 @@ pub(crate) fn build_specs_with_research(
         dynamic_tools,
         research_toolkit,
         None,
+        None,
     )
 }
 
@@ -1473,20 +1503,26 @@ pub(crate) fn build_specs_with_toolkits(
     dynamic_tools: &[DynamicToolSpec],
     research_toolkit: Option<&Arc<SharedResearchToolkit>>,
     data_toolkit: Option<&Arc<SharedDataToolkit>>,
+    kb_toolkit: Option<&Arc<SharedKbToolkit>>,
 ) -> ToolRegistryBuilder {
     #[cfg(not(feature = "research"))]
     let _ = research_toolkit;
     #[cfg(not(feature = "data"))]
     let _ = data_toolkit;
+    #[cfg(not(feature = "kb"))]
+    let _ = kb_toolkit;
 
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::CollabHandler;
     #[cfg(feature = "data")]
     use crate::tools::handlers::DataBridgeHandler;
+    use crate::tools::handlers::DocumentReaderHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
     use crate::tools::handlers::JsReplResetHandler;
+    #[cfg(feature = "kb")]
+    use crate::tools::handlers::KbBridgeHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
@@ -1507,6 +1543,7 @@ pub(crate) fn build_specs_with_toolkits(
     let shell_handler = Arc::new(ShellHandler);
     let unified_exec_handler = Arc::new(UnifiedExecHandler);
     let plan_handler = Arc::new(PlanHandler);
+    let document_reader_handler = Arc::new(DocumentReaderHandler::new());
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let dynamic_tool_handler = Arc::new(DynamicToolHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
@@ -1565,6 +1602,15 @@ pub(crate) fn build_specs_with_toolkits(
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
+
+    builder.push_spec(PRESENT_DOCUMENT_TOOL.clone());
+    builder.push_spec(UPDATE_DOCUMENT_SECTION_TOOL.clone());
+    builder.push_spec(APPEND_TO_SECTION_TOOL.clone());
+    builder.push_spec(PATCH_DOCUMENT_SECTION_TOOL.clone());
+    builder.register_handler("present_document", document_reader_handler.clone());
+    builder.register_handler("update_document_section", document_reader_handler.clone());
+    builder.register_handler("append_to_section", document_reader_handler.clone());
+    builder.register_handler("patch_document_section", document_reader_handler);
 
     if config.js_repl_enabled {
         builder.push_spec(create_js_repl_tool());
@@ -1742,6 +1788,40 @@ pub(crate) fn build_specs_with_toolkits(
         }
     }
 
+    #[cfg(feature = "kb")]
+    let mut suppressed_mcp_kb_tool_names: BTreeSet<String> = BTreeSet::new();
+
+    #[cfg(feature = "kb")]
+    if let Some(toolkit) = kb_toolkit {
+        let kb_handler = Arc::new(KbBridgeHandler::new(Arc::clone(toolkit)));
+        let discovered_mcp_tools: BTreeMap<String, rmcp::model::Tool> = mcp_tools
+            .as_ref()
+            .map(|tools| {
+                tools
+                    .iter()
+                    .map(|(name, tool)| (name.clone(), tool.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        for def in codex_kb::tool_specs::all_tool_defs() {
+            let matching_mcp_tools = find_mcp_kb_tool_matches(def.mcp_name, &discovered_mcp_tools);
+            match kb_tool_to_openai_tool(&def) {
+                Ok(converted_tool) => {
+                    builder.push_spec(ToolSpec::Function(converted_tool));
+                    builder.register_handler(def.native_name, kb_handler.clone());
+                    suppressed_mcp_kb_tool_names.extend(matching_mcp_tools);
+                }
+                Err(err) => {
+                    tracing::error!(
+                        tool_name = def.native_name,
+                        "failed to convert native kb tool schema: {err}"
+                    );
+                }
+            }
+        }
+    }
+
     if let Some(mcp_tools) = mcp_tools {
         let mut entries: Vec<(String, rmcp::model::Tool)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1753,6 +1833,10 @@ pub(crate) fn build_specs_with_toolkits(
             }
             #[cfg(feature = "data")]
             if suppressed_mcp_data_tool_names.contains(&name) {
+                continue;
+            }
+            #[cfg(feature = "kb")]
+            if suppressed_mcp_kb_tool_names.contains(&name) {
                 continue;
             }
             match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {
@@ -2056,6 +2140,10 @@ mod tests {
             create_list_mcp_resource_templates_tool(),
             create_read_mcp_resource_tool(),
             PLAN_TOOL.clone(),
+            PRESENT_DOCUMENT_TOOL.clone(),
+            UPDATE_DOCUMENT_SECTION_TOOL.clone(),
+            APPEND_TO_SECTION_TOOL.clone(),
+            PATCH_DOCUMENT_SECTION_TOOL.clone(),
             create_request_user_input_tool(),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {
@@ -2341,6 +2429,10 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "present_document",
+                "update_document_section",
+                "append_to_section",
+                "patch_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2364,6 +2456,10 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "present_document",
+                "update_document_section",
+                "append_to_section",
+                "patch_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2389,6 +2485,10 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "present_document",
+                "update_document_section",
+                "append_to_section",
+                "patch_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2414,6 +2514,10 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "present_document",
+                "update_document_section",
+                "append_to_section",
+                "patch_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2437,6 +2541,10 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "present_document",
+                "update_document_section",
+                "append_to_section",
+                "patch_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2460,6 +2568,10 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "present_document",
+                "update_document_section",
+                "append_to_section",
+                "patch_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2483,6 +2595,10 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "present_document",
+                "update_document_section",
+                "append_to_section",
+                "patch_document_section",
                 "request_user_input",
                 "web_search",
                 "view_image",
@@ -2505,6 +2621,10 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "present_document",
+                "update_document_section",
+                "append_to_section",
+                "patch_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2530,6 +2650,10 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "present_document",
+                "update_document_section",
+                "append_to_section",
+                "patch_document_section",
                 "request_user_input",
                 "apply_patch",
                 "web_search",

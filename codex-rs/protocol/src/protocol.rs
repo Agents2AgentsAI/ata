@@ -20,6 +20,10 @@ use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::WindowsSandboxLevel;
 use crate::custom_prompts::CustomPrompt;
+use crate::document_reader::AppendDocumentSectionEvent;
+use crate::document_reader::PatchDocumentSectionEvent;
+use crate::document_reader::PresentDocumentEvent;
+use crate::document_reader::UpdateDocumentSectionEvent;
 use crate::dynamic_tools::DynamicToolCallRequest;
 use crate::dynamic_tools::DynamicToolResponse;
 use crate::dynamic_tools::DynamicToolSpec;
@@ -749,6 +753,29 @@ impl SandboxPolicy {
                     }
                 }
 
+                // Include the knowledge-base directory under codex home
+                // (e.g. ~/.ata/knowledge-base) so that sandboxed commands
+                // can write KB assets. Only the knowledge-base subtree is
+                // made writable, not the entire codex home.
+                if let Ok(codex_home) = codex_utils_home_dir::find_codex_home() {
+                    let kb_dir = codex_home.join("knowledge-base");
+                    if kb_dir.is_dir() {
+                        match AbsolutePathBuf::from_absolute_path(&kb_dir) {
+                            Ok(kb_path) => {
+                                if !roots.iter().any(|r| r == &kb_path) {
+                                    roots.push(kb_path);
+                                }
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Ignoring KB dir {:?} for sandbox writable root: {e}",
+                                    kb_dir,
+                                );
+                            }
+                        }
+                    }
+                }
+
                 // For each root, compute subpaths that should remain read-only.
                 roots
                     .into_iter()
@@ -1018,6 +1045,18 @@ pub enum EventMsg {
     SkillsUpdateAvailable,
 
     PlanUpdate(UpdatePlanArgs),
+
+    /// Agent presented a long document in sectioned reading mode.
+    PresentDocument(PresentDocumentEvent),
+
+    /// Agent updated a section of a document currently in reading mode.
+    UpdateDocumentSection(UpdateDocumentSectionEvent),
+
+    /// Agent appended content to a section of a document in reading mode.
+    AppendDocumentSection(AppendDocumentSectionEvent),
+
+    /// Agent patched (find-and-replace) a section of a document in reading mode.
+    PatchDocumentSection(PatchDocumentSectionEvent),
 
     TurnAborted(TurnAbortedEvent),
 

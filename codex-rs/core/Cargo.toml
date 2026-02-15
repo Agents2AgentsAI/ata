@@ -44,6 +44,7 @@ codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-data-tools = { workspace = true, optional = true }
+codex-kb = { workspace = true, optional = true }
 codex-research-tools = { workspace = true, optional = true }
 codex-secrets = { workspace = true, optional = true }
 codex-rmcp-client = { workspace = true }
@@ -122,7 +123,9 @@ zip = { workspace = true }
 [features]
 deterministic_process_ids = []
 data = ["dep:codex-data-tools", "dep:codex-secrets"]
+kb = ["dep:codex-kb"]
 research = ["dep:codex-research-tools", "dep:codex-secrets"]
+research-hackernews = ["research", "codex-research-tools/hackernews"]
 research-latex = ["research", "codex-research-tools/latex"]
 research-pdf-images = ["research", "codex-research-tools/pdf_images"]
 research-repo = ["research", "codex-research-tools/repo_analysis"]

@@ -55,7 +55,6 @@ members = [
     "codex-research-tools",
     "codex-data-tools",
     "codex-kb",
-    "codex-kb-mcp",
     "state",
     "codex-experimental-api-macros",
 ]
@@ -409,6 +408,14 @@ ignored = [
     "codex-utils-readiness",
     "codex-secrets",
 ]
+
+[profile.dev]
+# Skip the slow dsymutil pass on macOS; debug symbols stay as separate
+# object files which is fine for local development.
+split-debuginfo = "unpacked"
+# Line-tables-only still gives backtraces with file:line info but
+# compiles noticeably faster than full debug info.
+debug = "line-tables-only"
 
 [profile.release]
 lto = "fat"

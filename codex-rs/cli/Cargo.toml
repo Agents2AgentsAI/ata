@@ -57,9 +57,12 @@ codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-
 
 [features]
 data = ["codex-core/data"]
+kb = ["codex-core/kb"]
+research-hackernews = ["codex-core/research-hackernews"]
 research-latex = ["codex-core/research-latex"]
 research-pdf-images = ["codex-core/research-pdf-images"]
 research-repo = ["codex-core/research-repo"]
+research-all = ["data", "kb", "research-hackernews", "research-latex", "research-pdf-images", "research-repo"]
 
 [dev-dependencies]
 assert_cmd = { workspace = true }

@@ -23,6 +23,7 @@ pub struct ResearchConfig {
     pub openalex_base_url: String,
     pub zotero_base_url: String,
     pub github_api_base_url: String,
+    pub hn_base_url: String,
 
     pub connect_timeout: Duration,
     pub request_timeout: Duration,
@@ -41,6 +42,7 @@ pub struct CacheTtls {
     pub zotero_items: Duration,
     pub repo_analysis: Duration,
     pub repo_health: Duration,
+    pub hn_search: Duration,
     pub negative: Duration,
 }
 
@@ -58,6 +60,7 @@ pub struct RateLimitOverrides {
     pub openalex: Option<ApiRateLimit>,
     pub zotero: Option<ApiRateLimit>,
     pub github: Option<ApiRateLimit>,
+    pub hackernews: Option<ApiRateLimit>,
 }
 
 impl Default for CacheTtls {
@@ -68,6 +71,7 @@ impl Default for CacheTtls {
             zotero_items: Duration::from_secs(2 * 60),
             repo_analysis: Duration::from_secs(60 * 60),
             repo_health: Duration::from_secs(15 * 60),
+            hn_search: Duration::from_secs(5 * 60),
             negative: Duration::from_secs(30),
         }
     }
@@ -99,6 +103,7 @@ impl Default for ResearchConfig {
             openalex_base_url: "https://api.openalex.org".to_string(),
             zotero_base_url: DEFAULT_REMOTE_ZOTERO_BASE_URL.to_string(),
             github_api_base_url: "https://api.github.com".to_string(),
+            hn_base_url: "https://hn.algolia.com/api/v1".to_string(),
             connect_timeout: Duration::from_secs(10),
             request_timeout: Duration::from_secs(30),
             tool_timeout: Duration::from_secs(60),
@@ -156,6 +161,8 @@ impl ResearchConfig {
             zotero_base_url,
             github_api_base_url: std::env::var("GITHUB_API_BASE_URL")
                 .unwrap_or_else(|_| "https://api.github.com".to_string()),
+            hn_base_url: std::env::var("HN_BASE_URL")
+                .unwrap_or_else(|_| "https://hn.algolia.com/api/v1".to_string()),
             ..Self::default()
         };
 
@@ -199,6 +206,10 @@ impl ResearchConfig {
                     ApiRateLimit::new(60, Duration::from_secs(60 * 60), 3)
                 },
             ),
+            (
+                ResearchApi::HackerNews,
+                ApiRateLimit::new(10, Duration::from_secs(1), 3),
+            ),
         ]);
 
         for (api, override_limit) in [
@@ -210,6 +221,10 @@ impl ResearchConfig {
             (ResearchApi::OpenAlex, self.rate_limit_overrides.openalex),
             (ResearchApi::Zotero, self.rate_limit_overrides.zotero),
             (ResearchApi::GitHub, self.rate_limit_overrides.github),
+            (
+                ResearchApi::HackerNews,
+                self.rate_limit_overrides.hackernews,
+            ),
         ] {
             if let Some(rule) = override_limit {
                 limits.insert(api, rule);
@@ -239,6 +254,7 @@ impl fmt::Debug for ResearchConfig {
             .field("openalex_base_url", &self.openalex_base_url)
             .field("zotero_base_url", &self.zotero_base_url)
             .field("github_api_base_url", &self.github_api_base_url)
+            .field("hn_base_url", &self.hn_base_url)
             .field("connect_timeout", &self.connect_timeout)
             .field("request_timeout", &self.request_timeout)
             .field("tool_timeout", &self.tool_timeout)
