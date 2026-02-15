@@ -15,8 +15,10 @@ use crate::models_manager::manager::ModelsManager;
 use crate::research::SharedResearchToolkit;
 use crate::skills::SkillsManager;
 use crate::state_db::StateDbHandle;
+use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
+use codex_api::file_support::FileReferenceCache;
 use codex_hooks::Hooks;
 use codex_otel::OtelManager;
 use tokio::sync::Mutex;
@@ -28,6 +30,8 @@ pub(crate) struct SessionServices {
     pub(crate) mcp_connection_manager: Arc<RwLock<McpConnectionManager>>,
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
+    pub(crate) file_reference_cache: Mutex<FileReferenceCache>,
+    pub(crate) file_upload_http_client: reqwest::Client,
     pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) hooks: Hooks,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,
@@ -46,6 +50,7 @@ pub(crate) struct SessionServices {
     pub(crate) file_watcher: Arc<FileWatcher>,
     pub(crate) agent_control: AgentControl,
     pub(crate) network_proxy: Option<StartedNetworkProxy>,
+    pub(crate) network_approval: Arc<NetworkApprovalService>,
     pub(crate) state_db: Option<StateDbHandle>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,

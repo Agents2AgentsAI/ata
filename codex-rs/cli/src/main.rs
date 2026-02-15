@@ -100,10 +100,10 @@ enum Subcommand {
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
 
-    /// [experimental] Run Ata as an MCP server and manage MCP servers.
+    /// Manage external MCP servers for Ata.
     Mcp(McpCli),
 
-    /// [experimental] Run the Ata MCP server (stdio transport).
+    /// Start Ata as an MCP server (stdio).
     McpServer,
 
     /// [experimental] Run the app server or related tooling.

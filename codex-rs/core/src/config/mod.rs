@@ -51,6 +51,8 @@ use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
+#[cfg(target_os = "macos")]
+use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use codex_app_server_protocol::Tools;
@@ -80,6 +82,8 @@ use std::path::Path;
 use std::path::PathBuf;
 #[cfg(test)]
 use tempfile::tempdir;
+#[cfg(not(target_os = "macos"))]
+type MacOsSeatbeltProfileExtensions = ();
 
 use crate::config::profile::ConfigProfile;
 use toml::Value as TomlValue;
@@ -135,6 +139,9 @@ pub struct Permissions {
     /// Effective Windows sandbox mode derived from `[windows].sandbox` or
     /// legacy feature keys.
     pub windows_sandbox_mode: Option<WindowsSandboxModeToml>,
+    /// Optional macOS seatbelt extension profile used to extend default
+    /// seatbelt permissions when running under seatbelt.
+    pub macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
 }
 
 /// Application configuration loaded from disk and merged with overrides.
@@ -1819,6 +1826,7 @@ impl Config {
                 network,
                 shell_environment_policy,
                 windows_sandbox_mode,
+                macos_seatbelt_profile_extensions: None,
             },
             enforce_residency: enforce_residency.value,
             did_user_set_custom_approval_policy_or_sandbox_mode,
@@ -2018,6 +2026,13 @@ impl Config {
         } else {
             self.permissions.windows_sandbox_mode
         };
+    }
+
+    pub fn managed_network_requirements_enabled(&self) -> bool {
+        self.config_layer_stack
+            .requirements_toml()
+            .network
+            .is_some()
     }
 }
 
@@ -2906,9 +2921,16 @@ profile = "project"
                 ..Default::default()
             };
 
+            // Ensure the test is hermetic even if other providers are configured
+            // via environment variables on the developer machine.
+            let overrides = ConfigOverrides {
+                model_provider: Some(PROVIDER_OPENAI.to_string()),
+                ..ConfigOverrides::default()
+            };
+
             let config = Config::load_from_base_config_with_overrides(
                 cfg,
-                ConfigOverrides::default(),
+                overrides,
                 codex_home.path().to_path_buf(),
             )?;
 
@@ -4162,6 +4184,7 @@ model_verbosity = "high"
                     network: None,
                     shell_environment_policy: ShellEnvironmentPolicy::default(),
                     windows_sandbox_mode: None,
+                    macos_seatbelt_profile_extensions: None,
                 },
                 enforce_residency: Constrained::allow_any(None),
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
@@ -4275,6 +4298,7 @@ model_verbosity = "high"
                 network: None,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
+                macos_seatbelt_profile_extensions: None,
             },
             enforce_residency: Constrained::allow_any(None),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
@@ -4386,6 +4410,7 @@ model_verbosity = "high"
                 network: None,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
+                macos_seatbelt_profile_extensions: None,
             },
             enforce_residency: Constrained::allow_any(None),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
@@ -4483,6 +4508,7 @@ model_verbosity = "high"
                 network: None,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
+                macos_seatbelt_profile_extensions: None,
             },
             enforce_residency: Constrained::allow_any(None),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
