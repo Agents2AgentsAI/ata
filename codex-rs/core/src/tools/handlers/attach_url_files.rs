@@ -163,28 +163,57 @@ impl ToolHandler for AttachUrlFilesHandler {
         let mut success_count = 0usize;
 
         if supports_url_ingestion {
-            let mut content = Vec::with_capacity(validated_files.len());
-            for attachment in &validated_files {
-                let filename = attachment
-                    .filename
-                    .clone()
-                    .or_else(|| Some(attachment.url.derive_pdf_filename(None)));
-                content.push(ContentItem::url_file(
-                    attachment.url.as_str().to_string(),
-                    Some("application/pdf".to_string()),
-                    filename,
-                ));
+            // Download + validate each URL before passing to the provider.
+            // This catches non-PDF responses (e.g. HTML bot-protection pages)
+            // before they cause the provider to reject the entire request.
+            let requests: Vec<UrlDownloadRequest> = validated_files
+                .iter()
+                .map(|attachment| UrlDownloadRequest {
+                    url: attachment.url.clone(),
+                    filename_hint: attachment.filename.clone(),
+                })
+                .collect();
+            let download_outcomes = download_url_files_to_cache(
+                &turn.config.codex_home,
+                requests,
+                DEFAULT_MAX_DOWNLOAD_CONCURRENCY,
+            )
+            .await;
+
+            let mut content = Vec::new();
+            for (outcome, attachment) in download_outcomes.into_iter().zip(&validated_files) {
+                match outcome {
+                    UrlDownloadOutcome::Success(_) => {
+                        let filename = attachment
+                            .filename
+                            .clone()
+                            .or_else(|| Some(attachment.url.derive_pdf_filename(None)));
+                        content.push(ContentItem::url_file(
+                            attachment.url.as_str().to_string(),
+                            Some("application/pdf".to_string()),
+                            filename,
+                        ));
+                        success_count += 1;
+                    }
+                    UrlDownloadOutcome::Failure(failure) => {
+                        failures.push(AttachmentFailure {
+                            redacted_url: failure.redacted_url,
+                            reason: failure.reason,
+                        });
+                    }
+                }
             }
 
-            success_count = validated_files.len();
-            session
-                .inject_response_items_with_url_attachment_budget(
-                    vec![user_message_response_input(content)],
-                    success_count,
-                    MAX_URLS_PER_TURN,
-                )
-                .await
-                .map_err(map_budget_injection_error)?;
+            if success_count > 0 {
+                session
+                    .inject_response_items_with_url_attachment_budget(
+                        vec![user_message_response_input(content)],
+                        success_count,
+                        MAX_URLS_PER_TURN,
+                    )
+                    .await
+                    .map_err(map_budget_injection_error)?;
+            }
         } else {
             let remaining_budget = {
                 let mut active = session.active_turn.lock().await;
@@ -450,8 +479,12 @@ mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
     use crate::state::ActiveTurn;
+    use crate::tools::url_downloader::prepopulate_pdf_cache;
+    use crate::tools::url_validation::validated_url_for_test;
     use pretty_assertions::assert_eq;
     use tokio::sync::Mutex;
+
+    const VALID_PDF_BYTES: &[u8] = b"%PDF-1.4\ntest content";
 
     #[tokio::test]
     async fn provider_path_injects_url_files() {
@@ -459,6 +492,9 @@ mod tests {
         turn_context.provider = crate::ModelProviderInfo::create_openai_provider();
         let session = Arc::new(session);
         *session.active_turn.lock().await = Some(ActiveTurn::default());
+
+        let url = validated_url_for_test("https://example.com/doc.pdf");
+        prepopulate_pdf_cache(&turn_context.config.codex_home, &url, VALID_PDF_BYTES).await;
 
         let handler = AttachUrlFilesHandler;
         let output = handler
@@ -523,6 +559,9 @@ mod tests {
         turn_context.provider = crate::ModelProviderInfo::create_openai_provider();
         let session = Arc::new(session);
         *session.active_turn.lock().await = Some(ActiveTurn::default());
+
+        let url = validated_url_for_test("https://example.com/doc.pdf");
+        prepopulate_pdf_cache(&turn_context.config.codex_home, &url, VALID_PDF_BYTES).await;
 
         let handler = AttachUrlFilesHandler;
         let output = handler
@@ -627,6 +666,9 @@ mod tests {
         let session = Arc::new(session);
         *session.active_turn.lock().await = Some(ActiveTurn::default());
 
+        let url = validated_url_for_test("https://example.com/valid.pdf");
+        prepopulate_pdf_cache(&turn_context.config.codex_home, &url, VALID_PDF_BYTES).await;
+
         let handler = AttachUrlFilesHandler;
         let output = handler
             .handle(ToolInvocation {
@@ -697,6 +739,54 @@ mod tests {
             !specs.iter().any(|s| s.spec.name() == TOOL_NAME),
             "expected {TOOL_NAME} NOT registered for web_search_mode=Disabled"
         );
+    }
+
+    #[tokio::test]
+    async fn url_ingestion_path_rejects_non_pdf_downloads() {
+        let (session, mut turn_context) = make_session_and_context().await;
+        turn_context.provider = crate::ModelProviderInfo::create_openai_provider();
+        let session = Arc::new(session);
+        *session.active_turn.lock().await = Some(ActiveTurn::default());
+
+        // Pre-populate cache with non-PDF content (HTML).
+        let url = validated_url_for_test("https://example.com/blocked.pdf");
+        prepopulate_pdf_cache(
+            &turn_context.config.codex_home,
+            &url,
+            b"<html><body>Bot protection</body></html>",
+        )
+        .await;
+
+        let handler = AttachUrlFilesHandler;
+        let result = handler
+            .handle(ToolInvocation {
+                session: Arc::clone(&session),
+                turn: Arc::new(turn_context),
+                tracker: Arc::new(Mutex::new(crate::turn_diff_tracker::TurnDiffTracker::new())),
+                call_id: "call-7".to_string(),
+                tool_name: TOOL_NAME.to_string(),
+                payload: ToolPayload::Function {
+                    arguments: r#"{"files":[{"url":"https://example.com/blocked.pdf"}]}"#
+                        .to_string(),
+                },
+            })
+            .await;
+
+        // The non-PDF should be rejected, resulting in a failure-only summary.
+        let Err(FunctionCallError::RespondToModel(message)) = result else {
+            panic!("expected failure for non-PDF content");
+        };
+        assert!(
+            message.contains("No URL files were attached."),
+            "expected failure-only header, got: {message}"
+        );
+        assert!(
+            message.contains("https://example.com/blocked.pdf"),
+            "expected specific URL in failure, got: {message}"
+        );
+
+        let pending = session.get_pending_input().await;
+        assert!(pending.is_empty(), "no pending input for rejected PDF");
     }
 
     fn minimal_tools_config() -> ToolsConfig {

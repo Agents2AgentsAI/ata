@@ -1,4 +1,5 @@
 use crate::exec::ExecToolCallOutput;
+use crate::network_policy_decision::NetworkPolicyDecisionPayload;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
 use crate::truncate::TruncationPolicy;
@@ -31,7 +32,10 @@ pub enum SandboxErr {
         "sandbox denied exec error, exit code: {}, stdout: {}, stderr: {}",
         .output.exit_code, .output.stdout.text, .output.stderr.text
     )]
-    Denied { output: Box<ExecToolCallOutput> },
+    Denied {
+        output: Box<ExecToolCallOutput>,
+        network_policy_decision: Option<NetworkPolicyDecisionPayload>,
+    },
 
     /// Error from linux seccomp filter setup
     #[cfg(target_os = "linux")]
@@ -624,7 +628,7 @@ impl CodexErr {
 
 pub fn get_error_message_ui(e: &CodexErr) -> String {
     let message = match e {
-        CodexErr::Sandbox(SandboxErr::Denied { output }) => {
+        CodexErr::Sandbox(SandboxErr::Denied { output, .. }) => {
             let aggregated = output.aggregated_output.text.trim();
             if !aggregated.is_empty() {
                 output.aggregated_output.text.clone()
@@ -744,6 +748,7 @@ mod tests {
         };
         let err = CodexErr::Sandbox(SandboxErr::Denied {
             output: Box::new(output),
+            network_policy_decision: None,
         });
         assert_eq!(get_error_message_ui(&err), "aggregate detail");
     }
@@ -760,6 +765,7 @@ mod tests {
         };
         let err = CodexErr::Sandbox(SandboxErr::Denied {
             output: Box::new(output),
+            network_policy_decision: None,
         });
         assert_eq!(get_error_message_ui(&err), "stderr detail\nstdout detail");
     }
@@ -776,6 +782,7 @@ mod tests {
         };
         let err = CodexErr::Sandbox(SandboxErr::Denied {
             output: Box::new(output),
+            network_policy_decision: None,
         });
         assert_eq!(get_error_message_ui(&err), "stdout only");
     }
@@ -819,6 +826,7 @@ mod tests {
         };
         let err = CodexErr::Sandbox(SandboxErr::Denied {
             output: Box::new(output),
+            network_policy_decision: None,
         });
         assert_eq!(
             get_error_message_ui(&err),

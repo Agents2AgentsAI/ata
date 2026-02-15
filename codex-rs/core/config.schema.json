@@ -233,6 +233,9 @@
             "js_repl_tools_only": {
               "type": "boolean"
             },
+            "kb": {
+              "type": "boolean"
+            },
             "memory_tool": {
               "type": "boolean"
             },
@@ -457,6 +460,16 @@
           "type": "string"
         }
       ]
+    },
+    "KbToml": {
+      "additionalProperties": false,
+      "properties": {
+        "kb_path": {
+          "description": "Path to the knowledge base directory. Defaults to `<codex_home>/knowledge-base`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
     },
     "MemoriesToml": {
       "additionalProperties": false,
@@ -1426,6 +1439,9 @@
         "js_repl_tools_only": {
           "type": "boolean"
         },
+        "kb": {
+          "type": "boolean"
+        },
         "memory_tool": {
           "type": "boolean"
         },
@@ -1561,6 +1577,15 @@
         }
       ],
       "description": "Optional absolute path to the Node runtime used by `js_repl`."
+    },
+    "kb": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/KbToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional KB settings."
     },
     "log_dir": {
       "allOf": [
