@@ -2488,6 +2488,21 @@ mod tests {
     }
 
     #[test]
+    fn collab_spawn_end_errored_snapshot() {
+        let cell = crate::collab::spawn_end(codex_core::protocol::CollabAgentSpawnEndEvent {
+            call_id: "call_123".to_string(),
+            sender_thread_id: codex_protocol::ThreadId::new(),
+            new_thread_id: None,
+            prompt: "You are helping me improve RepoMaster (arXiv:2505.21577).".to_string(),
+            status: codex_core::protocol::AgentStatus::Errored(
+                "collab manager unavailable".to_string(),
+            ),
+        });
+        let rendered = render_transcript(&cell).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
     fn unified_exec_interaction_cell_renders_input() {
         let cell =
             new_unified_exec_interaction(Some("echo hello".to_string()), "ls\npwd".to_string());

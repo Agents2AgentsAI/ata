@@ -54,9 +54,32 @@ impl HttpClient {
         F: Fn() -> reqwest::RequestBuilder,
     {
         let response = self.execute_response(api, build_request).await?;
-        response.json().await.map_err(|err| ResearchError::Parse {
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("<missing>")
+            .to_string();
+        let bytes = response.bytes().await.map_err(|err| ResearchError::Parse {
             api,
             message: err.to_string(),
+        })?;
+
+        serde_json::from_slice(&bytes).map_err(|err| {
+            const MAX_PREVIEW_BYTES: usize = 512;
+            let (slice, suffix) = if bytes.len() <= MAX_PREVIEW_BYTES {
+                (bytes.as_ref(), "")
+            } else {
+                (&bytes.as_ref()[..MAX_PREVIEW_BYTES], "...")
+            };
+            let body_preview = format!("{}{}", String::from_utf8_lossy(slice), suffix);
+            ResearchError::Parse {
+                api,
+                message: format!(
+                    "{err} (status {status}, content-type {content_type}): {body_preview}"
+                ),
+            }
         })
     }
 

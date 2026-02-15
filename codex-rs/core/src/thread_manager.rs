@@ -45,7 +45,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use tokio::runtime::Handle;
-use tokio::runtime::RuntimeFlavor;
 #[cfg(any(feature = "research", feature = "data", feature = "kb"))]
 use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
@@ -82,13 +81,12 @@ impl Drop for TempCodexHomeGuard {
 }
 
 fn build_file_watcher(codex_home: PathBuf, skills_manager: Arc<SkillsManager>) -> Arc<FileWatcher> {
-    if should_use_test_thread_manager_behavior()
-        && let Ok(handle) = Handle::try_current()
-        && handle.runtime_flavor() == RuntimeFlavor::CurrentThread
-    {
-        // The real watcher spins background tasks that can starve the
-        // current-thread test runtime and cause event waits to time out.
-        warn!("using noop file watcher under current-thread test runtime");
+    if should_use_test_thread_manager_behavior() {
+        // Tests don't need a real file watcher. Under the current-thread
+        // runtime the background tasks can starve the executor, and under
+        // the multi-thread runtime the FSEvents watcher.watch() calls are
+        // unexpectedly slow, adding seconds per test.
+        warn!("using noop file watcher in test mode");
         return Arc::new(FileWatcher::noop());
     }
 

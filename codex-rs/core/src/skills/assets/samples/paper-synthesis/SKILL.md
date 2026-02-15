@@ -149,16 +149,16 @@ Before synthesizing, always attempt to read the full paper text. Choose the path
 ### Path A: arXiv URL or DOI (default)
 
 1. If given an arXiv `/abs/` URL, convert it to `/pdf/` (e.g. `https://arxiv.org/abs/2503.14734` becomes `https://arxiv.org/pdf/2503.14734`).
-2. Use `attach_url_files` with the PDF URL. The model reads the PDF directly — no conversion to text is needed or allowed. If available, also use `paper_get` to retrieve metadata (title, authors, abstract) as supplementary context.
-3. If `attach_url_files` fails, fall back to the abstract from `paper_get` and note in output: "Based on abstract only; full text unavailable."
+2. Use `attach_url_files` to fetch the PDF. After it succeeds, the PDF content is injected into your conversation context automatically — you can read and analyze it immediately. Do not search for a downloaded file on disk or use shell commands to extract text. If available, use `paper_get` to retrieve metadata (title, authors, abstract) as supplementary context.
+3. If PDF fetch fails, fall back to the abstract from `paper_get` and note in output: "Based on abstract only; full text unavailable."
 4. If neither source is available, clearly state this limitation upfront.
 
 ### Path B: Zotero (when user mentions Zotero, a collection, or their library)
 
 1. Use `zotero_search` to find the paper(s) by title, author, or topic. Also call `zotero_get_collections` to check if a collection matches the topic — if so, use `zotero_get_collection_items` to retrieve its contents. If the user names a specific collection, use `zotero_get_collection_items` directly.
 2. For each paper found, call `zotero_get_item` with `include_attachments=true` and `include_fulltext_resolution=true`.
-3. If `document_resolution.preferred_url` (PDF URL) is present, fetch the paper with `attach_url_files` and treat that attached document as the primary source (this preserves figures/tables). Do NOT use shell commands to download the PDF.
-4. If no URL is available but `document_resolution.local_path` is present, attach the local PDF via `attach_url_files` using the file path as the primary source.
+3. If `document_resolution.preferred_url` (PDF URL) is present, fetch the paper with `attach_url_files` and treat that attached document as the primary source (this preserves figures/tables). After `attach_url_files` succeeds, the PDF content is injected into your conversation context automatically — you can read and analyze it immediately. Do not search for a downloaded file on disk or use shell commands to extract text.
+4. If no URL is available but `document_resolution.local_path` is present, use that local PDF path as the primary source.
 5. Do not call `zotero_get_fulltext` for paper synthesis. Indexed fulltext is lossy (no figures/tables) and is not an acceptable primary source when PDF resolution is required. Similarly, do not use `pdftotext` or any shell-based text extraction — the model reads PDFs natively via `attach_url_files`.
 6. Optionally call `zotero_get_notes` to retrieve the user's annotations and highlights — weave these into the synthesis where relevant (e.g. "The authors note X, which the reader flagged as particularly relevant because...").
 7. If neither `preferred_url` nor `local_path` is available, stop and report this as a Zotero metadata inconsistency instead of switching to indexed fulltext.

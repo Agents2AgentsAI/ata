@@ -83,6 +83,22 @@ impl FileErrorKind {
 }
 
 fn classify_file_error(message: &str) -> Option<FileErrorKind> {
+    // Fast path: exact match against known user-facing messages.
+    // These messages are produced by `FileErrorKind::user_message()` and may be
+    // re-classified after upstream code wraps them into `CodexErr::InvalidRequest`.
+    // Checking exact strings avoids keyword drift between user-facing copy and
+    // the heuristics below.
+    for kind in [
+        FileErrorKind::Encrypted,
+        FileErrorKind::TooManyPages,
+        FileErrorKind::UnsupportedFormat,
+        FileErrorKind::FileReferenceNotFound,
+    ] {
+        if message == kind.user_message() {
+            return Some(kind);
+        }
+    }
+
     let lower = message.to_ascii_lowercase();
     let has_file_context = lower.contains("pdf")
         || lower.contains("input_file")
@@ -93,13 +109,21 @@ fn classify_file_error(message: &str) -> Option<FileErrorKind> {
         return None;
     }
 
-    if (lower.contains("not found") || lower.contains("no such file"))
+    if (lower.contains("not found")
+        || lower.contains("no such file")
+        || lower.contains("no longer valid"))
         && (lower.contains("file") || lower.contains("files/") || lower.contains("file_id"))
     {
         return Some(FileErrorKind::FileReferenceNotFound);
     }
 
-    if lower.contains("encrypted") || lower.contains("password") {
+    let has_password_protection_context = lower.contains("password protected")
+        || lower.contains("password-protected")
+        || lower.contains("password protection");
+    if lower.contains("encrypted")
+        || (lower.contains("password")
+            && (lower.contains("pdf") || has_password_protection_context))
+    {
         return Some(FileErrorKind::Encrypted);
     }
 
@@ -110,12 +134,33 @@ fn classify_file_error(message: &str) -> Option<FileErrorKind> {
         return Some(FileErrorKind::TooManyPages);
     }
 
+    let invalid_pdf_with_context = if lower.contains("invalid") && lower.contains("pdf") {
+        let max_gap = 12;
+        let invalid_near_pdf = lower.match_indices("pdf").any(|(idx, _)| {
+            let start = idx.saturating_sub(max_gap);
+            let end = (idx + "pdf".len() + max_gap).min(lower.len());
+            lower
+                .get(start..end)
+                .is_some_and(|window| window.contains("invalid"))
+        });
+        let has_format_context = lower.contains("file")
+            || lower.contains("format")
+            || lower.contains("type")
+            || lower.contains("upload")
+            || lower.contains("expected")
+            || lower.contains("must be")
+            || lower.contains("only");
+        invalid_near_pdf || has_format_context
+    } else {
+        false
+    };
+
     if lower.contains("unsupported file type")
         || lower.contains("unsupported file")
         || lower.contains("unsupported format")
         || lower.contains("invalid pdf")
         || lower.contains("not a pdf")
-        || (lower.contains("invalid") && lower.contains("pdf"))
+        || invalid_pdf_with_context
     {
         return Some(FileErrorKind::UnsupportedFormat);
     }
@@ -215,10 +260,91 @@ mod tests {
     }
 
     #[test]
+    fn maps_own_user_facing_file_reference_not_found_message() {
+        let message = "File reference is no longer valid. Please re-attach the file.";
+        let mapped = map_user_facing_file_error_from_message(message)
+            .expect("should map own user-facing message");
+        assert_eq!(
+            mapped,
+            UserFacingMappedError {
+                user_message: message.to_string(),
+                debug_detail: message.to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn all_user_facing_messages_are_self_classifiable() {
+        let kinds = [
+            FileErrorKind::Encrypted,
+            FileErrorKind::TooManyPages,
+            FileErrorKind::UnsupportedFormat,
+            FileErrorKind::FileReferenceNotFound,
+        ];
+        for kind in kinds {
+            let message = kind.user_message();
+            let mapped = map_user_facing_file_error_from_message(message);
+            assert_eq!(
+                mapped,
+                Some(UserFacingMappedError {
+                    user_message: message.to_string(),
+                    debug_detail: message.to_string(),
+                }),
+                "user-facing message for {kind:?} must be self-classifiable"
+            );
+        }
+    }
+
+    #[test]
     fn does_not_map_unrelated_message() {
         assert_eq!(
             map_user_facing_file_error_from_message("Rate limit exceeded."),
             None
+        );
+    }
+
+    #[test]
+    fn does_not_map_unrelated_password_error() {
+        assert_eq!(
+            map_user_facing_file_error_from_message(
+                "Invalid password for file upload authentication."
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn does_not_map_message_with_file_word_but_not_pdf_error() {
+        assert_eq!(
+            map_user_facing_file_error_from_message("File upload service rate limited."),
+            None
+        );
+    }
+
+    #[test]
+    fn does_not_map_invalid_request_without_file_context() {
+        assert_eq!(
+            map_user_facing_file_error_from_message("Invalid JSON in request."),
+            None
+        );
+    }
+
+    #[test]
+    fn does_not_map_invalid_response_from_pdf_viewer() {
+        assert_eq!(
+            map_user_facing_file_error_from_message("The PDF viewer returned an invalid response."),
+            None
+        );
+    }
+
+    #[test]
+    fn maps_invalid_file_only_pdf_supported_message() {
+        let mapped =
+            map_user_facing_file_error_from_message("Invalid file. Only PDF files are supported.")
+                .expect("should map");
+        assert_eq!(
+            mapped.user_message,
+            "Unsupported file format. Check that the file is a valid PDF."
         );
     }
 
