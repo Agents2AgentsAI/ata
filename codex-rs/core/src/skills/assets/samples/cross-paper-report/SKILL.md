@@ -287,6 +287,30 @@ When the user asks follow-up questions about a specific section, use the most ef
 - `patch_document_section` — to change specific text within a section (for corrections or targeted edits)
 - `update_document_section` — to fully rewrite a section (only when the entire section needs to change)
 
+## Post-Report Housekeeping
+
+After the report is complete (both reading view + PDF delivered), do these:
+
+**1. Journal entry** — Append to `research-journal.md` at the KB root via `kb_write_file`. Prepend (newest first):
+
+```markdown
+## [Date] — Cross-Paper Report: [Topic/Title]
+
+### Explored
+- Compared [N] papers: [list paper titles briefly]
+- Focus dimensions: [e.g., action tokenization, inference latency, training strategy]
+
+### Key Findings
+- [1-2 bullet points: the most important comparative insights]
+
+### Cards Touched
+- [card-ids] (read)
+
+---
+```
+
+**2. Research context detection** — During the report interaction and follow-ups, watch for preference signals. If the user focuses on specific comparison dimensions ("I really care about the latency comparison"), asks to skip sections, or responds well to particular framings, offer briefly to note it in `research-context.md`. Never block the interaction on this.
+
 ## Completion Checklist
 
 Before reporting done, verify ALL of these:
@@ -296,6 +320,7 @@ Before reporting done, verify ALL of these:
 - [ ] PDF generated via `latex_compile` with at least one TikZ diagram
 - [ ] If compilation failed: errors were fixed and `latex_compile` was retried
 - [ ] PDF opened for the user via `open` / `xdg-open`
+- [ ] Journal entry appended to `research-journal.md`
 
 ## Anti-Patterns (Things You Must NEVER Do)
 

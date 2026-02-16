@@ -456,6 +456,31 @@ After the ranked list, group papers by topic area with brief rationale for each 
 - **No KB tools**: Present the report in chat only
 - **Few seed papers (< 3)**: Reduce citation graph exploration but increase trend scanner and author tracker scope
 
+## Post-Discovery Housekeeping
+
+After presenting the discovery report, do these:
+
+**1. Journal entry** — Append to `research-journal.md` at the KB root via `kb_write_file`. Prepend (newest first):
+
+```markdown
+## [Date] — Discovery: [Topic/Question]
+
+### Explored
+- Mode: [explore / discovery / topic:X / authors]
+- Searched: [brief description of what was searched for]
+- Found [N] new papers across [M] strategies
+
+### Top Finds
+- [2-3 most promising papers with one-line descriptions]
+
+### Open Questions
+- [1-2 threads worth pursuing next]
+
+---
+```
+
+**2. Research context detection** — If the user's discovery request or follow-up questions reveal priorities (e.g., "focus on methods that work in real-time", "I'm not interested in simulation-only results"), offer to note it in `research-context.md`.
+
 ## Presentation
 
 IMPORTANT: When a discovery or explore mode report is complete, you MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the report title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
