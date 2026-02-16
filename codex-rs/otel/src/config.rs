@@ -13,10 +13,6 @@ pub(crate) const STATSIG_API_KEY: &str = "client-MkRuleRQBd6qakfnDYqJVR9JuXcY57L
 pub(crate) fn resolve_exporter(exporter: &OtelExporter) -> OtelExporter {
     match exporter {
         OtelExporter::Statsig => {
-            if !cfg!(feature = "internal-telemetry") {
-                return OtelExporter::None;
-            }
-
             if cfg!(test) || cfg!(feature = "disable-default-metrics-exporter") {
                 return OtelExporter::None;
             }
