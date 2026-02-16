@@ -178,6 +178,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             upgrade: None,
             display_name: "Claude Sonnet 4-5".to_string(),
             description: "Anthropic's balanced model for coding tasks.".to_string(),
+            hidden: false,
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::Low,
@@ -203,6 +204,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             upgrade: None,
             display_name: "Claude Opus 4-6".to_string(),
             description: "Anthropic's most capable model for complex reasoning.".to_string(),
+            hidden: false,
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::Low,
@@ -234,6 +236,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             upgrade: None,
             display_name: "Gemini 3 Pro".to_string(),
             description: "Google's advanced model for complex tasks.".to_string(),
+            hidden: false,
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::Low,
@@ -255,6 +258,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             upgrade: None,
             display_name: "Gemini 3 Flash".to_string(),
             description: "Google's fast and efficient model.".to_string(),
+            hidden: false,
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::Minimal,
@@ -422,6 +426,7 @@ async fn list_models_pagination_works() -> Result<()> {
         .send_list_models_request(ModelListParams {
             limit: Some(1),
             cursor: Some(fifth_cursor.clone()),
+            include_hidden: None,
         })
         .await?;
 
@@ -445,6 +450,7 @@ async fn list_models_pagination_works() -> Result<()> {
         .send_list_models_request(ModelListParams {
             limit: Some(1),
             cursor: Some(sixth_cursor.clone()),
+            include_hidden: None,
         })
         .await?;
 
@@ -468,6 +474,7 @@ async fn list_models_pagination_works() -> Result<()> {
         .send_list_models_request(ModelListParams {
             limit: Some(1),
             cursor: Some(seventh_cursor.clone()),
+            include_hidden: None,
         })
         .await?;
 
@@ -491,6 +498,7 @@ async fn list_models_pagination_works() -> Result<()> {
         .send_list_models_request(ModelListParams {
             limit: Some(1),
             cursor: Some(eighth_cursor.clone()),
+            include_hidden: None,
         })
         .await?;
 

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
+#[cfg(feature = "feedback-upload")]
 use std::collections::btree_map::Entry;
 use std::fs;
 use std::io::Write;
@@ -7,6 +8,7 @@ use std::io::{self};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+#[cfg(feature = "feedback-upload")]
 use std::time::Duration;
 
 use anyhow::Result;
@@ -22,8 +24,10 @@ use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::registry::LookupSpan;
 
 const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
+#[cfg(feature = "feedback-upload")]
 const SENTRY_DSN: &str =
     "https://ae32ed50620d7a7792c1ce5df38b3e3e@o33249.ingest.us.sentry.io/4510195390611458";
+#[cfg(feature = "feedback-upload")]
 const UPLOAD_TIMEOUT_SECS: u64 = 10;
 const FEEDBACK_TAGS_TARGET: &str = "feedback_tags";
 const MAX_FEEDBACK_TAGS: usize = 64;
@@ -201,6 +205,7 @@ impl RingBuffer {
 
 pub struct CodexLogSnapshot {
     bytes: Vec<u8>,
+    #[cfg_attr(not(feature = "feedback-upload"), allow(dead_code))]
     tags: BTreeMap<String, String>,
     pub thread_id: String,
 }
@@ -227,116 +232,135 @@ impl CodexLogSnapshot {
         rollout_path: Option<&std::path::Path>,
         session_source: Option<SessionSource>,
     ) -> Result<()> {
-        use std::collections::BTreeMap;
-        use std::fs;
-        use std::str::FromStr;
-        use std::sync::Arc;
-
-        use sentry::Client;
-        use sentry::ClientOptions;
-        use sentry::protocol::Attachment;
-        use sentry::protocol::Envelope;
-        use sentry::protocol::EnvelopeItem;
-        use sentry::protocol::Event;
-        use sentry::protocol::Level;
-        use sentry::transports::DefaultTransportFactory;
-        use sentry::types::Dsn;
-
-        // Build Sentry client
-        let client = Client::from_config(ClientOptions {
-            dsn: Some(Dsn::from_str(SENTRY_DSN).map_err(|e| anyhow!("invalid DSN: {e}"))?),
-            transport: Some(Arc::new(DefaultTransportFactory {})),
-            ..Default::default()
-        });
-
-        let cli_version = env!("CARGO_PKG_VERSION");
-        let mut tags = BTreeMap::from([
-            (String::from("thread_id"), self.thread_id.to_string()),
-            (String::from("classification"), classification.to_string()),
-            (String::from("cli_version"), cli_version.to_string()),
-        ]);
-        if let Some(source) = session_source.as_ref() {
-            tags.insert(String::from("session_source"), source.to_string());
-        }
-        if let Some(r) = reason {
-            tags.insert(String::from("reason"), r.to_string());
+        #[cfg(not(feature = "feedback-upload"))]
+        {
+            let _ = (
+                classification,
+                reason,
+                include_logs,
+                rollout_path,
+                session_source,
+            );
+            Err(anyhow!(
+                "feedback upload is disabled in this build; enable `codex-feedback/feedback-upload`",
+            ))
         }
 
-        let reserved = [
-            "thread_id",
-            "classification",
-            "cli_version",
-            "session_source",
-            "reason",
-        ];
-        for (key, value) in &self.tags {
-            if reserved.contains(&key.as_str()) {
-                continue;
-            }
-            if let Entry::Vacant(entry) = tags.entry(key.clone()) {
-                entry.insert(value.clone());
-            }
-        }
+        #[cfg(feature = "feedback-upload")]
+        {
+            use std::collections::BTreeMap;
+            use std::fs;
+            use std::str::FromStr;
+            use std::sync::Arc;
 
-        let level = match classification {
-            "bug" | "bad_result" => Level::Error,
-            _ => Level::Info,
-        };
+            use sentry::Client;
+            use sentry::ClientOptions;
+            use sentry::protocol::Attachment;
+            use sentry::protocol::Envelope;
+            use sentry::protocol::EnvelopeItem;
+            use sentry::protocol::Event;
+            use sentry::protocol::Level;
+            use sentry::transports::DefaultTransportFactory;
+            use sentry::types::Dsn;
 
-        let mut envelope = Envelope::new();
-        let title = format!(
-            "[{}]: Codex session {}",
-            display_classification(classification),
-            self.thread_id
-        );
-
-        let mut event = Event {
-            level,
-            message: Some(title.clone()),
-            tags,
-            ..Default::default()
-        };
-        if let Some(r) = reason {
-            use sentry::protocol::Exception;
-            use sentry::protocol::Values;
-
-            event.exception = Values::from(vec![Exception {
-                ty: title.clone(),
-                value: Some(r.to_string()),
+            // Build Sentry client
+            let client = Client::from_config(ClientOptions {
+                dsn: Some(Dsn::from_str(SENTRY_DSN).map_err(|e| anyhow!("invalid DSN: {e}"))?),
+                transport: Some(Arc::new(DefaultTransportFactory {})),
                 ..Default::default()
-            }]);
-        }
-        envelope.add_item(EnvelopeItem::Event(event));
+            });
 
-        if include_logs {
-            envelope.add_item(EnvelopeItem::Attachment(Attachment {
-                buffer: self.bytes.clone(),
-                filename: String::from("codex-logs.log"),
-                content_type: Some("text/plain".to_string()),
-                ty: None,
-            }));
-        }
+            let cli_version = env!("CARGO_PKG_VERSION");
+            let mut tags = BTreeMap::from([
+                (String::from("thread_id"), self.thread_id.to_string()),
+                (String::from("classification"), classification.to_string()),
+                (String::from("cli_version"), cli_version.to_string()),
+            ]);
+            if let Some(source) = session_source.as_ref() {
+                tags.insert(String::from("session_source"), source.to_string());
+            }
+            if let Some(r) = reason {
+                tags.insert(String::from("reason"), r.to_string());
+            }
 
-        if let Some((path, data)) = rollout_path.and_then(|p| fs::read(p).ok().map(|d| (p, d))) {
-            let fname = path
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| "rollout.jsonl".to_string());
-            let content_type = "text/plain".to_string();
-            envelope.add_item(EnvelopeItem::Attachment(Attachment {
-                buffer: data,
-                filename: fname,
-                content_type: Some(content_type),
-                ty: None,
-            }));
-        }
+            let reserved = [
+                "thread_id",
+                "classification",
+                "cli_version",
+                "session_source",
+                "reason",
+            ];
+            for (key, value) in &self.tags {
+                if reserved.contains(&key.as_str()) {
+                    continue;
+                }
+                if let Entry::Vacant(entry) = tags.entry(key.clone()) {
+                    entry.insert(value.clone());
+                }
+            }
 
-        client.send_envelope(envelope);
-        client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
-        Ok(())
+            let level = match classification {
+                "bug" | "bad_result" => Level::Error,
+                _ => Level::Info,
+            };
+
+            let mut envelope = Envelope::new();
+            let title = format!(
+                "[{}]: Codex session {}",
+                display_classification(classification),
+                self.thread_id
+            );
+
+            let mut event = Event {
+                level,
+                message: Some(title.clone()),
+                tags,
+                ..Default::default()
+            };
+            if let Some(r) = reason {
+                use sentry::protocol::Exception;
+                use sentry::protocol::Values;
+
+                event.exception = Values::from(vec![Exception {
+                    ty: title.clone(),
+                    value: Some(r.to_string()),
+                    ..Default::default()
+                }]);
+            }
+            envelope.add_item(EnvelopeItem::Event(event));
+
+            if include_logs {
+                envelope.add_item(EnvelopeItem::Attachment(Attachment {
+                    buffer: self.bytes.clone(),
+                    filename: String::from("codex-logs.log"),
+                    content_type: Some("text/plain".to_string()),
+                    ty: None,
+                }));
+            }
+
+            if let Some((path, data)) = rollout_path.and_then(|p| fs::read(p).ok().map(|d| (p, d)))
+            {
+                let fname = path
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "rollout.jsonl".to_string());
+                let content_type = "text/plain".to_string();
+                envelope.add_item(EnvelopeItem::Attachment(Attachment {
+                    buffer: data,
+                    filename: fname,
+                    content_type: Some(content_type),
+                    ty: None,
+                }));
+            }
+
+            client.send_envelope(envelope);
+            client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
+            Ok(())
+        }
     }
 }
 
+#[cfg(feature = "feedback-upload")]
 fn display_classification(classification: &str) -> String {
     match classification {
         "bug" => "Bug".to_string(),
@@ -446,5 +470,21 @@ mod tests {
         let snap = fb.snapshot(None);
         pretty_assertions::assert_eq!(snap.tags.get("model").map(String::as_str), Some("gpt-5"));
         pretty_assertions::assert_eq!(snap.tags.get("cached").map(String::as_str), Some("true"));
+    }
+
+    #[cfg(not(feature = "feedback-upload"))]
+    #[test]
+    fn upload_feedback_is_disabled_without_feature() {
+        let fb = CodexFeedback::new();
+        let snapshot = fb.snapshot(None);
+
+        let err = snapshot
+            .upload_feedback("bug", None, false, None, None)
+            .expect_err("feedback upload should be disabled");
+
+        pretty_assertions::assert_eq!(
+            err.to_string(),
+            "feedback upload is disabled in this build; enable `codex-feedback/feedback-upload`",
+        );
     }
 }

@@ -3,8 +3,11 @@ use std::path::PathBuf;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+#[cfg(feature = "internal-telemetry")]
 pub(crate) const STATSIG_OTLP_HTTP_ENDPOINT: &str = "https://ab.chatgpt.com/otlp/v1/metrics";
+#[cfg(feature = "internal-telemetry")]
 pub(crate) const STATSIG_API_KEY_HEADER: &str = "statsig-api-key";
+#[cfg(feature = "internal-telemetry")]
 pub(crate) const STATSIG_API_KEY: &str = "client-MkRuleRQBd6qakfnDYqJVR9JuXcY57Ljly3vi5JVUIO";
 
 pub(crate) fn resolve_exporter(exporter: &OtelExporter) -> OtelExporter {
@@ -14,14 +17,21 @@ pub(crate) fn resolve_exporter(exporter: &OtelExporter) -> OtelExporter {
                 return OtelExporter::None;
             }
 
-            OtelExporter::OtlpHttp {
-                endpoint: STATSIG_OTLP_HTTP_ENDPOINT.to_string(),
-                headers: HashMap::from([(
-                    STATSIG_API_KEY_HEADER.to_string(),
-                    STATSIG_API_KEY.to_string(),
-                )]),
-                protocol: OtelHttpProtocol::Json,
-                tls: None,
+            #[cfg(feature = "internal-telemetry")]
+            {
+                OtelExporter::OtlpHttp {
+                    endpoint: STATSIG_OTLP_HTTP_ENDPOINT.to_string(),
+                    headers: HashMap::from([(
+                        STATSIG_API_KEY_HEADER.to_string(),
+                        STATSIG_API_KEY.to_string(),
+                    )]),
+                    protocol: OtelHttpProtocol::Json,
+                    tls: None,
+                }
+            }
+            #[cfg(not(feature = "internal-telemetry"))]
+            {
+                OtelExporter::None
             }
         }
         _ => exporter.clone(),
@@ -73,4 +83,18 @@ pub enum OtelExporter {
         protocol: OtelHttpProtocol,
         tls: Option<OtelTlsConfig>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OtelExporter;
+    use super::resolve_exporter;
+
+    #[test]
+    fn statsig_exporter_resolves_to_none_in_tests() {
+        assert!(matches!(
+            resolve_exporter(&OtelExporter::Statsig),
+            OtelExporter::None
+        ));
+    }
 }

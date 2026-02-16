@@ -230,7 +230,8 @@ pub(crate) fn track_skill_invocations(
     tracking: Option<TrackEventsContext>,
     invocations: Vec<SkillInvocation>,
 ) {
-    if config.analytics_enabled == Some(false) {
+    // FORK: telemetry disabled by default (explicit opt-in only).
+    if config.analytics_enabled != Some(true) {
         return;
     }
     let Some(tracking) = tracking else {
@@ -253,7 +254,8 @@ pub(crate) fn track_app_mentioned(
     tracking: Option<TrackEventsContext>,
     mentions: Vec<AppInvocation>,
 ) {
-    if config.analytics_enabled == Some(false) {
+    // FORK: telemetry disabled by default (explicit opt-in only).
+    if config.analytics_enabled != Some(true) {
         return;
     }
     let Some(tracking) = tracking else {
@@ -276,7 +278,8 @@ pub(crate) fn track_app_used(
     tracking: Option<TrackEventsContext>,
     app: AppInvocation,
 ) {
-    if config.analytics_enabled == Some(false) {
+    // FORK: telemetry disabled by default (explicit opt-in only).
+    if config.analytics_enabled != Some(true) {
         return;
     }
     let Some(tracking) = tracking else {
@@ -393,6 +396,10 @@ async fn send_track_events(
     config: Arc<Config>,
     events: Vec<TrackEventRequest>,
 ) {
+    // FORK: telemetry disabled by default (explicit opt-in only).
+    if config.analytics_enabled != Some(true) {
+        return;
+    }
     if events.is_empty() {
         return;
     }
@@ -485,10 +492,17 @@ mod tests {
     use super::AppInvocation;
     use super::CodexAppMentionedEventRequest;
     use super::CodexAppUsedEventRequest;
+    use super::SkillInvocation;
     use super::TrackEventRequest;
     use super::TrackEventsContext;
+    use super::TrackEventsJob;
     use super::codex_app_metadata;
     use super::normalize_path_for_skill_id;
+    use super::track_app_mentioned;
+    use super::track_app_used;
+    use super::track_skill_invocations;
+    use crate::config::test_config;
+    use codex_protocol::protocol::SkillScope;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::collections::HashSet;
@@ -656,5 +670,195 @@ mod tests {
         assert_eq!(queue.should_enqueue_app_used(&turn_1, &app), true);
         assert_eq!(queue.should_enqueue_app_used(&turn_1, &app), false);
         assert_eq!(queue.should_enqueue_app_used(&turn_2, &app), true);
+    }
+
+    #[test]
+    fn track_skill_invocations_requires_explicit_opt_in() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let queue = AnalyticsEventsQueue {
+            sender,
+            app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+        };
+        let tracking = TrackEventsContext {
+            model_slug: "gpt-5".to_string(),
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        };
+        let invocations = vec![SkillInvocation {
+            skill_name: "test-skill".to_string(),
+            skill_scope: SkillScope::User,
+            skill_path: PathBuf::from("/tmp/.codex/skills/test/SKILL.md"),
+        }];
+
+        let mut config = test_config();
+        config.analytics_enabled = None;
+        track_skill_invocations(&queue, Arc::new(config), Some(tracking), invocations);
+
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn track_skill_invocations_enqueues_with_opt_in() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let queue = AnalyticsEventsQueue {
+            sender,
+            app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+        };
+        let tracking = TrackEventsContext {
+            model_slug: "gpt-5".to_string(),
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        };
+        let invocations = vec![SkillInvocation {
+            skill_name: "test-skill".to_string(),
+            skill_scope: SkillScope::User,
+            skill_path: PathBuf::from("/tmp/.codex/skills/test/SKILL.md"),
+        }];
+
+        let mut config = test_config();
+        config.analytics_enabled = Some(true);
+        track_skill_invocations(&queue, Arc::new(config), Some(tracking), invocations);
+
+        let received = receiver
+            .try_recv()
+            .expect("skill invocation should be enqueued when opted in");
+        let TrackEventsJob::SkillInvocations(_) = received else {
+            panic!("expected skill invocations job");
+        };
+    }
+
+    #[test]
+    fn track_app_mentioned_requires_explicit_opt_in() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let queue = AnalyticsEventsQueue {
+            sender,
+            app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+        };
+        let tracking = TrackEventsContext {
+            model_slug: "gpt-5".to_string(),
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        };
+
+        let mut config = test_config();
+        config.analytics_enabled = None;
+        track_app_mentioned(
+            &queue,
+            Arc::new(config),
+            Some(tracking),
+            vec![AppInvocation {
+                connector_id: Some("calendar".to_string()),
+                app_name: Some("Calendar".to_string()),
+                invoke_type: Some("explicit".to_string()),
+            }],
+        );
+
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn track_app_mentioned_enqueues_with_opt_in() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let queue = AnalyticsEventsQueue {
+            sender,
+            app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+        };
+        let tracking = TrackEventsContext {
+            model_slug: "gpt-5".to_string(),
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        };
+
+        let mut config = test_config();
+        config.analytics_enabled = Some(true);
+        track_app_mentioned(
+            &queue,
+            Arc::new(config),
+            Some(tracking),
+            vec![AppInvocation {
+                connector_id: Some("calendar".to_string()),
+                app_name: Some("Calendar".to_string()),
+                invoke_type: Some("explicit".to_string()),
+            }],
+        );
+
+        let received = receiver
+            .try_recv()
+            .expect("app mentioned should be enqueued when opted in");
+        let TrackEventsJob::AppMentioned(_) = received else {
+            panic!("expected app mentioned job");
+        };
+    }
+
+    #[test]
+    fn track_app_used_requires_explicit_opt_in() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let queue = AnalyticsEventsQueue {
+            sender,
+            app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+        };
+        let tracking = TrackEventsContext {
+            model_slug: "gpt-5".to_string(),
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        };
+
+        let mut config = test_config();
+        config.analytics_enabled = None;
+        track_app_used(
+            &queue,
+            Arc::new(config),
+            Some(tracking),
+            AppInvocation {
+                connector_id: Some("calendar".to_string()),
+                app_name: Some("Calendar".to_string()),
+                invoke_type: Some("implicit".to_string()),
+            },
+        );
+
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn track_app_used_enqueues_with_opt_in() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let queue = AnalyticsEventsQueue {
+            sender,
+            app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+        };
+        let tracking = TrackEventsContext {
+            model_slug: "gpt-5".to_string(),
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        };
+
+        let mut config = test_config();
+        config.analytics_enabled = Some(true);
+        track_app_used(
+            &queue,
+            Arc::new(config),
+            Some(tracking),
+            AppInvocation {
+                connector_id: Some("calendar".to_string()),
+                app_name: Some("Calendar".to_string()),
+                invoke_type: Some("implicit".to_string()),
+            },
+        );
+
+        let received = receiver
+            .try_recv()
+            .expect("app used should be enqueued when opted in");
+        let TrackEventsJob::AppUsed(_) = received else {
+            panic!("expected app used job");
+        };
     }
 }
