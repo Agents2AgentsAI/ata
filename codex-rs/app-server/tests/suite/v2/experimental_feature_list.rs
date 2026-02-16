@@ -10,6 +10,7 @@ use codex_app_server_protocol::ExperimentalFeatureStage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_core::features::FEATURES;
+use codex_core::features::Features;
 use codex_core::features::Stage;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -35,6 +36,7 @@ async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Resu
     .await??;
 
     let actual = to_response::<ExperimentalFeatureListResponse>(response)?;
+    let enabled_features = Features::with_defaults();
     let expected_data = FEATURES
         .iter()
         .map(|spec| {
@@ -63,7 +65,7 @@ async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Resu
                 display_name,
                 description,
                 announcement,
-                enabled: spec.default_enabled,
+                enabled: enabled_features.enabled(spec.id),
                 default_enabled: spec.default_enabled,
             }
         })
