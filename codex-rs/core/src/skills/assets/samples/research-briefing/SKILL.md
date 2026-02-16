@@ -121,6 +121,30 @@ When the user asks follow-up questions about a specific section, use the most ef
 - `patch_document_section` — to change specific text within a section (for corrections or targeted edits)
 - `update_document_section` — to fully rewrite a section (only when the entire section needs to change)
 
+## Post-Briefing Housekeeping
+
+After presenting the briefing, do these:
+
+**1. Journal entry** — Append to `research-journal.md` at the KB root via `kb_write_file`. Prepend (newest first):
+
+```markdown
+## [Date] — Briefing: [Topic]
+
+### Explored
+- Briefed on [N] papers covering [topic]
+- Approaches identified: [list approach families briefly]
+
+### Recommendation
+- [1-2 sentences: what was recommended and why]
+
+### Cards Touched
+- [card-ids] (read)
+
+---
+```
+
+**2. Research context detection** — If the user's questions or reactions reveal priorities (e.g., "which of these is fastest at inference?", "I don't need the simulation-only ones"), offer to note it in `research-context.md`. This is especially valuable during briefings because the user is actively deciding what to focus on.
+
 ## Anti-Patterns
 
 - **NEVER write more than 5 sentences per paper.** This is a briefing, not a deep dive. If you're writing multi-paragraph walkthroughs, you're doing cross-paper-report's job.

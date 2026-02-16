@@ -101,10 +101,10 @@ The main agent orchestrates subagents and handles presentation. Subagents write 
 
 When the user asks about ONE paper (explain, walkthrough, deep dive, summarize):
 
-1. Call `kb_status` and `kb_search` **in parallel** to check for an existing card.
+1. Call `kb_status` and `kb_search` **in parallel** to check for an existing card. Optionally read `research-context.md` in the same parallel batch (via `kb_read_file` at path `research-context.md`) to tailor the subagent prompt.
 2. If a card with a Deep Dive exists → read it via `kb_read_card` → present via `present_reading_view` → **done, skip remaining steps.**
 3. Resolve the paper identifier using the Pre-Synthesis routing rules (see below). This produces a PDF URL, DOI, or arXiv ID. **Do NOT search Zotero unless the user explicitly mentions Zotero or their library.**
-4. Launch ONE subagent with the standard template (see Subagent Prompt Construction). Include the resolved identifier and `kb_path`.
+4. Launch ONE subagent with the standard template (see Subagent Prompt Construction). Include the resolved identifier, `kb_path`, and any research context priorities (see Personalization below).
 5. When the subagent returns, read the newly written card via `kb_read_card`.
 6. Present the Deep Dive content via `present_reading_view`. Title: the paper name (never card IDs or "KB" references).
 
@@ -121,6 +121,22 @@ When the user asks about MULTIPLE papers or a broad topic:
 5. Collect subagent reports and tell the user which cards were written and a brief highlight per paper.
 6. If the user wants comparison, suggest `$cross-paper-report` as a follow-up. Do NOT run it automatically.
 
+#### Personalization via Research Context
+
+If `research-context.md` exists at the KB root (read via `kb_read_file` at path `research-context.md`), use it to tailor the walkthrough:
+
+- **Priorities** affect emphasis: If the user cares about inference latency, spend more words on the inference pipeline and latency numbers. If they care about data efficiency, expand the training data discussion. The walkthrough covers everything, but the priority sections get deeper treatment (more paragraphs, more worked examples).
+- **Not Interested In** affects framing: If the user has dismissed pure RL approaches, don't spend a paragraph motivating RL vs. imitation learning — state the approach and move on. Still cover the method fully, but don't sell the user on something they've already decided against.
+- **Framings That Work** affect style: If the user responds to tradeoff framing, structure explanations as "you get X but you lose Y." If they prefer mechanical analogies, use those. If they prefer concrete numbers, lead with numbers before abstractions.
+- **Project context** affects connections: If the user is building a bimanual manipulation pipeline, point out which parts of the paper are directly relevant to their setup and which are tangential.
+
+When passing research context to a subagent, include a brief summary in the subagent prompt:
+> User priorities: [list from research-context.md Priorities section]
+> Emphasize: [sections relevant to priorities]
+> User project: [brief from Project section, if relevant]
+
+If `research-context.md` doesn't exist, produce the standard walkthrough — no personalization needed.
+
 #### After Synthesis: Interactive Workflow
 
 After synthesis is complete and the user starts chatting about the papers, the KB cards should grow with the conversation. The following skills compose with paper-synthesis:
@@ -128,6 +144,33 @@ After synthesis is complete and the user starts chatting about the papers, the K
 - **`$kb-update`** — When follow-up Q&A produces insights not in the card, invoke kb-update to persist them back to the card's Discussion Notes section. This happens naturally during conversation — no explicit invocation needed from the user.
 - **`$research-briefing`** — When the user wants a quick orientation of multiple papers before diving deep, suggest this as an alternative to cross-paper-report. Produces a concise 2-4 page overview.
 - **`$conversation-report`** — When the user has been chatting about papers and wants to capture the discussion as a document, suggest this. It organizes the conversation's Q&A into a focused report.
+
+#### Post-Synthesis Housekeeping
+
+After completing a synthesis (card written + reading view presented), do these in the background — they should not block the user from interacting with the reading view:
+
+**1. Journal entry** — Append a brief entry to `research-journal.md` at the KB root via `kb_write_file`. If the file doesn't exist, create it. Prepend (newest first):
+
+```markdown
+## [Date] — Synthesized: [Paper Title]
+
+### Action
+- Synthesized [paper title] into KB card `[card-id]`
+- Source: [URL or "Zotero item XDBQLKYV" or "paper_search"]
+
+### Cards Touched
+- [card-id] (created)
+```
+
+For multi-paper synthesis, list all papers in one entry. Keep it short — 5-10 lines max.
+
+**2. Research context detection** — During the synthesis interaction (including follow-up questions), watch for preference signals:
+- User asks "skip the RL motivation" or "I know how transformers work" → They're expert in that area, note in research-context.md under Framings That Work
+- User asks "focus on the inference pipeline" → Priority signal
+- User says "how would this work for my bimanual setup?" → Project context signal
+- User responds positively to an analogy or framing → Framings That Work signal
+
+When you detect a preference signal, offer briefly: "Want me to note that [preference] in your research context so future walkthroughs adapt?" If yes, read `research-context.md` (create if needed), merge the new item, write it back. If no or ignored, move on — never block on this.
 
 #### Post-Reading-View: Persist Follow-Up Insights
 
@@ -138,6 +181,7 @@ When the user exits the reading view and returns to the main conversation:
 1. **Check if the reading view Q&A produced insights not already in the KB card.** Typical examples: the user asked "how does X handle Y?" and got a targeted explanation, or asked about a specific failure mode, or asked for a comparison with another method.
 2. **If yes, offer to update the KB card:** "The questions you asked about [topics] produced explanations not in the original card. Want me to add them to the card's Discussion Notes so they're available next time?"
 3. **If the user agrees, use the `$kb-update` protocol** — read the card, append the follow-up insights under Discussion Notes with today's date, write the card back.
+4. **Append follow-up insights to the journal** — If insights were persisted to cards, also append a brief journal entry noting the follow-up: `### Follow-up: [Paper Title]` with bullets for what was discussed.
 
 This is lightweight and non-blocking — if the user moves on to a different topic, don't interrupt. But if there's a natural pause or the user explicitly returns from the reading view, this is the moment to offer.
 

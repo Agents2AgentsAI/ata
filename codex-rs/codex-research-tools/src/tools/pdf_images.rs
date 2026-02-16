@@ -400,6 +400,14 @@ async fn build_jar(cache_dir: &Path, dest: &Path) -> std::result::Result<(), Str
 
 /// Probe for an existing pdffigures2 JAR without downloading anything.
 pub(crate) fn probe_pdffigures2_jar() -> Option<PathBuf> {
+    // 0. Check compile-time built JAR.
+    if let Some(buildtime_jar) = option_env!("PDFFIGURES2_JAR_BUILDTIME") {
+        let path = PathBuf::from(buildtime_jar);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
     // 1. Explicit env var.
     if let Ok(p) = std::env::var(PDFFIGURES2_JAR_ENV) {
         let path = PathBuf::from(&p);
@@ -421,10 +429,19 @@ pub(crate) fn probe_pdffigures2_jar() -> Option<PathBuf> {
 /// Locate or auto-build the pdffigures2 JAR.
 ///
 /// Resolution order:
+/// 0. Compile-time built JAR (set by build.rs)
 /// 1. `PDFFIGURES2_JAR` env var (backward compat)
 /// 2. Cached JAR in platform cache dir
 /// 3. Build from source via SBT (auto-installs Java + SBT if needed)
 pub(crate) async fn ensure_pdffigures2_jar() -> std::result::Result<PathBuf, String> {
+    // 0. Check compile-time built JAR.
+    if let Some(buildtime_jar) = option_env!("PDFFIGURES2_JAR_BUILDTIME") {
+        let path = PathBuf::from(buildtime_jar);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
     // 1. Explicit env var takes precedence.
     if let Ok(p) = std::env::var(PDFFIGURES2_JAR_ENV) {
         let path = PathBuf::from(&p);
