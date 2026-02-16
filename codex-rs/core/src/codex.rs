@@ -6160,6 +6160,7 @@ mod tests {
             name: name.to_string(),
             arguments: "{}".to_string(),
             call_id: call_id.to_string(),
+            thought_signature: None,
         })
     }
 
