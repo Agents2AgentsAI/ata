@@ -67,11 +67,11 @@ Do NOT invoke cross-paper-report as part of paper-synthesis. Cross-paper-report 
 
 ### Subagent Prompt Construction
 
-Each subagent prompt MUST instruct the subagent to **invoke the `paper-synthesis` skill** (via the Skill tool) **as its very first action**. This is essential: the Skill tool loads the full 300+ line instruction set that governs PDF handling, narrative style, depth requirements, figure extraction, and KB storage. Without it, the subagent will improvise — using shell commands to extract text, writing shallow summaries, and skipping figure extraction.
+Each subagent prompt MUST include `$paper-synthesis` — this triggers automatic injection of the full 300+ line skill instructions into the subagent's context. Without it, the subagent will improvise — using shell commands to extract text, writing shallow summaries, and skipping figure extraction.
 
-**Do NOT write a custom prompt that describes what the subagent should do.** If you write "You are summarizing a research paper…" or similar, the subagent will NOT load the skill instructions and will fall back to shell-based approaches. Use the template below **verbatim** (only fill in the bracketed fields):
+**Do NOT write a custom prompt that describes what the subagent should do.** If you write "You are summarizing a research paper…" or similar, the subagent will NOT have the skill instructions and will fall back to shell-based approaches. Use the template below **verbatim** (only fill in the bracketed fields):
 
-> Your first action must be to invoke the `paper-synthesis` skill using the Skill tool — this loads the complete workflow instructions you must follow. Then execute every section from the loaded skill: Pre-Synthesis, Type 1 Structured Summary, Type 2 Pedagogical Deep Dive (with the Default Narrative Style and Basics-First Contract), Figure Extraction, Depth Enforcement, and KB Card Storage. Skip the "Execution: Use Subagents" section — you ARE the subagent. Do NOT invoke `cross-paper-report` — the main agent handles that after you return.
+> The $paper-synthesis skill instructions are loaded in your context. Execute every section: Pre-Synthesis, Type 1 Structured Summary, Type 2 Pedagogical Deep Dive (with the Default Narrative Style and Basics-First Contract), Figure Extraction, Depth Enforcement, and KB Card Storage. Skip the "Execution: Use Subagents" section — you ARE the subagent. Do NOT invoke `cross-paper-report` — the main agent handles that after you return.
 >
 > CRITICAL: To read the paper, use `attach_url_files` with the PDF URL. Do NOT use shell commands (curl, wget, pdftotext, python) to download or extract PDF text. The model reads PDFs natively via attach_url_files.
 >
@@ -79,7 +79,7 @@ Each subagent prompt MUST instruct the subagent to **invoke the `paper-synthesis
 > KB path: [value from kb_status]
 > [For Zotero papers: item key, downloaded PDF path, and any notes already retrieved]
 
-Do NOT manually reconstruct the workflow or style rules in the subagent prompt. Do NOT write your own custom prompt — use the template above exactly. The Skill tool loads the full instructions automatically. If you summarize the instructions yourself instead, the subagent will miss critical rules (like using `attach_url_files` instead of shell commands).
+Do NOT manually reconstruct the workflow or style rules in the subagent prompt. Do NOT write your own custom prompt — use the template above exactly. The `$paper-synthesis` mention causes the skill to be auto-loaded into the subagent's context. If you summarize the instructions yourself instead, the subagent will miss critical rules (like using `attach_url_files` instead of shell commands).
 
 ### What Subagents Return
 

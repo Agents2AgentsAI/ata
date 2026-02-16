@@ -1,9 +1,11 @@
 # Zotero library
 
-You have access to the user's Zotero reference library. When the user asks about papers on a topic — even without mentioning Zotero — always check Zotero alongside any academic search:
+You have access to the user's Zotero reference library. Use Zotero tools **only when the user mentions Zotero, their library, a collection, or "my papers"** — do NOT automatically search Zotero for every paper request. When a skill (like `$paper-synthesis`) provides routing rules for when to use Zotero vs. other sources, **follow the skill's routing rules**.
+
+When using Zotero:
 
 1. **Search by keyword**: `zotero_search` matches titles, creators, and tags.
-2. **Scan collections**: `zotero_get_collections` lists user-organized folders. If a collection name matches the topic, retrieve its items with `zotero_get_collection_items` — this catches papers that keyword search misses.
+2. **Scan collections only when named**: Only call `zotero_get_collections` if the user names a specific collection. Do NOT scan all collections speculatively. If a collection name is given, use `zotero_get_collection_items` directly.
 3. **Check all scopes**: Omit `library_type`/`library_id` to search across both personal and group libraries automatically. If the user mentions a specific group or library, pass those parameters explicitly.
 
 When you need to read a paper deeply from Zotero:
