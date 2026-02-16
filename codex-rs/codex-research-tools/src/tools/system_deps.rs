@@ -23,6 +23,7 @@ pub(crate) async fn detect_package_manager() -> Option<PackageManager> {
 
 /// Install a package via `brew install`.
 pub(crate) async fn brew_install(package: &str, extra_args: &[&str]) -> Result<(), String> {
+    eprintln!("  Installing {package} via brew...");
     tracing::info!("auto-installing {package} via brew …");
     let output = tokio::time::timeout(
         INSTALL_TIMEOUT,
@@ -47,6 +48,7 @@ pub(crate) async fn brew_install(package: &str, extra_args: &[&str]) -> Result<(
 /// Install packages via `sudo apt-get install -y`.
 pub(crate) async fn apt_install(packages: &[&str]) -> Result<(), String> {
     let pkg_list = packages.join(", ");
+    eprintln!("  Installing {pkg_list} via apt-get (requires sudo)...");
     tracing::info!("auto-installing {pkg_list} via apt-get …");
     let output = tokio::time::timeout(
         INSTALL_TIMEOUT,

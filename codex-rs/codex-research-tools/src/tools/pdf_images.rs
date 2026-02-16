@@ -11,14 +11,9 @@ use crate::types::PdfExtractFiguresParams;
 use crate::types::PdfExtractFiguresResult;
 
 const PDFFIGURES2_JAR_ENV: &str = "PDFFIGURES2_JAR";
-const PDFFIGURES2_JAR_URL_ENV: &str = "PDFFIGURES2_JAR_URL";
-/// GitHub API asset URL for the pdffigures2 fat JAR. Uses the API endpoint
-/// (not the browser download URL) so it works with private repos when
-/// `GH_TOKEN` / `GITHUB_TOKEN` is set. Override with `PDFFIGURES2_JAR_URL`.
-const PDFFIGURES2_JAR_DEFAULT_URL: &str =
-    "https://api.github.com/repos/Agents2AgentsAI/codex/releases/assets/356426212";
 const PDFFIGURES2_JAR_FILENAME: &str = "pdffigures2.jar";
-const JAR_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
+/// Timeout for building the JAR from source via Docker+SBT (SBT is slow).
+const BUILD_JAR_TIMEOUT: Duration = Duration::from_secs(600);
 /// Minimum size for a valid pdffigures2 fat JAR (~30 MB; 1 MB sanity check).
 const JAR_MIN_SIZE: u64 = 1_000_000;
 
@@ -197,88 +192,206 @@ fn tools_cache_dir() -> PathBuf {
         .join("codex-research-tools")
 }
 
-/// Resolve a GitHub token from env vars or the `gh` CLI.
-async fn resolve_github_token() -> Option<String> {
-    if let Ok(token) = std::env::var("GH_TOKEN") {
-        return Some(token);
-    }
-    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
-        return Some(token);
-    }
-    // Fall back to `gh auth token`.
-    let output = Command::new("gh")
-        .args(["auth", "token"])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .await
-        .ok()?;
-    if output.status.success() {
-        let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !token.is_empty() {
-            return Some(token);
+/// Well-known JAVA_HOME locations for JDK 11 or 8 (compatible with pdffigures2).
+/// JDK 11 is preferred because JDK 8 is unavailable on Apple Silicon.
+const BUILD_JDK_HOMES: &[&str] = &[
+    // Homebrew JDK 11 (Apple Silicon / Intel)
+    "/opt/homebrew/opt/openjdk@11",
+    "/usr/local/opt/openjdk@11",
+    // Homebrew JDK 8 (Intel only — not available on Apple Silicon)
+    "/opt/homebrew/opt/openjdk@8",
+    "/usr/local/opt/openjdk@8",
+    // Linux apt JDK 11
+    "/usr/lib/jvm/java-11-openjdk-amd64",
+    "/usr/lib/jvm/java-11-openjdk-arm64",
+    // Linux apt JDK 8
+    "/usr/lib/jvm/java-8-openjdk-amd64",
+    "/usr/lib/jvm/java-8-openjdk-arm64",
+];
+
+/// Find or install a JDK 11 (or 8) suitable for building pdffigures2.
+///
+/// pdffigures2's SBT build is incompatible with modern JDKs (17+).
+/// Returns the JAVA_HOME path for the compatible JDK.
+async fn find_build_jdk() -> std::result::Result<PathBuf, String> {
+    // Check well-known paths first.
+    for home in BUILD_JDK_HOMES {
+        let p = PathBuf::from(home);
+        if p.join("bin/java").exists() {
+            return Ok(p);
         }
     }
-    None
+
+    // Not found — install JDK 11 (works on both Apple Silicon and Intel).
+    let pm = super::system_deps::detect_package_manager().await;
+    match pm {
+        Some(super::system_deps::PackageManager::Brew) => {
+            super::system_deps::brew_install("openjdk@11", &[]).await?;
+        }
+        Some(super::system_deps::PackageManager::AptGet) => {
+            super::system_deps::apt_install(&["openjdk-11-jdk-headless"]).await?;
+        }
+        None => {
+            return Err(
+                "JDK 11 is required to build pdffigures2 but no package manager (brew/apt-get) \
+                 is available. Install: `brew install openjdk@11` (macOS) or \
+                 `sudo apt install openjdk-11-jdk-headless` (Linux)"
+                    .to_string(),
+            );
+        }
+    }
+
+    // Re-check well-known paths after install.
+    for home in BUILD_JDK_HOMES {
+        let p = PathBuf::from(home);
+        if p.join("bin/java").exists() {
+            return Ok(p);
+        }
+    }
+
+    Err("JDK 11 was installed but JAVA_HOME could not be located at well-known paths".to_string())
 }
 
-/// Download the pdffigures2 fat JAR to `dest`, writing to a temp file first
-/// and then renaming for atomicity.
-async fn download_jar(url: &str, cache_dir: &Path, dest: &Path) -> std::result::Result<(), String> {
+/// Ensure SBT is available, auto-installing via package manager if needed.
+async fn ensure_sbt() -> std::result::Result<(), String> {
+    if super::system_deps::is_on_path("sbt").await {
+        return Ok(());
+    }
+
+    let pm = super::system_deps::detect_package_manager().await;
+    match pm {
+        Some(super::system_deps::PackageManager::Brew) => {
+            super::system_deps::brew_install("sbt", &[]).await?;
+        }
+        Some(super::system_deps::PackageManager::AptGet) => {
+            // sbt isn't in default apt repos; use the official deb from scala-sbt.
+            // Install apt-transport-https + add the sbt repo, then install.
+            super::system_deps::apt_install(&["apt-transport-https"]).await?;
+
+            let add_repo = Command::new("bash")
+                .args([
+                    "-c",
+                    "echo 'deb https://repo.scala-sbt.org/scalasbt/debian all main' \
+                     | sudo tee /etc/apt/sources.list.d/sbt.list && \
+                     curl -sL 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823' \
+                     | sudo apt-key add - && \
+                     sudo apt-get update",
+                ])
+                .output()
+                .await
+                .map_err(|e| format!("failed to add sbt apt repo: {e}"))?;
+
+            if !add_repo.status.success() {
+                let stderr = String::from_utf8_lossy(&add_repo.stderr);
+                return Err(format!("failed to add sbt apt repository: {stderr}"));
+            }
+
+            super::system_deps::apt_install(&["sbt"]).await?;
+        }
+        None => {
+            return Err(
+                "sbt is required to build pdffigures2 but was not found and no package manager \
+                 (brew/apt-get) is available. Install: `brew install sbt` (macOS) or see \
+                 https://www.scala-sbt.org/download/"
+                    .to_string(),
+            );
+        }
+    }
+
+    if super::system_deps::is_on_path("sbt").await {
+        Ok(())
+    } else {
+        Err("sbt was installed but still not found on $PATH".to_string())
+    }
+}
+
+/// Build the pdffigures2 fat JAR from source using SBT.
+///
+/// 1. Ensure Java and SBT are available
+/// 2. Clone the pdffigures2 repo into a temp directory
+/// 3. Run `sbt assembly`
+/// 4. Copy the resulting JAR to `dest` (atomic rename)
+async fn build_jar(cache_dir: &Path, dest: &Path) -> std::result::Result<(), String> {
     tokio::fs::create_dir_all(cache_dir)
         .await
         .map_err(|e| format!("failed to create cache dir {}: {e}", cache_dir.display()))?;
 
-    let client = reqwest::Client::builder()
-        .timeout(JAR_DOWNLOAD_TIMEOUT)
-        .user_agent("codex-research-tools")
-        .build()
-        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
+    // Ensure a compatible JDK (8 or 11) and SBT are available.
+    // pdffigures2's SBT build fails with modern JDKs (17+).
+    let build_jdk_home = find_build_jdk().await?;
+    ensure_sbt().await?;
 
-    let mut request = client.get(url);
+    let tmp_dir = tempfile::tempdir()
+        .map_err(|e| format!("failed to create temp dir for pdffigures2 build: {e}"))?;
+    let clone_dir = tmp_dir.path().join("pdffigures2");
 
-    // For GitHub release assets on private repos, authenticate with a token
-    // if available. Checks `GH_TOKEN`, `GITHUB_TOKEN` env vars, then falls
-    // back to `gh auth token` (the gh CLI's stored credential).
-    if url.contains("github.com") || url.contains("api.github.com") {
-        if let Some(token) = resolve_github_token().await {
-            request = request.header("Authorization", format!("Bearer {token}"));
-        }
-    }
-    // GitHub API requires Accept: application/octet-stream for asset downloads.
-    if url.contains("api.github.com") {
-        request = request.header("Accept", "application/octet-stream");
-    }
-
-    let response = request
-        .send()
+    // Step 1: git clone
+    eprintln!("  Cloning pdffigures2 repository...");
+    let clone_output = Command::new("git")
+        .args([
+            "clone",
+            "--depth",
+            "1",
+            "https://github.com/allenai/pdffigures2.git",
+        ])
+        .arg(&clone_dir)
+        .output()
         .await
-        .map_err(|e| format!("failed to download pdffigures2.jar from {url}: {e}"))?;
+        .map_err(|e| format!("failed to run git clone: {e}"))?;
 
-    if !response.status().is_success() {
+    if !clone_output.status.success() {
+        let stderr = String::from_utf8_lossy(&clone_output.stderr);
+        return Err(format!("git clone of pdffigures2 failed: {stderr}"));
+    }
+
+    // Step 2: build with sbt assembly (using the compatible JDK)
+    eprintln!(
+        "  Running sbt assembly with JAVA_HOME={} (this may take several minutes)...",
+        build_jdk_home.display()
+    );
+    let build_output = tokio::time::timeout(
+        BUILD_JAR_TIMEOUT,
+        Command::new("sbt")
+            .arg("assembly")
+            .env("JAVA_HOME", &build_jdk_home)
+            .current_dir(&clone_dir)
+            .output(),
+    )
+    .await
+    .map_err(|_| format!("sbt assembly timed out after {BUILD_JAR_TIMEOUT:?}"))?
+    .map_err(|e| format!("failed to run sbt assembly: {e}"))?;
+
+    if !build_output.status.success() {
+        let stderr = String::from_utf8_lossy(&build_output.stderr);
+        return Err(format!("sbt assembly failed: {stderr}"));
+    }
+
+    // build.sbt sets: assembly / assemblyOutputPath := file("pdffigures2.jar")
+    // so the fat JAR lands in the project root, not under target/.
+    let built_jar = clone_dir.join("pdffigures2.jar");
+    if !built_jar.exists() {
+        return Err(
+            "sbt assembly completed but pdffigures2.jar was not found in project root".to_string(),
+        );
+    }
+
+    // Validate size.
+    let metadata = tokio::fs::metadata(&built_jar)
+        .await
+        .map_err(|e| format!("failed to read built JAR metadata: {e}"))?;
+    if metadata.len() < JAR_MIN_SIZE {
         return Err(format!(
-            "download of pdffigures2.jar failed: HTTP {} from {url}",
-            response.status()
+            "built JAR is too small ({} bytes), likely not a valid pdffigures2 fat JAR",
+            metadata.len()
         ));
     }
 
-    let bytes = response
-        .bytes()
+    // Step 3: atomic copy to cache.
+    let tmp_dest = dest.with_extension("jar.tmp");
+    tokio::fs::copy(&built_jar, &tmp_dest)
         .await
-        .map_err(|e| format!("failed to read response body: {e}"))?;
-
-    if (bytes.len() as u64) < JAR_MIN_SIZE {
-        return Err(format!(
-            "downloaded file is too small ({} bytes), likely not a valid pdffigures2 fat JAR",
-            bytes.len()
-        ));
-    }
-
-    let tmp = dest.with_extension("jar.tmp");
-    tokio::fs::write(&tmp, &bytes)
-        .await
-        .map_err(|e| format!("failed to write JAR to {}: {e}", tmp.display()))?;
-    tokio::fs::rename(&tmp, dest)
+        .map_err(|e| format!("failed to copy JAR to {}: {e}", tmp_dest.display()))?;
+    tokio::fs::rename(&tmp_dest, dest)
         .await
         .map_err(|e| format!("failed to rename temp JAR to {}: {e}", dest.display()))?;
 
@@ -305,12 +418,12 @@ pub(crate) fn probe_pdffigures2_jar() -> Option<PathBuf> {
     None
 }
 
-/// Locate or auto-download the pdffigures2 JAR.
+/// Locate or auto-build the pdffigures2 JAR.
 ///
 /// Resolution order:
 /// 1. `PDFFIGURES2_JAR` env var (backward compat)
 /// 2. Cached JAR in platform cache dir
-/// 3. Download from `PDFFIGURES2_JAR_URL` (or built-in default URL)
+/// 3. Build from source via SBT (auto-installs Java + SBT if needed)
 pub(crate) async fn ensure_pdffigures2_jar() -> std::result::Result<PathBuf, String> {
     // 1. Explicit env var takes precedence.
     if let Ok(p) = std::env::var(PDFFIGURES2_JAR_ENV) {
@@ -330,15 +443,12 @@ pub(crate) async fn ensure_pdffigures2_jar() -> std::result::Result<PathBuf, Str
         return Ok(cached_jar);
     }
 
-    // 3. Download.
-    let url = std::env::var(PDFFIGURES2_JAR_URL_ENV)
-        .unwrap_or_else(|_| PDFFIGURES2_JAR_DEFAULT_URL.to_string());
-
-    tracing::info!("Downloading pdffigures2.jar from {url} …");
-    if let Err(e) = download_jar(&url, &cache_dir, &cached_jar).await {
+    // 3. Build from source.
+    eprintln!("  Building pdffigures2.jar from source (requires JDK 11 + SBT)...");
+    tracing::info!("building pdffigures2.jar from source via SBT …");
+    if let Err(e) = build_jar(&cache_dir, &cached_jar).await {
         return Err(format!(
-            "{e}. You can manually download the JAR and set \
-             {PDFFIGURES2_JAR_ENV}=/path/to/pdffigures2.jar"
+            "{e}. You can build manually and set {PDFFIGURES2_JAR_ENV}=/path/to/pdffigures2.jar"
         ));
     }
 
@@ -921,11 +1031,6 @@ pub(crate) async fn pdf_extract_figures(
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
-    use wiremock::Mock;
-    use wiremock::MockServer;
-    use wiremock::ResponseTemplate;
-    use wiremock::matchers::method;
-    use wiremock::matchers::path;
 
     use super::*;
 
@@ -1103,121 +1208,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn download_jar_succeeds_with_valid_response() {
-        let server = MockServer::start().await;
-        // Create a fake JAR payload larger than JAR_MIN_SIZE (1 MB).
-        let payload = vec![0xCA_u8; 1_500_000];
-
-        Mock::given(method("GET"))
-            .and(path("/pdffigures2.jar"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(payload.clone()))
-            .mount(&server)
-            .await;
-
-        let dir = tempfile::tempdir().expect("create temp dir");
-        let cache_dir = dir.path().join("cache");
-        let dest = cache_dir.join("pdffigures2.jar");
-
-        let url = format!("{}/pdffigures2.jar", server.uri());
-        let result = download_jar(&url, &cache_dir, &dest).await;
-        assert!(result.is_ok(), "expected Ok, got {result:?}");
-        assert!(dest.exists(), "JAR file should exist at dest");
-
-        let written = std::fs::read(&dest).expect("read downloaded JAR");
-        assert_eq!(written.len(), payload.len());
-
-        // Temp file should be cleaned up.
-        let tmp = dest.with_extension("jar.tmp");
-        assert!(!tmp.exists(), "temp file should be removed after rename");
-    }
-
-    #[tokio::test]
-    async fn download_jar_fails_on_http_error() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("GET"))
-            .and(path("/pdffigures2.jar"))
-            .respond_with(ResponseTemplate::new(404))
-            .mount(&server)
-            .await;
-
-        let dir = tempfile::tempdir().expect("create temp dir");
-        let cache_dir = dir.path().join("cache");
-        let dest = cache_dir.join("pdffigures2.jar");
-
-        let url = format!("{}/pdffigures2.jar", server.uri());
-        let result = download_jar(&url, &cache_dir, &dest).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(
-            err.contains("HTTP 404"),
-            "error should mention HTTP status, got: {err}"
-        );
-        assert!(!dest.exists());
-    }
-
-    #[tokio::test]
-    async fn download_jar_rejects_undersized_payload() {
-        let server = MockServer::start().await;
-        // Payload below JAR_MIN_SIZE (1 MB).
-        let small_payload = vec![0xFF_u8; 100];
-
-        Mock::given(method("GET"))
-            .and(path("/pdffigures2.jar"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(small_payload))
-            .mount(&server)
-            .await;
-
-        let dir = tempfile::tempdir().expect("create temp dir");
-        let cache_dir = dir.path().join("cache");
-        let dest = cache_dir.join("pdffigures2.jar");
-
-        let url = format!("{}/pdffigures2.jar", server.uri());
-        let result = download_jar(&url, &cache_dir, &dest).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(
-            err.contains("too small"),
-            "error should mention undersized file, got: {err}"
-        );
-        assert!(!dest.exists());
-    }
-
-    #[tokio::test]
-    async fn download_jar_creates_cache_dir_if_missing() {
-        let server = MockServer::start().await;
-        let payload = vec![0xAB_u8; 1_500_000];
-
-        Mock::given(method("GET"))
-            .and(path("/jar"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(payload))
-            .mount(&server)
-            .await;
-
-        let dir = tempfile::tempdir().expect("create temp dir");
-        let cache_dir = dir.path().join("deeply").join("nested").join("cache");
-        assert!(!cache_dir.exists());
-
-        let dest = cache_dir.join("pdffigures2.jar");
-        let url = format!("{}/jar", server.uri());
-        let result = download_jar(&url, &cache_dir, &dest).await;
-        assert!(result.is_ok(), "expected Ok, got {result:?}");
-        assert!(cache_dir.exists(), "cache dir should be created");
-        assert!(dest.exists(), "JAR should exist");
-    }
-
-    #[tokio::test]
-    async fn ensure_jar_returns_cached_jar_without_download() {
-        // Pre-populate a cached JAR and verify ensure_pdffigures2_jar finds it.
+    async fn ensure_jar_returns_cached_jar_without_build() {
+        // Pre-populate a cached JAR and verify the cache detection logic finds it.
         let dir = tempfile::tempdir().expect("create temp dir");
         let cache_dir = dir.path();
         let jar = cache_dir.join(PDFFIGURES2_JAR_FILENAME);
         std::fs::write(&jar, vec![0_u8; 2_000_000]).expect("write fake cached JAR");
 
-        // Call the inner logic that checks the cache path directly.
         assert!(jar.exists());
-        // We can't easily call ensure_pdffigures2_jar without env var side effects,
-        // but we can verify the cache detection logic inline.
         let cached_jar = cache_dir.join(PDFFIGURES2_JAR_FILENAME);
         assert!(cached_jar.exists(), "cached JAR should be detected");
     }
