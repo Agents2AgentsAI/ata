@@ -4,10 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+feedback-upload = ["dep:sentry"]
+
 [dependencies]
 anyhow = { workspace = true }
 codex-protocol = { workspace = true }
-sentry = { version = "0.46" }
+sentry = { version = "0.46", optional = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 

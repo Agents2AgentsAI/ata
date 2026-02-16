@@ -17,7 +17,6 @@ pub fn build_provider(
     config: &Config,
     service_version: &str,
     service_name_override: Option<&str>,
-    _default_analytics_enabled: bool,
 ) -> Result<Option<OtelProvider>, Box<dyn Error>> {
     let to_otel_exporter = |kind: &Kind| match kind {
         Kind::None => OtelExporter::None,

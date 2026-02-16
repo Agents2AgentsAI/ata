@@ -382,7 +382,7 @@ pub async fn run_main(
     }
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, true)
+        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None)
     })) {
         Ok(Ok(otel)) => otel,
         Ok(Err(e)) => {
