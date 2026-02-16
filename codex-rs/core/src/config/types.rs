@@ -346,15 +346,21 @@ pub enum HistoryPersistence {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct AnalyticsConfigToml {
-    /// When `false`, disables analytics across Codex product surfaces in this profile.
+    /// When `true`, enables analytics across Codex product surfaces in this profile.
+    #[schemars(default = "default_opt_in_disabled")]
     pub enabled: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct FeedbackConfigToml {
-    /// When `false`, disables the feedback flow across Codex product surfaces.
+    /// When `true`, enables the feedback upload flow across Codex product surfaces.
+    #[schemars(default = "default_opt_in_disabled")]
     pub enabled: Option<bool>,
+}
+
+const fn default_opt_in_disabled() -> Option<bool> {
+    Some(false)
 }
 
 /// Memories settings loaded from config.toml.
@@ -544,7 +550,7 @@ impl Default for OtelConfig {
             environment: DEFAULT_OTEL_ENVIRONMENT.to_owned(),
             exporter: OtelExporterKind::None,
             trace_exporter: OtelExporterKind::None,
-            metrics_exporter: OtelExporterKind::Statsig,
+            metrics_exporter: OtelExporterKind::None,
         }
     }
 }

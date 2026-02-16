@@ -49,7 +49,8 @@
       "description": "Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.",
       "properties": {
         "enabled": {
-          "description": "When `false`, disables analytics across Codex product surfaces in this profile.",
+          "default": false,
+          "description": "When `true`, enables analytics across Codex product surfaces in this profile.",
           "type": "boolean"
         }
       },
@@ -386,7 +387,8 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "description": "When `false`, disables the feedback flow across Codex product surfaces.",
+          "default": false,
+          "description": "When `true`, enables the feedback upload flow across Codex product surfaces.",
           "type": "boolean"
         }
       },
@@ -1316,7 +1318,7 @@
           "$ref": "#/definitions/AnalyticsConfigToml"
         }
       ],
-      "description": "When `false`, disables analytics across Codex product surfaces in this machine. Defaults to `true`."
+      "description": "When `true`, enables analytics across Codex product surfaces in this machine. Defaults to disabled unless explicitly opted in."
     },
     "approval_policy": {
       "allOf": [
@@ -1520,7 +1522,7 @@
           "$ref": "#/definitions/FeedbackConfigToml"
         }
       ],
-      "description": "When `false`, disables feedback collection across Codex product surfaces. Defaults to `true`."
+      "description": "When `true`, enables feedback upload across Codex product surfaces. Defaults to disabled unless explicitly opted in."
     },
     "file_opener": {
       "allOf": [

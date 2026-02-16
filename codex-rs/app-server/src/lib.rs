@@ -201,13 +201,11 @@ pub async fn run_main(
     codex_linux_sandbox_exe: Option<PathBuf>,
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
-    default_analytics_enabled: bool,
 ) -> IoResult<()> {
     run_main_with_transport(
         codex_linux_sandbox_exe,
         cli_config_overrides,
         loader_overrides,
-        default_analytics_enabled,
         AppServerTransport::Stdio,
     )
     .await
@@ -217,7 +215,6 @@ pub async fn run_main_with_transport(
     codex_linux_sandbox_exe: Option<PathBuf>,
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
-    default_analytics_enabled: bool,
     transport: AppServerTransport,
 ) -> IoResult<()> {
     let (transport_event_tx, mut transport_event_rx) =
@@ -331,7 +328,6 @@ pub async fn run_main_with_transport(
         &config,
         env!("CARGO_PKG_VERSION"),
         Some("codex_app_server"),
-        default_analytics_enabled,
     )
     .map_err(|e| {
         std::io::Error::new(

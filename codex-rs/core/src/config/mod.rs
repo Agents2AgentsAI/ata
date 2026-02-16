@@ -406,12 +406,12 @@ pub struct Config {
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: bool,
 
-    /// When `false`, disables analytics across Codex product surfaces in this machine.
-    /// Voluntarily left as Optional because the default value might depend on the client.
+    /// When `true`, enables analytics across Codex product surfaces in this machine.
+    /// Voluntarily left as Optional because explicit opt-in is required.
     pub analytics_enabled: Option<bool>,
 
-    /// When `false`, disables feedback collection across Codex product surfaces.
-    /// Defaults to `true`.
+    /// When `true`, enables feedback upload across Codex product surfaces.
+    /// Defaults to `false`.
     pub feedback_enabled: bool,
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
@@ -1076,12 +1076,12 @@ pub struct ConfigToml {
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: Option<bool>,
 
-    /// When `false`, disables analytics across Codex product surfaces in this machine.
-    /// Defaults to `true`.
+    /// When `true`, enables analytics across Codex product surfaces in this machine.
+    /// Defaults to disabled unless explicitly opted in.
     pub analytics: Option<crate::config::types::AnalyticsConfigToml>,
 
-    /// When `false`, disables feedback collection across Codex product surfaces.
-    /// Defaults to `true`.
+    /// When `true`, enables feedback upload across Codex product surfaces.
+    /// Defaults to disabled unless explicitly opted in.
     pub feedback: Option<crate::config::types::FeedbackConfigToml>,
 
     /// Settings for app-specific controls.
@@ -1917,7 +1917,7 @@ impl Config {
                 .feedback
                 .as_ref()
                 .and_then(|feedback| feedback.enabled)
-                .unwrap_or(true),
+                .unwrap_or(false),
             tui_notifications: cfg
                 .tui
                 .as_ref()
@@ -1945,7 +1945,7 @@ impl Config {
                     .unwrap_or(DEFAULT_OTEL_ENVIRONMENT.to_string());
                 let exporter = t.exporter.unwrap_or(OtelExporterKind::None);
                 let trace_exporter = t.trace_exporter.unwrap_or_else(|| exporter.clone());
-                let metrics_exporter = t.metrics_exporter.unwrap_or(OtelExporterKind::Statsig);
+                let metrics_exporter = t.metrics_exporter.unwrap_or(OtelExporterKind::None);
                 OtelConfig {
                     log_user_prompt,
                     environment,
@@ -2603,7 +2603,7 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn feedback_enabled_defaults_to_true() -> std::io::Result<()> {
+    fn feedback_enabled_defaults_to_false() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml {
             feedback: Some(FeedbackConfigToml::default()),
@@ -2616,7 +2616,7 @@ trust_level = "trusted"
             codex_home.path().to_path_buf(),
         )?;
 
-        assert_eq!(config.feedback_enabled, true);
+        assert_eq!(config.feedback_enabled, false);
 
         Ok(())
     }
@@ -4244,7 +4244,7 @@ model_verbosity = "high"
                 show_tooltips: true,
                 experimental_mode: None,
                 analytics_enabled: Some(true),
-                feedback_enabled: true,
+                feedback_enabled: false,
                 tui_alternate_screen: AltScreenMode::Auto,
                 tui_status_line: None,
                 otel: OtelConfig::default(),
@@ -4255,7 +4255,7 @@ model_verbosity = "high"
     }
 
     #[test]
-    fn metrics_exporter_defaults_to_statsig_when_missing() -> std::io::Result<()> {
+    fn metrics_exporter_defaults_to_none_when_missing() -> std::io::Result<()> {
         let fixture = create_test_fixture()?;
 
         let config = Config::load_from_base_config_with_overrides(
@@ -4267,7 +4267,7 @@ model_verbosity = "high"
             fixture.codex_home(),
         )?;
 
-        assert_eq!(config.otel.metrics_exporter, OtelExporterKind::Statsig);
+        assert_eq!(config.otel.metrics_exporter, OtelExporterKind::None);
         Ok(())
     }
 
@@ -4358,7 +4358,7 @@ model_verbosity = "high"
             show_tooltips: true,
             experimental_mode: None,
             analytics_enabled: Some(true),
-            feedback_enabled: true,
+            feedback_enabled: false,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
             otel: OtelConfig::default(),
@@ -4470,7 +4470,7 @@ model_verbosity = "high"
             show_tooltips: true,
             experimental_mode: None,
             analytics_enabled: Some(false),
-            feedback_enabled: true,
+            feedback_enabled: false,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
             otel: OtelConfig::default(),
@@ -4568,7 +4568,7 @@ model_verbosity = "high"
             show_tooltips: true,
             experimental_mode: None,
             analytics_enabled: Some(true),
-            feedback_enabled: true,
+            feedback_enabled: false,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
             otel: OtelConfig::default(),

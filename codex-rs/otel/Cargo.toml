@@ -19,6 +19,11 @@ workspace = true
 ## attempt to export metrics over the network.
 disable-default-metrics-exporter = []
 
+## Enables Codex-internal telemetry defaults for the Statsig exporter.
+##
+## When disabled (default), `OtelExporter::Statsig` resolves to `OtelExporter::None`.
+internal-telemetry = []
+
 [dependencies]
 chrono = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
