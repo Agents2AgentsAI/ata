@@ -1,6 +1,6 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
-<p align="center"><strong>Ata CLI</strong> is a coding agent from Agents2Agents AI that runs locally on your computer.
-
+<p align="center"><code>npm i -g @a2a-ai/codex</code><br />or <code>brew install --cask ata</code></p>
+<p align="center"><strong>Ata CLI</strong> is a coding agent from Agents2Agents AI that runs locally on your computer.</p>
+<p align="center">
 It is built on top of OpenAI Codex CLI.
 <p align="center">
   <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
