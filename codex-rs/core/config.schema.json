@@ -49,6 +49,7 @@
       "description": "Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.",
       "properties": {
         "enabled": {
+          "default": false,
           "description": "When `true`, enables analytics across Codex product surfaces in this profile.",
           "type": "boolean"
         }
@@ -386,6 +387,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {
+          "default": false,
           "description": "When `true`, enables the feedback upload flow across Codex product surfaces.",
           "type": "boolean"
         }

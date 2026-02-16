@@ -347,6 +347,7 @@ pub enum HistoryPersistence {
 #[schemars(deny_unknown_fields)]
 pub struct AnalyticsConfigToml {
     /// When `true`, enables analytics across Codex product surfaces in this profile.
+    #[schemars(default = "default_opt_in_disabled")]
     pub enabled: Option<bool>,
 }
 
@@ -354,7 +355,12 @@ pub struct AnalyticsConfigToml {
 #[schemars(deny_unknown_fields)]
 pub struct FeedbackConfigToml {
     /// When `true`, enables the feedback upload flow across Codex product surfaces.
+    #[schemars(default = "default_opt_in_disabled")]
     pub enabled: Option<bool>,
+}
+
+const fn default_opt_in_disabled() -> Option<bool> {
+    Some(false)
 }
 
 /// Memories settings loaded from config.toml.
