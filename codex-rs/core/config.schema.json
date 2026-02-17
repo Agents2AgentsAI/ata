@@ -141,7 +141,7 @@
           "type": "string"
         },
         {
-          "description": "NOTE: default changed from `File` to `Auto`. Keep this comment so upstream merges can spot semantic conflicts quickly. Use keyring when available; otherwise, fall back to a file in CODEX_HOME. More secure - stores credentials in OS keyring. If keyring access fails once, it automatically falls back to file storage for the session to avoid repeated prompts.",
+          "description": "Use keyring when available; otherwise, fall back to a file in CODEX_HOME. More secure - stores credentials in OS keyring. If keyring access fails once, it automatically falls back to file storage for the session to avoid repeated prompts.",
           "enum": [
             "auto"
           ],
@@ -1616,7 +1616,7 @@
         }
       ],
       "default": null,
-      "description": "Preferred backend for storing MCP OAuth credentials. keyring: Use an OS-specific keyring service. https://github.com/Agents2AgentsAI/ata/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2 file: Use a file in the Ata home directory. auto (default): Use the OS-specific keyring service if available, otherwise use a file."
+      "description": "Preferred backend for storing MCP OAuth credentials. keyring: Use an OS-specific keyring service. https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2 file: Use a file in the Codex home directory. auto (default): Use the OS-specific keyring service if available, otherwise use a file."
     },
     "mcp_servers": {
       "additionalProperties": {

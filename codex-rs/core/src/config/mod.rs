@@ -2589,7 +2589,7 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn config_defaults_to_auto_oauth_store_mode() -> std::io::Result<()> {
+    fn config_defaults_to_correct_oauth_store_mode() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml::default();
 
@@ -2599,6 +2599,12 @@ trust_level = "trusted"
             codex_home.path().to_path_buf(),
         )?;
 
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            config.mcp_oauth_credentials_store_mode,
+            OAuthCredentialsStoreMode::File,
+        );
+        #[cfg(not(debug_assertions))]
         assert_eq!(
             config.mcp_oauth_credentials_store_mode,
             OAuthCredentialsStoreMode::Auto,
