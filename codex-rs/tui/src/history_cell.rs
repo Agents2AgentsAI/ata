@@ -2492,7 +2492,7 @@ mod tests {
 
     #[test]
     fn collab_spawn_end_errored_snapshot() {
-        let cell = crate::collab::spawn_end(codex_core::protocol::CollabAgentSpawnEndEvent {
+        let cell = crate::multi_agents::spawn_end(codex_core::protocol::CollabAgentSpawnEndEvent {
             call_id: "call_123".to_string(),
             sender_thread_id: codex_protocol::ThreadId::new(),
             new_thread_id: None,
