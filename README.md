@@ -22,6 +22,11 @@ npm install -g @a2a-ai/ata
 brew install --cask ata
 ```
 
+```shell
+# Install using curl (macOS/Linux)
+curl -fsSL https://agents2agents.ai/ata/install.sh | sh
+```
+
 Then simply run `ata` to get started.
 
 <details>

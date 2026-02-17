@@ -378,6 +378,64 @@ mod tests {
     use std::process::Command;
     use tempfile::TempDir;
 
+    /// Build extra policy snippets and `-D` params for any writable roots
+    /// beyond `first_extra_index` that `get_writable_roots_with_cwd` returns
+    /// (e.g. `~/.ata/knowledge-base`).  This keeps the tests resilient to new
+    /// system-managed writable roots without hard-coding every possibility.
+    fn extra_writable_root_entries(
+        policy: &SandboxPolicy,
+        cwd: &Path,
+        first_extra_index: usize,
+    ) -> (String, Vec<String>) {
+        let all_roots = policy.get_writable_roots_with_cwd(cwd);
+        let mut policy_snippets = String::new();
+        let mut params = Vec::new();
+        for (i, wr) in all_roots.iter().enumerate().skip(first_extra_index) {
+            let canonical = wr
+                .root
+                .as_path()
+                .canonicalize()
+                .unwrap_or_else(|_| wr.root.to_path_buf());
+            let param_name = format!("WRITABLE_ROOT_{i}");
+
+            if wr.read_only_subpaths.is_empty() {
+                policy_snippets
+                    .push_str(&format!(r#" (subpath (param "{param_name}"))"#));
+                params.push(format!(
+                    "-D{param_name}={}",
+                    canonical.to_string_lossy()
+                ));
+            } else {
+                let mut require_parts = vec![format!(
+                    r#"(subpath (param "{param_name}"))"#
+                )];
+                params.push(format!(
+                    "-D{param_name}={}",
+                    canonical.to_string_lossy()
+                ));
+                for (j, ro) in wr.read_only_subpaths.iter().enumerate() {
+                    let canonical_ro = ro
+                        .as_path()
+                        .canonicalize()
+                        .unwrap_or_else(|_| ro.to_path_buf());
+                    let ro_param = format!("WRITABLE_ROOT_{i}_RO_{j}");
+                    require_parts.push(format!(
+                        r#"(require-not (subpath (param "{ro_param}")))"#
+                    ));
+                    params.push(format!(
+                        "-D{ro_param}={}",
+                        canonical_ro.to_string_lossy()
+                    ));
+                }
+                policy_snippets.push_str(&format!(
+                    "(require-all {} )",
+                    require_parts.join(" ")
+                ));
+            }
+        }
+        (policy_snippets, params)
+    }
+
     fn assert_seatbelt_denied(stderr: &[u8], path: &Path) {
         let stderr = String::from_utf8_lossy(stderr);
         let expected = format!("bash: {}: Operation not permitted\n", path.display());
@@ -651,17 +709,21 @@ mod tests {
         .collect();
         let args = create_seatbelt_command_args(shell_command.clone(), &policy, &cwd, false, None);
 
-        // Build the expected policy text using a raw string for readability.
-        // Note that the policy includes:
-        // - the base policy,
-        // - read-only access to the filesystem,
-        // - write access to WRITABLE_ROOT_0 (but not its .git or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
+        // Discover any extra writable roots that get_writable_roots_with_cwd()
+        // adds beyond the three we explicitly set up (e.g. knowledge-base).
+        let (extra_policy, extra_params) =
+            extra_writable_root_entries(&policy, &cwd, 3);
+
+        // Build the expected policy text.
+        // WRITABLE_ROOT_0 = vulnerable_root (with .git/.codex read-only),
+        // WRITABLE_ROOT_1 = empty_root, WRITABLE_ROOT_2 = cwd,
+        // plus any system-managed roots discovered above.
         let expected_policy = format!(
             r#"{MACOS_SEATBELT_BASE_POLICY}
 ; allow read-only file operations
 (allow file-read*)
 (allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) ) (subpath (param "WRITABLE_ROOT_1")) (subpath (param "WRITABLE_ROOT_2"))
+(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) ) (subpath (param "WRITABLE_ROOT_1")) (subpath (param "WRITABLE_ROOT_2")){extra_policy}
 )
 
 ; macOS permission profile extensions
@@ -700,6 +762,8 @@ mod tests {
                     .to_string_lossy()
             ),
         ];
+
+        expected_args.extend(extra_params);
 
         expected_args.extend(
             macos_dir_params()
@@ -946,17 +1010,22 @@ mod tests {
             ""
         };
 
-        // Build the expected policy text using a raw string for readability.
-        // Note that the policy includes:
-        // - the base policy,
-        // - read-only access to the filesystem,
-        // - write access to WRITABLE_ROOT_0 (but not its .git or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
+        // The first "extra" root index follows cwd (0), /tmp (1), and
+        // optionally $TMPDIR (2).
+        let first_extra_index = if tmpdir_env_var.is_some() { 3 } else { 2 };
+        let (extra_policy, extra_params) =
+            extra_writable_root_entries(&policy, vulnerable_root.as_path(), first_extra_index);
+
+        // Build the expected policy text.
+        // WRITABLE_ROOT_0 = cwd (with .git/.codex read-only),
+        // WRITABLE_ROOT_1 = /tmp, optionally WRITABLE_ROOT_2 = $TMPDIR,
+        // plus any system-managed roots (e.g. knowledge-base).
         let expected_policy = format!(
             r#"{MACOS_SEATBELT_BASE_POLICY}
 ; allow read-only file operations
 (allow file-read*)
 (allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
+(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}{extra_policy}
 )
 
 ; macOS permission profile extensions
@@ -996,6 +1065,8 @@ mod tests {
         if let Some(p) = tmpdir_env_var {
             expected_args.push(format!("-DWRITABLE_ROOT_2={p}"));
         }
+
+        expected_args.extend(extra_params);
 
         expected_args.extend(
             macos_dir_params()
