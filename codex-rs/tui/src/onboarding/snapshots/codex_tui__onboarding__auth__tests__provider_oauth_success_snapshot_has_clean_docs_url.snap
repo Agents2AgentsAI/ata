@@ -8,7 +8,7 @@ expression: terminal.backend()
 
   Decide how much autonomy you want to grant Ata
   For more details see the Ata docs:
-  https://github.com/openai/codex
+  https://github.com/Agents2AgentsAI/ata
 
   Ata can make mistakes
   Review the code it writes and commands it runs
