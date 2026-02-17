@@ -278,14 +278,40 @@ Not every explanation needs all diagram types. Use judgment — a single-card ex
 
 **Open:** After successful compilation, open the PDF for the user with `open <pdf_path>` (macOS) or `xdg-open <pdf_path>` (Linux).
 
-## Presentation
+## Presentation (Main Agent Only)
 
-IMPORTANT: When the deep narrative explanation is complete, you MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the report title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
+**This section applies to the main agent only.** Cluster subagents in the Large-Set workflow return their content as text to the main agent — they never call `present_reading_view` because the user is interacting with the main agent.
+
+IMPORTANT: When the deep narrative explanation is complete, the main agent MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the report title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
 
 When the user asks follow-up questions about a specific section, use the most efficient update tool:
 - `append_to_section` — to add new information at the end of a section (most common for follow-up questions)
 - `patch_document_section` — to change specific text within a section (for corrections or targeted edits)
 - `update_document_section` — to fully rewrite a section (only when the entire section needs to change)
+
+## Post-Report Housekeeping
+
+After the report is complete (both reading view + PDF delivered), do these:
+
+**1. Journal entry** — Append to `research-journal.md` at the KB root via `kb_write_file`. Prepend (newest first):
+
+```markdown
+## [Date] — Cross-Paper Report: [Topic/Title]
+
+### Explored
+- Compared [N] papers: [list paper titles briefly]
+- Focus dimensions: [e.g., action tokenization, inference latency, training strategy]
+
+### Key Findings
+- [1-2 bullet points: the most important comparative insights]
+
+### Cards Touched
+- [card-ids] (read)
+
+---
+```
+
+**2. Research context detection** — During the report interaction and follow-ups, watch for preference signals. If the user focuses on specific comparison dimensions ("I really care about the latency comparison"), asks to skip sections, or responds well to particular framings, offer briefly to note it in `research-context.md`. Never block the interaction on this.
 
 ## Completion Checklist
 
@@ -296,6 +322,7 @@ Before reporting done, verify ALL of these:
 - [ ] PDF generated via `latex_compile` with at least one TikZ diagram
 - [ ] If compilation failed: errors were fixed and `latex_compile` was retried
 - [ ] PDF opened for the user via `open` / `xdg-open`
+- [ ] Journal entry appended to `research-journal.md`
 
 ## Anti-Patterns (Things You Must NEVER Do)
 
@@ -359,6 +386,7 @@ Launch **one subagent per cluster**, all in parallel. Each subagent runs the ful
 >
 > Follow the skill's standard workflow (Phases 1–3) with these overrides:
 > - **Skip Phase 0** (Related Card Discovery) — you work only on the assigned cards. Do NOT call `kb_list_cards` to discover additional cards.
+> - **Skip the Presentation section** — do NOT call `present_reading_view`. The user is on the main agent, not on you. Return your content as text to the main agent.
 > - **All cards are focal** — no tiered depth. Every card gets the full 800–2500 word treatment.
 > - **No user confirmation** — do not present tier assignments or card additions for approval. Execute autonomously.
 > - **Shared terminology glossary:** [paste the glossary from Step 1 here so all subagents use consistent terms]
