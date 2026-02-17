@@ -11,7 +11,7 @@ import urllib.error
 
 from github_utils import github_api_contents_url, github_request
 
-DEFAULT_REPO = "openai/skills"
+DEFAULT_REPO = "Agents2AgentsAI/skills"
 DEFAULT_PATH = "skills/.curated"
 DEFAULT_REF = "main"
 

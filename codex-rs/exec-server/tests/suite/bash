@@ -2,6 +2,8 @@
 
 // This is an instance of the fork of Bash that we bundle with
 // https://www.npmjs.com/package/@a2a-ai/ata-shell-tool-mcp.
+// TODO: Update openai/codex GitHub release URLs below to Agents2AgentsAI/ata
+// once the first release with these artifacts is published on the new repo.
 // Fetching the prebuilt version via DotSlash makes it easier to write
 // integration tests for the MCP server.
 //

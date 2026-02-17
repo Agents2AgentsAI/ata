@@ -2291,11 +2291,11 @@ mod tests {
 
     #[test]
     fn parse_repo_ref_accepts_supported_hosts_and_variants() {
-        let parsed = parse_repo_ref("https://github.com/openai/codex.git/tree/main", None)
+        let parsed = parse_repo_ref("https://github.com/Agents2AgentsAI/ata.git/tree/main", None)
             .expect("github URL should parse");
         assert_eq!(parsed.host, "github.com");
-        assert_eq!(parsed.owner, "openai");
-        assert_eq!(parsed.repo, "codex");
+        assert_eq!(parsed.owner, "Agents2AgentsAI");
+        assert_eq!(parsed.repo, "ata");
         assert_eq!(parsed.branch.as_deref(), Some("main"));
 
         let parsed = parse_repo_ref("https://gitlab.com/group/project", Some("dev"))
@@ -2310,10 +2310,10 @@ mod tests {
     fn parse_repo_ref_rejects_invalid_values() {
         let cases = [
             "",
-            "github.com/openai/codex",
-            "http://github.com/openai/codex",
-            "https://bitbucket.org/openai/codex",
-            "https://github.com/openai",
+            "github.com/Agents2AgentsAI/ata",
+            "http://github.com/Agents2AgentsAI/ata",
+            "https://bitbucket.org/Agents2AgentsAI/ata",
+            "https://github.com/Agents2AgentsAI",
         ];
 
         for value in cases {
@@ -2385,7 +2385,7 @@ mod tests {
         let server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/repos/openai/codex"))
+            .and(path("/repos/Agents2AgentsAI/ata"))
             .and(header("authorization", "Bearer test-token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "license": { "spdx_id": "MIT" },
@@ -2398,13 +2398,13 @@ mod tests {
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/repos/openai/codex/releases"))
+            .and(path("/repos/Agents2AgentsAI/ata/releases"))
             .and(query_param("per_page", "1"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .append_header(
                         "link",
-                        "<https://api.github.com/repos/openai/codex/releases?per_page=1&page=4>; rel=\"last\"",
+                        "<https://api.github.com/repos/Agents2AgentsAI/ata/releases?per_page=1&page=4>; rel=\"last\"",
                     )
                     .set_body_json(serde_json::json!([{ "id": 1 }])),
             )
@@ -2412,7 +2412,7 @@ mod tests {
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/repos/openai/codex/commits/main/check-runs"))
+            .and(path("/repos/Agents2AgentsAI/ata/commits/main/check-runs"))
             .and(query_param("per_page", "1"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "check_runs": [
@@ -2425,7 +2425,7 @@ mod tests {
         let toolkit = build_test_toolkit(server.uri(), Some("test-token"));
 
         let health = toolkit
-            .repo_get_health("https://github.com/openai/codex.git/tree/main")
+            .repo_get_health("https://github.com/Agents2AgentsAI/ata.git/tree/main")
             .await
             .expect("repo_get_health should succeed");
 
@@ -2445,7 +2445,7 @@ mod tests {
         let server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/repos/openai/codex"))
+            .and(path("/repos/Agents2AgentsAI/ata"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "license": null,
                 "pushed_at": "2026-02-01T01:02:03Z",
@@ -2457,14 +2457,14 @@ mod tests {
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/repos/openai/codex/releases"))
+            .and(path("/repos/Agents2AgentsAI/ata/releases"))
             .and(query_param("per_page", "1"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
             .mount(&server)
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/repos/openai/codex/commits/main/check-runs"))
+            .and(path("/repos/Agents2AgentsAI/ata/commits/main/check-runs"))
             .and(query_param("per_page", "1"))
             .respond_with(ResponseTemplate::new(404))
             .mount(&server)
@@ -2472,7 +2472,7 @@ mod tests {
 
         let toolkit = build_test_toolkit(server.uri(), None);
         let health = toolkit
-            .repo_get_health("https://github.com/openai/codex")
+            .repo_get_health("https://github.com/Agents2AgentsAI/ata")
             .await
             .expect("repo_get_health should succeed");
 
@@ -2486,7 +2486,7 @@ mod tests {
         let server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/repos/openai/codex"))
+            .and(path("/repos/Agents2AgentsAI/ata"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "license": null,
                 "pushed_at": "2026-02-01T01:02:03Z",
@@ -2498,14 +2498,14 @@ mod tests {
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/repos/openai/codex/releases"))
+            .and(path("/repos/Agents2AgentsAI/ata/releases"))
             .and(query_param("per_page", "1"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
             .mount(&server)
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/repos/openai/codex/commits/main/check-runs"))
+            .and(path("/repos/Agents2AgentsAI/ata/commits/main/check-runs"))
             .and(query_param("per_page", "1"))
             .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
                 "message": "Resource not accessible by integration"
@@ -2515,7 +2515,7 @@ mod tests {
 
         let toolkit = build_test_toolkit(server.uri(), None);
         let error = toolkit
-            .repo_get_health("https://github.com/openai/codex")
+            .repo_get_health("https://github.com/Agents2AgentsAI/ata")
             .await
             .expect_err("forbidden check-runs should fail");
 
@@ -2536,7 +2536,7 @@ mod tests {
     async fn repo_get_health_rejects_non_github_urls() {
         let toolkit = build_test_toolkit("https://api.github.com".to_string(), None);
         let error = toolkit
-            .repo_get_health("https://gitlab.com/openai/codex")
+            .repo_get_health("https://gitlab.com/Agents2AgentsAI/ata")
             .await
             .expect_err("non-github URL should fail");
 
@@ -2551,7 +2551,7 @@ mod tests {
         let server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/repos/openai/missing"))
+            .and(path("/repos/Agents2AgentsAI/missing"))
             .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
                 "message": "Not Found"
             })))
@@ -2562,7 +2562,7 @@ mod tests {
 
         for _ in 0..2 {
             let error = toolkit
-                .repo_get_health("https://github.com/openai/missing")
+                .repo_get_health("https://github.com/Agents2AgentsAI/missing")
                 .await
                 .expect_err("missing repo should fail");
             assert!(
@@ -2584,7 +2584,7 @@ mod tests {
             .expect("request history should be available");
         let metadata_calls = requests
             .iter()
-            .filter(|request| request.url.path() == "/repos/openai/missing")
+            .filter(|request| request.url.path() == "/repos/Agents2AgentsAI/missing")
             .count();
         assert_eq!(metadata_calls, 1);
     }
@@ -2594,7 +2594,7 @@ mod tests {
         let server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/repos/openai/missing"))
+            .and(path("/repos/Agents2AgentsAI/missing"))
             .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
                 "message": "Not Found"
             })))
@@ -2614,7 +2614,7 @@ mod tests {
         let toolkit = build_test_toolkit_with_config(config);
 
         let first = toolkit
-            .repo_get_health("https://github.com/openai/missing")
+            .repo_get_health("https://github.com/Agents2AgentsAI/missing")
             .await
             .expect_err("first missing repo request should fail");
         assert!(
@@ -2625,7 +2625,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(35)).await;
 
         let second = toolkit
-            .repo_get_health("https://github.com/openai/missing")
+            .repo_get_health("https://github.com/Agents2AgentsAI/missing")
             .await
             .expect_err("second missing repo request should fail");
         assert!(
@@ -2639,7 +2639,7 @@ mod tests {
             .expect("request history should be available");
         let metadata_calls = requests
             .iter()
-            .filter(|request| request.url.path() == "/repos/openai/missing")
+            .filter(|request| request.url.path() == "/repos/Agents2AgentsAI/missing")
             .count();
         assert_eq!(metadata_calls, 2);
     }
@@ -2649,7 +2649,7 @@ mod tests {
         let server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/repos/openai/codex"))
+            .and(path("/repos/Agents2AgentsAI/ata"))
             .respond_with(ResponseTemplate::new(429).set_body_json(serde_json::json!({
                 "message": "API rate limit exceeded"
             })))
@@ -2658,7 +2658,7 @@ mod tests {
 
         let toolkit = build_test_toolkit(server.uri(), None);
         let error = toolkit
-            .repo_get_health("https://github.com/openai/codex")
+            .repo_get_health("https://github.com/Agents2AgentsAI/ata")
             .await
             .expect_err("rate-limited request should fail");
 
