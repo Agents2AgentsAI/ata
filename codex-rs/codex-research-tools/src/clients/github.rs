@@ -367,8 +367,7 @@ mod tests {
 
     #[test]
     fn parse_last_page_from_link_header_returns_none_without_last_rel() {
-        let raw =
-            "<https://api.github.com/repos/Agents2AgentsAI/ata/releases?per_page=1&page=2>; rel=\"next\"";
+        let raw = "<https://api.github.com/repos/Agents2AgentsAI/ata/releases?per_page=1&page=2>; rel=\"next\"";
         assert_eq!(parse_last_page_from_link_header(raw), None);
     }
 }
