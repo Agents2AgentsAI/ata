@@ -1198,6 +1198,7 @@ impl AuthManager {
     /// whether the auth value changed.
     pub fn reload(&self) -> bool {
         tracing::info!("Reloading auth");
+        storage::invalidate_keyring_cache(&self.codex_home);
         let new_auth = self.load_auth_from_storage();
         self.set_cached_auth(new_auth)
     }
@@ -1211,6 +1212,7 @@ impl AuthManager {
             }
         };
 
+        storage::invalidate_keyring_cache(&self.codex_home);
         let new_auth = self.load_auth_from_storage();
         let new_account_id = new_auth.as_ref().and_then(CodexAuth::get_account_id);
 
