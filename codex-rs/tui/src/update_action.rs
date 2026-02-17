@@ -5,7 +5,7 @@ pub enum UpdateAction {
     NpmGlobalLatest,
     /// Update via `bun install -g @a2a-ai/ata@latest`.
     BunGlobalLatest,
-    /// Update via `brew upgrade codex`.
+    /// Update via `brew upgrade ata`.
     BrewUpgrade,
 }
 
@@ -15,7 +15,7 @@ impl UpdateAction {
         match self {
             UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@a2a-ai/ata"]),
             UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@a2a-ai/ata"]),
-            UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "codex"]),
+            UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "ata"]),
         }
     }
 
