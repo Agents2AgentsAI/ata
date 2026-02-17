@@ -1,3 +1,3 @@
-# Getting started with Codex CLI
+# Getting started with Ata CLI
 
-For an overview of Codex CLI features, see [this documentation](https://developers.openai.com/codex/cli/features#running-in-interactive-mode).
+For an overview of Ata CLI features, see [this documentation](https://github.com/Agents2AgentsAI/ata/blob/main/docs/getting-started.md).

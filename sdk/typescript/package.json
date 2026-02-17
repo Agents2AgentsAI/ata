@@ -1,15 +1,15 @@
 {
-  "name": "@openai/codex-sdk",
+  "name": "@a2a-ai/ata-sdk",
   "version": "0.0.0-dev",
-  "description": "TypeScript SDK for Codex APIs.",
+  "description": "TypeScript SDK for Ata APIs.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openai/codex.git",
+    "url": "git+https://github.com/Agents2AgentsAI/ata.git",
     "directory": "sdk/typescript"
   },
   "keywords": [
-    "openai",
-    "codex",
+    "agents2agents",
+    "ata",
     "sdk",
     "typescript",
     "api"

@@ -40,13 +40,13 @@ function createEarlyExitChild(exitCode = 2): FakeChildProcess {
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-describe("CodexExec", () => {
+describe("AtaExec", () => {
   it("rejects when exit happens before stdout closes", async () => {
-    const { CodexExec } = await import("../src/exec");
+    const { AtaExec } = await import("../src/exec");
     const child = createEarlyExitChild();
     spawnMock.mockReturnValue(child as unknown as child_process.ChildProcess);
 
-    const exec = new CodexExec("codex");
+    const exec = new AtaExec("ata");
     const runPromise = (async () => {
       for await (const _ of exec.run({ input: "hi" })) {
         // no-op
@@ -64,12 +64,12 @@ describe("CodexExec", () => {
     expect(result.status).toBe("rejected");
     if (result.status === "rejected") {
       expect(result.error).toBeInstanceOf(Error);
-      expect(result.error.message).toMatch(/Codex Exec exited/);
+      expect(result.error.message).toMatch(/Ata Exec exited/);
     }
   });
 
   it("places resume args before image args", async () => {
-    const { CodexExec } = await import("../src/exec");
+    const { AtaExec } = await import("../src/exec");
     spawnMock.mockClear();
     const child = new FakeChildProcess();
     spawnMock.mockReturnValue(child as unknown as child_process.ChildProcess);
@@ -80,7 +80,7 @@ describe("CodexExec", () => {
       child.emit("exit", 0, null);
     });
 
-    const exec = new CodexExec("codex");
+    const exec = new AtaExec("ata");
     for await (const _ of exec.run({ input: "hi", images: ["img.png"], threadId: "thread-id" })) {
       // no-op
     }

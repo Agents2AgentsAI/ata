@@ -1,5 +1,5 @@
 {
-  description = "Development Nix flake for OpenAI Codex CLI";
+  description = "Development Nix flake for Agents2Agents Ata CLI";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

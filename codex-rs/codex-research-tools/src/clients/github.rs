@@ -303,31 +303,31 @@ mod tests {
     fn normalize_repo_url_accepts_common_variants() {
         let cases = [
             (
-                "https://github.com/openai/codex",
+                "https://github.com/Agents2AgentsAI/ata",
                 GitHubRepoRef {
-                    owner: "openai".to_string(),
-                    repo: "codex".to_string(),
+                    owner: "Agents2AgentsAI".to_string(),
+                    repo: "ata".to_string(),
                 },
             ),
             (
-                "https://github.com/openai/codex.git",
+                "https://github.com/Agents2AgentsAI/ata.git",
                 GitHubRepoRef {
-                    owner: "openai".to_string(),
-                    repo: "codex".to_string(),
+                    owner: "Agents2AgentsAI".to_string(),
+                    repo: "ata".to_string(),
                 },
             ),
             (
-                "https://github.com/openai/codex/tree/main",
+                "https://github.com/Agents2AgentsAI/ata/tree/main",
                 GitHubRepoRef {
-                    owner: "openai".to_string(),
-                    repo: "codex".to_string(),
+                    owner: "Agents2AgentsAI".to_string(),
+                    repo: "ata".to_string(),
                 },
             ),
             (
-                "https://github.com/OpenAI/Codex.git/issues/1",
+                "https://github.com/Agents2AgentsAI/Ata.git/issues/1",
                 GitHubRepoRef {
-                    owner: "OpenAI".to_string(),
-                    repo: "Codex".to_string(),
+                    owner: "Agents2AgentsAI".to_string(),
+                    repo: "Ata".to_string(),
                 },
             ),
         ];
@@ -342,12 +342,12 @@ mod tests {
     fn normalize_repo_url_rejects_unsupported_values() {
         let cases = [
             "",
-            "github.com/openai/codex",
-            "http://github.com/openai/codex",
-            "https://gitlab.com/openai/codex",
-            "https://github.com/openai",
-            "https://github.com/openai/",
-            "git@github.com:openai/codex.git",
+            "github.com/Agents2AgentsAI/ata",
+            "http://github.com/Agents2AgentsAI/ata",
+            "https://gitlab.com/Agents2AgentsAI/ata",
+            "https://github.com/Agents2AgentsAI",
+            "https://github.com/Agents2AgentsAI/",
+            "git@github.com:Agents2AgentsAI/ata.git",
         ];
 
         for input in cases {
@@ -361,14 +361,14 @@ mod tests {
 
     #[test]
     fn parse_last_page_from_link_header_extracts_page_number() {
-        let raw = "<https://api.github.com/repos/openai/codex/releases?per_page=1&page=2>; rel=\"next\", <https://api.github.com/repos/openai/codex/releases?per_page=1&page=17>; rel=\"last\"";
+        let raw = "<https://api.github.com/repos/Agents2AgentsAI/ata/releases?per_page=1&page=2>; rel=\"next\", <https://api.github.com/repos/Agents2AgentsAI/ata/releases?per_page=1&page=17>; rel=\"last\"";
         assert_eq!(parse_last_page_from_link_header(raw), Some(17));
     }
 
     #[test]
     fn parse_last_page_from_link_header_returns_none_without_last_rel() {
         let raw =
-            "<https://api.github.com/repos/openai/codex/releases?per_page=1&page=2>; rel=\"next\"";
+            "<https://api.github.com/repos/Agents2AgentsAI/ata/releases?per_page=1&page=2>; rel=\"next\"";
         assert_eq!(parse_last_page_from_link_header(raw), None);
     }
 }

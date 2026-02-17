@@ -1,6 +1,5 @@
 pub mod apply_patch;
 pub(crate) mod attach_url_files;
-pub(crate) mod collab;
 #[cfg(feature = "data")]
 pub(crate) mod data;
 mod document_reader;
@@ -12,6 +11,7 @@ pub(crate) mod kb;
 mod list_dir;
 mod mcp;
 mod mcp_resource;
+pub(crate) mod multi_agents;
 mod plan;
 mod read_file;
 mod request_user_input;
@@ -34,7 +34,6 @@ use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
 pub use apply_patch::ApplyPatchHandler;
-pub use collab::CollabHandler;
 #[cfg(feature = "data")]
 pub(crate) use data::DataBridgeHandler;
 pub use dynamic::DynamicToolHandler;
@@ -46,6 +45,7 @@ pub(crate) use kb::KbBridgeHandler;
 pub use list_dir::ListDirHandler;
 pub use mcp::McpHandler;
 pub use mcp_resource::McpResourceHandler;
+pub use multi_agents::MultiAgentHandler;
 pub use plan::PlanHandler;
 pub use read_file::ReadFileHandler;
 pub use request_user_input::RequestUserInputHandler;

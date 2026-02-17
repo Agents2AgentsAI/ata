@@ -75,9 +75,6 @@ async fn model_selects_expected_tools() {
         expected_default_tools(
             "shell_command",
             &[
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "present_document",
                 "update_document_section",
@@ -99,9 +96,6 @@ async fn model_selects_expected_tools() {
         expected_default_tools(
             "shell_command",
             &[
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "present_document",
                 "update_document_section",
@@ -123,9 +117,6 @@ async fn model_selects_expected_tools() {
         expected_default_tools(
             "shell_command",
             &[
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "present_document",
                 "update_document_section",
@@ -147,9 +138,6 @@ async fn model_selects_expected_tools() {
         expected_default_tools(
             "shell",
             &[
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "present_document",
                 "update_document_section",
@@ -170,9 +158,6 @@ async fn model_selects_expected_tools() {
         expected_default_tools(
             "shell_command",
             &[
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "present_document",
                 "update_document_section",

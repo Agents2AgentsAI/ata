@@ -1,10 +1,10 @@
 {
-  "name": "@openai/codex-shell-tool-mcp",
+  "name": "@a2a-ai/ata-shell-tool-mcp",
   "version": "0.0.0-dev",
-  "description": "Codex MCP server for the shell tool with patched Bash and exec wrappers.",
+  "description": "Ata MCP server for the shell tool with patched Bash and exec wrappers.",
   "license": "Apache-2.0",
   "bin": {
-    "codex-shell-tool-mcp": "bin/mcp-server.js"
+    "ata-shell-tool-mcp": "bin/mcp-server.js"
   },
   "engines": {
     "node": ">=18"
@@ -16,7 +16,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openai/codex.git",
+    "url": "git+https://github.com/Agents2AgentsAI/ata.git",
     "directory": "shell-tool-mcp"
   },
   "scripts": {
