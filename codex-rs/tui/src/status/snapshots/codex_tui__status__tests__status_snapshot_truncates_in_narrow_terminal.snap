@@ -1,11 +1,12 @@
 ---
 source: tui/src/status/tests.rs
+assertion_line: 655
 expression: sanitized
 ---
 /status
 
 ╭────────────────────────────────────────────────────────────────────╮
-│  >_ OpenAI Ata (v0.0.0)                                            │
+│  >_ Agents2Agents Ata (v0.0.0)                                     │
 │                                                                    │
 │ Visit https://chatgpt.com/codex/settings/usage for up-to-date      │
 │ information on rate limits and credits                             │
