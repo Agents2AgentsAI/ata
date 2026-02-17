@@ -1,4 +1,4 @@
-<p align="center"><code>npm i -g @a2a-ai/ata</code><br />or <code>brew install --cask ata</code></p>
+<p align="center"><code>npm i -g @a2a-ai/ata</code><br />or <code>brew install --cask Agents2AgentsAI/tap/ata</code></p>
 <p align="center"><strong>Ata CLI</strong> is an AI assistant from Agents2Agents AI that runs locally on your computer.<br />It is built on top of OpenAI Codex CLI. Not affiliated with OpenAI.
 <p align="center">
   <img src=".github/ata-cli-splash.png" alt="Ata CLI splash" width="80%" />
@@ -18,8 +18,11 @@ npm install -g @a2a-ai/ata
 ```
 
 ```shell
-# Install using Homebrew
-brew install --cask ata
+# Install using Homebrew (macOS)
+brew install --cask Agents2AgentsAI/tap/ata
+
+# Or install the formula (macOS / Linux)
+brew install Agents2AgentsAI/tap/ata
 ```
 
 ```shell
