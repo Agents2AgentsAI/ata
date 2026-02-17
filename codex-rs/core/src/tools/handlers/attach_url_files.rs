@@ -415,7 +415,9 @@ fn render_summary(
     failures: &[AttachmentFailure],
     warnings: &[String],
 ) -> String {
-    let mut summary = format!("Attached {success_count} URL file(s).");
+    let mut summary = format!(
+        "Attached {success_count} URL file(s). The file contents have been added to the conversation and are available for you to read and reference directly."
+    );
     if !warnings.is_empty() {
         summary.push_str("\nWarnings:");
         for warning in warnings {
@@ -797,7 +799,6 @@ mod tests {
             search_tool: false,
             collab_tools: false,
             collaboration_modes_tools: false,
-            request_rule_enabled: false,
             js_repl_enabled: false,
             js_repl_tools_only: false,
             experimental_supported_tools: Vec::new(),
