@@ -1,5 +1,5 @@
 name: 🪲 Other Bug
-description: Report an issue in Codex Web, integrations, or other Codex components
+description: Report an issue in Ata Web, integrations, or other Ata components
 labels:
   - bug
 body:
@@ -9,7 +9,7 @@ body:
         Before submitting a new issue, please search for existing issues to see if your issue has already been reported.
         If it has, please add a 👍 reaction (no need to leave a comment) to the existing issue instead of creating a new one.
 
-        If you need help or support using Codex and are not reporting a bug, please post on [codex/discussions](https://github.com/openai/codex/discussions), where you can ask questions or engage with others on ideas for how to improve codex.
+        If you need help or support using Ata and are not reporting a bug, please post on [ata/discussions](https://github.com/Agents2AgentsAI/ata/discussions), where you can ask questions or engage with others on ideas for how to improve Ata.
 
   - type: textarea
     id: actual
