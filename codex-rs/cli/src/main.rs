@@ -60,13 +60,14 @@ use codex_core::terminal::TerminalName;
 /// If no subcommand is specified, options will be forwarded to the interactive CLI.
 #[derive(Debug, Parser)]
 #[clap(
+    name = "ata",
     author,
     version,
     // If a sub‑command is given, ignore requirements of the default args.
     subcommand_negates_reqs = true,
     // The executable is sometimes invoked via a platform‑specific name like
     // `codex-x86_64-unknown-linux-musl`, but the help output should always use
-    // the generic `codex` command name that users run.
+    // the generic `ata` command name that users run.
     bin_name = "ata",
     override_usage = "ata [OPTIONS] [PROMPT]\n       ata [OPTIONS] <COMMAND> [ARGS]"
 )]
