@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell.rs
+expression: rendered
+---
+model changed:
+requested: requested-model
+used: actual-model

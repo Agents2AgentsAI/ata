@@ -84,11 +84,7 @@ impl WidgetRef for &WelcomeWidget {
         }
         lines.push(Line::from(vec![
             "  ".into(),
-            "Welcome to Agents2Agents's command-line agentic system".into(),
-        ]));
-        lines.push(Line::from(vec![
-            "  ".into(),
-            "(built on OpenAI's Codex)".into(),
+            "Welcome to Agents2Agents's AI assistant".into(),
         ]));
 
         Paragraph::new(lines)

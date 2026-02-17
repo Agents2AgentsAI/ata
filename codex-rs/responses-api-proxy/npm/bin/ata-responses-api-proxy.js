@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Entry point for the Codex responses API proxy binary.
+// Entry point for the Ata responses API proxy binary.
 
 import { spawn } from "node:child_process";
 import path from "path";
@@ -50,7 +50,7 @@ if (!targetTriple) {
 
 const vendorRoot = path.join(__dirname, "..", "vendor");
 const archRoot = path.join(vendorRoot, targetTriple);
-const binaryBaseName = "codex-responses-api-proxy";
+const binaryBaseName = "ata-responses-api-proxy";
 const binaryPath = path.join(
   archRoot,
   binaryBaseName,

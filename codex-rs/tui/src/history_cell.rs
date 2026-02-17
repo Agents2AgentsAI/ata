@@ -79,6 +79,8 @@ use tracing::error;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+const DISPLAY_STARTUP_TIPS: bool = false;
+
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
 /// scrollable list.
@@ -1069,7 +1071,8 @@ pub(crate) fn new_session_info(
 
         parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
     } else {
-        if config.show_tooltips
+        if DISPLAY_STARTUP_TIPS
+            && config.show_tooltips
             && let Some(tooltips) = tooltips::get_tooltip(auth_plan).map(TooltipHistoryCell::new)
         {
             parts.push(Box::new(tooltips));
@@ -3087,6 +3090,50 @@ mod tests {
         );
 
         let rendered = render_lines(&cell.display_lines(120)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[tokio::test]
+    async fn session_info_hides_tooltip_snapshot() {
+        let mut config = test_config().await;
+        config.cwd = std::path::PathBuf::from("/repo");
+
+        let event = SessionConfiguredEvent {
+            session_id: codex_protocol::ThreadId::new(),
+            forked_from_id: None,
+            thread_name: None,
+            model: "actual-model".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            approval_policy: codex_core::protocol::AskForApproval::Never,
+            sandbox_policy: codex_core::protocol::SandboxPolicy::new_read_only_policy(),
+            cwd: std::path::PathBuf::from("/repo"),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: None,
+        };
+
+        let cell = new_session_info(
+            &config,
+            "requested-model",
+            event,
+            false,
+            Some(PlanType::Plus),
+            None,
+        );
+        let rendered = render_lines(&cell.display_lines(100))
+            .into_iter()
+            .filter(|line| {
+                line.contains("Tip:")
+                    || line.contains("model changed:")
+                    || line.contains("requested:")
+                    || line.contains("used:")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
 
         insta::assert_snapshot!(rendered);
     }
