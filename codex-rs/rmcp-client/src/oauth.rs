@@ -73,7 +73,7 @@ pub struct StoredOAuthTokens {
 }
 
 /// Determine where Codex should store and read MCP credentials.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum OAuthCredentialsStoreMode {
     /// `Keyring` when available; otherwise, `File`.
@@ -81,22 +81,10 @@ pub enum OAuthCredentialsStoreMode {
     Auto,
     /// CODEX_HOME/.credentials.json
     /// This file will be readable to Codex and other applications running as the same user.
+    #[default]
     File,
     /// Keyring when available, otherwise fail.
     Keyring,
-}
-
-impl Default for OAuthCredentialsStoreMode {
-    fn default() -> Self {
-        #[cfg(debug_assertions)]
-        {
-            Self::File
-        }
-        #[cfg(not(debug_assertions))]
-        {
-            Self::Auto
-        }
-    }
 }
 
 /// Wrap OAuthTokenResponse to allow for partial equality comparison.

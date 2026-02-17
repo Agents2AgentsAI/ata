@@ -32,10 +32,11 @@ use once_cell::sync::Lazy;
 pub const AUTH_JSON_VERSION: u32 = 2;
 
 /// Determine where Codex should store CLI auth credentials.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthCredentialsStoreMode {
     /// Persist credentials in CODEX_HOME/auth.json with 0600 permissions.
+    #[default]
     File,
     /// Persist credentials in the keyring. Fail if unavailable.
     Keyring,
@@ -45,19 +46,6 @@ pub enum AuthCredentialsStoreMode {
     Auto,
     /// Store credentials in memory only for the current process.
     Ephemeral,
-}
-
-impl Default for AuthCredentialsStoreMode {
-    fn default() -> Self {
-        #[cfg(debug_assertions)]
-        {
-            Self::File
-        }
-        #[cfg(not(debug_assertions))]
-        {
-            Self::Auto
-        }
-    }
 }
 
 /// Expected structure for $CODEX_HOME/auth.json.
