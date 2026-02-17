@@ -47,6 +47,7 @@ use cwd_prompt::CwdSelection;
 use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::error;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;

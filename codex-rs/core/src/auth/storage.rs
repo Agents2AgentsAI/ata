@@ -49,7 +49,6 @@ pub enum AuthCredentialsStoreMode {
     Ephemeral,
 }
 
-
 /// Expected structure for $CODEX_HOME/auth.json.
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 pub struct AuthDotJson {
@@ -487,7 +486,11 @@ mod tests {
     }
 
     impl KeyringStore for CountingKeyringStore {
-        fn load(&self, service: &str, account: &str) -> Result<Option<String>, CredentialStoreError> {
+        fn load(
+            &self,
+            service: &str,
+            account: &str,
+        ) -> Result<Option<String>, CredentialStoreError> {
             self.load_count.fetch_add(1, Ordering::SeqCst);
             self.inner.load(service, account)
         }
