@@ -278,9 +278,11 @@ Not every explanation needs all diagram types. Use judgment — a single-card ex
 
 **Open:** After successful compilation, open the PDF for the user with `open <pdf_path>` (macOS) or `xdg-open <pdf_path>` (Linux).
 
-## Presentation
+## Presentation (Main Agent Only)
 
-IMPORTANT: When the deep narrative explanation is complete, you MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the report title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
+**This section applies to the main agent only.** Cluster subagents in the Large-Set workflow return their content as text to the main agent — they never call `present_reading_view` because the user is interacting with the main agent.
+
+IMPORTANT: When the deep narrative explanation is complete, the main agent MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the report title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
 
 When the user asks follow-up questions about a specific section, use the most efficient update tool:
 - `append_to_section` — to add new information at the end of a section (most common for follow-up questions)
@@ -384,6 +386,7 @@ Launch **one subagent per cluster**, all in parallel. Each subagent runs the ful
 >
 > Follow the skill's standard workflow (Phases 1–3) with these overrides:
 > - **Skip Phase 0** (Related Card Discovery) — you work only on the assigned cards. Do NOT call `kb_list_cards` to discover additional cards.
+> - **Skip the Presentation section** — do NOT call `present_reading_view`. The user is on the main agent, not on you. Return your content as text to the main agent.
 > - **All cards are focal** — no tiered depth. Every card gets the full 800–2500 word treatment.
 > - **No user confirmation** — do not present tier assignments or card additions for approval. Execute autonomously.
 > - **Shared terminology glossary:** [paste the glossary from Step 1 here so all subagents use consistent terms]

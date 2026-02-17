@@ -171,9 +171,11 @@ If yes, offer to update `research-context.md` at the KB root:
 [Conclusions reached, with dates]
 ```
 
-## Presentation
+## Presentation (Main Agent Only)
 
-IMPORTANT: When the report is complete, you MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the report title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
+**This section applies to the main agent only.** If this skill is loaded in a subagent, return results as text to the main agent — do NOT call `present_reading_view`.
+
+IMPORTANT: When the report is complete, the main agent MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the report title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
 
 When the user asks follow-up questions about a specific section, use the most efficient update tool:
 - `append_to_section` — to add new information at the end of a section (most common for follow-up questions)

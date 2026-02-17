@@ -71,7 +71,7 @@ Each subagent prompt MUST include `$paper-synthesis` — this triggers automatic
 
 **Do NOT write a custom prompt that describes what the subagent should do.** If you write "You are summarizing a research paper…" or similar, the subagent will NOT have the skill instructions and will fall back to shell-based approaches. Use the template below **verbatim** (only fill in the bracketed fields):
 
-> The $paper-synthesis skill instructions are loaded in your context. Execute every section: Pre-Synthesis, Type 1 Structured Summary, Type 2 Pedagogical Deep Dive (with the Default Narrative Style and Basics-First Contract), Figure Extraction, Depth Enforcement, and KB Card Storage. Skip the "Execution: Use Subagents" section — you ARE the subagent. Do NOT invoke `cross-paper-report` — the main agent handles that after you return.
+> The $paper-synthesis skill instructions are loaded in your context. Execute every section: Pre-Synthesis, Type 1 Structured Summary, Type 2 Pedagogical Deep Dive (with the Default Narrative Style and Basics-First Contract), Figure Extraction, Depth Enforcement, and KB Card Storage. Skip the "Execution: Use Subagents" section — you ARE the subagent. Skip the "Presentation" section — you do NOT present to the user. Do NOT invoke `cross-paper-report` and do NOT call `present_reading_view` — those are main-agent responsibilities. Write the KB card and return your report.
 >
 > CRITICAL: To read the paper, use `attach_url_files` with the PDF URL. Do NOT use shell commands (curl, wget, pdftotext, python) to download or extract PDF text. The model reads PDFs natively via attach_url_files.
 >
@@ -83,15 +83,7 @@ Do NOT manually reconstruct the workflow or style rules in the subagent prompt. 
 
 ### What Subagents Return
 
-Each subagent writes the KB card directly via `kb_write_card` (and extracts figures if available). After completing, the subagent returns a **concise report** to the main agent containing:
-- Card ID that was written
-- Paper title, authors, year
-- 3-5 sentence summary of the core contribution
-- Key architectural choices (backbone type, scale, notable modules)
-- Key training details (stages, data sources, losses)
-- Whether figures were extracted and how many
-
-The subagent does NOT need to return the full Type 1 + Type 2 text — that content lives in the KB card. The subagent's report is just enough for the main agent to inform the user and produce a cross-paper comparison.
+Each subagent writes the KB card directly via `kb_write_card` (and extracts figures if available). After completing, the subagent returns **only the card ID** it wrote — e.g., `paper-hindsight-experience-replay`. No summary, no architectural breakdown, no training details. The main agent reads the full card via `kb_read_card` and handles presentation. Returning a redundant summary wastes subagent time and context.
 
 ### Main Agent Role
 
@@ -145,7 +137,9 @@ After synthesis is complete and the user starts chatting about the papers, the K
 - **`$research-briefing`** — When the user wants a quick orientation of multiple papers before diving deep, suggest this as an alternative to cross-paper-report. Produces a concise 2-4 page overview.
 - **`$conversation-report`** — When the user has been chatting about papers and wants to capture the discussion as a document, suggest this. It organizes the conversation's Q&A into a focused report.
 
-#### Post-Synthesis Housekeeping
+#### Post-Synthesis Housekeeping (Main Agent Only)
+
+**Subagents skip this section.** Subagents write the KB card and return — journal entries, research-context updates, and follow-up persistence are main-agent responsibilities.
 
 After completing a synthesis (card written + reading view presented), do these in the background — they should not block the user from interacting with the reading view:
 
@@ -172,7 +166,7 @@ For multi-paper synthesis, list all papers in one entry. Keep it short — 5-10 
 
 When you detect a preference signal, offer briefly: "Want me to note that [preference] in your research context so future walkthroughs adapt?" If yes, read `research-context.md` (create if needed), merge the new item, write it back. If no or ignored, move on — never block on this.
 
-#### Post-Reading-View: Persist Follow-Up Insights
+#### Post-Reading-View: Persist Follow-Up Insights (Main Agent Only)
 
 When the user asks follow-up questions inside the reading view (via `append_to_section`), those answers are added to the ephemeral reading view document — they are not automatically saved to the KB card. The reading view is a display surface, not storage.
 
@@ -399,9 +393,11 @@ the points where they naturally arise — not collected into separate sections a
 
 If `kb_write_card` is not available, produce both types directly in the chat response.
 
-## Presentation
+## Presentation (Main Agent Only)
 
-IMPORTANT: When the synthesis is complete, you MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the paper title or synthesis name, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
+**This section applies to the main agent only.** Subagents write KB cards and return a concise report — they never call `present_reading_view` because the user is interacting with the main agent, not the subagent.
+
+IMPORTANT: When the synthesis is complete, the main agent MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the paper title or synthesis name, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
 
 When the user asks follow-up questions about a specific section, use the most efficient update tool:
 - `append_to_section` — to add new information at the end of a section (most common for follow-up questions)
