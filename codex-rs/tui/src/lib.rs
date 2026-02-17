@@ -218,7 +218,7 @@ pub async fn run_main(
         tracing::warn!(error = %err, "failed to run personality migration");
     }
 
-    let auth_manager = AuthManager::shared(
+    let cloud_auth_manager = AuthManager::shared(
         codex_home.to_path_buf(),
         false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
@@ -228,7 +228,7 @@ pub async fn run_main(
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
     let cloud_requirements = cloud_requirements_loader(
-        auth_manager.clone(),
+        cloud_auth_manager.clone(),
         chatgpt_base_url,
         codex_home.to_path_buf(),
     );
@@ -316,7 +316,7 @@ pub async fn run_main(
     }
 
     #[allow(clippy::print_stderr)]
-    if let Err(err) = enforce_login_restrictions(&config, Some(auth_manager.as_ref())) {
+    if let Err(err) = enforce_login_restrictions(&config, Some(cloud_auth_manager.as_ref())) {
         eprintln!("{err}");
         std::process::exit(1);
     }
@@ -424,7 +424,7 @@ pub async fn run_main(
         overrides,
         cli_kv_overrides,
         cloud_requirements,
-        auth_manager,
+        cloud_auth_manager,
         feedback,
     )
     .await

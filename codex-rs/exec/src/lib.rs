@@ -197,7 +197,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     };
 
-    let auth_manager = AuthManager::shared(
+    // Reuse a single manager through startup and thread execution so we don't reread storage.
+    // In exec mode this intentionally keeps CODEX_API_KEY environment support enabled.
+    let cloud_auth_manager = AuthManager::shared(
         codex_home.clone(),
         true,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
@@ -207,8 +209,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
     // TODO(gt): Make cloud requirements failures blocking once we can fail-closed.
-    let cloud_requirements =
-        cloud_requirements_loader(auth_manager.clone(), chatgpt_base_url, codex_home.clone());
+    let cloud_requirements = cloud_requirements_loader(
+        cloud_auth_manager.clone(),
+        chatgpt_base_url,
+        codex_home.clone(),
+    );
 
     let model_provider = if oss {
         let resolved = resolve_oss_provider(
@@ -284,7 +289,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     set_default_client_residency_requirement(config.enforce_residency.value());
 
-    if let Err(err) = enforce_login_restrictions(&config, Some(auth_manager.as_ref())) {
+    if let Err(err) = enforce_login_restrictions(&config, Some(cloud_auth_manager.as_ref())) {
         eprintln!("{err}");
         std::process::exit(1);
     }
@@ -364,7 +369,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     let thread_manager = Arc::new(ThreadManager::new(
         config.codex_home.clone(),
-        auth_manager.clone(),
+        cloud_auth_manager.clone(),
         SessionSource::Exec,
     ));
     let default_model = thread_manager
@@ -382,7 +387,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
         if let Some(path) = resume_path {
             thread_manager
-                .resume_thread_from_rollout(config.clone(), path, auth_manager.clone())
+                .resume_thread_from_rollout(config.clone(), path, cloud_auth_manager.clone())
                 .await?
         } else {
             thread_manager.start_thread(config.clone()).await?
