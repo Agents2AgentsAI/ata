@@ -518,7 +518,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Experimental {
             name: "Bubblewrap sandbox",
             menu_description: "Try the new linux sandbox based on bubblewrap.",
-            announcement: "NEW: Linux bubblewrap sandbox offers stronger filesystem and network controls than Landlock alone, including keeping .git and .codex read-only inside writable workspaces. Enable it in /experimental and restart Codex to try it.",
+            announcement: "NEW: Linux bubblewrap sandbox offers stronger filesystem and network controls than Landlock alone, including keeping .git and .ata read-only inside writable workspaces. Enable it in /experimental and restart Ata to try it.",
         },
         #[cfg(not(target_os = "linux"))]
         stage: Stage::UnderDevelopment,
@@ -658,7 +658,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: if cfg!(target_os = "macos") {
             Stage::Experimental {
                 name: "Prevent sleep while running",
-                menu_description: "Keep your computer awake while Codex is running a thread.",
+                menu_description: "Keep your computer awake while Ata is running a thread.",
                 announcement: "NEW: Prevent sleep while running is now available in /experimental.",
             }
         } else {

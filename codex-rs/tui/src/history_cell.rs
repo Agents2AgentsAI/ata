@@ -1,4 +1,4 @@
-//! Transcript/history cells for the Codex TUI.
+//! Transcript/history cells for the Ata TUI.
 //!
 //! A `HistoryCell` is the unit of display in the conversation UI, representing both committed
 //! transcript entries and, transiently, an in-flight active cell that can mutate in place while
@@ -1045,7 +1045,7 @@ pub(crate) fn new_session_info(
             Line::from(vec![
                 "  ".into(),
                 "/init".into(),
-                " - create an AGENTS.md file with instructions for Codex".dim(),
+                " - create an AGENTS.md file with instructions for Ata".dim(),
             ]),
             Line::from(vec![
                 "  ".into(),
@@ -1055,7 +1055,7 @@ pub(crate) fn new_session_info(
             Line::from(vec![
                 "  ".into(),
                 "/permissions".into(),
-                " - choose what Codex is allowed to do".dim(),
+                " - choose what Ata is allowed to do".dim(),
             ]),
             Line::from(vec![
                 "  ".into(),
@@ -1178,7 +1178,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
 
-        // Title line rendered inside the box: ">_ OpenAI Codex (vX)"
+        // Title line rendered inside the box: ">_ Agents2Agents Ata (vX)"
         let title_spans: Vec<Span<'static>> = vec![
             Span::from(">_ ").dim(),
             Span::from("Agents2Agents Ata").bold(),
