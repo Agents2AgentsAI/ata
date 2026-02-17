@@ -1,20 +1,20 @@
-import { CodexOptions } from "./codexOptions";
-import { CodexExec } from "./exec";
+import { AtaOptions } from "./ataOptions";
+import { AtaExec } from "./exec";
 import { Thread } from "./thread";
 import { ThreadOptions } from "./threadOptions";
 
 /**
- * Codex is the main class for interacting with the Codex agent.
+ * Ata is the main class for interacting with the Ata agent.
  *
  * Use the `startThread()` method to start a new thread or `resumeThread()` to resume a previously started thread.
  */
-export class Codex {
-  private exec: CodexExec;
-  private options: CodexOptions;
+export class Ata {
+  private exec: AtaExec;
+  private options: AtaOptions;
 
-  constructor(options: CodexOptions = {}) {
-    const { codexPathOverride, env, config } = options;
-    this.exec = new CodexExec(codexPathOverride, env, config);
+  constructor(options: AtaOptions = {}) {
+    const { ataPathOverride, env, config } = options;
+    this.exec = new AtaExec(ataPathOverride, env, config);
     this.options = options;
   }
 

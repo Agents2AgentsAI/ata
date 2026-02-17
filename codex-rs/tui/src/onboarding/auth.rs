@@ -529,7 +529,7 @@ impl AuthModeWidget {
             "".into(),
             "  Decide how much autonomy you want to grant Ata".into(),
             "  For more details see the Ata docs:".dim().into(),
-            "  https://github.com/openai/codex"
+            "  https://github.com/Agents2AgentsAI/ata"
                 .cyan()
                 .underlined()
                 .dim()
@@ -573,7 +573,7 @@ impl AuthModeWidget {
             "".into(),
             "  Decide how much autonomy you want to grant Ata".into(),
             "  For more details see the Ata docs:".dim().into(),
-            "  https://github.com/openai/codex"
+            "  https://github.com/Agents2AgentsAI/ata"
                 .cyan()
                 .underlined()
                 .dim()
@@ -611,7 +611,7 @@ impl AuthModeWidget {
             "".into(),
             "  Decide how much autonomy you want to grant Ata".into(),
             "  For more details see the Ata docs:".dim().into(),
-            "  https://github.com/openai/codex"
+            "  https://github.com/Agents2AgentsAI/ata"
                 .cyan()
                 .underlined()
                 .dim()

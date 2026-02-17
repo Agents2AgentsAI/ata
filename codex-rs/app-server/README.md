@@ -1,6 +1,6 @@
 # codex-app-server
 
-`codex app-server` is the interface Codex uses to power rich interfaces such as the [Codex VS Code extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt).
+`codex app-server` is the interface Codex uses to power rich interfaces such as the [Ata VS Code extension](https://marketplace.visualstudio.com/items?itemName=a2a-ai.ata).
 
 ## Table of Contents
 
@@ -69,11 +69,11 @@ Clients must send a single `initialize` request per transport connection before 
 
 Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
 
-**Important**: `clientInfo.name` is used to identify the client for the OpenAI Compliance Logs Platform. If
-you are developing a new Codex integration that is intended for enterprise use, please contact us to get it
-added to a known clients list. For more context: https://chatgpt.com/admin/api-reference#tag/Logs:-Codex
+**Important**: `clientInfo.name` is used to identify the client for compliance logging. If
+you are developing a new Ata integration that is intended for enterprise use, please contact us to get it
+added to a known clients list.
 
-Example (from OpenAI's official VSCode extension):
+Example (from the official Ata VS Code extension):
 
 ```json
 {
@@ -557,7 +557,7 @@ Today both notifications carry an empty `items` array even when item events were
 
 `ThreadItem` is the tagged union carried in turn responses and `item/*` notifications. Currently we support events for the following items:
 
-- `userMessage` — `{id, content}` where `content` is a list of user inputs (`text`, `image`, or `localImage`).
+- `userMessage` — `{id, content}` where `content` is a list of user inputs (`text`, `image`, or `localImage`). Cyber model-routing warnings are surfaced as synthetic `userMessage` items with `text` prefixed by `Warning:`.
 - `agentMessage` — `{id, text}` containing the accumulated agent reply.
 - `plan` — `{id, text}` emitted for plan-mode turns; plan text can stream via `item/plan/delta` (experimental).
 - `reasoning` — `{id, summary, content}` where `summary` holds streamed reasoning summaries (applicable for most OpenAI models) and `content` holds raw reasoning blocks (applicable for e.g. open source models).

@@ -26,9 +26,9 @@ export type {
 export { Thread } from "./thread";
 export type { RunResult, RunStreamedResult, Input, UserInput } from "./thread";
 
-export { Codex } from "./codex";
+export { Ata } from "./ata";
 
-export type { CodexOptions } from "./codexOptions";
+export type { AtaOptions } from "./ataOptions";
 
 export type {
   ThreadOptions,

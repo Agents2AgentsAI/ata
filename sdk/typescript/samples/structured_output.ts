@@ -1,12 +1,12 @@
 #!/usr/bin/env -S NODE_NO_WARNINGS=1 pnpm ts-node-esm --files
 
-import { Codex } from "@openai/codex-sdk";
+import { Ata } from "@a2a-ai/ata-sdk";
 
-import { codexPathOverride } from "./helpers.ts";
+import { ataPathOverride } from "./helpers.ts";
 
-const codex = new Codex({ codexPathOverride: codexPathOverride() });
+const ata = new Ata({ ataPathOverride: ataPathOverride() });
 
-const thread = codex.startThread();
+const thread = ata.startThread();
 
 const schema = {
   type: "object",

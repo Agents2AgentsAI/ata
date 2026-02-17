@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "@jest/globals";
 
-import { Codex } from "../src/codex";
+import { Ata } from "../src/ata";
 
 import {
   assistantMessage,
@@ -14,7 +14,7 @@ import {
   startResponsesTestProxy,
 } from "./responsesProxy";
 
-const codexExecPath = path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "codex");
+const ataExecPath = path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "ata");
 
 function* infiniteShellCall(): Generator<SseResponseBody> {
   while (true) {
@@ -30,7 +30,7 @@ describe("AbortSignal support", () => {
     });
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
       const thread = client.startThread();
 
       // Create an abort controller and abort it immediately
@@ -51,7 +51,7 @@ describe("AbortSignal support", () => {
     });
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
       const thread = client.startThread();
 
       // Create an abort controller and abort it immediately
@@ -89,7 +89,7 @@ describe("AbortSignal support", () => {
     });
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
       const thread = client.startThread();
 
       const controller = new AbortController();
@@ -114,7 +114,7 @@ describe("AbortSignal support", () => {
     });
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
       const thread = client.startThread();
 
       const controller = new AbortController();
@@ -148,7 +148,7 @@ describe("AbortSignal support", () => {
     });
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
       const thread = client.startThread();
 
       const controller = new AbortController();

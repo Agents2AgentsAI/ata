@@ -9,7 +9,7 @@ const actualChildProcess =
   jest.requireActual<typeof import("node:child_process")>("node:child_process");
 const spawnMock = child_process.spawn as jest.MockedFunction<typeof actualChildProcess.spawn>;
 
-export function codexExecSpy(): {
+export function ataExecSpy(): {
   args: string[][];
   envs: (Record<string, string> | undefined)[];
   restore: () => void;

@@ -26,7 +26,7 @@ _BUILD_MODULE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_BUILD_MODULE)
 PACKAGE_NATIVE_COMPONENTS = getattr(_BUILD_MODULE, "PACKAGE_NATIVE_COMPONENTS", {})
 PACKAGE_EXPANSIONS = getattr(_BUILD_MODULE, "PACKAGE_EXPANSIONS", {})
-CODEX_PLATFORM_PACKAGES = getattr(_BUILD_MODULE, "CODEX_PLATFORM_PACKAGES", {})
+ATA_PLATFORM_PACKAGES = getattr(_BUILD_MODULE, "ATA_PLATFORM_PACKAGES", {})
 
 
 def parse_args() -> argparse.Namespace:
@@ -131,9 +131,9 @@ def run_command(cmd: list[str]) -> None:
 
 
 def tarball_name_for_package(package: str, version: str) -> str:
-    if package in CODEX_PLATFORM_PACKAGES:
-        platform = package.removeprefix("codex-")
-        return f"codex-npm-{platform}-{version}.tgz"
+    if package in ATA_PLATFORM_PACKAGES:
+        platform = package.removeprefix("ata-")
+        return f"ata-npm-{platform}-{version}.tgz"
     return f"{package}-npm-{version}.tgz"
 
 

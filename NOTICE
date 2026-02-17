@@ -1,5 +1,8 @@
-OpenAI Codex
-Copyright 2025 OpenAI
+Agents2Agents Ata
+Copyright 2026 Agents2Agents AI
+
+Derived from OpenAI Codex CLI (https://github.com/openai/codex)
+Copyright 2025 OpenAI
 
 This project includes code derived from [Ratatui](https://github.com/ratatui/ratatui), licensed under the MIT license.
 Copyright (c) 2016-2022 Florian Dehau

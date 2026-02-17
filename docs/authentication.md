@@ -1,3 +1,3 @@
 # Authentication
 
-For information about Codex CLI authentication, see [this documentation](https://developers.openai.com/codex/auth).
+For information about Ata CLI authentication, see [this documentation](https://github.com/Agents2AgentsAI/ata/blob/main/docs/authentication.md).
