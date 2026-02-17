@@ -25,6 +25,7 @@ use oauth2::RefreshToken;
 use oauth2::Scope;
 use oauth2::TokenResponse;
 use oauth2::basic::BasicTokenType;
+use once_cell::sync::Lazy;
 use rmcp::transport::auth::OAuthTokenResponse;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -43,7 +44,6 @@ use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
-use once_cell::sync::Lazy;
 use tracing::warn;
 
 use codex_keyring_store::DefaultKeyringStore;
@@ -1049,7 +1049,8 @@ mod tests {
         store.inner.save(KEYRING_SERVICE, &key, &serialized)?;
         clear_oauth_keyring_cache(&tokens.server_name, &tokens.url);
 
-        let first = super::load_oauth_tokens_from_keyring(&store, &tokens.server_name, &tokens.url)?;
+        let first =
+            super::load_oauth_tokens_from_keyring(&store, &tokens.server_name, &tokens.url)?;
         let second =
             super::load_oauth_tokens_from_keyring(&store, &tokens.server_name, &tokens.url)?;
 

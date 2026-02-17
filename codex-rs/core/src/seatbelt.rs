@@ -399,38 +399,21 @@ mod tests {
             let param_name = format!("WRITABLE_ROOT_{i}");
 
             if wr.read_only_subpaths.is_empty() {
-                policy_snippets
-                    .push_str(&format!(r#" (subpath (param "{param_name}"))"#));
-                params.push(format!(
-                    "-D{param_name}={}",
-                    canonical.to_string_lossy()
-                ));
+                policy_snippets.push_str(&format!(r#" (subpath (param "{param_name}"))"#));
+                params.push(format!("-D{param_name}={}", canonical.to_string_lossy()));
             } else {
-                let mut require_parts = vec![format!(
-                    r#"(subpath (param "{param_name}"))"#
-                )];
-                params.push(format!(
-                    "-D{param_name}={}",
-                    canonical.to_string_lossy()
-                ));
+                let mut require_parts = vec![format!(r#"(subpath (param "{param_name}"))"#)];
+                params.push(format!("-D{param_name}={}", canonical.to_string_lossy()));
                 for (j, ro) in wr.read_only_subpaths.iter().enumerate() {
                     let canonical_ro = ro
                         .as_path()
                         .canonicalize()
                         .unwrap_or_else(|_| ro.to_path_buf());
                     let ro_param = format!("WRITABLE_ROOT_{i}_RO_{j}");
-                    require_parts.push(format!(
-                        r#"(require-not (subpath (param "{ro_param}")))"#
-                    ));
-                    params.push(format!(
-                        "-D{ro_param}={}",
-                        canonical_ro.to_string_lossy()
-                    ));
+                    require_parts.push(format!(r#"(require-not (subpath (param "{ro_param}")))"#));
+                    params.push(format!("-D{ro_param}={}", canonical_ro.to_string_lossy()));
                 }
-                policy_snippets.push_str(&format!(
-                    "(require-all {} )",
-                    require_parts.join(" ")
-                ));
+                policy_snippets.push_str(&format!("(require-all {} )", require_parts.join(" ")));
             }
         }
         (policy_snippets, params)
@@ -711,8 +694,7 @@ mod tests {
 
         // Discover any extra writable roots that get_writable_roots_with_cwd()
         // adds beyond the three we explicitly set up (e.g. knowledge-base).
-        let (extra_policy, extra_params) =
-            extra_writable_root_entries(&policy, &cwd, 3);
+        let (extra_policy, extra_params) = extra_writable_root_entries(&policy, &cwd, 3);
 
         // Build the expected policy text.
         // WRITABLE_ROOT_0 = vulnerable_root (with .git/.codex read-only),
