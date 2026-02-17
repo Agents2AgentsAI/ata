@@ -1,5 +1,6 @@
 ---
 source: tui/src/onboarding/auth.rs
+assertion_line: 1254
 expression: terminal.backend()
 ---
 ✓ Signed in with Google Gemini

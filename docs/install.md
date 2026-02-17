@@ -12,6 +12,24 @@
 
 The GitHub Release also contains a [DotSlash](https://dotslash-cli.com/) file for the Ata CLI named `ata`. Using a DotSlash file makes it possible to make a lightweight commit to source control to ensure all contributors use the same version of an executable, regardless of what platform they use for development.
 
+### Install via curl (macOS/Linux)
+
+You can install the latest release with a `curl | sh` one-liner:
+
+```bash
+curl -fsSL https://agents2agents.ai/ata/install.sh | sh
+```
+
+Options (pass with `sh -s -- ...`):
+
+```bash
+# Install into a custom directory
+curl -fsSL https://agents2agents.ai/ata/install.sh | sh -s -- --bin-dir "$HOME/bin"
+
+# Install a specific release tag
+curl -fsSL https://agents2agents.ai/ata/install.sh | sh -s -- --version 1.2.3
+```
+
 ### Build from source
 
 ```bash

@@ -25,6 +25,11 @@ brew install --cask Agents2AgentsAI/tap/ata
 brew install Agents2AgentsAI/tap/ata
 ```
 
+```shell
+# Install using curl (macOS/Linux)
+curl -fsSL https://agents2agents.ai/ata/install.sh | sh
+```
+
 Then simply run `ata` to get started.
 
 <details>

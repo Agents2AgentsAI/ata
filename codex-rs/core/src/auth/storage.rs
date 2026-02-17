@@ -36,15 +36,13 @@ pub const AUTH_JSON_VERSION: u32 = 2;
 #[serde(rename_all = "lowercase")]
 pub enum AuthCredentialsStoreMode {
     /// Persist credentials in CODEX_HOME/auth.json with 0600 permissions.
+    #[default]
     File,
     /// Persist credentials in the keyring. Fail if unavailable.
     Keyring,
-    #[default]
-    /// NOTE: default changed from `File` to `Auto`.
-    /// Keep this comment so upstream merges can spot semantic conflicts quickly.
     /// Use keyring when available; otherwise, fall back to a file in CODEX_HOME.
-    /// More secure - stores credentials in OS keyring. If keyring access fails once,
-    /// it automatically falls back to file storage for the session to avoid repeated prompts.
+    /// More secure - stores credentials in OS keyring. If keyring access fails once, it
+    /// automatically falls back to file storage for the session to avoid repeated prompts.
     Auto,
     /// Store credentials in memory only for the current process.
     Ephemeral,
@@ -232,7 +230,19 @@ impl KeyringAuthStorage {
 impl AuthStorageBackend for KeyringAuthStorage {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
         let key = compute_store_key(&self.codex_home)?;
-        self.load_from_keyring(&key)
+        if let Ok(guard) = KEYRING_AUTH_CACHE.lock()
+            && let Some(cached) = guard.get(&key).cloned()
+        {
+            return Ok(cached);
+        }
+
+        let result = self.load_from_keyring(&key);
+        if let Ok(ref value) = result
+            && let Ok(mut guard) = KEYRING_AUTH_CACHE.lock()
+        {
+            guard.insert(key, value.clone());
+        }
+        result
     }
 
     fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
@@ -240,6 +250,9 @@ impl AuthStorageBackend for KeyringAuthStorage {
         // Simpler error mapping per style: prefer method reference over closure
         let serialized = serde_json::to_string(auth).map_err(std::io::Error::other)?;
         self.save_to_keyring(&key, &serialized)?;
+        if let Ok(mut guard) = KEYRING_AUTH_CACHE.lock() {
+            guard.insert(key, Some(auth.clone()));
+        }
         if let Err(err) = delete_file_if_exists(&self.codex_home) {
             warn!("failed to remove CLI auth fallback file: {err}");
         }
@@ -248,6 +261,9 @@ impl AuthStorageBackend for KeyringAuthStorage {
 
     fn delete(&self) -> std::io::Result<bool> {
         let key = compute_store_key(&self.codex_home)?;
+        if let Ok(mut guard) = KEYRING_AUTH_CACHE.lock() {
+            guard.remove(&key);
+        }
         let keyring_removed = self
             .keyring_store
             .delete(KEYRING_SERVICE, &key)
@@ -267,6 +283,22 @@ impl AuthStorageBackend for KeyringAuthStorage {
 /// This fallback behavior is separate from provider-auth extraction logic.
 static USE_FILE_STORAGE: Lazy<Mutex<std::collections::HashSet<String>>> =
     Lazy::new(|| Mutex::new(std::collections::HashSet::new()));
+
+/// Process-global cache of keyring-loaded auth data keyed by `compute_store_key()`.
+/// This cache is process-scoped; external keyring updates by another process are not visible
+/// until restart.
+static KEYRING_AUTH_CACHE: Lazy<Mutex<HashMap<String, Option<AuthDotJson>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Remove the cached keyring entry for `codex_home` so the next
+/// `load()` re-reads from the OS keyring.
+pub(super) fn invalidate_keyring_cache(codex_home: &Path) {
+    if let Ok(key) = compute_store_key(codex_home) {
+        if let Ok(mut guard) = KEYRING_AUTH_CACHE.lock() {
+            guard.remove(&key);
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 struct AutoAuthStorage {
@@ -437,12 +469,57 @@ mod tests {
     use crate::token_data::IdTokenInfo;
     use anyhow::Context;
     use base64::Engine;
+    use codex_keyring_store::CredentialStoreError;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::sync::atomic::AtomicU32;
+    use std::sync::atomic::Ordering;
     use tempfile::tempdir;
 
     use codex_keyring_store::tests::MockKeyringStore;
     use keyring::Error as KeyringError;
+
+    #[derive(Clone, Debug)]
+    struct CountingKeyringStore {
+        inner: MockKeyringStore,
+        load_count: Arc<AtomicU32>,
+        save_count: Arc<AtomicU32>,
+    }
+
+    impl CountingKeyringStore {
+        fn new() -> Self {
+            Self {
+                inner: MockKeyringStore::default(),
+                load_count: Arc::new(AtomicU32::new(0)),
+                save_count: Arc::new(AtomicU32::new(0)),
+            }
+        }
+    }
+
+    impl KeyringStore for CountingKeyringStore {
+        fn load(
+            &self,
+            service: &str,
+            account: &str,
+        ) -> Result<Option<String>, CredentialStoreError> {
+            self.load_count.fetch_add(1, Ordering::SeqCst);
+            self.inner.load(service, account)
+        }
+
+        fn save(
+            &self,
+            service: &str,
+            account: &str,
+            value: &str,
+        ) -> Result<(), CredentialStoreError> {
+            self.save_count.fetch_add(1, Ordering::SeqCst);
+            self.inner.save(service, account, value)
+        }
+
+        fn delete(&self, service: &str, account: &str) -> Result<bool, CredentialStoreError> {
+            self.inner.delete(service, account)
+        }
+    }
 
     #[tokio::test]
     async fn file_storage_load_returns_auth_dot_json() -> anyhow::Result<()> {
@@ -591,6 +668,10 @@ mod tests {
         );
     }
 
+    fn clear_keyring_cache_for_path(codex_home: &Path) {
+        super::invalidate_keyring_cache(codex_home);
+    }
+
     fn id_token_with_prefix(prefix: &str) -> IdTokenInfo {
         #[derive(Serialize)]
         struct Header {
@@ -668,6 +749,130 @@ mod tests {
         let loaded = loaded.unwrap();
         assert_eq!(expected.auth_mode, loaded.auth_mode);
         assert_eq!(expected.openai_api_key, loaded.openai_api_key);
+        Ok(())
+    }
+
+    #[test]
+    fn keyring_auth_storage_cache_prevents_repeated_loads() -> anyhow::Result<()> {
+        let codex_home = tempdir()?;
+        let counting_store = CountingKeyringStore::new();
+        let storage_a = KeyringAuthStorage::new(
+            codex_home.path().to_path_buf(),
+            Arc::new(counting_store.clone()),
+        );
+        let storage_b = KeyringAuthStorage::new(
+            codex_home.path().to_path_buf(),
+            Arc::new(counting_store.clone()),
+        );
+        let expected = auth_with_prefix("cache-hit");
+        seed_keyring_with_auth(
+            &counting_store.inner,
+            || compute_store_key(codex_home.path()),
+            &expected,
+        )?;
+        clear_keyring_cache_for_path(codex_home.path());
+
+        let first = storage_a.load()?;
+        let second = storage_b.load()?;
+
+        assert_eq!(first, Some(expected.clone()));
+        assert_eq!(second, Some(expected));
+        assert_eq!(counting_store.load_count.load(Ordering::SeqCst), 1);
+        clear_keyring_cache_for_path(codex_home.path());
+        Ok(())
+    }
+
+    #[test]
+    fn keyring_auth_storage_save_populates_cache() -> anyhow::Result<()> {
+        let codex_home = tempdir()?;
+        let counting_store = CountingKeyringStore::new();
+        let storage = KeyringAuthStorage::new(
+            codex_home.path().to_path_buf(),
+            Arc::new(counting_store.clone()),
+        );
+        clear_keyring_cache_for_path(codex_home.path());
+        let auth = auth_with_prefix("saved-cache");
+
+        storage.save(&auth)?;
+        counting_store.load_count.store(0, Ordering::SeqCst);
+
+        let loaded = storage.load()?;
+
+        assert_eq!(loaded, Some(auth));
+        assert_eq!(counting_store.save_count.load(Ordering::SeqCst), 1);
+        assert_eq!(counting_store.load_count.load(Ordering::SeqCst), 0);
+        clear_keyring_cache_for_path(codex_home.path());
+        Ok(())
+    }
+
+    #[test]
+    fn keyring_auth_storage_delete_clears_cache() -> anyhow::Result<()> {
+        let codex_home = tempdir()?;
+        let counting_store = CountingKeyringStore::new();
+        let storage = KeyringAuthStorage::new(
+            codex_home.path().to_path_buf(),
+            Arc::new(counting_store.clone()),
+        );
+        let first = auth_with_prefix("before-delete");
+        seed_keyring_with_auth(
+            &counting_store.inner,
+            || compute_store_key(codex_home.path()),
+            &first,
+        )?;
+        clear_keyring_cache_for_path(codex_home.path());
+
+        let loaded = storage.load()?;
+        assert_eq!(loaded, Some(first));
+        assert_eq!(counting_store.load_count.load(Ordering::SeqCst), 1);
+
+        assert!(storage.delete()?);
+        let second = auth_with_prefix("after-delete");
+        seed_keyring_with_auth(
+            &counting_store.inner,
+            || compute_store_key(codex_home.path()),
+            &second,
+        )?;
+        let loaded_again = storage.load()?;
+
+        assert_eq!(loaded_again, Some(second));
+        assert_eq!(counting_store.load_count.load(Ordering::SeqCst), 2);
+        clear_keyring_cache_for_path(codex_home.path());
+        Ok(())
+    }
+
+    #[test]
+    fn invalidate_keyring_cache_forces_re_read() -> anyhow::Result<()> {
+        let codex_home = tempdir()?;
+        let counting_store = CountingKeyringStore::new();
+        let storage = KeyringAuthStorage::new(
+            codex_home.path().to_path_buf(),
+            Arc::new(counting_store.clone()),
+        );
+        let expected = auth_with_prefix("invalidate");
+        seed_keyring_with_auth(
+            &counting_store.inner,
+            || compute_store_key(codex_home.path()),
+            &expected,
+        )?;
+        clear_keyring_cache_for_path(codex_home.path());
+
+        // First load hits the keyring.
+        let first = storage.load()?;
+        assert_eq!(first, Some(expected.clone()));
+        assert_eq!(counting_store.load_count.load(Ordering::SeqCst), 1);
+
+        // Second load is served from cache — no additional keyring read.
+        let second = storage.load()?;
+        assert_eq!(second, Some(expected.clone()));
+        assert_eq!(counting_store.load_count.load(Ordering::SeqCst), 1);
+
+        // Invalidate the cache, then load again — should hit keyring a second time.
+        super::invalidate_keyring_cache(codex_home.path());
+        let third = storage.load()?;
+        assert_eq!(third, Some(expected));
+        assert_eq!(counting_store.load_count.load(Ordering::SeqCst), 2);
+
+        clear_keyring_cache_for_path(codex_home.path());
         Ok(())
     }
 

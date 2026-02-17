@@ -146,10 +146,18 @@ impl ModelsManager {
                 used_fallback_model_metadata: false,
                 ..remote
             }
+        } else if let Some(preset) = self.find_local_preset_by_slug(model) {
+            model_info::model_info_from_preset(model, preset)
         } else {
             model_info::model_info_from_slug(model)
         };
         model_info::with_config_overrides(model_info, config)
+    }
+
+    fn find_local_preset_by_slug(&self, model: &str) -> Option<&ModelPreset> {
+        self.local_models
+            .iter()
+            .find(|preset| preset.model == model)
     }
 
     async fn find_remote_model_by_longest_prefix(

@@ -66,6 +66,7 @@ use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
+use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
@@ -122,6 +123,7 @@ use crate::config::GhostSnapshotConfig;
 use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::config::types::McpServerConfig;
+use crate::config::types::McpServerTransportConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
@@ -150,6 +152,7 @@ use crate::file_watcher::FileWatcherEvent;
 use crate::git_info::get_git_repo_root;
 use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::mcp::auth::McpAuthStatusEntry;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::effective_mcp_servers;
 use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
@@ -1125,11 +1128,32 @@ impl Session {
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
             let mcp_servers = effective_mcp_servers(&config_for_mcp, auth.as_ref());
-            let auth_statuses = compute_auth_statuses(
-                mcp_servers.iter(),
-                config_for_mcp.mcp_oauth_credentials_store_mode,
-            )
-            .await;
+            // Build auth statuses using only local checks (bearer token env var,
+            // authorization header) to avoid hitting the MCP OAuth keyring at
+            // startup.  This prevents a second macOS Keychain prompt after binary
+            // rebuild.  Full status (including OAuth token check) resolves on the
+            // next /mcp command or server refresh, by which time the connection
+            // has already populated OAUTH_KEYRING_CACHE.
+            let auth_statuses: HashMap<String, McpAuthStatusEntry> = mcp_servers
+                .iter()
+                .map(|(name, config)| {
+                    let auth_status = match &config.transport {
+                        McpServerTransportConfig::Stdio { .. } => McpAuthStatus::Unsupported,
+                        McpServerTransportConfig::StreamableHttp {
+                            bearer_token_env_var: Some(_),
+                            ..
+                        } => McpAuthStatus::BearerToken,
+                        _ => McpAuthStatus::Unsupported,
+                    };
+                    (
+                        name.clone(),
+                        McpAuthStatusEntry {
+                            config: config.clone(),
+                            auth_status,
+                        },
+                    )
+                })
+                .collect();
             (auth, mcp_servers, auth_statuses)
         };
 
