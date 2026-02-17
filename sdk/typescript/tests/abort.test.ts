@@ -14,7 +14,7 @@ import {
   startResponsesTestProxy,
 } from "./responsesProxy";
 
-const ataExecPath = path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "codex");
+const ataExecPath = path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "ata");
 
 function* infiniteShellCall(): Generator<SseResponseBody> {
   while (true) {

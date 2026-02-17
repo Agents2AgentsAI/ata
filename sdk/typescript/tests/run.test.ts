@@ -17,7 +17,7 @@ import {
   SseResponseBody,
 } from "./responsesProxy";
 
-const ataExecPath = path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "codex");
+const ataExecPath = path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "ata");
 
 describe("Ata", () => {
   it("returns thread events", async () => {
