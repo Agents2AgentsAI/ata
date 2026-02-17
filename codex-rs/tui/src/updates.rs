@@ -56,7 +56,7 @@ struct VersionInfo {
 
 const VERSION_FILENAME: &str = "version.json";
 // We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
-const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
+const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/ata.json";
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/Agents2AgentsAI/ata/releases/latest";
 
 #[derive(Deserialize, Debug, Clone)]
@@ -184,10 +184,10 @@ mod tests {
     #[test]
     fn extract_version_from_brew_api_json() {
         //
-        // https://formulae.brew.sh/api/cask/codex.json
+        // https://formulae.brew.sh/api/cask/ata.json
         let cask_json = r#"{
-            "token": "codex",
-            "full_token": "codex",
+            "token": "ata",
+            "full_token": "ata",
             "tap": "homebrew/cask",
             "version": "0.96.0",
         }"#;

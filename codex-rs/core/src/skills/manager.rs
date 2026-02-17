@@ -32,6 +32,14 @@ impl SkillsManager {
             tracing::error!("failed to install system skills: {err}");
         }
 
+        #[cfg(feature = "research")]
+        {
+            use crate::skills::system::install_research_skills;
+            if let Err(err) = install_research_skills(&codex_home) {
+                tracing::error!("failed to install research skills: {err}");
+            }
+        }
+
         Self {
             codex_home,
             cache_by_cwd: RwLock::new(HashMap::new()),

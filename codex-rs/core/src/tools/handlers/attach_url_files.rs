@@ -415,7 +415,9 @@ fn render_summary(
     failures: &[AttachmentFailure],
     warnings: &[String],
 ) -> String {
-    let mut summary = format!("Attached {success_count} URL file(s).");
+    let mut summary = format!(
+        "Attached {success_count} URL file(s). The file contents have been added to the conversation and are available for you to read and reference directly."
+    );
     if !warnings.is_empty() {
         summary.push_str("\nWarnings:");
         for warning in warnings {

@@ -6,7 +6,7 @@ use std::fmt::Debug;
 use std::sync::OnceLock;
 use tracing::warn;
 
-const ASSERTION_REASON: &str = "Codex is running an active turn";
+const ASSERTION_REASON: &str = "Ata is running an active turn";
 const MACOS_IDLE_SLEEP_ASSERTION_TYPE: &str = "PreventUserIdleSystemSleep";
 const IOKIT_FRAMEWORK_BINARY: &[u8] = b"/System/Library/Frameworks/IOKit.framework/IOKit\0";
 const IOPM_ASSERTION_CREATE_WITH_NAME_SYMBOL: &[u8] = b"IOPMAssertionCreateWithName\0";

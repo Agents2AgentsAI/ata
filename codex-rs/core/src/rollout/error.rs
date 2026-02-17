@@ -25,11 +25,11 @@ fn map_rollout_io_error(io_err: &std::io::Error, codex_home: &Path) -> Option<Co
             codex_home.display()
         ),
         ErrorKind::NotFound => format!(
-            "Session storage missing at {}. Create the directory or choose a different Codex home.",
+            "Session storage missing at {}. Create the directory or choose a different Ata home.",
             sessions_dir.display()
         ),
         ErrorKind::AlreadyExists => format!(
-            "Session storage path {} is blocked by an existing file. Remove or rename it so Codex can create sessions.",
+            "Session storage path {} is blocked by an existing file. Remove or rename it so Ata can create sessions.",
             sessions_dir.display()
         ),
         ErrorKind::InvalidData | ErrorKind::InvalidInput => format!(
@@ -37,7 +37,7 @@ fn map_rollout_io_error(io_err: &std::io::Error, codex_home: &Path) -> Option<Co
             sessions_dir.display()
         ),
         ErrorKind::IsADirectory | ErrorKind::NotADirectory => format!(
-            "Session storage path {} has an unexpected type. Ensure it is a directory Codex can use for session files.",
+            "Session storage path {} has an unexpected type. Ensure it is a directory Ata can use for session files.",
             sessions_dir.display()
         ),
         _ => return None,
