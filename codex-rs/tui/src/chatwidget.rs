@@ -5994,7 +5994,7 @@ impl ChatWidget {
             header.push(*Box::new(
                 Paragraph::new(vec![
                     line!["Agent mode on Windows uses an experimental sandbox to limit network and filesystem access.".bold()],
-                    line!["Learn more: https://developers.openai.com/codex/windows"],
+                    line!["Learn more: https://github.com/Agents2AgentsAI/ata/blob/main/docs/sandbox.md"],
                 ])
                 .wrap(Wrap { trim: false }),
             ));
@@ -6040,7 +6040,7 @@ impl ChatWidget {
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(
             Paragraph::new(vec![
-                line!["Set up the Codex agent sandbox to protect your files and control network access. Learn more <https://developers.openai.com/codex/windows>"],
+                line!["Set up the Ata agent sandbox to protect your files and control network access. Learn more <https://github.com/Agents2AgentsAI/ata/blob/main/docs/sandbox.md>"],
             ])
             .wrap(Wrap { trim: false }),
         ));
@@ -6111,7 +6111,7 @@ impl ChatWidget {
             "You can still use Codex in a non-admin sandbox. It carries greater risk if prompt injected."
         ]);
         lines.push(line![
-            "Learn more <https://developers.openai.com/codex/windows>"
+            "Learn more <https://github.com/Agents2AgentsAI/ata/blob/main/docs/sandbox.md>"
         ]);
 
         let mut header = ColumnRenderable::new();

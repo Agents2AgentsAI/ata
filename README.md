@@ -46,7 +46,7 @@ You can use `ata` with ChatGPT plan or OpenAI, Anthropic, or Gemini API key. All
 
 ## Docs
 
-- **Coming soon** - consult [Codex](https://developers.openai.com/codex) documentation for now
+- **Coming soon** - consult [Ata docs](https://github.com/Agents2AgentsAI/ata/tree/main/docs) for now
 - [**Installing & building**](./docs/install.md)
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
