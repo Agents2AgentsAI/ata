@@ -615,14 +615,17 @@ fn write_fallback_file(store: &FallbackFile) -> Result<()> {
     }
 
     let serialized = serde_json::to_string(store)?;
-    fs::write(&path, serialized)?;
 
+    let mut options = fs::OpenOptions::new();
+    options.truncate(true).write(true).create(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = fs::Permissions::from_mode(0o600);
-        fs::set_permissions(&path, perms)?;
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
     }
+    let mut file = options.open(&path)?;
+    std::io::Write::write_all(&mut file, serialized.as_bytes())?;
+    std::io::Write::flush(&mut file)?;
 
     Ok(())
 }

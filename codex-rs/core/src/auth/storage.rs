@@ -302,6 +302,16 @@ static USE_FILE_STORAGE: Lazy<Mutex<std::collections::HashSet<String>>> =
 static KEYRING_AUTH_CACHE: Lazy<Mutex<HashMap<String, Option<AuthDotJson>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// Remove the cached keyring entry for `codex_home` so the next
+/// `load()` re-reads from the OS keyring.
+pub(super) fn invalidate_keyring_cache(codex_home: &Path) {
+    if let Ok(key) = compute_store_key(codex_home) {
+        if let Ok(mut guard) = KEYRING_AUTH_CACHE.lock() {
+            guard.remove(&key);
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct AutoAuthStorage {
     keyring_storage: Arc<KeyringAuthStorage>,
@@ -671,19 +681,7 @@ mod tests {
     }
 
     fn clear_keyring_cache_for_path(codex_home: &Path) {
-        if let Ok(key) = compute_store_key(codex_home) {
-            if let Ok(mut guard) = KEYRING_AUTH_CACHE.lock() {
-                guard.remove(&key);
-            }
-            return;
-        }
-        clear_all_keyring_cache();
-    }
-
-    fn clear_all_keyring_cache() {
-        if let Ok(mut guard) = KEYRING_AUTH_CACHE.lock() {
-            guard.clear();
-        }
+        super::invalidate_keyring_cache(codex_home);
     }
 
     fn id_token_with_prefix(prefix: &str) -> IdTokenInfo {
@@ -850,6 +848,42 @@ mod tests {
 
         assert_eq!(loaded_again, Some(second));
         assert_eq!(counting_store.load_count.load(Ordering::SeqCst), 2);
+        clear_keyring_cache_for_path(codex_home.path());
+        Ok(())
+    }
+
+    #[test]
+    fn invalidate_keyring_cache_forces_re_read() -> anyhow::Result<()> {
+        let codex_home = tempdir()?;
+        let counting_store = CountingKeyringStore::new();
+        let storage = KeyringAuthStorage::new(
+            codex_home.path().to_path_buf(),
+            Arc::new(counting_store.clone()),
+        );
+        let expected = auth_with_prefix("invalidate");
+        seed_keyring_with_auth(
+            &counting_store.inner,
+            || compute_store_key(codex_home.path()),
+            &expected,
+        )?;
+        clear_keyring_cache_for_path(codex_home.path());
+
+        // First load hits the keyring.
+        let first = storage.load()?;
+        assert_eq!(first, Some(expected.clone()));
+        assert_eq!(counting_store.load_count.load(Ordering::SeqCst), 1);
+
+        // Second load is served from cache — no additional keyring read.
+        let second = storage.load()?;
+        assert_eq!(second, Some(expected.clone()));
+        assert_eq!(counting_store.load_count.load(Ordering::SeqCst), 1);
+
+        // Invalidate the cache, then load again — should hit keyring a second time.
+        super::invalidate_keyring_cache(codex_home.path());
+        let third = storage.load()?;
+        assert_eq!(third, Some(expected));
+        assert_eq!(counting_store.load_count.load(Ordering::SeqCst), 2);
+
         clear_keyring_cache_for_path(codex_home.path());
         Ok(())
     }
