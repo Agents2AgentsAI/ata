@@ -112,14 +112,40 @@ For full technical walkthroughs of any paper above:
 - Chat about any paper and ask follow-up questions — insights will be saved via `$kb-update`
 ```
 
-## Presentation
+## Presentation (Main Agent Only)
 
-IMPORTANT: When the briefing is complete, you MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the briefing title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
+**This section applies to the main agent only.** If this skill is loaded in a subagent, return results as text to the main agent — do NOT call `present_reading_view`.
+
+IMPORTANT: When the briefing is complete, the main agent MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the briefing title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
 
 When the user asks follow-up questions about a specific section, use the most efficient update tool:
 - `append_to_section` — to add new information at the end of a section (most common for follow-up questions)
 - `patch_document_section` — to change specific text within a section (for corrections or targeted edits)
 - `update_document_section` — to fully rewrite a section (only when the entire section needs to change)
+
+## Post-Briefing Housekeeping
+
+After presenting the briefing, do these:
+
+**1. Journal entry** — Append to `research-journal.md` at the KB root via `kb_write_file`. Prepend (newest first):
+
+```markdown
+## [Date] — Briefing: [Topic]
+
+### Explored
+- Briefed on [N] papers covering [topic]
+- Approaches identified: [list approach families briefly]
+
+### Recommendation
+- [1-2 sentences: what was recommended and why]
+
+### Cards Touched
+- [card-ids] (read)
+
+---
+```
+
+**2. Research context detection** — If the user's questions or reactions reveal priorities (e.g., "which of these is fastest at inference?", "I don't need the simulation-only ones"), offer to note it in `research-context.md`. This is especially valuable during briefings because the user is actively deciding what to focus on.
 
 ## Anti-Patterns
 

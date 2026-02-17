@@ -40,6 +40,10 @@ quick-xml = { version = "0.38.4", optional = true }
 regex = { workspace = true, optional = true }
 walkdir = { workspace = true, optional = true }
 
+[build-dependencies]
+dirs = { workspace = true }
+tempfile = { workspace = true }
+
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

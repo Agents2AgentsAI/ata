@@ -71,7 +71,7 @@ Each subagent prompt MUST include `$paper-synthesis` — this triggers automatic
 
 **Do NOT write a custom prompt that describes what the subagent should do.** If you write "You are summarizing a research paper…" or similar, the subagent will NOT have the skill instructions and will fall back to shell-based approaches. Use the template below **verbatim** (only fill in the bracketed fields):
 
-> The $paper-synthesis skill instructions are loaded in your context. Execute every section: Pre-Synthesis, Type 1 Structured Summary, Type 2 Pedagogical Deep Dive (with the Default Narrative Style and Basics-First Contract), Figure Extraction, Depth Enforcement, and KB Card Storage. Skip the "Execution: Use Subagents" section — you ARE the subagent. Do NOT invoke `cross-paper-report` — the main agent handles that after you return.
+> The $paper-synthesis skill instructions are loaded in your context. Execute every section: Pre-Synthesis, Type 1 Structured Summary, Type 2 Pedagogical Deep Dive (with the Default Narrative Style and Basics-First Contract), Figure Extraction, Depth Enforcement, and KB Card Storage. Skip the "Execution: Use Subagents" section — you ARE the subagent. Skip the "Presentation" section — you do NOT present to the user. Do NOT invoke `cross-paper-report` and do NOT call `present_reading_view` — those are main-agent responsibilities. Write the KB card and return your report.
 >
 > CRITICAL: To read the paper, use `attach_url_files` with the PDF URL. Do NOT use shell commands (curl, wget, pdftotext, python) to download or extract PDF text. The model reads PDFs natively via attach_url_files.
 >
@@ -83,15 +83,7 @@ Do NOT manually reconstruct the workflow or style rules in the subagent prompt. 
 
 ### What Subagents Return
 
-Each subagent writes the KB card directly via `kb_write_card` (and extracts figures if available). After completing, the subagent returns a **concise report** to the main agent containing:
-- Card ID that was written
-- Paper title, authors, year
-- 3-5 sentence summary of the core contribution
-- Key architectural choices (backbone type, scale, notable modules)
-- Key training details (stages, data sources, losses)
-- Whether figures were extracted and how many
-
-The subagent does NOT need to return the full Type 1 + Type 2 text — that content lives in the KB card. The subagent's report is just enough for the main agent to inform the user and produce a cross-paper comparison.
+Each subagent writes the KB card directly via `kb_write_card` (and extracts figures if available). After completing, the subagent returns **only the card ID** it wrote — e.g., `paper-hindsight-experience-replay`. No summary, no architectural breakdown, no training details. The main agent reads the full card via `kb_read_card` and handles presentation. Returning a redundant summary wastes subagent time and context.
 
 ### Main Agent Role
 
@@ -101,10 +93,10 @@ The main agent orchestrates subagents and handles presentation. Subagents write 
 
 When the user asks about ONE paper (explain, walkthrough, deep dive, summarize):
 
-1. Call `kb_status` and `kb_search` **in parallel** to check for an existing card.
+1. Call `kb_status` and `kb_search` **in parallel** to check for an existing card. Optionally read `research-context.md` in the same parallel batch (via `kb_read_file` at path `research-context.md`) to tailor the subagent prompt.
 2. If a card with a Deep Dive exists → read it via `kb_read_card` → present via `present_reading_view` → **done, skip remaining steps.**
 3. Resolve the paper identifier using the Pre-Synthesis routing rules (see below). This produces a PDF URL, DOI, or arXiv ID. **Do NOT search Zotero unless the user explicitly mentions Zotero or their library.**
-4. Launch ONE subagent with the standard template (see Subagent Prompt Construction). Include the resolved identifier and `kb_path`.
+4. Launch ONE subagent with the standard template (see Subagent Prompt Construction). Include the resolved identifier, `kb_path`, and any research context priorities (see Personalization below).
 5. When the subagent returns, read the newly written card via `kb_read_card`.
 6. Present the Deep Dive content via `present_reading_view`. Title: the paper name (never card IDs or "KB" references).
 
@@ -121,6 +113,22 @@ When the user asks about MULTIPLE papers or a broad topic:
 5. Collect subagent reports and tell the user which cards were written and a brief highlight per paper.
 6. If the user wants comparison, suggest `$cross-paper-report` as a follow-up. Do NOT run it automatically.
 
+#### Personalization via Research Context
+
+If `research-context.md` exists at the KB root (read via `kb_read_file` at path `research-context.md`), use it to tailor the walkthrough:
+
+- **Priorities** affect emphasis: If the user cares about inference latency, spend more words on the inference pipeline and latency numbers. If they care about data efficiency, expand the training data discussion. The walkthrough covers everything, but the priority sections get deeper treatment (more paragraphs, more worked examples).
+- **Not Interested In** affects framing: If the user has dismissed pure RL approaches, don't spend a paragraph motivating RL vs. imitation learning — state the approach and move on. Still cover the method fully, but don't sell the user on something they've already decided against.
+- **Framings That Work** affect style: If the user responds to tradeoff framing, structure explanations as "you get X but you lose Y." If they prefer mechanical analogies, use those. If they prefer concrete numbers, lead with numbers before abstractions.
+- **Project context** affects connections: If the user is building a bimanual manipulation pipeline, point out which parts of the paper are directly relevant to their setup and which are tangential.
+
+When passing research context to a subagent, include a brief summary in the subagent prompt:
+> User priorities: [list from research-context.md Priorities section]
+> Emphasize: [sections relevant to priorities]
+> User project: [brief from Project section, if relevant]
+
+If `research-context.md` doesn't exist, produce the standard walkthrough — no personalization needed.
+
 #### After Synthesis: Interactive Workflow
 
 After synthesis is complete and the user starts chatting about the papers, the KB cards should grow with the conversation. The following skills compose with paper-synthesis:
@@ -129,7 +137,36 @@ After synthesis is complete and the user starts chatting about the papers, the K
 - **`$research-briefing`** — When the user wants a quick orientation of multiple papers before diving deep, suggest this as an alternative to cross-paper-report. Produces a concise 2-4 page overview.
 - **`$conversation-report`** — When the user has been chatting about papers and wants to capture the discussion as a document, suggest this. It organizes the conversation's Q&A into a focused report.
 
-#### Post-Reading-View: Persist Follow-Up Insights
+#### Post-Synthesis Housekeeping (Main Agent Only)
+
+**Subagents skip this section.** Subagents write the KB card and return — journal entries, research-context updates, and follow-up persistence are main-agent responsibilities.
+
+After completing a synthesis (card written + reading view presented), do these in the background — they should not block the user from interacting with the reading view:
+
+**1. Journal entry** — Append a brief entry to `research-journal.md` at the KB root via `kb_write_file`. If the file doesn't exist, create it. Prepend (newest first):
+
+```markdown
+## [Date] — Synthesized: [Paper Title]
+
+### Action
+- Synthesized [paper title] into KB card `[card-id]`
+- Source: [URL or "Zotero item XDBQLKYV" or "paper_search"]
+
+### Cards Touched
+- [card-id] (created)
+```
+
+For multi-paper synthesis, list all papers in one entry. Keep it short — 5-10 lines max.
+
+**2. Research context detection** — During the synthesis interaction (including follow-up questions), watch for preference signals:
+- User asks "skip the RL motivation" or "I know how transformers work" → They're expert in that area, note in research-context.md under Framings That Work
+- User asks "focus on the inference pipeline" → Priority signal
+- User says "how would this work for my bimanual setup?" → Project context signal
+- User responds positively to an analogy or framing → Framings That Work signal
+
+When you detect a preference signal, offer briefly: "Want me to note that [preference] in your research context so future walkthroughs adapt?" If yes, read `research-context.md` (create if needed), merge the new item, write it back. If no or ignored, move on — never block on this.
+
+#### Post-Reading-View: Persist Follow-Up Insights (Main Agent Only)
 
 When the user asks follow-up questions inside the reading view (via `append_to_section`), those answers are added to the ephemeral reading view document — they are not automatically saved to the KB card. The reading view is a display surface, not storage.
 
@@ -138,6 +175,7 @@ When the user exits the reading view and returns to the main conversation:
 1. **Check if the reading view Q&A produced insights not already in the KB card.** Typical examples: the user asked "how does X handle Y?" and got a targeted explanation, or asked about a specific failure mode, or asked for a comparison with another method.
 2. **If yes, offer to update the KB card:** "The questions you asked about [topics] produced explanations not in the original card. Want me to add them to the card's Discussion Notes so they're available next time?"
 3. **If the user agrees, use the `$kb-update` protocol** — read the card, append the follow-up insights under Discussion Notes with today's date, write the card back.
+4. **Append follow-up insights to the journal** — If insights were persisted to cards, also append a brief journal entry noting the follow-up: `### Follow-up: [Paper Title]` with bullets for what was discussed.
 
 This is lightweight and non-blocking — if the user moves on to a different topic, don't interrupt. But if there's a natural pause or the user explicitly returns from the reading view, this is the moment to offer.
 
@@ -355,9 +393,11 @@ the points where they naturally arise — not collected into separate sections a
 
 If `kb_write_card` is not available, produce both types directly in the chat response.
 
-## Presentation
+## Presentation (Main Agent Only)
 
-IMPORTANT: When the synthesis is complete, you MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the paper title or synthesis name, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
+**This section applies to the main agent only.** Subagents write KB cards and return a concise report — they never call `present_reading_view` because the user is interacting with the main agent, not the subagent.
+
+IMPORTANT: When the synthesis is complete, the main agent MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the paper title or synthesis name, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
 
 When the user asks follow-up questions about a specific section, use the most efficient update tool:
 - `append_to_section` — to add new information at the end of a section (most common for follow-up questions)
