@@ -6,9 +6,9 @@ example, to stage the CLI, responses proxy, and SDK packages for version `0.6.0`
 ```bash
 ./scripts/stage_npm_packages.py \
   --release-version 0.6.0 \
-  --package codex \
-  --package codex-responses-api-proxy \
-  --package codex-sdk
+  --package ata \
+  --package ata-responses-api-proxy \
+  --package ata-sdk
 ```
 
 This downloads the native artifacts once, hydrates `vendor/` for each package, and writes

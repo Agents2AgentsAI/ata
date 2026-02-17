@@ -4,7 +4,7 @@
   "description": "Ata MCP server for the shell tool with patched Bash and exec wrappers.",
   "license": "Apache-2.0",
   "bin": {
-    "codex-shell-tool-mcp": "bin/mcp-server.js"
+    "ata-shell-tool-mcp": "bin/mcp-server.js"
   },
   "engines": {
     "node": ">=18"
