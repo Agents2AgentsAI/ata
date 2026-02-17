@@ -197,9 +197,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     };
 
-    let cloud_auth_manager = AuthManager::shared(
+    let auth_manager = AuthManager::shared(
         codex_home.clone(),
-        false,
+        true,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
     );
     let chatgpt_base_url = config_toml
@@ -208,7 +208,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
     // TODO(gt): Make cloud requirements failures blocking once we can fail-closed.
     let cloud_requirements =
-        cloud_requirements_loader(cloud_auth_manager, chatgpt_base_url, codex_home.clone());
+        cloud_requirements_loader(auth_manager.clone(), chatgpt_base_url, codex_home.clone());
 
     let model_provider = if oss {
         let resolved = resolve_oss_provider(
@@ -284,7 +284,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     set_default_client_residency_requirement(config.enforce_residency.value());
 
-    if let Err(err) = enforce_login_restrictions(&config) {
+    if let Err(err) = enforce_login_restrictions(&config, Some(auth_manager.as_ref())) {
         eprintln!("{err}");
         std::process::exit(1);
     }
@@ -362,11 +362,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         std::process::exit(1);
     }
 
-    let auth_manager = AuthManager::shared(
-        config.codex_home.clone(),
-        true,
-        config.cli_auth_credentials_store_mode,
-    );
     let thread_manager = Arc::new(ThreadManager::new(
         config.codex_home.clone(),
         auth_manager.clone(),
