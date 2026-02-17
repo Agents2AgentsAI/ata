@@ -9,7 +9,6 @@ pub use app::AppExitInfo;
 pub use app::ExitReason;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AuthManager;
-use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_core::ThreadSortKey;
@@ -48,6 +47,7 @@ use cwd_prompt::CwdSelection;
 use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::error;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
@@ -228,7 +228,7 @@ pub async fn run_main(
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
     let cloud_requirements = cloud_requirements_loader(
-        cloud_auth_manager,
+        cloud_auth_manager.clone(),
         chatgpt_base_url,
         codex_home.to_path_buf(),
     );
@@ -316,7 +316,7 @@ pub async fn run_main(
     }
 
     #[allow(clippy::print_stderr)]
-    if let Err(err) = enforce_login_restrictions(&config) {
+    if let Err(err) = enforce_login_restrictions(&config, Some(cloud_auth_manager.as_ref())) {
         eprintln!("{err}");
         std::process::exit(1);
     }
@@ -424,6 +424,7 @@ pub async fn run_main(
         overrides,
         cli_kv_overrides,
         cloud_requirements,
+        cloud_auth_manager,
         feedback,
     )
     .await
@@ -436,6 +437,7 @@ async fn run_ratatui_app(
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     mut cloud_requirements: CloudRequirementsLoader,
+    auth_manager: Arc<AuthManager>,
     feedback: codex_feedback::CodexFeedback,
 ) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
@@ -481,12 +483,7 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
 
-    let auth_manager = AuthManager::shared(
-        initial_config.codex_home.clone(),
-        false,
-        initial_config.cli_auth_credentials_store_mode,
-    );
-    let login_status = get_login_status(&initial_config);
+    let login_status = get_login_status(&initial_config, auth_manager.as_ref());
     let should_show_trust_screen_flag = should_show_trust_screen(&initial_config);
     let should_show_onboarding =
         should_show_onboarding(login_status, &initial_config, should_show_trust_screen_flag);
@@ -850,18 +847,11 @@ pub enum LoginStatus {
     NotAuthenticated,
 }
 
-fn get_login_status(config: &Config) -> LoginStatus {
+fn get_login_status(config: &Config, auth_manager: &AuthManager) -> LoginStatus {
     if config.model_provider.requires_openai_auth {
-        // Reading the OpenAI API key is an async operation because it may need
-        // to refresh the token. Block on it.
-        let codex_home = config.codex_home.clone();
-        match CodexAuth::from_auth_storage(&codex_home, config.cli_auth_credentials_store_mode) {
-            Ok(Some(auth)) => LoginStatus::AuthMode(auth.auth_mode()),
-            Ok(None) => LoginStatus::NotAuthenticated,
-            Err(err) => {
-                error!("Failed to read auth.json: {err}");
-                LoginStatus::NotAuthenticated
-            }
+        match auth_manager.auth_cached() {
+            Some(auth) => LoginStatus::AuthMode(auth.auth_mode()),
+            None => LoginStatus::NotAuthenticated,
         }
     } else {
         LoginStatus::NotAuthenticated

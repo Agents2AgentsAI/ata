@@ -13,6 +13,12 @@ ata
 
 You can also install via Homebrew (`brew install --cask ata`) or download a platform-specific release directly from our [GitHub Releases](https://github.com/Agents2AgentsAI/ata/releases).
 
+For macOS/Linux, you can also install via:
+
+```shell
+curl -fsSL https://agents2agents.ai/ata/install.sh | sh
+```
+
 ## Documentation quickstart
 
 - First run with Ata? Start with [`docs/getting-started.md`](../docs/getting-started.md) (links to the walkthrough for prompts, keyboard shortcuts, and session management).

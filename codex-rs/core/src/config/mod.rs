@@ -2552,10 +2552,9 @@ trust_level = "trusted"
             codex_home.path().to_path_buf(),
         )?;
 
-        // Default is Auto - tries keyring first, falls back to file if it fails
         assert_eq!(
             config.cli_auth_credentials_store_mode,
-            AuthCredentialsStoreMode::Auto,
+            AuthCredentialsStoreMode::File,
         );
 
         Ok(())
@@ -2584,7 +2583,7 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn config_defaults_to_auto_oauth_store_mode() -> std::io::Result<()> {
+    fn config_defaults_to_correct_oauth_store_mode() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml::default();
 
@@ -2596,7 +2595,7 @@ trust_level = "trusted"
 
         assert_eq!(
             config.mcp_oauth_credentials_store_mode,
-            OAuthCredentialsStoreMode::Auto,
+            OAuthCredentialsStoreMode::File,
         );
 
         Ok(())

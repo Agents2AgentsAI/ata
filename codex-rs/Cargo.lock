@@ -2259,6 +2259,7 @@ dependencies = [
  "futures",
  "keyring",
  "oauth2",
+ "once_cell",
  "pretty_assertions",
  "reqwest",
  "rmcp",

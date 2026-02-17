@@ -5139,7 +5139,7 @@ impl ChatWidget {
         .map(|p| p.provider_id)
         .collect();
 
-        let presets: Vec<ModelPreset> = presets
+        let mut presets: Vec<ModelPreset> = presets
             .into_iter()
             .filter(|preset| preset.show_in_picker)
             .filter(|preset| {
@@ -5150,6 +5150,28 @@ impl ChatWidget {
             .collect();
 
         let current_model = self.current_model();
+
+        // Determine the active model's provider for sorting.
+        let current_provider: String = presets
+            .iter()
+            .find(|preset| preset.model.as_str() == current_model)
+            .and_then(|preset| preset.provider_id.clone())
+            .unwrap_or_else(|| PROVIDER_OPENAI.to_string());
+
+        // Sort: current provider first, then others.
+        presets.sort_by_key(|preset| {
+            let provider = preset.provider_id.as_deref().unwrap_or(PROVIDER_OPENAI);
+            if provider == current_provider { 0u8 } else { 1u8 }
+        });
+
+        // Reset is_default to match the new ordering.
+        for preset in &mut presets {
+            preset.is_default = false;
+        }
+        if let Some(first) = presets.first_mut() {
+            first.is_default = true;
+        }
+
         let current_label = presets
             .iter()
             .find(|preset| preset.model.as_str() == current_model)
