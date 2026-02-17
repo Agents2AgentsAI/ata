@@ -2552,7 +2552,12 @@ trust_level = "trusted"
             codex_home.path().to_path_buf(),
         )?;
 
-        // Default is Auto - tries keyring first, falls back to file if it fails
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            config.cli_auth_credentials_store_mode,
+            AuthCredentialsStoreMode::File,
+        );
+        #[cfg(not(debug_assertions))]
         assert_eq!(
             config.cli_auth_credentials_store_mode,
             AuthCredentialsStoreMode::Auto,

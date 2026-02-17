@@ -504,13 +504,19 @@ pub fn load_auth_dot_json(
     storage.load()
 }
 
-pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
-    let Some(auth) = load_auth(
-        &config.codex_home,
-        true,
-        config.cli_auth_credentials_store_mode,
-    )?
-    else {
+pub fn enforce_login_restrictions(
+    config: &Config,
+    auth_manager: Option<&AuthManager>,
+) -> std::io::Result<()> {
+    let auth = match auth_manager {
+        Some(manager) => manager.auth_cached(),
+        None => load_auth(
+            &config.codex_home,
+            true,
+            config.cli_auth_credentials_store_mode,
+        )?,
+    };
+    let Some(auth) = auth else {
         return Ok(());
     };
 
@@ -1827,7 +1833,7 @@ mod tests {
 
         let config = build_config(codex_home.path(), Some(ForcedLoginMethod::Chatgpt), None).await;
 
-        let err = super::enforce_login_restrictions(&config)
+        let err = super::enforce_login_restrictions(&config, None)
             .expect_err("expected method mismatch to error");
         assert!(err.to_string().contains("ChatGPT login is required"));
         assert!(
@@ -1852,7 +1858,7 @@ mod tests {
 
         let config = build_config(codex_home.path(), None, Some("org_mine".to_string())).await;
 
-        let err = super::enforce_login_restrictions(&config)
+        let err = super::enforce_login_restrictions(&config, None)
             .expect_err("expected workspace mismatch to error");
         assert!(err.to_string().contains("workspace org_mine"));
         assert!(
@@ -1877,7 +1883,8 @@ mod tests {
 
         let config = build_config(codex_home.path(), None, Some("org_mine".to_string())).await;
 
-        super::enforce_login_restrictions(&config).expect("matching workspace should succeed");
+        super::enforce_login_restrictions(&config, None)
+            .expect("matching workspace should succeed");
         assert!(
             codex_home.path().join("auth.json").exists(),
             "auth.json should remain when restrictions pass"
@@ -1893,7 +1900,8 @@ mod tests {
 
         let config = build_config(codex_home.path(), None, Some("org_mine".to_string())).await;
 
-        super::enforce_login_restrictions(&config).expect("matching workspace should succeed");
+        super::enforce_login_restrictions(&config, None)
+            .expect("matching workspace should succeed");
         assert!(
             codex_home.path().join("auth.json").exists(),
             "auth.json should remain when restrictions pass"
@@ -1908,7 +1916,7 @@ mod tests {
 
         let config = build_config(codex_home.path(), Some(ForcedLoginMethod::Chatgpt), None).await;
 
-        let err = super::enforce_login_restrictions(&config)
+        let err = super::enforce_login_restrictions(&config, None)
             .expect_err("environment API key should not satisfy forced ChatGPT login");
         assert!(
             err.to_string()
