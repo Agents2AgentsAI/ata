@@ -797,7 +797,6 @@ mod tests {
             search_tool: false,
             collab_tools: false,
             collaboration_modes_tools: false,
-            request_rule_enabled: false,
             js_repl_enabled: false,
             js_repl_tools_only: false,
             experimental_supported_tools: Vec::new(),

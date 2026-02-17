@@ -34,10 +34,8 @@ pub const AUTH_JSON_VERSION: u32 = 2;
 /// Determine where Codex should store CLI auth credentials.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-#[derive(Default)]
 pub enum AuthCredentialsStoreMode {
     /// Persist credentials in CODEX_HOME/auth.json with 0600 permissions.
-    #[default]
     File,
     /// Persist credentials in the keyring. Fail if unavailable.
     Keyring,
@@ -47,6 +45,19 @@ pub enum AuthCredentialsStoreMode {
     Auto,
     /// Store credentials in memory only for the current process.
     Ephemeral,
+}
+
+impl Default for AuthCredentialsStoreMode {
+    fn default() -> Self {
+        #[cfg(debug_assertions)]
+        {
+            Self::File
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            Self::Auto
+        }
+    }
 }
 
 /// Expected structure for $CODEX_HOME/auth.json.
@@ -286,6 +297,8 @@ static USE_FILE_STORAGE: Lazy<Mutex<std::collections::HashSet<String>>> =
     Lazy::new(|| Mutex::new(std::collections::HashSet::new()));
 
 /// Process-global cache of keyring-loaded auth data keyed by `compute_store_key()`.
+/// This cache is process-scoped; external keyring updates by another process are not visible
+/// until restart.
 static KEYRING_AUTH_CACHE: Lazy<Mutex<HashMap<String, Option<AuthDotJson>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -658,10 +671,18 @@ mod tests {
     }
 
     fn clear_keyring_cache_for_path(codex_home: &Path) {
-        if let Ok(key) = compute_store_key(codex_home)
-            && let Ok(mut guard) = KEYRING_AUTH_CACHE.lock()
-        {
-            guard.remove(&key);
+        if let Ok(key) = compute_store_key(codex_home) {
+            if let Ok(mut guard) = KEYRING_AUTH_CACHE.lock() {
+                guard.remove(&key);
+            }
+            return;
+        }
+        clear_all_keyring_cache();
+    }
+
+    fn clear_all_keyring_cache() {
+        if let Ok(mut guard) = KEYRING_AUTH_CACHE.lock() {
+            guard.clear();
         }
     }
 
