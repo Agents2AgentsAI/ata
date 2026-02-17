@@ -1,6 +1,6 @@
 # codex-app-server
 
-`codex app-server` is the interface Codex uses to power rich interfaces such as the [Codex VS Code extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt).
+`codex app-server` is the interface Codex uses to power rich interfaces such as the [Ata VS Code extension](https://marketplace.visualstudio.com/items?itemName=a2a-ai.ata).
 
 ## Table of Contents
 
@@ -69,11 +69,11 @@ Clients must send a single `initialize` request per transport connection before 
 
 Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
 
-**Important**: `clientInfo.name` is used to identify the client for the OpenAI Compliance Logs Platform. If
-you are developing a new Codex integration that is intended for enterprise use, please contact us to get it
-added to a known clients list. For more context: https://chatgpt.com/admin/api-reference#tag/Logs:-Codex
+**Important**: `clientInfo.name` is used to identify the client for compliance logging. If
+you are developing a new Ata integration that is intended for enterprise use, please contact us to get it
+added to a known clients list.
 
-Example (from OpenAI's official VSCode extension):
+Example (from the official Ata VS Code extension):
 
 ```json
 {
