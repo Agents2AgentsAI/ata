@@ -692,8 +692,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh api \
-            repos/${GITHUB_REPOSITORY}/git/refs/heads/latest-alpha-cli \
+          if ! gh api \
+            "repos/${GITHUB_REPOSITORY}/git/refs/heads/latest-alpha-cli" \
             -X PATCH \
             -f sha="${GITHUB_SHA}" \
-            -F force=true
+            -F force=true 2>/dev/null; then
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -X POST \
+              -f ref="refs/heads/latest-alpha-cli" \
+              -f sha="${GITHUB_SHA}"
+          fi
