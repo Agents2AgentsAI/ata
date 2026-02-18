@@ -221,7 +221,6 @@ fn skill_roots_from_layer_stack_inner(
                     path: system_cache_root_dir(config_folder.as_path()),
                     scope: SkillScope::System,
                 });
-
             }
             ConfigLayerSource::System { .. } => {
                 // The system config layer lives under `/etc/codex/` on Unix, so treat
