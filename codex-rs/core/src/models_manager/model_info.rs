@@ -70,7 +70,7 @@ pub(crate) fn model_info_from_preset(slug: &str, preset: &ModelPreset) -> ModelI
         priority: 99,
         upgrade: None,
         base_instructions: BASE_INSTRUCTIONS.to_string(),
-        model_messages: None,
+        model_messages: local_personality_messages_for_slug(slug),
         supports_reasoning_summaries: false,
         support_verbosity: false,
         default_verbosity: None,

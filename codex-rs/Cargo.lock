@@ -1327,7 +1327,6 @@ dependencies = [
  "pretty_assertions",
  "regex-lite",
  "reqwest",
- "rustls",
  "serde",
  "serde_json",
  "tempfile",
