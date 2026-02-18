@@ -132,6 +132,7 @@ jobs:
         with:
           workspaces: codex-rs
           key: ${{ matrix.target }}
+          save-if: false
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Use hermetic Cargo home (musl)
@@ -243,6 +244,19 @@ jobs:
           apple-notarization-key-p8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
           apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
           apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+
+      - if: ${{ runner.os == 'macOS' }}
+        name: Free disk space before DMG creation
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Remove debug symbols and intermediate build artifacts to free space.
+          find codex-rs/target -name '*.d' -o -name '*.rlib' -o -name '*.rmeta' | xargs rm -f 2>/dev/null || true
+          find codex-rs/target -path '*/deps/*' -name '*.o' | xargs rm -f 2>/dev/null || true
+          # Remove incremental compilation data.
+          find codex-rs/target -type d -name incremental -exec rm -rf {} + 2>/dev/null || true
+          echo "Disk usage after cleanup:"
+          df -h .
 
       - if: ${{ runner.os == 'macOS' }}
         name: Build macOS dmg
