@@ -5,7 +5,6 @@ use crate::app_event::ExitMode;
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
-use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
@@ -553,7 +552,6 @@ pub(crate) struct App {
     /// transcript cells.
     pub(crate) backtrack_render_pending: bool,
     pub(crate) feedback: codex_feedback::CodexFeedback,
-    feedback_audience: FeedbackAudience,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
 
@@ -624,7 +622,6 @@ impl App {
             models_manager: self.server.get_models_manager(),
             feedback: self.feedback.clone(),
             is_first_run: false,
-            feedback_audience: self.feedback_audience,
             model: Some(self.chat_widget.current_model().to_string()),
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             otel_manager: self.otel_manager.clone(),
@@ -1032,17 +1029,6 @@ impl App {
 
         let auth = auth_manager.auth().await;
         let auth_ref = auth.as_ref();
-        // Determine who should see internal Slack routing. We treat
-        // `@openai.com` emails as employees and default to `External` when the
-        // email is unavailable (for example, API key auth).
-        let feedback_audience = if auth_ref
-            .and_then(CodexAuth::get_account_email)
-            .is_some_and(|email| email.ends_with("@openai.com"))
-        {
-            FeedbackAudience::OpenAiEmployee
-        } else {
-            FeedbackAudience::External
-        };
         let auth_mode = auth_ref
             .map(CodexAuth::auth_mode)
             .map(TelemetryAuthMode::from);
@@ -1086,7 +1072,6 @@ impl App {
                     models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    feedback_audience,
                     model: Some(model.clone()),
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
@@ -1116,7 +1101,6 @@ impl App {
                     models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    feedback_audience,
                     model: config.model.clone(),
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
@@ -1147,7 +1131,6 @@ impl App {
                     models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    feedback_audience,
                     model: config.model.clone(),
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
@@ -1186,7 +1169,6 @@ impl App {
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
             feedback: feedback.clone(),
-            feedback_audience,
             pending_update_action: None,
             suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
@@ -1390,7 +1372,6 @@ impl App {
                     models_manager: self.server.get_models_manager(),
                     feedback: self.feedback.clone(),
                     is_first_run: false,
-                    feedback_audience: self.feedback_audience,
                     model: Some(model),
                     status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
                     otel_manager: self.otel_manager.clone(),
@@ -3096,7 +3077,6 @@ mod tests {
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
-            feedback_audience: FeedbackAudience::External,
             pending_update_action: None,
             suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
@@ -3154,7 +3134,6 @@ mod tests {
                 backtrack: BacktrackState::default(),
                 backtrack_render_pending: false,
                 feedback: codex_feedback::CodexFeedback::new(),
-                feedback_audience: FeedbackAudience::External,
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
                 pending_shutdown_exit_thread_id: None,

@@ -10,12 +10,12 @@ use codex_core::auth::ProviderAuthSource;
 use codex_core::auth::get_provider_api_key;
 use codex_core::auth::list_configured_providers;
 use codex_core::auth::login_with_provider_api_key;
-use codex_core::auth::logout;
 use codex_core::auth::logout_provider;
 use codex_core::auth::provider_env_var;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::edit::default_model_for_provider;
+use codex_core::AuthManager;
 use codex_login::GeminiServerOptions;
 use codex_login::ServerOptions;
 use codex_login::run_device_code_login;
@@ -470,7 +470,12 @@ pub async fn run_logout_provider(
         }
         None => {
             // Logout all (existing behavior)
-            match logout(&config.codex_home, config.cli_auth_credentials_store_mode) {
+            let auth_manager = AuthManager::new(
+                config.codex_home.clone(),
+                false,
+                config.cli_auth_credentials_store_mode,
+            );
+            match auth_manager.logout() {
                 Ok(true) => {
                     eprintln!("Successfully logged out");
                     std::process::exit(0);
@@ -491,7 +496,12 @@ pub async fn run_logout_provider(
 pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
-    match logout(&config.codex_home, config.cli_auth_credentials_store_mode) {
+    let auth_manager = AuthManager::new(
+        config.codex_home.clone(),
+        false,
+        config.cli_auth_credentials_store_mode,
+    );
+    match auth_manager.logout() {
         Ok(true) => {
             eprintln!("Successfully logged out");
             std::process::exit(0);

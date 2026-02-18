@@ -3,13 +3,6 @@ use std::path::PathBuf;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
 
-#[cfg(feature = "internal-telemetry")]
-pub(crate) const STATSIG_OTLP_HTTP_ENDPOINT: &str = "https://ab.chatgpt.com/otlp/v1/metrics";
-#[cfg(feature = "internal-telemetry")]
-pub(crate) const STATSIG_API_KEY_HEADER: &str = "statsig-api-key";
-#[cfg(feature = "internal-telemetry")]
-pub(crate) const STATSIG_API_KEY: &str = "client-MkRuleRQBd6qakfnDYqJVR9JuXcY57Ljly3vi5JVUIO";
-
 pub(crate) fn resolve_exporter(exporter: &OtelExporter) -> OtelExporter {
     match exporter {
         OtelExporter::Statsig => {
@@ -17,21 +10,19 @@ pub(crate) fn resolve_exporter(exporter: &OtelExporter) -> OtelExporter {
                 return OtelExporter::None;
             }
 
-            #[cfg(feature = "internal-telemetry")]
-            {
-                OtelExporter::OtlpHttp {
-                    endpoint: STATSIG_OTLP_HTTP_ENDPOINT.to_string(),
-                    headers: HashMap::from([(
-                        STATSIG_API_KEY_HEADER.to_string(),
-                        STATSIG_API_KEY.to_string(),
-                    )]),
-                    protocol: OtelHttpProtocol::Json,
-                    tls: None,
-                }
+            // Read endpoint and API key from environment so no secrets are
+            // baked into the binary.
+            let endpoint = std::env::var("CODEX_STATSIG_ENDPOINT").unwrap_or_default();
+            let api_key = std::env::var("CODEX_STATSIG_API_KEY").unwrap_or_default();
+            if endpoint.is_empty() || api_key.is_empty() {
+                return OtelExporter::None;
             }
-            #[cfg(not(feature = "internal-telemetry"))]
-            {
-                OtelExporter::None
+
+            OtelExporter::OtlpHttp {
+                endpoint,
+                headers: HashMap::from([("statsig-api-key".to_string(), api_key)]),
+                protocol: OtelHttpProtocol::Json,
+                tls: None,
             }
         }
         _ => exporter.clone(),

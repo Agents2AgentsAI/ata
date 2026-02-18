@@ -192,7 +192,7 @@ mod windows_impl {
     struct RunnerPayload {
         policy_json_or_preset: String,
         sandbox_policy_cwd: PathBuf,
-        // Writable log dir for sandbox user (.codex in sandbox profile).
+        // Writable log dir for sandbox user (.ata in sandbox profile).
         codex_home: PathBuf,
         // Real user's CODEX_HOME for shared data (caps, config).
         real_codex_home: PathBuf,

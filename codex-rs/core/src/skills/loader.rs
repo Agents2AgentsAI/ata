@@ -836,7 +836,7 @@ mod tests {
     use tempfile::TempDir;
     use toml::Value as TomlValue;
 
-    const REPO_ROOT_CONFIG_DIR_NAME: &str = ".codex";
+    const REPO_ROOT_CONFIG_DIR_NAME: &str = ".ata";
 
     async fn make_config(codex_home: &TempDir) -> Config {
         make_config_for_cwd(codex_home, codex_home.path().to_path_buf()).await
@@ -955,7 +955,7 @@ mod tests {
         fs::create_dir_all(&user_folder)?;
 
         let project_root = tmp.path().join("repo");
-        let dot_codex = project_root.join(".codex");
+        let dot_codex = project_root.join(".ata");
         fs::create_dir_all(&dot_codex)?;
 
         let user_file = AbsolutePathBuf::from_absolute_path(user_folder.join("config.toml"))?;
@@ -2601,7 +2601,7 @@ permissions:
             .into_iter()
             .map(|root| root.scope)
             .collect();
-        let mut expected = vec![SkillScope::User, SkillScope::System, SkillScope::System];
+        let mut expected = vec![SkillScope::User, SkillScope::System];
         if home_dir().is_some() {
             expected.insert(1, SkillScope::User);
         }

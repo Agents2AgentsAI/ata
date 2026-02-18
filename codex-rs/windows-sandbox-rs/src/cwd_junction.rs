@@ -18,7 +18,7 @@ fn junction_name_for_path(path: &Path) -> String {
 
 fn junction_root_for_userprofile(userprofile: &str) -> PathBuf {
     PathBuf::from(userprofile)
-        .join(".codex")
+        .join(".ata")
         .join(".sandbox")
         .join("cwd")
 }

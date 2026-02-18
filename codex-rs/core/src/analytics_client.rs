@@ -521,7 +521,7 @@ mod tests {
     #[test]
     fn normalize_path_for_skill_id_repo_scoped_uses_relative_path() {
         let repo_root = PathBuf::from("/repo/root");
-        let skill_path = PathBuf::from("/repo/root/.codex/skills/doc/SKILL.md");
+        let skill_path = PathBuf::from("/repo/root/.ata/skills/doc/SKILL.md");
 
         let path = normalize_path_for_skill_id(
             Some("https://example.com/repo.git"),
@@ -529,12 +529,12 @@ mod tests {
             skill_path.as_path(),
         );
 
-        assert_eq!(path, ".codex/skills/doc/SKILL.md");
+        assert_eq!(path, ".ata/skills/doc/SKILL.md");
     }
 
     #[test]
     fn normalize_path_for_skill_id_user_scoped_uses_absolute_path() {
-        let skill_path = PathBuf::from("/Users/abc/.codex/skills/doc/SKILL.md");
+        let skill_path = PathBuf::from("/Users/abc/.ata/skills/doc/SKILL.md");
 
         let path = normalize_path_for_skill_id(None, None, skill_path.as_path());
         let expected = expected_absolute_path(&skill_path);
@@ -555,7 +555,7 @@ mod tests {
     #[test]
     fn normalize_path_for_skill_id_repo_root_not_in_skill_path_uses_absolute_path() {
         let repo_root = PathBuf::from("/repo/root");
-        let skill_path = PathBuf::from("/other/path/.codex/skills/doc/SKILL.md");
+        let skill_path = PathBuf::from("/other/path/.ata/skills/doc/SKILL.md");
 
         let path = normalize_path_for_skill_id(
             Some("https://example.com/repo.git"),
@@ -687,7 +687,7 @@ mod tests {
         let invocations = vec![SkillInvocation {
             skill_name: "test-skill".to_string(),
             skill_scope: SkillScope::User,
-            skill_path: PathBuf::from("/tmp/.codex/skills/test/SKILL.md"),
+            skill_path: PathBuf::from("/tmp/.ata/skills/test/SKILL.md"),
         }];
 
         let mut config = test_config();
@@ -715,7 +715,7 @@ mod tests {
         let invocations = vec![SkillInvocation {
             skill_name: "test-skill".to_string(),
             skill_scope: SkillScope::User,
-            skill_path: PathBuf::from("/tmp/.codex/skills/test/SKILL.md"),
+            skill_path: PathBuf::from("/tmp/.ata/skills/test/SKILL.md"),
         }];
 
         let mut config = test_config();

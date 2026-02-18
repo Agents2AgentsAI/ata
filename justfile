@@ -30,7 +30,7 @@ fmt:
 fix *args:
     cargo clippy --fix --all-features --tests --allow-dirty "$@"
 
-# Lint without --all-features (avoids compiling research deps)
+# Lint without --all-features
 fix-fast *args:
     cargo clippy --fix --tests --allow-dirty "$@"
 
@@ -52,12 +52,7 @@ install:
 test:
     cargo nextest run --no-fail-fast
 
-# Test research crates + research-gated core code
-test-research:
-    cargo nextest run -p codex-research-tools --all-features --no-fail-fast
-    cargo nextest run -p codex-core --features research-repo,research-latex,research-pdf-images --no-fail-fast
-
-# Test all workspace members (including research)
+# Test all workspace members
 test-all:
     cargo nextest run --workspace --no-fail-fast
 

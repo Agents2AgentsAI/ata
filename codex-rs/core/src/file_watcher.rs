@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn classify_event_supports_multiple_roots_without_prefix_false_positives() {
         let root_a = path("/tmp/skills");
-        let root_b = path("/tmp/workspace/.codex/skills");
+        let root_b = path("/tmp/workspace/.ata/skills");
         let state = RwLock::new(WatchState {
             skills_roots: HashSet::from([root_a.clone(), root_b.clone()]),
         });

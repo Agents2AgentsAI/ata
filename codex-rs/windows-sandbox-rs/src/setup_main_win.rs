@@ -788,23 +788,23 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         }
     }
 
-    // Protect the current workspace's `.codex` directory from tampering (write/delete) by using a
-    // workspace-specific capability SID. If `.codex` doesn't exist yet, skip it (it will be picked
+    // Protect the current workspace's `.ata` directory from tampering (write/delete) by using a
+    // workspace-specific capability SID. If `.ata` doesn't exist yet, skip it (it will be picked
     // up on the next refresh).
     match unsafe { protect_workspace_codex_dir(&payload.command_cwd, workspace_psid) } {
         Ok(true) => {
-            let cwd_codex = payload.command_cwd.join(".codex");
+            let cwd_codex = payload.command_cwd.join(".ata");
             log_line(
                 log,
                 &format!(
-                    "applied deny ACE to protect workspace .codex {}",
+                    "applied deny ACE to protect workspace .ata {}",
                     cwd_codex.display()
                 ),
             )?;
         }
         Ok(false) => {}
         Err(err) => {
-            let cwd_codex = payload.command_cwd.join(".codex");
+            let cwd_codex = payload.command_cwd.join(".ata");
             refresh_errors.push(format!("deny ACE failed on {}: {err}", cwd_codex.display()));
             log_line(
                 log,
