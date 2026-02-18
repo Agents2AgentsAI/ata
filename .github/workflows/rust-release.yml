@@ -225,7 +225,7 @@ jobs:
           target: ${{ matrix.target }}
           artifacts-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
 
-      - if: ${{ runner.os == 'macOS' }}
+      - if: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_P12 != '' }}
         name: MacOS code signing (binaries)
         uses: ./.github/actions/macos-code-sign
         with:
@@ -284,7 +284,7 @@ jobs:
             exit 1
           fi
 
-      - if: ${{ runner.os == 'macOS' }}
+      - if: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_P12 != '' }}
         name: MacOS code signing (dmg)
         uses: ./.github/actions/macos-code-sign
         with:
@@ -385,11 +385,7 @@ jobs:
 
             # Also create .zst (existing behaviour) *and* remove the original
             # uncompressed binary to keep the directory small.
-            zstd_args=(-T0 -19)
-            if [[ "${keep_originals}" == false ]]; then
-              zstd_args+=(--rm)
-            fi
-            zstd "${zstd_args[@]}" "$dest/$base"
+            zstd -T0 -19 --rm "$dest/$base"
           done
 
       - uses: actions/upload-artifact@v6
@@ -649,7 +645,22 @@ jobs:
             fi
 
             echo "+ ${publish_cmd[*]}"
-            "${publish_cmd[@]}"
+            set +e
+            publish_output="$("${publish_cmd[@]}" 2>&1)"
+            publish_status=$?
+            set -e
+
+            echo "${publish_output}"
+            if [[ ${publish_status} -eq 0 ]]; then
+              continue
+            fi
+
+            if grep -qiE "previously published|cannot publish over|version already exists" <<< "${publish_output}"; then
+              echo "Skipping already-published package version for ${filename}"
+              continue
+            fi
+
+            exit "${publish_status}"
           done
 
   update-branch:

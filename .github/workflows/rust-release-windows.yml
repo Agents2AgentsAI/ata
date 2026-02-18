@@ -145,7 +145,8 @@ jobs:
           ls -lh target/${{ matrix.target }}/release/ata-windows-sandbox-setup.exe
           ls -lh target/${{ matrix.target }}/release/ata-command-runner.exe
 
-      - name: Sign Windows binaries with Azure Trusted Signing
+      - if: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID != '' }}
+        name: Sign Windows binaries with Azure Trusted Signing
         uses: ./.github/actions/windows-code-sign
         with:
           target: ${{ matrix.target }}
