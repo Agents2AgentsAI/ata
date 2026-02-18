@@ -4,6 +4,10 @@ on:
   pull_request: {}
   push: { branches: [main] }
 
+permissions:
+  actions: read
+  contents: read
+
 jobs:
   build-test:
     runs-on: ubuntu-latest
