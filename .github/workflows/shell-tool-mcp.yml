@@ -430,8 +430,8 @@ jobs:
           cat > "$tmpdir/exec-wrapper" <<'EOF'
           #!/usr/bin/env bash
           set -euo pipefail
-          : "${CODEX_WRAPPER_LOG:?missing CODEX_WRAPPER_LOG}"
-          printf '%s\n' "$@" > "$CODEX_WRAPPER_LOG"
+          : "${ATA_WRAPPER_LOG:?missing ATA_WRAPPER_LOG}"
+          printf '%s\n' "$@" > "$ATA_WRAPPER_LOG"
           file="$1"
           shift
           if [[ "$#" -eq 0 ]]; then
@@ -443,7 +443,7 @@ jobs:
           EOF
           chmod +x "$tmpdir/exec-wrapper"
 
-          CODEX_WRAPPER_LOG="$tmpdir/wrapper.log" \
+          ATA_WRAPPER_LOG="$tmpdir/wrapper.log" \
           EXEC_WRAPPER="$tmpdir/exec-wrapper" \
           /tmp/zsh/Src/zsh -fc '/bin/echo smoke-zsh' > "$tmpdir/stdout.txt"
 
@@ -509,8 +509,8 @@ jobs:
           cat > "$tmpdir/exec-wrapper" <<'EOF'
           #!/usr/bin/env bash
           set -euo pipefail
-          : "${CODEX_WRAPPER_LOG:?missing CODEX_WRAPPER_LOG}"
-          printf '%s\n' "$@" > "$CODEX_WRAPPER_LOG"
+          : "${ATA_WRAPPER_LOG:?missing ATA_WRAPPER_LOG}"
+          printf '%s\n' "$@" > "$ATA_WRAPPER_LOG"
           file="$1"
           shift
           if [[ "$#" -eq 0 ]]; then
@@ -522,7 +522,7 @@ jobs:
           EOF
           chmod +x "$tmpdir/exec-wrapper"
 
-          CODEX_WRAPPER_LOG="$tmpdir/wrapper.log" \
+          ATA_WRAPPER_LOG="$tmpdir/wrapper.log" \
           EXEC_WRAPPER="$tmpdir/exec-wrapper" \
           /tmp/zsh/Src/zsh -fc '/bin/echo smoke-zsh' > "$tmpdir/stdout.txt"
 
@@ -628,12 +628,12 @@ jobs:
           staging="${{ steps.staging.outputs.dir }}"
           pack_info=$(cd "$staging" && npm pack --ignore-scripts --json --pack-destination "${GITHUB_WORKSPACE}/dist/npm")
           filename=$(PACK_INFO="$pack_info" node -e 'const data = JSON.parse(process.env.PACK_INFO); console.log(data[0].filename);')
-          mv "dist/npm/${filename}" "dist/npm/codex-shell-tool-mcp-npm-${PACKAGE_VERSION}.tgz"
+          mv "dist/npm/${filename}" "dist/npm/ata-shell-tool-mcp-npm-${PACKAGE_VERSION}.tgz"
 
       - uses: actions/upload-artifact@v6
         with:
-          name: codex-shell-tool-mcp-npm
-          path: dist/npm/codex-shell-tool-mcp-npm-${{ env.PACKAGE_VERSION }}.tgz
+          name: ata-shell-tool-mcp-npm
+          path: dist/npm/ata-shell-tool-mcp-npm-${{ env.PACKAGE_VERSION }}.tgz
           if-no-files-found: error
 
   publish:
@@ -652,7 +652,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           registry-url: https://registry.npmjs.org
-          scope: "@openai"
+          scope: "@a2a-ai"
 
       # Trusted publishing requires npm CLI version 11.5.1 or later.
       - name: Update npm
@@ -661,7 +661,7 @@ jobs:
       - name: Download npm tarball
         uses: actions/download-artifact@v7
         with:
-          name: codex-shell-tool-mcp-npm
+          name: ata-shell-tool-mcp-npm
           path: dist/npm
 
       - name: Publish to npm
@@ -675,4 +675,4 @@ jobs:
           if [[ -n "${NPM_TAG}" ]]; then
             tag_args+=(--tag "${NPM_TAG}")
           fi
-          npm publish "dist/npm/codex-shell-tool-mcp-npm-${VERSION}.tgz" "${tag_args[@]}"
+          npm publish "dist/npm/ata-shell-tool-mcp-npm-${VERSION}.tgz" "${tag_args[@]}"
