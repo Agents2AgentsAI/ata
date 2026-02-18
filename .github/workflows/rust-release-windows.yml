@@ -68,6 +68,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: codex-rs
+          key: windows-${{ matrix.bundle }}
+
       - name: Cargo build (Windows binaries)
         shell: bash
         run: |

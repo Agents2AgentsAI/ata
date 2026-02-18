@@ -109,6 +109,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: codex-rs
+          key: shell-tool-mcp-${{ matrix.target }}
+
       - if: ${{ matrix.install_musl }}
         name: Install Zig
         uses: mlugg/setup-zig@v2
@@ -673,4 +678,19 @@ jobs:
           if [[ -n "${NPM_TAG}" ]]; then
             tag_args+=(--tag "${NPM_TAG}")
           fi
-          npm publish "dist/npm/ata-shell-tool-mcp-npm-${VERSION}.tgz" "${tag_args[@]}"
+          set +e
+          publish_output="$(npm publish "dist/npm/ata-shell-tool-mcp-npm-${VERSION}.tgz" "${tag_args[@]}" 2>&1)"
+          publish_status=$?
+          set -e
+
+          echo "${publish_output}"
+          if [[ ${publish_status} -eq 0 ]]; then
+            exit 0
+          fi
+
+          if grep -qiE "previously published|cannot publish over|version already exists" <<< "${publish_output}"; then
+            echo "Skipping already-published package version"
+            exit 0
+          fi
+
+          exit "${publish_status}"
