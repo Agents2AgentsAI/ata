@@ -1,0 +1,22 @@
+Use /compact when the conversation gets long to summarize history and free up context.
+Start a fresh idea with /new; the previous session stays in history.
+Use /feedback to send logs to the maintainers when something looks off.
+Switch models or reasoning effort quickly with /model.
+Use /permissions to control when Ata asks for confirmation.
+Run /review to get a code review of your current changes.
+Use /skills to list available skills or ask Ata to use one.
+Use /status to see the current model, approvals, and token usage.
+Use /fork to branch the current chat into a new thread.
+Use /init to create an AGENTS.md with project-specific guidance.
+Use /mcp to list configured MCP tools.
+Run `ata app` to open Ata Desktop (it installs on macOS if needed).
+Use /personality to customize how Ata communicates.
+Use /rename to rename your threads for easier thread resuming.
+Report issues or contribute at https://github.com/Agents2AgentsAI/ata
+Join the discussion at https://github.com/Agents2AgentsAI/ata/discussions
+You can run any shell command from Ata using `!` (e.g. `!ls`)
+Type / to open the command popup; Tab autocompletes slash commands.
+When the composer is empty, press Esc to step back and edit your last message; Enter confirms.
+Press Tab to queue a message when a task is running; otherwise it sends immediately (except `!`).
+Paste an image with Ctrl+V to attach it to your next message.
+You can resume a previous conversation by running `ata resume`

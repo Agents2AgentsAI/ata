@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Sending feedback is disabled
+  This action is disabled by configuration.
+
+› 1. Close
+
+  Press enter to confirm or esc to go back

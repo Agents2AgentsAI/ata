@@ -1,0 +1,11 @@
+---
+source: tui/src/bottom_pane/list_selection_view.rs
+expression: render_lines(&view)
+---
+                                                
+  Select Approval Mode                          
+                                                
+› 1. Read Only (current)  Ata can read files    
+  2. Full Access          Ata can edit files    
+                                                
+  Press enter to confirm or esc to go back

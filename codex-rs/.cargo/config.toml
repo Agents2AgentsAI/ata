@@ -1,0 +1,14 @@
+[build]
+# Override global sccache wrapper for this project — sccache conflicts
+# with incremental compilation, and incremental is far better for local
+# iterative development.
+rustc-wrapper = ""
+
+[profile.dev]
+incremental = true
+
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "link-arg=/STACK:8388608"]
+
+[target.'cfg(all(windows, target_env = "gnu"))']
+rustflags = ["-C", "link-arg=-Wl,--stack,8388608"]

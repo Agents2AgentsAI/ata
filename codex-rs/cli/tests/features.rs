@@ -1,0 +1,70 @@
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::OnceLock;
+
+use anyhow::Result;
+use predicates::str::contains;
+use tempfile::TempDir;
+
+static ATA_BIN: OnceLock<PathBuf> = OnceLock::new();
+
+fn ata_bin() -> &'static PathBuf {
+    ATA_BIN.get_or_init(|| match codex_utils_cargo_bin::cargo_bin("ata") {
+        Ok(path) => path,
+        Err(error) => panic!("failed to locate ata binary: {error}"),
+    })
+}
+
+fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
+    let bin = ata_bin();
+    let mut cmd = assert_cmd::Command::new(bin);
+    cmd.env("CODEX_HOME", codex_home);
+    Ok(cmd)
+}
+
+#[tokio::test]
+async fn features_enable_writes_feature_flag_to_config() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut cmd = codex_command(codex_home.path())?;
+    cmd.args(["features", "enable", "unified_exec"])
+        .assert()
+        .success()
+        .stdout(contains("Enabled feature `unified_exec` in config.toml."));
+
+    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+    assert!(config.contains("[features]"));
+    assert!(config.contains("unified_exec = true"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn features_disable_writes_feature_flag_to_config() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut cmd = codex_command(codex_home.path())?;
+    cmd.args(["features", "disable", "shell_tool"])
+        .assert()
+        .success()
+        .stdout(contains("Disabled feature `shell_tool` in config.toml."));
+
+    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+    assert!(config.contains("[features]"));
+    assert!(config.contains("shell_tool = false"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn features_enable_under_development_feature_prints_warning() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut cmd = codex_command(codex_home.path())?;
+    cmd.args(["features", "enable", "sqlite"])
+        .assert()
+        .success()
+        .stderr(contains("Under-development features enabled: sqlite."));
+
+    Ok(())
+}
