@@ -1,7 +1,7 @@
 <p align="center"><code>npm i -g @a2a-ai/ata</code><br />or <code>curl -fsSL https://agents2agents.ai/ata/install.sh | sh</code></p>
 <p align="center"><strong>Ata CLI</strong> is an AI assistant from Agents2Agents AI that runs locally on your computer.<br />It is built on top of OpenAI Codex CLI. Not affiliated with OpenAI.
 <p align="center">
-  <img src="https://github.com/openai/codex/blob/main/.github/cli-splash.png" alt="Ata CLI splash" width="80%" />
+  <img src="https://github.com/Agents2AgentsAI/ata/blob/main/.github/cli-splash.png" alt="Ata CLI splash" width="80%" />
 
 
 ---
