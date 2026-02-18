@@ -15,14 +15,6 @@ npm install -g @a2a-ai/ata
 ```
 
 ```shell
-# Install using Homebrew (macOS)
-brew install --cask Agents2AgentsAI/tap/ata
-
-# Or install the formula (macOS / Linux)
-brew install Agents2AgentsAI/tap/ata
-```
-
-```shell
 # Install using curl (macOS/Linux)
 curl -fsSL https://agents2agents.ai/ata/install.sh | sh
 ```
@@ -39,7 +31,6 @@ Each GitHub Release contains many executables, but in practice, you likely want 
   - x86_64 (older Mac hardware): `ata-x86_64-apple-darwin.tar.gz`
 - Linux
   - x86_64: `ata-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `ata-aarch64-unknown-linux-musl.tar.gz`
 
 Each archive contains a single entry with the platform baked into the name (e.g., `ata-x86_64-unknown-linux-musl`), so you likely want to rename it to `ata` after extracting it.
 
