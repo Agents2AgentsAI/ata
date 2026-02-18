@@ -112,6 +112,8 @@ jobs:
     defaults:
       run:
         working-directory: codex-rs
+    env:
+      HAS_AZURE_SIGNING: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID != '' }}
 
     strategy:
       fail-fast: false
@@ -145,7 +147,7 @@ jobs:
           ls -lh target/${{ matrix.target }}/release/ata-windows-sandbox-setup.exe
           ls -lh target/${{ matrix.target }}/release/ata-command-runner.exe
 
-      - if: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID != '' }}
+      - if: ${{ env.HAS_AZURE_SIGNING == 'true' }}
         name: Sign Windows binaries with Azure Trusted Signing
         uses: ./.github/actions/windows-code-sign
         with:
