@@ -21,7 +21,7 @@ into this binary.
 - When enabled, the filesystem is read-only by default via `--ro-bind / /`.
 - When enabled, writable roots are layered with `--bind <root> <root>`.
 - When enabled, protected subpaths under writable roots (for example `.git`,
-  resolved `gitdir:`, and `.codex`) are re-applied as read-only via `--ro-bind`.
+  resolved `gitdir:`, and `.ata`) are re-applied as read-only via `--ro-bind`.
 - When enabled, symlink-in-path and non-existent protected paths inside
   writable roots are blocked by mounting `/dev/null` on the symlink or first
   missing component.

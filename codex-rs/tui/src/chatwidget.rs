@@ -175,7 +175,6 @@ use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
 use crate::bottom_pane::ExperimentalFeatureItem;
 use crate::bottom_pane::ExperimentalFeaturesView;
-use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
@@ -421,7 +420,6 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
-    pub(crate) feedback_audience: FeedbackAudience,
     pub(crate) model: Option<String>,
     // Shared latch so we only warn once about invalid status-line item IDs.
     pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
@@ -609,7 +607,6 @@ pub(crate) struct ChatWidget {
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
     feedback: codex_feedback::CodexFeedback,
-    feedback_audience: FeedbackAudience,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
     // Current working directory (if known)
@@ -1192,7 +1189,6 @@ impl ChatWidget {
             rollout,
             self.app_event_tx.clone(),
             include_logs,
-            self.feedback_audience,
         );
         self.bottom_pane.show_view(Box::new(view));
         self.request_redraw();
@@ -2654,7 +2650,6 @@ impl ChatWidget {
             models_manager,
             feedback,
             is_first_run,
-            feedback_audience,
             model,
             status_line_invalid_items_warned,
             otel_manager,
@@ -2771,7 +2766,6 @@ impl ChatWidget {
             turn_runtime_metrics: RuntimeMetricsSummary::default(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
-            feedback_audience,
             current_rollout_path: None,
             current_cwd,
             session_network_proxy: None,
@@ -2829,7 +2823,6 @@ impl ChatWidget {
             models_manager,
             feedback,
             is_first_run,
-            feedback_audience,
             model,
             status_line_invalid_items_warned,
             otel_manager,
@@ -2945,7 +2938,6 @@ impl ChatWidget {
             turn_runtime_metrics: RuntimeMetricsSummary::default(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
-            feedback_audience,
             current_rollout_path: None,
             current_cwd,
             session_network_proxy: None,
@@ -2992,7 +2984,6 @@ impl ChatWidget {
             models_manager,
             feedback,
             is_first_run: _,
-            feedback_audience,
             model,
             status_line_invalid_items_warned,
             otel_manager,
@@ -3105,7 +3096,6 @@ impl ChatWidget {
             turn_runtime_metrics: RuntimeMetricsSummary::default(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
-            feedback_audience,
             current_rollout_path: None,
             current_cwd,
             session_network_proxy: None,
@@ -3512,10 +3502,7 @@ impl ChatWidget {
                     tracing::error!("failed to clear global model on logout: {e}");
                 }
 
-                if let Err(e) = codex_core::auth::logout(
-                    &self.config.codex_home,
-                    self.config.cli_auth_credentials_store_mode,
-                ) {
+                if let Err(e) = self.auth_manager.logout() {
                     tracing::error!("failed to logout: {e}");
                 }
                 self.request_quit_without_confirmation();
@@ -4944,6 +4931,11 @@ impl ChatWidget {
             }));
             tx.send(AppEvent::UpdateModel(switch_model_for_events.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(Some(default_effort)));
+            tx.send(AppEvent::PersistModelSelection {
+                model: switch_model_for_events.clone(),
+                effort: Some(default_effort),
+                provider: provider_id.clone(),
+            });
         })];
 
         let keep_actions: Vec<SelectionAction> = Vec::new();

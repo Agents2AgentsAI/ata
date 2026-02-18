@@ -18,7 +18,7 @@ pub struct CapSids {
     /// Per-workspace capability SIDs keyed by canonicalized CWD string.
     ///
     /// This is used to isolate workspaces from other workspace sandbox writes and to
-    /// apply per-workspace denies (e.g. protect `CWD/.codex`)
+    /// apply per-workspace denies (e.g. protect `CWD/.ata`)
     /// without permanently affecting other workspaces.
     #[serde(default)]
     pub workspace_by_cwd: HashMap<String, String>,

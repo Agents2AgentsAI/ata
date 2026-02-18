@@ -215,7 +215,7 @@ pub struct Config {
     /// appends one extra argument containing a JSON payload describing the
     /// event.
     ///
-    /// Example `~/.codex/config.toml` snippet:
+    /// Example `~/.ata/config.toml` snippet:
     ///
     /// ```toml
     /// notify = ["notify-send", "Ata"]
@@ -274,7 +274,7 @@ pub struct Config {
     /// Preferred store for MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
     ///          Credentials stored in the keyring will only be readable by Codex unless the user explicitly grants access via OS-level keyring access.
-    ///          https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2
+    ///          https://github.com/Agents2AgentsAI/ata/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2
     /// file: CODEX_HOME/.credentials.json
     ///       This file will be readable to Codex and other applications running as the same user.
     /// auto (default): keyring if available, otherwise file.
@@ -303,14 +303,14 @@ pub struct Config {
     /// Memories subsystem settings.
     pub memories: MemoriesConfig,
 
-    /// Directory containing all Codex state (defaults to `~/.codex` but can be
+    /// Directory containing all Codex state (defaults to `~/.ata` but can be
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: PathBuf,
 
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
 
-    /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
+    /// Settings that govern if and what will be written to `~/.ata/history.jsonl`.
     pub history: History,
 
     /// When true, session is not persisted on disk. Default to `false`
@@ -713,7 +713,7 @@ pub async fn load_global_mcp_servers(
     // result.
     let cli_overrides = Vec::<(String, TomlValue)>::new();
     // There is no cwd/project context for this query, so this will not include
-    // MCP servers defined in in-repo .codex/ folders.
+    // MCP servers defined in in-repo .ata/ folders.
     let cwd: Option<AbsolutePathBuf> = None;
     let config_layer_stack = load_config_layers_state(
         codex_home,
@@ -875,7 +875,7 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
         .map_err(|err| std::io::Error::other(format!("failed to persist config.toml: {err}")))
 }
 
-/// Base config deserialized from ~/.codex/config.toml.
+/// Base config deserialized from ~/.ata/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ConfigToml {
@@ -949,7 +949,7 @@ pub struct ConfigToml {
 
     /// Preferred backend for storing MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
-    ///          https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2
+    ///          https://github.com/Agents2AgentsAI/ata/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2
     /// file: Use a file in the Codex home directory.
     /// auto (default): Use the OS-specific keyring service if available, otherwise use a file.
     #[serde(default)]
@@ -982,7 +982,7 @@ pub struct ConfigToml {
     #[serde(default)]
     pub profiles: HashMap<String, ConfigProfile>,
 
-    /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
+    /// Settings that govern if and what will be written to `~/.ata/history.jsonl`.
     #[serde(default)]
     pub history: Option<History>,
 
@@ -1062,7 +1062,7 @@ pub struct ConfigToml {
     pub ghost_snapshot: Option<GhostSnapshotToml>,
 
     /// Markers used to detect the project root when searching parent
-    /// directories for `.codex` folders. Defaults to [".git"] when unset.
+    /// directories for `.ata` folders. Defaults to [".git"] when unset.
     #[serde(default)]
     pub project_root_markers: Option<Vec<String>>,
 
@@ -2062,7 +2062,7 @@ fn toml_uses_deprecated_instructions_file(value: &TomlValue) -> bool {
 
 /// Returns the path to the Codex configuration directory, which can be
 /// specified by the `CODEX_HOME` environment variable. If not set, defaults to
-/// `~/.codex`.
+/// `~/.ata`.
 ///
 /// - If `CODEX_HOME` is set, the value must exist and be a directory. The
 ///   value will be canonicalized and this function will Err otherwise.
@@ -2762,7 +2762,7 @@ trust_level = "trusted"
 "#,
             ),
         )?;
-        let project_config_dir = workspace.path().join(".codex");
+        let project_config_dir = workspace.path().join(".ata");
         std::fs::create_dir_all(&project_config_dir)?;
         std::fs::write(
             project_config_dir.join(CONFIG_TOML_FILE),

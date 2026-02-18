@@ -8,7 +8,6 @@ use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event_sender::AppEventSender;
-use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
 use crate::history_cell::UserHistoryCell;
@@ -1801,7 +1800,6 @@ async fn helpers_are_available_and_do_not_panic() {
         models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
-        feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
@@ -1937,7 +1935,6 @@ async fn make_chatwidget_manual(
         turn_runtime_metrics: RuntimeMetricsSummary::default(),
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
-        feedback_audience: FeedbackAudience::External,
         current_rollout_path: None,
         current_cwd: None,
         session_network_proxy: None,
@@ -2062,7 +2059,6 @@ async fn make_chatwidget_with_provider(
         last_separator_elapsed_secs: None,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
-        feedback_audience: FeedbackAudience::External,
         current_rollout_path: None,
         external_editor_state: ExternalEditorState::Closed,
         current_cwd: None,
@@ -2517,6 +2513,48 @@ async fn rate_limit_switch_prompt_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("rate_limit_switch_prompt_popup", popup);
+}
+
+#[tokio::test]
+async fn rate_limit_switch_prompt_switch_action_persists_model_selection() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    );
+    let expected_preset = chat
+        .lower_cost_preset()
+        .expect("expected lower-cost preset for rate-limit nudge");
+    let expected_model = expected_preset.model.clone();
+    let expected_effort = Some(expected_preset.default_reasoning_effort);
+    let expected_provider = Some(
+        expected_preset
+            .provider_id
+            .clone()
+            .unwrap_or_else(|| PROVIDER_OPENAI.to_string()),
+    );
+
+    chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
+    chat.maybe_show_pending_rate_limit_prompt();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let mut saw_persist = false;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::PersistModelSelection {
+            model,
+            effort,
+            provider,
+        } = event
+        {
+            assert_eq!(model, expected_model);
+            assert_eq!(effort, expected_effort);
+            assert_eq!(provider, expected_provider);
+            saw_persist = true;
+        }
+    }
+    assert!(
+        saw_persist,
+        "expected rate-limit switch prompt to persist selected model"
+    );
 }
 
 #[tokio::test]
@@ -4135,7 +4173,6 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
-        feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
@@ -4184,7 +4221,6 @@ async fn experimental_mode_plan_applies_on_startup() {
         models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
-        feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
@@ -4327,6 +4363,33 @@ async fn slash_exit_requests_exit() {
     chat.dispatch_command(SlashCommand::Exit);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+}
+
+#[tokio::test]
+async fn slash_logout_clears_auth_file_and_requests_exit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let codex_home_dir = tempdir().expect("create codex home tempdir");
+    let codex_home = codex_home_dir.path().to_path_buf();
+    login_with_provider_api_key(
+        &codex_home,
+        PROVIDER_OPENAI,
+        "sk-test-key",
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("seed auth file");
+    let auth_file = codex_home.join("auth.json");
+    assert!(auth_file.exists(), "expected seeded auth file");
+
+    chat.config.codex_home = codex_home.clone();
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth_with_home(
+        CodexAuth::from_api_key("test"),
+        codex_home,
+    );
+
+    chat.dispatch_command(SlashCommand::Logout);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+    assert!(!auth_file.exists(), "expected auth file removed by /logout");
 }
 
 #[tokio::test]

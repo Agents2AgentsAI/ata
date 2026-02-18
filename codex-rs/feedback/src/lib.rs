@@ -25,9 +25,6 @@ use tracing_subscriber::registry::LookupSpan;
 
 const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
 #[cfg(feature = "feedback-upload")]
-const SENTRY_DSN: &str =
-    "https://ae32ed50620d7a7792c1ce5df38b3e3e@o33249.ingest.us.sentry.io/4510195390611458";
-#[cfg(feature = "feedback-upload")]
 const UPLOAD_TIMEOUT_SECS: u64 = 10;
 const FEEDBACK_TAGS_TARGET: &str = "feedback_tags";
 const MAX_FEEDBACK_TAGS: usize = 64;
@@ -263,9 +260,14 @@ impl CodexLogSnapshot {
             use sentry::transports::DefaultTransportFactory;
             use sentry::types::Dsn;
 
-            // Build Sentry client
+            // Build Sentry client – DSN is read from the environment so no
+            // secret is baked into the binary.
+            let sentry_dsn = match std::env::var("CODEX_SENTRY_DSN") {
+                Ok(v) if !v.is_empty() => v,
+                _ => return Ok(()), // silently skip upload when DSN is not configured
+            };
             let client = Client::from_config(ClientOptions {
-                dsn: Some(Dsn::from_str(SENTRY_DSN).map_err(|e| anyhow!("invalid DSN: {e}"))?),
+                dsn: Some(Dsn::from_str(&sentry_dsn).map_err(|e| anyhow!("invalid DSN: {e}"))?),
                 transport: Some(Arc::new(DefaultTransportFactory {})),
                 ..Default::default()
             });

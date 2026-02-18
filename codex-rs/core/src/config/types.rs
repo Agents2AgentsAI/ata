@@ -318,7 +318,7 @@ impl UriBasedFileOpener {
     }
 }
 
-/// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
+/// Settings that govern if and what will be written to `~/.ata/history.jsonl`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct History {

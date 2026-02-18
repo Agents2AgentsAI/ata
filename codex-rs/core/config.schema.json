@@ -426,7 +426,7 @@
     },
     "History": {
       "additionalProperties": false,
-      "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`.",
+      "description": "Settings that govern if and what will be written to `~/.ata/history.jsonl`.",
       "properties": {
         "max_bytes": {
           "description": "If set, the maximum size of the history file in bytes. The oldest entries are dropped once the file exceeds this limit.",
@@ -1305,7 +1305,7 @@
       ]
     }
   },
-  "description": "Base config deserialized from ~/.codex/config.toml.",
+  "description": "Base config deserialized from ~/.ata/config.toml.",
   "properties": {
     "agents": {
       "allOf": [
@@ -1572,7 +1572,7 @@
         }
       ],
       "default": null,
-      "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`."
+      "description": "Settings that govern if and what will be written to `~/.ata/history.jsonl`."
     },
     "instructions": {
       "description": "System instructions.",
@@ -1616,7 +1616,7 @@
         }
       ],
       "default": null,
-      "description": "Preferred backend for storing MCP OAuth credentials. keyring: Use an OS-specific keyring service. https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2 file: Use a file in the Codex home directory. auto (default): Use the OS-specific keyring service if available, otherwise use a file."
+      "description": "Preferred backend for storing MCP OAuth credentials. keyring: Use an OS-specific keyring service. https://github.com/Agents2AgentsAI/ata/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2 file: Use a file in the Codex home directory. auto (default): Use the OS-specific keyring service if available, otherwise use a file."
     },
     "mcp_servers": {
       "additionalProperties": {
@@ -1749,7 +1749,7 @@
     },
     "project_root_markers": {
       "default": null,
-      "description": "Markers used to detect the project root when searching parent directories for `.codex` folders. Defaults to [\".git\"] when unset.",
+      "description": "Markers used to detect the project root when searching parent directories for `.ata` folders. Defaults to [\".git\"] when unset.",
       "items": {
         "type": "string"
       },

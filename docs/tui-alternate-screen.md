@@ -97,8 +97,8 @@ We use `auto` detection instead of always disabling in Zellij because:
 
 ## Related Issues and References
 
-- **Original Issue:** [GitHub #2558](https://github.com/openai/codex/issues/2558) - "No scrollback in Zellij"
-- **Implementation PR:** [GitHub #8555](https://github.com/openai/codex/pull/8555)
+- **Original Issue:** [GitHub #2558](https://github.com/Agents2AgentsAI/ata/issues/2558) - "No scrollback in Zellij"
+- **Implementation PR:** [GitHub #8555](https://github.com/Agents2AgentsAI/ata/pull/8555)
 - **Zellij PR:** https://github.com/zellij-org/zellij/pull/1032 (why scrollback is disabled)
 - **xterm Spec:** Alternate screen buffers should not have scrollback
 
