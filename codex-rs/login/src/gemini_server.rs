@@ -135,7 +135,6 @@ pub fn run_gemini_login_server(opts: GeminiServerOptions) -> io::Result<LoginSer
     let shutdown_notify = Arc::new(tokio::sync::Notify::new());
     let server_handle = {
         let shutdown_notify = shutdown_notify.clone();
-        let server = server.clone();
         tokio::spawn(async move {
             let result = loop {
                 tokio::select! {
