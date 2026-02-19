@@ -40,6 +40,14 @@ impl SkillsManager {
             }
         }
 
+        #[cfg(feature = "visual-reports")]
+        {
+            use crate::skills::system::install_visual_reports_skills;
+            if let Err(err) = install_visual_reports_skills(&codex_home) {
+                tracing::error!("failed to install visual-reports skills: {err}");
+            }
+        }
+
         Self {
             codex_home,
             cache_by_cwd: RwLock::new(HashMap::new()),

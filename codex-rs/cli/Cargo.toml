@@ -64,6 +64,7 @@ research-latex = ["codex-core/research-latex"]
 research-pdf-images = ["codex-core/research-pdf-images"]
 research-patents = ["codex-core/research-patents"]
 research-repo = ["codex-core/research-repo"]
+visual-reports = ["codex-core/visual-reports"]
 research-all = ["data", "kb", "research-hackernews", "research-latex", "research-patents", "research-pdf-images", "research-repo", "dep:codex-research-tools", "codex-research-tools/latex", "codex-research-tools/pdf_images"]
 
 [dev-dependencies]

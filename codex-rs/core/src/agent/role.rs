@@ -16,6 +16,7 @@ use toml::Value as TomlValue;
 
 const BUILT_IN_AGENTS_CONFIG: &str = include_str!("builtins_agents_config.toml");
 const BUILT_IN_EXPLORER_CONFIG: &str = include_str!("builtins/explorer.toml");
+const BUILT_IN_SYNTHESIZER_CONFIG: &str = include_str!("builtins/synthesizer.toml");
 
 const AGENTS_CONFIG_FILENAME: &str = "agents_config.toml";
 const AGENTS_CONFIG_SCHEMA_VERSION: u32 = 1;
@@ -263,6 +264,7 @@ mod built_in {
     pub(super) fn config_file(path: &Path) -> Option<&'static str> {
         match path.to_str()? {
             "explorer.toml" => Some(BUILT_IN_EXPLORER_CONFIG),
+            "synthesizer.toml" => Some(BUILT_IN_SYNTHESIZER_CONFIG),
             _ => None,
         }
     }

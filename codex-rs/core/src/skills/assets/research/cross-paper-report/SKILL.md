@@ -1,19 +1,16 @@
 ---
 name: cross-paper-report
-description: Generate integrated cross-paper explanations and PDF reports from KB cards. Use when a user asks to explain, compare, synthesize, understand, or deep-dive into one or more knowledge base cards, or asks how cards relate or work together.
+description: Generate integrated cross-paper explanations from KB cards. Use when a user asks to explain, compare, synthesize, understand, or deep-dive into one or more knowledge base cards, or asks how cards relate or work together.
 ---
 
 # Cross-Paper Report
 
 > **When to use this skill vs. alternatives:**
-> This skill produces exhaustive deep reports (800+ words per paper, TikZ diagrams, full comparative synthesis). For quick orientations, use `$research-briefing` instead — it gives a 2-4 page overview with 3-5 sentences per paper. For conversation-derived reports that capture what you specifically discussed, use `$conversation-report` instead. Use this skill when the user wants a complete technical reference document.
+> This skill produces exhaustive deep reports (800+ words per paper, full comparative synthesis). For quick orientations, use `$research-briefing` instead — it gives a 2-4 page overview with 3-5 sentences per paper. For conversation-derived reports that capture what you specifically discussed, use `$conversation-report` instead. Use this skill when the user wants a complete technical reference document. For LaTeX PDF output with TikZ diagrams, use `$latex-report` after generating the narrative.
 
-You MUST produce two deliverables — no exceptions, no shortcuts:
+You MUST produce a **deep narrative explanation** — no exceptions, no shortcuts. Focal cards: 800–2500 words; supporting cards: 400–600 words (see Tiered Depth Strategy).
 
-1. **Deep narrative explanation** in the chat (focal cards: 800–2500 words; supporting cards: 400–600 words; see Tiered Depth Strategy)
-2. **LaTeX PDF** compiled via `latex_compile` with TikZ diagrams
-
-A short summary is NEVER acceptable. This task is NOT complete until both deliverables exist. Do NOT ask the user whether they want a PDF — always produce it. The PDF is the archival artifact; the chat shows it live. No separate markdown file — the PDF replaces it.
+A short summary is NEVER acceptable. This task is NOT complete until the deep narrative exists.
 
 ## Default Narrative Style (Self-Contained Walkthrough)
 
@@ -64,8 +61,8 @@ Call `kb_status` first. The response includes `kb_path` — use that value where
 
 After reading all requested cards, check the count:
 
-- **Standard mode** (≤ 12 cards): Follow Phases 1–3 as written below. Every card gets a full deep walkthrough in one pass.
-- **Large-set mode** (> 12 cards): Jump to the **Large-Set Synthesis** section at the end of this document. Do NOT attempt standard Phases 1–3 for large sets — producing 800+ words per card for 20+ papers in a single agent pass will collapse into shallow summaries that violate the depth contract. The large-set workflow uses clustering and parallel subagents to preserve per-card depth at scale.
+- **Standard mode** (≤ 12 cards): Follow Phases 1–2 as written below. Every card gets a full deep walkthrough in one pass.
+- **Large-set mode** (> 12 cards): Jump to the **Large-Set Synthesis** section at the end of this document. Do NOT attempt standard Phases 1–2 for large sets — producing 800+ words per card for 20+ papers in a single agent pass will collapse into shallow summaries that violate the depth contract. The large-set workflow uses clustering and parallel subagents to preserve per-card depth at scale.
 
 ## Phase 0: Related Card Discovery
 
@@ -131,8 +128,6 @@ The following are the elements that a focal card walkthrough should cover. The a
 
 - **Analogies.** For non-obvious concepts, introduce an analogy **before** the formal explanation, right where the concept appears. Do not defer analogies to a separate section.
 
-- **Diagrams.** TikZ diagrams and card figures should appear **near the text they illustrate**, not collected at the end of the walkthrough. An architecture diagram belongs in the architecture discussion; a training flow diagram belongs in the training pipeline discussion.
-
 - **Results with interpretation.** Report specific numbers, baselines, and what the gaps tell us. Interpret what ablations reveal about which components matter and why.
 
 - **Limitations woven in.** Weave limitations and failure modes into the narrative at the points where they arise from specific design choices, not in a separate section at the end.
@@ -177,106 +172,16 @@ In that final section:
 
 Use specifics throughout. Every comparison claim should cite a concrete detail from each card.
 
-## Depth Gate (Mandatory Before Phase 3)
+## Depth Gate (Mandatory Before Completion)
 
-Before proceeding to LaTeX, verify depth mechanically:
+Before finalizing, verify depth mechanically:
 
-1. **Per-card word count.** For each card's section in the chat explanation, estimate word count. Focal cards must be at least 800 words; supporting cards must be at least 400 words. If ANY card section is below its tier's floor, STOP and expand it before proceeding. Re-read the relevant KB card via `kb_read_card` and deepen the shallow section.
+1. **Per-card word count.** For each card's section in the explanation, estimate word count. Focal cards must be at least 800 words; supporting cards must be at least 400 words. If ANY card section is below its tier's floor, STOP and expand it. Re-read the relevant KB card via `kb_read_card` and deepen the shallow section.
 2. **Equation intuitions.** Check that every equation has a full-paragraph intuition (3–5 sentences explaining why it works and what happens at boundary conditions), not a one-liner like "continuous motion is snapped to a symbol."
 3. **Stage walkthrough depth.** Check that every stage in a stage-by-stage walkthrough has 2–3 full paragraphs — not a single sentence. A one-sentence stage description violates the depth contract.
 4. **Comparison specificity.** Check that the cross-card comparison has at least one full paragraph per dimension with concrete numbers and implementation details traced from individual cards — not generic claims like "X is bigger than Y."
 
-If depth is insufficient at any checkpoint, expand before proceeding. Do NOT proceed to LaTeX with shallow content — the PDF is the permanent artifact and must meet the depth floor.
-
-## Phase 3: Convert to LaTeX PDF
-
-This phase is MANDATORY. Do not skip it. Do not ask the user first.
-
-**Phase 3 is FORMAT CONVERSION, not content generation.** You already wrote the full content in Phases 1–2 and presented it in the chat. Phase 3 takes that content and wraps it in LaTeX markup. You are translating format, not rewriting or summarizing. No editorial judgment, no compression, no "tightening." Every sentence from the chat explanation appears in the LaTeX.
-
-### Conversion Procedure (Section by Section)
-
-Process the chat explanation one section at a time. For each section:
-
-1. **Copy the prose** from the chat explanation into the LaTeX `\section` or `\subsection`.
-2. **Add LaTeX formatting**: wrap equations in `equation`/`align` environments, convert bold/italic to `\textbf`/`\textit`, convert lists to `itemize`/`enumerate`, add `\vspace` for spacing.
-3. **Verify paragraph count**: count the paragraphs in the chat explanation and count them in the LaTeX section. They must match. If the chat section has 5 paragraphs, the LaTeX section must have 5 paragraphs.
-4. **Add TikZ diagrams** and `\includegraphics` figures at the appropriate points within the section (not all at the end).
-5. Move to the next section.
-
-Do NOT "write the LaTeX document from scratch." Do NOT summarize the chat explanation into a shorter LaTeX version. Do NOT combine multiple paragraphs into one. The LaTeX is the chat explanation with formatting applied — nothing added, nothing removed.
-
-### Why This Matters
-
-The PDF is the permanent artifact. When the agent treats Phase 3 as "write a LaTeX report," it produces a compressed summary — each multi-paragraph stage walkthrough collapses into a single bold sentence (e.g., "**Stage 1: Tokenize control.** Continuous action dimensions are discretized into 256 bins"). This is a Phase 3 failure, not a Phase 1 failure. The content was already written correctly; it was lost during format conversion.
-
-### Paragraph-Count Gate (Blocking)
-
-Before calling `latex_compile`, verify for EVERY section:
-- Count paragraphs in the chat explanation version of the section.
-- Count paragraphs in the LaTeX version of the section.
-- If the LaTeX has fewer paragraphs than the chat explanation, you have compressed. Go back and restore the missing paragraphs.
-
-**Word count check:** The LaTeX source content (excluding `\begin`, `\end`, preamble, and markup commands) should be within 20% of the chat explanation word count. If the LaTeX content is less than 80% of the chat explanation length, you have compressed and must restore content before compiling.
-
-**Packages:** `latex_compile` will auto-install missing packages via `tlmgr` if available. Use these freely in the preamble:
-- `geometry`, `graphicx`, `hyperref`, `amsmath`, `amssymb` — universally available
-- `enumitem`, `tcolorbox`, `xcolor`, `booktabs`, `caption`, `subcaption` — common extras (auto-installed if needed)
-- `tikz` (with libraries: `arrows.meta`, `positioning`, `shapes`, `fit`, `calc`) — for diagrams
-
-Do NOT use obscure or legacy packages. If compilation fails with "File not found" for a package, `latex_compile` will attempt `tlmgr install` automatically and retry (up to 3 times).
-
-**Layout and breathing room:** The document must NOT read like a dense essay. Use generous spacing and visual structure:
-- `\vspace{0.5em}` between paragraphs within a subsection.
-- `\bigskip` before and after diagrams and key equations.
-- Figures and equations should be separated from body text — never crammed between paragraphs without spacing.
-- Use `\begin{tcolorbox}` (from the `tcolorbox` package) or `\fbox` for key takeaways, analogies, or important definitions — this visually breaks up the text.
-- Split paragraphs longer than 6 sentences into multiple paragraphs for readability — but never cut content to make them shorter.
-- Use itemize/enumerate lists when enumerating design choices, ablation results, or comparison points — but always with explanatory sentences, not bare bullets.
-
-**Equations:** Use proper LaTeX math environments. Inline math for terms referenced in prose (`$\mathcal{L}_\text{recon}$`), `equation` or `align` environments for key equations that deserve their own line and number.
-
-After each equation, provide TWO things:
-1. A `\noindent \textbf{where}` block defining every variable.
-2. An **intuitive explanation** of what the equation actually does — not just variable definitions, but what happens conceptually, why it works, and what the edge cases reveal.
-
-Bad (just variable definitions):
-> "where $A_t$ is the ground-truth action chunk, $A_t^\tau$ is its noised interpolation, and $\epsilon$ is Gaussian noise."
-
-Good (builds intuition):
-> "This is a linear interpolation between the real action and pure noise, controlled by $\tau$. When $\tau = 1$ the model sees the clean action unchanged; when $\tau = 0$ the input is entirely random noise. Training the model to recover the original action from every noise level teaches it to denoise — and at inference time, it starts from pure noise ($\tau = 0$) and iteratively reconstructs a plausible action. Think of it as gradually unscrambling a signal: easy when $\tau$ is close to 1 (barely scrambled), hard when $\tau$ is near 0 (almost pure static)."
-
-Every equation should leave the reader thinking "I see why that works" rather than just "I see what the symbols mean."
-
-**Diagrams with TikZ:** Create TikZ diagrams to make the explanation visual. Read `references/tikz-reference.tex` for reusable patterns. Include diagrams for:
-
-- **Architecture overviews** — block diagrams showing the major components of each method's pipeline (encoder, decoder, backbone, heads, etc.) with labeled arrows showing data flow.
-- **Comparison diagrams** (multi-card only) — side-by-side or stacked pipeline diagrams that visually highlight where two methods diverge. Use color coding: one color per method, shared components in gray.
-- **Training pipeline flows** — show the stages (pretraining, finetuning, inference) as a left-to-right flow with what data/model is used at each stage.
-- **Conceptual diagrams** — when an analogy or key insight benefits from visualization (e.g., "codebook lookup" as a nearest-neighbor diagram, "latent space" as a 2D scatter).
-
-Not every explanation needs all diagram types. Use judgment — a single-card explanation might need one architecture diagram; a three-card comparison might need a comparison diagram and a shared-pipeline flow. Aim for 1-3 diagrams total.
-
-**Diagram layout rules (mandatory — diagrams that violate these will look broken):**
-- Use `text width=2cm` (or wider) on all block nodes so long text wraps instead of overflowing the box.
-- Use **relative positioning** (`right=2cm of nodeA`) — NEVER absolute coordinates (`at (4,0)`) which cause overlaps when text is longer than expected.
-- Keep node labels to **2-3 words per line**. Use `\\` for line breaks. Example: `{Cross-Embodiment\\Action Chunks}` not `{Cross-embodiment action chunks}`.
-- Use `inner sep=6pt` so text has padding inside the box edges.
-- Minimum **1.5cm gap** between nodes (`right=1.5cm`), prefer 2cm.
-- Place labels (annotations, captions) **away from nodes** — never on top of or adjacent to a node where they could overlap.
-- For comparison diagrams, position rows with `below=2cm` so there is clear vertical separation.
-- Use `align=center` on all block nodes.
-
-**Document structure:** Use `\section`, `\subsection` to mirror the explanation structure. Include a `\title` and `\author{Auto-generated from KB}`. Use `\textbf` for emphasis on first use of key terms. Include a `\tableofcontents` for multi-card explanations.
-
-**Card figures:** When a card has `figures` in its frontmatter, include them in the LaTeX PDF using `\includegraphics`. Use `\graphicspath{{<kb_path>/}}` in the preamble so relative figure paths resolve correctly. Prioritize architecture and method diagrams — these visually explain how the system works and are far more valuable in an explanation document than results bar charts. If a card has many figures, include architecture/pipeline diagrams first and only add results charts if space permits and they reveal something the narrative cannot convey in text. For each figure:
-- Use `\begin{figure}[h]\centering\includegraphics[width=0.8\textwidth]{<figure.path>}\caption{<figure.caption>}\end{figure}`.
-- For side-by-side comparison of figures from different cards, use `minipage`: `\begin{figure}[h]\begin{minipage}{0.48\textwidth}\centering\includegraphics[width=\textwidth]{...}\caption{...}\end{minipage}\hfill\begin{minipage}{0.48\textwidth}\centering\includegraphics[width=\textwidth]{...}\caption{...}\end{minipage}\end{figure}`.
-- Place figures near the text that discusses them, not all at the end.
-
-**Compile:** Call `latex_compile` with `output_dir` set to `<kb_path>/explanations/` and a descriptive `filename` (e.g. `lapa-groot-cosmos-deep-dive`). If compilation fails, read the errors, fix the LaTeX, and retry. Common fixes: escape underscores in text, fix unmatched braces, add missing TikZ libraries to the preamble.
-
-**Open:** After successful compilation, open the PDF for the user with `open <pdf_path>` (macOS) or `xdg-open <pdf_path>` (Linux).
+If depth is insufficient at any checkpoint, expand before finalizing.
 
 ## Presentation (Main Agent Only)
 
@@ -318,10 +223,7 @@ After the report is complete (both reading view + PDF delivered), do these:
 Before reporting done, verify ALL of these:
 - [ ] All relevant cards included (none dropped for depth budget — use tiered depth if needed)
 - [ ] Deep narrative prose in chat (focal cards: 800+ words; supporting cards: 400+ words)
-- [ ] LaTeX paragraph count matches chat explanation paragraph count for every section (Phase 3 conversion gate)
-- [ ] PDF generated via `latex_compile` with at least one TikZ diagram
-- [ ] If compilation failed: errors were fixed and `latex_compile` was retried
-- [ ] PDF opened for the user via `open` / `xdg-open`
+- [ ] Depth Gate passed (word counts, equation intuitions, stage walkthrough depth, comparison specificity)
 - [ ] Journal entry appended to `research-journal.md`
 
 ## Anti-Patterns (Things You Must NEVER Do)
@@ -334,17 +236,8 @@ Every item below is a failure. If you catch yourself doing any of these, stop an
 - NEVER use a comparison table as the sole comparison mechanism. Tables flatten nuance — they can only appear alongside full-paragraph prose comparisons.
 - NEVER write one-liner role descriptions like "Role in a stack: pretraining backbone" — that has zero technical substance.
 - NEVER parrot card titles and tags as if they were an explanation. Restating "LAPA: Latent Action Pretraining" without walking through the mechanism is not an explanation.
-- NEVER produce a text-only LaTeX PDF without at least one TikZ diagram. A wall of text with equations is not a report.
-- NEVER skip the PDF. The PDF is mandatory — do not ask the user, do not treat it as optional.
-- NEVER rewrite the chat explanation content when converting to LaTeX. Phase 3 is format conversion, not fresh writing. If your LaTeX has fewer paragraphs than the chat explanation in any section, you have compressed and must restore the missing content.
 - NEVER cover only the explicitly requested cards when the KB has closely related cards. Failing to check for related cards (Phase 0) produces a report with blind spots.
 - NEVER drop cards to save depth budget. Covering 3 of 10 relevant papers deeply is worse than covering all 10 at mixed depth. Use Tiered Depth or Large-Set Synthesis instead of cutting cards.
-
-## Style Reference
-
-Read `references/style-exemplar.md` for a concrete example of the target depth and style. It shows one card's deep explanation and one comparison dimension demonstrating how to trace ideas across papers.
-
-Read `references/tikz-reference.tex` for reusable TikZ patterns for architecture, comparison, and flow diagrams.
 
 ---
 
@@ -352,7 +245,7 @@ Read `references/tikz-reference.tex` for reusable TikZ patterns for architecture
 
 When the card set exceeds 12, a single-pass deep walkthrough will collapse into surface-level summaries — the agent runs out of output capacity before covering every card at 800+ words. This section defines the mandatory hierarchical synthesis workflow that preserves per-card depth at scale.
 
-**Do NOT skip this workflow for large sets.** The standard Phases 1–3 are designed for 2–12 cards. For 13+ cards, always use this workflow instead.
+**Do NOT skip this workflow for large sets.** The standard Phases 1–2 are designed for 2–12 cards. For 13+ cards, always use this workflow instead.
 
 ### Step 1: Cluster Assignment
 
@@ -373,30 +266,27 @@ Present the proposed clustering to the user before launching subagents. Include:
 
 ### Step 2: Per-Cluster Sub-Reports (Parallel Subagents)
 
-Launch **one subagent per cluster**, all in parallel. Each subagent runs the full standard cross-paper-report workflow (Phases 1–3) on its cluster's cards only:
+Launch **one subagent per cluster**, all in parallel. Each subagent runs the full standard cross-paper-report workflow (Phases 1–2) on its cluster's cards only:
 
 - Full 800–2500 word per-card deep walkthroughs with all cards treated as focal (Phase 1)
 - Within-cluster comparative synthesis (Phase 2)
 - Depth Gate verification before proceeding
-- Within-cluster TikZ diagrams (Phase 3 diagram generation only — do NOT compile a standalone PDF per cluster)
 
 **Subagent prompt template:**
 
 > Invoke the `cross-paper-report` skill for cards `[card-id-1]`, `[card-id-2]`, ..., `[card-id-N]`. The KB path is `[kb_path]`. This is a cluster sub-report titled "[Cluster Name]".
 >
-> Follow the skill's standard workflow (Phases 1–3) with these overrides:
+> Follow the skill's standard workflow (Phases 1–2) with these overrides:
 > - **Skip Phase 0** (Related Card Discovery) — you work only on the assigned cards. Do NOT call `kb_list_cards` to discover additional cards.
 > - **Skip the Presentation section** — do NOT call `present_reading_view`. The user is on the main agent, not on you. Return your content as text to the main agent.
 > - **All cards are focal** — no tiered depth. Every card gets the full 800–2500 word treatment.
 > - **No user confirmation** — do not present tier assignments or card additions for approval. Execute autonomously.
 > - **Shared terminology glossary:** [paste the glossary from Step 1 here so all subagents use consistent terms]
 > - Produce deep per-card walkthroughs (800+ words each) and within-cluster comparative synthesis.
-> - Generate TikZ diagram source code but do NOT call `latex_compile` — the main agent handles final compilation.
 > - Return to the main agent:
 >   1. The full content (per-card walkthroughs + within-cluster synthesis)
->   2. All TikZ source blocks
->   3. A 3–5 sentence cluster summary
->   4. A **cross-cluster interface** section containing: (a) key technical terms defined and used in this cluster with definitions, (b) 2–3 key equations with paper attribution, (c) specific numbers/results that the meta-synthesis may reference for cross-cluster comparison, (d) bridge points — concepts in this cluster that connect to papers in other clusters
+>   2. A 3–5 sentence cluster summary
+>   3. A **cross-cluster interface** section containing: (a) key technical terms defined and used in this cluster with definitions, (b) 2–3 key equations with paper attribution, (c) specific numbers/results that the meta-synthesis may reference for cross-cluster comparison, (d) bridge points — concepts in this cluster that connect to papers in other clusters
 
 **Subagent failure handling:** If a cluster subagent fails (timeout, tool error, or returns empty content), do NOT block the entire report. Log the failure, proceed with the remaining cluster results, and note the gap in the meta-synthesis: "Cluster [name] could not be synthesized due to [reason]. The following cards are missing from this report: [list]." Offer to retry the failed cluster.
 
@@ -434,45 +324,6 @@ The meta-synthesis must contain these sections:
 
 7. **Practical Takeaways**: Actionable guidance for practitioners, grounded in specific findings from the papers.
 
-### Step 4: Assemble and Compile Final PDF
-
-Combine all sub-reports and meta-synthesis into one LaTeX document:
-
-```latex
-\title{[Descriptive Title]}
-\author{Auto-generated from KB}
-\date{\today}
-\tableofcontents
-
-% One section per cluster, containing the sub-report content
-\section{[Cluster 1 Name]}
-  % Full per-card walkthroughs + within-cluster comparison + TikZ diagrams
-
-\section{[Cluster 2 Name]}
-  % ...
-
-% Meta-synthesis as final major sections
-\section{Cross-Cluster Synthesis}
-  % Evolution tracing, design space mapping, failure mode lineage
-
-\section{Key Equations Across the Stack}
-  % Cross-cluster equations with deep intuitions
-
-\section{How the Papers Relate}
-  % Integrative narrative
-
-\section{Practical Takeaways}
-  % Actionable guidance
-```
-
-The final PDF must contain:
-- Every per-card deep walkthrough from every cluster sub-report
-- Within-cluster TikZ diagrams from each sub-report
-- At least one cross-cluster comparison TikZ diagram in the meta-synthesis (e.g., a field trajectory diagram or design space comparison)
-- All key equations with full-paragraph intuitions
-
-Compile via `latex_compile` with `output_dir` set to `<kb_path>/explanations/` and open the resulting PDF.
-
 ### Large-Set Completion Checklist
 
 Before reporting done, verify ALL of these:
@@ -483,8 +334,6 @@ Before reporting done, verify ALL of these:
 - [ ] Failed subagents (if any) are noted with missing card lists and retry offered
 - [ ] Meta-synthesis contains all required sections (evolution tracing, design space mapping, failure mode lineage, equations, How the Papers Relate)
 - [ ] Meta-synthesis uses concrete data from cross-cluster interface sections, not generic claims
-- [ ] Final PDF compiled via `latex_compile` with per-cluster TikZ diagrams + at least one cross-cluster TikZ diagram
-- [ ] PDF opened for the user
 
 ### Large-Set Anti-Patterns
 

@@ -581,8 +581,7 @@ mod tests {
     #[test]
     fn issue_url_available_for_bug_bad_result_safety_check_and_other() {
         let bug_url = issue_url_for_category(FeedbackCategory::Bug, "thread-1");
-        let expected_url =
-            format!("{BASE_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20thread-1");
+        let expected_url = format!("{BASE_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20thread-1");
         assert_eq!(bug_url.as_deref(), Some(expected_url.as_str()));
 
         let bad_result_url = issue_url_for_category(FeedbackCategory::BadResult, "thread-2");
