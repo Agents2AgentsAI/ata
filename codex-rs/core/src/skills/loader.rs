@@ -2601,7 +2601,7 @@ permissions:
             .into_iter()
             .map(|root| root.scope)
             .collect();
-        let mut expected = vec![SkillScope::User, SkillScope::System];
+        let mut expected = vec![SkillScope::User, SkillScope::System, SkillScope::System];
         if home_dir().is_some() {
             expected.insert(1, SkillScope::User);
         }

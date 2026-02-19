@@ -118,6 +118,7 @@ async fn refresh_token_refreshes_when_auth_is_unchanged() -> Result<()> {
         openai_api_key: None,
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
+        ..Default::default()
     };
     ctx.write_auth(&initial_auth)?;
 
@@ -172,6 +173,7 @@ async fn refresh_token_skips_refresh_when_auth_changed() -> Result<()> {
         openai_api_key: None,
         tokens: Some(initial_tokens),
         last_refresh: Some(initial_last_refresh),
+        ..Default::default()
     };
     ctx.write_auth(&initial_auth)?;
 
@@ -181,6 +183,7 @@ async fn refresh_token_skips_refresh_when_auth_changed() -> Result<()> {
         openai_api_key: None,
         tokens: Some(disk_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
+        ..Default::default()
     };
     save_auth(
         ctx.codex_home.path(),
@@ -235,6 +238,7 @@ async fn refresh_token_errors_on_account_mismatch() -> Result<()> {
         openai_api_key: None,
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
+        ..Default::default()
     };
     ctx.write_auth(&initial_auth)?;
 
@@ -245,6 +249,7 @@ async fn refresh_token_errors_on_account_mismatch() -> Result<()> {
         openai_api_key: None,
         tokens: Some(disk_tokens),
         last_refresh: Some(initial_last_refresh),
+        ..Default::default()
     };
     save_auth(
         ctx.codex_home.path(),

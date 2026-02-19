@@ -75,7 +75,7 @@ async fn model_selects_expected_tools() {
             "shell_command",
             &[
                 "update_plan",
-                "present_document",
+                "present_reading_view",
                 "update_document_section",
                 "append_to_section",
                 "patch_document_section",
@@ -96,7 +96,7 @@ async fn model_selects_expected_tools() {
             "shell_command",
             &[
                 "update_plan",
-                "present_document",
+                "present_reading_view",
                 "update_document_section",
                 "append_to_section",
                 "patch_document_section",
@@ -117,7 +117,7 @@ async fn model_selects_expected_tools() {
             "shell_command",
             &[
                 "update_plan",
-                "present_document",
+                "present_reading_view",
                 "update_document_section",
                 "append_to_section",
                 "patch_document_section",
@@ -138,7 +138,7 @@ async fn model_selects_expected_tools() {
             "shell",
             &[
                 "update_plan",
-                "present_document",
+                "present_reading_view",
                 "update_document_section",
                 "append_to_section",
                 "patch_document_section",
@@ -158,7 +158,7 @@ async fn model_selects_expected_tools() {
             "shell_command",
             &[
                 "update_plan",
-                "present_document",
+                "present_reading_view",
                 "update_document_section",
                 "append_to_section",
                 "patch_document_section",
