@@ -53,6 +53,8 @@ jobs:
       - name: Activate RunsOn
         if: ${{ contains(matrix.runs_on || '', 'runs-on=') }}
         uses: runs-on/action@v2
+      - name: Set up MSVC dev environment
+        uses: ilammy/msvc-dev-cmd@v1
       - name: Print runner specs (Windows)
         shell: powershell
         run: |
