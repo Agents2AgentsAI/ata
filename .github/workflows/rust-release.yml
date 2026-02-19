@@ -68,19 +68,24 @@ jobs:
             target: aarch64-apple-darwin
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
-          - runner: ubuntu-24.04
+          - runner: ubuntu-x64
             target: x86_64-unknown-linux-musl
-          - runner: ubuntu-24.04
+            runs_on: "runs-on=${{ github.run_id }}/runner=release-linux-x64/extras=s3-cache"
+          - runner: ubuntu-x64
             target: x86_64-unknown-linux-gnu
-          # ARM64 Linux targets disabled: time out on GitHub-hosted ARM runners.
-          # Re-enable when self-hosted ARM runners are available.
-          # - runner: ubuntu-24.04-arm
-          #   target: aarch64-unknown-linux-musl
-          # - runner: ubuntu-24.04-arm
-          #   target: aarch64-unknown-linux-gnu
+            runs_on: "runs-on=${{ github.run_id }}/runner=release-linux-x64/extras=s3-cache"
+          - runner: ubuntu-arm64
+            target: aarch64-unknown-linux-musl
+            runs_on: "runs-on=${{ github.run_id }}/runner=release-linux-arm64/extras=s3-cache"
+          - runner: ubuntu-arm64
+            target: aarch64-unknown-linux-gnu
+            runs_on: "runs-on=${{ github.run_id }}/runner=release-linux-arm64/extras=s3-cache"
 
     steps:
       - uses: actions/checkout@v6
+      - name: Activate RunsOn
+        if: ${{ contains(matrix.runs_on || '', 'runs-on=') }}
+        uses: runs-on/action@v2
       - name: Print runner specs (Linux)
         if: ${{ runner.os == 'Linux' }}
         shell: bash

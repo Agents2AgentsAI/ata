@@ -14,6 +14,10 @@
           "regex": "^ata-x86_64-unknown-linux-musl\\.zst$",
           "path": "ata"
         },
+        "linux-aarch64": {
+          "regex": "^ata-aarch64-unknown-linux-musl\\.zst$",
+          "path": "ata"
+        },
         "windows-x86_64": {
           "regex": "^ata-x86_64-pc-windows-msvc\\.exe\\.zst$",
           "path": "ata.exe"
@@ -32,6 +36,10 @@
         },
         "linux-x86_64": {
           "regex": "^ata-responses-api-proxy-x86_64-unknown-linux-musl\\.zst$",
+          "path": "ata-responses-api-proxy"
+        },
+        "linux-aarch64": {
+          "regex": "^ata-responses-api-proxy-aarch64-unknown-linux-musl\\.zst$",
           "path": "ata-responses-api-proxy"
         },
         "windows-x86_64": {

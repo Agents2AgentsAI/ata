@@ -113,27 +113,35 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macOS — GitHub-hosted (no RunsOn macOS support).
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
             profile: dev
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
             profile: dev
-          - runner: ubuntu-24.04
+          # Linux — RunsOn w/ S3 magic cache.
+          - runner: ubuntu-x64
             target: x86_64-unknown-linux-musl
             profile: dev
-          - runner: ubuntu-24.04
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-x64/extras=s3-cache"
+          - runner: ubuntu-x64
             target: x86_64-unknown-linux-gnu
             profile: dev
-          - runner: ubuntu-24.04-arm
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-x64/extras=s3-cache"
+          - runner: ubuntu-arm64
             target: aarch64-unknown-linux-musl
             profile: dev
-          - runner: ubuntu-24.04-arm
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache"
+          - runner: ubuntu-arm64
             target: aarch64-unknown-linux-gnu
             profile: dev
-          - runner: windows-latest
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache"
+          # Windows — RunsOn (no magic cache on Windows).
+          - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: dev
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-windows-x64"
 
           # Also run representative release builds on Mac and Linux because
           # there could be release-only build errors we want to catch.
@@ -142,18 +150,24 @@ jobs:
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
             profile: release
-          - runner: ubuntu-24.04
+          - runner: ubuntu-x64
             target: x86_64-unknown-linux-musl
             profile: release
-          - runner: ubuntu-24.04-arm
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-x64/extras=s3-cache"
+          - runner: ubuntu-arm64
             target: aarch64-unknown-linux-musl
             profile: release
-          - runner: windows-latest
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache"
+          - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: release
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-windows-x64"
 
     steps:
       - uses: actions/checkout@v6
+      - name: Activate RunsOn
+        if: ${{ contains(matrix.runs_on || '', 'runs-on=') }}
+        uses: runs-on/action@v2
       - name: Install Linux build dependencies
         if: ${{ runner.os == 'Linux' }}
         shell: bash
@@ -443,18 +457,24 @@ jobs:
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
             profile: dev
-          - runner: ubuntu-24.04
+          - runner: ubuntu-x64
             target: x86_64-unknown-linux-gnu
             profile: dev
-          - runner: ubuntu-24.04-arm
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-x64/extras=s3-cache"
+          - runner: ubuntu-arm64
             target: aarch64-unknown-linux-gnu
             profile: dev
-          - runner: windows-latest
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache"
+          - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: dev
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-windows-x64"
 
     steps:
       - uses: actions/checkout@v6
+      - name: Activate RunsOn
+        if: ${{ contains(matrix.runs_on || '', 'runs-on=') }}
+        uses: runs-on/action@v2
       - name: Install Linux build dependencies
         if: ${{ runner.os == 'Linux' }}
         shell: bash
