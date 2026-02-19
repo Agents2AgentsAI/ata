@@ -24,7 +24,7 @@ jobs:
   build-windows-binaries:
     name: Build Windows binaries - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on }}
-    timeout-minutes: 60
+    timeout-minutes: 120
     permissions:
       contents: read
     defaults:
@@ -105,13 +105,15 @@ jobs:
       - build-windows-binaries
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on }}
-    timeout-minutes: 60
+    timeout-minutes: 120
     permissions:
       contents: read
       id-token: write
     defaults:
       run:
         working-directory: codex-rs
+    env:
+      HAS_AZURE_SIGNING: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID != '' }}
 
     strategy:
       fail-fast: false
@@ -145,7 +147,8 @@ jobs:
           ls -lh target/${{ matrix.target }}/release/ata-windows-sandbox-setup.exe
           ls -lh target/${{ matrix.target }}/release/ata-command-runner.exe
 
-      - name: Sign Windows binaries with Azure Trusted Signing
+      - if: ${{ env.HAS_AZURE_SIGNING == 'true' }}
+        name: Sign Windows binaries with Azure Trusted Signing
         uses: ./.github/actions/windows-code-sign
         with:
           target: ${{ matrix.target }}

@@ -58,6 +58,7 @@ jobs:
         working-directory: codex-rs
     env:
       CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
+      HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
 
     strategy:
       fail-fast: false
@@ -71,10 +72,12 @@ jobs:
             target: x86_64-unknown-linux-musl
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
+          # ARM64 Linux targets disabled: time out on GitHub-hosted ARM runners.
+          # Re-enable when self-hosted ARM runners are available.
+          # - runner: ubuntu-24.04-arm
+          #   target: aarch64-unknown-linux-musl
+          # - runner: ubuntu-24.04-arm
+          #   target: aarch64-unknown-linux-gnu
 
     steps:
       - uses: actions/checkout@v6
@@ -225,7 +228,7 @@ jobs:
           target: ${{ matrix.target }}
           artifacts-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
 
-      - if: ${{ runner.os == 'macOS' }}
+      - if: ${{ runner.os == 'macOS' && env.HAS_APPLE_SIGNING == 'true' }}
         name: MacOS code signing (binaries)
         uses: ./.github/actions/macos-code-sign
         with:
@@ -237,6 +240,19 @@ jobs:
           apple-notarization-key-p8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
           apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
           apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+
+      - if: ${{ runner.os == 'macOS' }}
+        name: Free disk space before DMG creation
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Remove debug symbols and intermediate build artifacts to free space.
+          find codex-rs/target -name '*.d' -o -name '*.rlib' -o -name '*.rmeta' | xargs rm -f 2>/dev/null || true
+          find codex-rs/target -path '*/deps/*' -name '*.o' | xargs rm -f 2>/dev/null || true
+          # Remove incremental compilation data.
+          find codex-rs/target -type d -name incremental -exec rm -rf {} + 2>/dev/null || true
+          echo "Disk usage after cleanup:"
+          df -h .
 
       - if: ${{ runner.os == 'macOS' }}
         name: Build macOS dmg
@@ -284,7 +300,7 @@ jobs:
             exit 1
           fi
 
-      - if: ${{ runner.os == 'macOS' }}
+      - if: ${{ runner.os == 'macOS' && env.HAS_APPLE_SIGNING == 'true' }}
         name: MacOS code signing (dmg)
         uses: ./.github/actions/macos-code-sign
         with:
@@ -385,11 +401,7 @@ jobs:
 
             # Also create .zst (existing behaviour) *and* remove the original
             # uncompressed binary to keep the directory small.
-            zstd_args=(-T0 -19)
-            if [[ "${keep_originals}" == false ]]; then
-              zstd_args+=(--rm)
-            fi
-            zstd "${zstd_args[@]}" "$dest/$base"
+            zstd -T0 -19 --rm "$dest/$base"
           done
 
       - uses: actions/upload-artifact@v6
@@ -649,7 +661,22 @@ jobs:
             fi
 
             echo "+ ${publish_cmd[*]}"
-            "${publish_cmd[@]}"
+            set +e
+            publish_output="$("${publish_cmd[@]}" 2>&1)"
+            publish_status=$?
+            set -e
+
+            echo "${publish_output}"
+            if [[ ${publish_status} -eq 0 ]]; then
+              continue
+            fi
+
+            if grep -qiE "previously published|cannot publish over|version already exists" <<< "${publish_output}"; then
+              echo "Skipping already-published package version for ${filename}"
+              continue
+            fi
+
+            exit "${publish_status}"
           done
 
   update-homebrew:
@@ -745,8 +772,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh api \
-            repos/${GITHUB_REPOSITORY}/git/refs/heads/latest-alpha-cli \
+          if ! gh api \
+            "repos/${GITHUB_REPOSITORY}/git/refs/heads/latest-alpha-cli" \
             -X PATCH \
             -f sha="${GITHUB_SHA}" \
-            -F force=true
+            -F force=true 2>/dev/null; then
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -X POST \
+              -f ref="refs/heads/latest-alpha-cli" \
+              -f sha="${GITHUB_SHA}"
+          fi

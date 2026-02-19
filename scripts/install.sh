@@ -17,7 +17,7 @@ Options:
 Examples:
   curl -fsSL https://agents2agents.ai/ata/install.sh | sh
   curl -fsSL https://agents2agents.ai/ata/install.sh | sh -s -- --bin-dir "$HOME/bin"
-  curl -fsSL https://agents2agents.ai/ata/install.sh | sh -s -- --version 1.2.3
+  curl -fsSL https://agents2agents.ai/ata/install.sh | sh -s -- --version 0.1.0
 USAGE
 }
 
@@ -108,11 +108,14 @@ TARGET="${ARCH}-${OS}"
 TAG="latest"
 if [ -n "$VERSION" ]; then
   case "$VERSION" in
-    v*)
+    rust-v*)
       TAG="$VERSION"
       ;;
+    v*)
+      TAG="rust-$VERSION"
+      ;;
     *)
-      TAG="v$VERSION"
+      TAG="rust-v$VERSION"
       ;;
   esac
 fi
