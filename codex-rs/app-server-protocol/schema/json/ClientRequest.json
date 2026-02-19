@@ -785,6 +785,15 @@
       ],
       "type": "object"
     },
+    "HazelnutScope": {
+      "enum": [
+        "example",
+        "workspace-shared",
+        "all-shared",
+        "personal"
+      ],
+      "type": "string"
+    },
     "InitializeCapabilities": {
       "description": "Client-declared capabilities negotiated during initialize.",
       "properties": {
@@ -1337,6 +1346,15 @@
         "none",
         "friendly",
         "pragmatic"
+      ],
+      "type": "string"
+    },
+    "ProductSurface": {
+      "enum": [
+        "chatgpt",
+        "codex",
+        "api",
+        "atlas"
       ],
       "type": "string"
     },
@@ -2519,20 +2537,38 @@
       "type": "object"
     },
     "SkillsRemoteReadParams": {
+      "properties": {
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "hazelnutScope": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/HazelnutScope"
+            }
+          ],
+          "default": "example"
+        },
+        "productSurface": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProductSurface"
+            }
+          ],
+          "default": "codex"
+        }
+      },
       "type": "object"
     },
     "SkillsRemoteWriteParams": {
       "properties": {
         "hazelnutId": {
           "type": "string"
-        },
-        "isPreload": {
-          "type": "boolean"
         }
       },
       "required": [
-        "hazelnutId",
-        "isPreload"
+        "hazelnutId"
       ],
       "type": "object"
     },
@@ -3373,6 +3409,24 @@
           "type": "object"
         }
       ]
+    },
+    "WindowsSandboxSetupMode": {
+      "enum": [
+        "elevated",
+        "unelevated"
+      ],
+      "type": "string"
+    },
+    "WindowsSandboxSetupStartParams": {
+      "properties": {
+        "mode": {
+          "$ref": "#/definitions/WindowsSandboxSetupMode"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
     }
   },
   "description": "Request from the client to the server.",
@@ -3697,9 +3751,9 @@
         },
         "method": {
           "enum": [
-            "skills/remote/read"
+            "skills/remote/list"
           ],
-          "title": "Skills/remote/readRequestMethod",
+          "title": "Skills/remote/listRequestMethod",
           "type": "string"
         },
         "params": {
@@ -3711,7 +3765,7 @@
         "method",
         "params"
       ],
-      "title": "Skills/remote/readRequest",
+      "title": "Skills/remote/listRequest",
       "type": "object"
     },
     {
@@ -3721,9 +3775,9 @@
         },
         "method": {
           "enum": [
-            "skills/remote/write"
+            "skills/remote/export"
           ],
-          "title": "Skills/remote/writeRequestMethod",
+          "title": "Skills/remote/exportRequestMethod",
           "type": "string"
         },
         "params": {
@@ -3735,7 +3789,7 @@
         "method",
         "params"
       ],
-      "title": "Skills/remote/writeRequest",
+      "title": "Skills/remote/exportRequest",
       "type": "object"
     },
     {
@@ -3999,6 +4053,30 @@
         "params"
       ],
       "title": "McpServerStatus/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "windowsSandbox/setupStart"
+          ],
+          "title": "WindowsSandbox/setupStartRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WindowsSandboxSetupStartParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "WindowsSandbox/setupStartRequest",
       "type": "object"
     },
     {
