@@ -412,11 +412,13 @@ jobs:
       - name: sccache stats
         if: always() && env.USE_SCCACHE == 'true'
         continue-on-error: true
+        working-directory: .
         run: sccache --show-stats || true
 
       - name: sccache summary
         if: always() && env.USE_SCCACHE == 'true'
         shell: bash
+        working-directory: .
         run: |
           {
             echo "### sccache stats — ${{ matrix.target }} (${{ matrix.profile }})";
@@ -594,11 +596,13 @@ jobs:
       - name: sccache stats
         if: always() && env.USE_SCCACHE == 'true'
         continue-on-error: true
+        working-directory: .
         run: sccache --show-stats || true
 
       - name: sccache summary
         if: always() && env.USE_SCCACHE == 'true'
         shell: bash
+        working-directory: .
         run: |
           {
             echo "### sccache stats — ${{ matrix.target }} (tests)";
