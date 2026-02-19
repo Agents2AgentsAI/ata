@@ -12,13 +12,13 @@
 
 Install globally with your preferred package manager:
 
+Install using npm
 ```shell
-# Install using npm
 npm install -g @a2a-ai/ata
 ```
 
+Install using curl (macOS/Linux)
 ```shell
-# Install using curl (macOS/Linux)
 curl -fsSL https://agents2agents.ai/ata/install.sh | sh
 ```
 
