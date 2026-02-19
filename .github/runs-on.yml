@@ -17,7 +17,7 @@ runners:
     retry: when-interrupted
 
   ci-windows-x64:
-    image: windows22-full-x64
+    image: windows25-full-x64
     family: ["c7i-flex", "m7i-flex"]
     cpu: [4, 8]
     ram: [16, 32]
@@ -40,7 +40,7 @@ runners:
     spot: false
 
   release-windows-x64:
-    image: windows22-full-x64
+    image: windows25-full-x64
     family: ["c7i", "m7i"]
     cpu: [8, 16]
     ram: [16, 32]

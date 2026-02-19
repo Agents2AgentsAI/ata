@@ -2829,6 +2829,164 @@
           "type": "object"
         },
         {
+          "description": "Agent presented a long document in sectioned reading mode.",
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            },
+            "document_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "present_document"
+              ],
+              "title": "PresentDocumentEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "content",
+            "document_id",
+            "title",
+            "turn_id",
+            "type"
+          ],
+          "title": "PresentDocumentEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Agent updated a section of a document currently in reading mode.",
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            },
+            "document_id": {
+              "type": "string"
+            },
+            "section_index": {
+              "format": "uint",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "update_document_section"
+              ],
+              "title": "UpdateDocumentSectionEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "content",
+            "document_id",
+            "section_index",
+            "turn_id",
+            "type"
+          ],
+          "title": "UpdateDocumentSectionEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Agent appended content to a section of a document in reading mode.",
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            },
+            "document_id": {
+              "type": "string"
+            },
+            "section_index": {
+              "format": "uint",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "append_document_section"
+              ],
+              "title": "AppendDocumentSectionEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "content",
+            "document_id",
+            "section_index",
+            "turn_id",
+            "type"
+          ],
+          "title": "AppendDocumentSectionEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Agent patched (find-and-replace) a section of a document in reading mode.",
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "document_id": {
+              "type": "string"
+            },
+            "new_text": {
+              "type": "string"
+            },
+            "old_text": {
+              "type": "string"
+            },
+            "section_index": {
+              "format": "uint",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "patch_document_section"
+              ],
+              "title": "PatchDocumentSectionEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "document_id",
+            "new_text",
+            "old_text",
+            "section_index",
+            "turn_id",
+            "type"
+          ],
+          "title": "PatchDocumentSectionEventMsg",
+          "type": "object"
+        },
+        {
           "properties": {
             "reason": {
               "$ref": "#/definitions/TurnAbortReason"
