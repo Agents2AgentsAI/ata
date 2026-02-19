@@ -15,7 +15,12 @@ jobs:
   cla:
     # Only run the CLA assistant for the canonical repo so forks are not blocked
     # and contributors who signed previously do not receive duplicate CLA notifications.
-    if: ${{ github.repository_owner == 'Agents2AgentsAI' }}
+    if: >-
+      ${{
+        github.repository_owner == 'Agents2AgentsAI' &&
+        github.event.pull_request.author_association != 'MEMBER' &&
+        github.event.pull_request.author_association != 'OWNER'
+      }}
     runs-on: ubuntu-latest
     steps:
       - uses: contributor-assistant/github-action@v2.6.1
