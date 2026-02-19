@@ -115,6 +115,10 @@ pub fn is_first_party_originator(originator_value: &str) -> bool {
         || originator_value.starts_with("Ata ")
 }
 
+pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
+    originator_value == "codex_atlas" || originator_value == "codex_chatgpt_desktop"
+}
+
 pub fn get_codex_user_agent() -> String {
     let build_version = env!("CARGO_PKG_VERSION");
     let os_info = os_info::get();
@@ -246,6 +250,17 @@ mod tests {
         assert_eq!(is_first_party_originator("Ata Something Else"), true);
         assert_eq!(is_first_party_originator("codex_cli"), false);
         assert_eq!(is_first_party_originator("Other"), false);
+    }
+
+    #[test]
+    fn is_first_party_chat_originator_matches_known_values() {
+        assert_eq!(is_first_party_chat_originator("codex_atlas"), true);
+        assert_eq!(
+            is_first_party_chat_originator("codex_chatgpt_desktop"),
+            true
+        );
+        assert_eq!(is_first_party_chat_originator(DEFAULT_ORIGINATOR), false);
+        assert_eq!(is_first_party_chat_originator("codex_vscode"), false);
     }
 
     #[tokio::test]
