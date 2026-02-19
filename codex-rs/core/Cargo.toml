@@ -130,6 +130,7 @@ research-latex = ["research", "codex-research-tools/latex"]
 research-pdf-images = ["research", "codex-research-tools/pdf_images"]
 research-patents = ["research", "codex-research-tools/patents"]
 research-repo = ["research", "codex-research-tools/repo_analysis"]
+visual-reports = ["research"]
 test-support = []
 
 

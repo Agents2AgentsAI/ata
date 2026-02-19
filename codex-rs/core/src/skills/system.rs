@@ -16,8 +16,13 @@ const SYSTEM_SKILLS_DIR: Dir =
 const RESEARCH_SKILLS_DIR: Dir =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/skills/assets/research");
 
+#[cfg(feature = "visual-reports")]
+const VISUAL_REPORTS_SKILLS_DIR: Dir =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/skills/assets/visual-reports");
+
 const SYSTEM_SKILLS_DIR_NAME: &str = ".system";
 const RESEARCH_SKILLS_DIR_NAME: &str = ".system-research";
+const VISUAL_REPORTS_SKILLS_DIR_NAME: &str = ".system-visual-reports";
 const SKILLS_DIR_NAME: &str = "skills";
 const SYSTEM_SKILLS_MARKER_FILENAME: &str = ".ata-system-skills.marker";
 const SYSTEM_SKILLS_MARKER_SALT: &str = "v1";
@@ -25,6 +30,10 @@ const SYSTEM_SKILLS_MARKER_SALT: &str = "v1";
 const RESEARCH_SKILLS_MARKER_FILENAME: &str = ".codex-research-skills.marker";
 #[cfg(feature = "research")]
 const RESEARCH_SKILLS_MARKER_SALT: &str = "v1";
+#[cfg(feature = "visual-reports")]
+const VISUAL_REPORTS_SKILLS_MARKER_FILENAME: &str = ".codex-visual-reports-skills.marker";
+#[cfg(feature = "visual-reports")]
+const VISUAL_REPORTS_SKILLS_MARKER_SALT: &str = "v1";
 
 /// Returns the on-disk cache location for embedded system skills.
 ///
@@ -66,6 +75,30 @@ fn research_cache_root_dir_abs(codex_home: &AbsolutePathBuf) -> std::io::Result<
     codex_home
         .join(SKILLS_DIR_NAME)?
         .join(RESEARCH_SKILLS_DIR_NAME)
+}
+
+/// Returns the on-disk cache location for embedded visual-reports skills.
+///
+/// This is typically located at `CODEX_HOME/skills/.system-visual-reports`.
+/// Always available so that the loader can add the path to skill roots
+/// unconditionally (non-existent directories are skipped at discovery time).
+pub(crate) fn visual_reports_cache_root_dir(codex_home: &Path) -> PathBuf {
+    AbsolutePathBuf::try_from(codex_home)
+        .and_then(|codex_home| visual_reports_cache_root_dir_abs(&codex_home))
+        .map(AbsolutePathBuf::into_path_buf)
+        .unwrap_or_else(|_| {
+            codex_home
+                .join(SKILLS_DIR_NAME)
+                .join(VISUAL_REPORTS_SKILLS_DIR_NAME)
+        })
+}
+
+fn visual_reports_cache_root_dir_abs(
+    codex_home: &AbsolutePathBuf,
+) -> std::io::Result<AbsolutePathBuf> {
+    codex_home
+        .join(SKILLS_DIR_NAME)?
+        .join(VISUAL_REPORTS_SKILLS_DIR_NAME)
 }
 
 /// Installs embedded system skills into `CODEX_HOME/skills/.system`.
@@ -148,6 +181,47 @@ pub(crate) fn install_research_skills(codex_home: &Path) -> Result<(), SystemSki
     Ok(())
 }
 
+/// Installs embedded visual-reports skills into `CODEX_HOME/skills/.system-visual-reports`.
+///
+/// Same caching strategy as [`install_system_skills`] but for visual-reports-feature-gated skills.
+#[cfg(feature = "visual-reports")]
+pub(crate) fn install_visual_reports_skills(codex_home: &Path) -> Result<(), SystemSkillsError> {
+    let codex_home = AbsolutePathBuf::try_from(codex_home)
+        .map_err(|source| SystemSkillsError::io("normalize codex home dir", source))?;
+    let skills_root_dir = codex_home
+        .join(SKILLS_DIR_NAME)
+        .map_err(|source| SystemSkillsError::io("resolve skills root dir", source))?;
+    fs::create_dir_all(skills_root_dir.as_path())
+        .map_err(|source| SystemSkillsError::io("create skills root dir", source))?;
+
+    let dest_visual_reports = visual_reports_cache_root_dir_abs(&codex_home).map_err(|source| {
+        SystemSkillsError::io("resolve visual-reports skills cache root dir", source)
+    })?;
+
+    let marker_path = dest_visual_reports
+        .join(VISUAL_REPORTS_SKILLS_MARKER_FILENAME)
+        .map_err(|source| {
+            SystemSkillsError::io("resolve visual-reports skills marker path", source)
+        })?;
+    let expected_fingerprint = embedded_visual_reports_skills_fingerprint();
+    if dest_visual_reports.as_path().is_dir()
+        && read_marker(&marker_path).is_ok_and(|marker| marker == expected_fingerprint)
+    {
+        return Ok(());
+    }
+
+    if dest_visual_reports.as_path().exists() {
+        fs::remove_dir_all(dest_visual_reports.as_path()).map_err(|source| {
+            SystemSkillsError::io("remove existing visual-reports skills dir", source)
+        })?;
+    }
+
+    write_embedded_dir(&VISUAL_REPORTS_SKILLS_DIR, &dest_visual_reports)?;
+    fs::write(marker_path.as_path(), format!("{expected_fingerprint}\n"))
+        .map_err(|source| SystemSkillsError::io("write visual-reports skills marker", source))?;
+    Ok(())
+}
+
 fn read_marker(path: &AbsolutePathBuf) -> Result<String, SystemSkillsError> {
     Ok(fs::read_to_string(path.as_path())
         .map_err(|source| SystemSkillsError::io("read system skills marker", source))?
@@ -177,6 +251,21 @@ fn embedded_research_skills_fingerprint() -> String {
 
     let mut hasher = DefaultHasher::new();
     RESEARCH_SKILLS_MARKER_SALT.hash(&mut hasher);
+    for (path, contents_hash) in items {
+        path.hash(&mut hasher);
+        contents_hash.hash(&mut hasher);
+    }
+    format!("{:x}", hasher.finish())
+}
+
+#[cfg(feature = "visual-reports")]
+fn embedded_visual_reports_skills_fingerprint() -> String {
+    let mut items = Vec::new();
+    collect_fingerprint_items(&VISUAL_REPORTS_SKILLS_DIR, &mut items);
+    items.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+
+    let mut hasher = DefaultHasher::new();
+    VISUAL_REPORTS_SKILLS_MARKER_SALT.hash(&mut hasher);
     for (path, contents_hash) in items {
         path.hash(&mut hasher);
         contents_hash.hash(&mut hasher);
