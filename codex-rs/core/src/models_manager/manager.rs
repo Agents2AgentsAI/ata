@@ -242,6 +242,10 @@ impl ModelsManager {
         }
     }
 
+    fn resolve_models_api_client_version() -> String {
+        crate::models_manager::models_api_client_version().to_string()
+    }
+
     async fn fetch_and_update_models(&self) -> CoreResult<()> {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
@@ -252,7 +256,7 @@ impl ModelsManager {
         let transport = ReqwestTransport::new(build_reqwest_client());
         let client = ModelsClient::new(transport, api_provider, api_auth);
 
-        let client_version = crate::models_manager::client_version_to_whole();
+        let client_version = Self::resolve_models_api_client_version();
         let (models, etag) = timeout(
             MODELS_REFRESH_TIMEOUT,
             client.list_models(&client_version, HeaderMap::new()),
@@ -299,7 +303,7 @@ impl ModelsManager {
     async fn try_load_cache(&self) -> bool {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.load_cache.duration_ms", &[]);
-        let client_version = crate::models_manager::client_version_to_whole();
+        let client_version = Self::resolve_models_api_client_version();
         info!(client_version, "models cache: evaluating cache eligibility");
         let cache = match self.cache_manager.load_fresh(&client_version).await {
             Some(cache) => cache,
@@ -620,6 +624,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_available_models_uses_default_client_version() {
+        let server = MockServer::start().await;
+        let remote_models = vec![remote_model("override", "Override", 5)];
+        let models_mock = mount_models_once(
+            &server,
+            ModelsResponse {
+                models: remote_models.clone(),
+            },
+        )
+        .await;
+
+        let codex_home = tempdir().expect("temp dir");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        config.features.enable(Feature::RemoteModels);
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let provider = provider_for(server.uri());
+        let manager = ModelsManager::with_provider_for_tests(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            provider,
+        );
+
+        manager
+            .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
+            .await
+            .expect("first refresh succeeds");
+        manager
+            .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
+            .await
+            .expect("cached refresh succeeds");
+
+        let first_request = models_mock
+            .requests()
+            .into_iter()
+            .next()
+            .expect("one request");
+        let client_version = first_request
+            .url
+            .query_pairs()
+            .find(|(key, _)| key == "client_version")
+            .map(|(_, value)| value.to_string());
+        assert_eq!(
+            client_version.as_deref(),
+            Some(crate::models_manager::models_api_client_version()),
+            "expected /models to use default client_version"
+        );
+        assert_eq!(
+            models_mock.requests().len(),
+            1,
+            "cache hit should avoid a second /models request"
+        );
+    }
+
+    #[tokio::test]
     async fn refresh_available_models_refetches_when_cache_stale() {
         let server = MockServer::start().await;
         let initial_models = vec![remote_model("stale", "Stale", 1)];
@@ -724,7 +787,7 @@ mod tests {
         manager
             .cache_manager
             .mutate_cache_for_test(|cache| {
-                let client_version = crate::models_manager::client_version_to_whole();
+                let client_version = ModelsManager::resolve_models_api_client_version();
                 cache.client_version = Some(format!("{client_version}-mismatch"));
             })
             .await
