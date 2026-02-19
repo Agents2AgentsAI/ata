@@ -1,4 +1,5 @@
 use codex_app_server_protocol::AuthMode;
+use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CLIENT_ID;
@@ -15,7 +16,6 @@ use codex_core::auth::provider_env_var;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::edit::default_model_for_provider;
-use codex_core::AuthManager;
 use codex_login::GeminiServerOptions;
 use codex_login::ServerOptions;
 use codex_login::run_device_code_login;

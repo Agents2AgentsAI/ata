@@ -324,7 +324,9 @@ mod tests {
                 ContentItem::InputText { text } | ContentItem::OutputText { text } => {
                     text.contains(SUBAGENT_NOTIFICATION_OPEN_TAG)
                 }
-                ContentItem::InputImage { .. } => false,
+                ContentItem::InputImage { .. }
+                | ContentItem::InputFile { .. }
+                | ContentItem::UrlFile { .. } => false,
             })
         })
     }

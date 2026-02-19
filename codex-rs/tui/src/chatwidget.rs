@@ -5150,7 +5150,11 @@ impl ChatWidget {
         // Sort: current provider first, then others.
         presets.sort_by_key(|preset| {
             let provider = preset.provider_id.as_deref().unwrap_or(PROVIDER_OPENAI);
-            if provider == current_provider { 0u8 } else { 1u8 }
+            if provider == current_provider {
+                0u8
+            } else {
+                1u8
+            }
         });
 
         // Reset is_default to match the new ordering.

@@ -7607,6 +7607,9 @@ mod tests {
             Arc::new(SkillsManager::new(config.codex_home.clone())),
             Arc::new(FileWatcher::noop()),
             AgentControl::default(),
+            None,
+            None,
+            None,
         )
         .await;
 

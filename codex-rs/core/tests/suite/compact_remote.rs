@@ -1469,6 +1469,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: Some(next_model.to_string()),
+            model_provider: None,
             effort: None,
             summary: None,
             collaboration_mode: None,
