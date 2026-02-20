@@ -24,13 +24,13 @@
       "path": "package/vendor/aarch64-apple-darwin/bash/macos-15/bash",
       "providers": [
         {
-          "url": "https://github.com/openai/codex/releases/download/rust-v0.65.0/codex-shell-tool-mcp-npm-0.65.0.tgz"
+          "url": "https://github.com/Agents2AgentsAI/ata/releases/download/rust-v0.1.1/ata-shell-tool-mcp-npm-0.1.1.tgz"
         },
         {
           "type": "github-release",
-          "repo": "openai/codex",
-          "tag": "rust-v0.65.0",
-          "name": "codex-shell-tool-mcp-npm-0.65.0.tgz"
+          "repo": "Agents2AgentsAI/ata",
+          "tag": "rust-v0.1.1",
+          "name": "ata-shell-tool-mcp-npm-0.1.1.tgz"
         }
       ]
     },
@@ -45,13 +45,13 @@
       "path": "package/vendor/x86_64-unknown-linux-musl/bash/ubuntu-24.04/bash",
       "providers": [
         {
-          "url": "https://github.com/openai/codex/releases/download/rust-v0.65.0/codex-shell-tool-mcp-npm-0.65.0.tgz"
+          "url": "https://github.com/Agents2AgentsAI/ata/releases/download/rust-v0.1.1/ata-shell-tool-mcp-npm-0.1.1.tgz"
         },
         {
           "type": "github-release",
-          "repo": "openai/codex",
-          "tag": "rust-v0.65.0",
-          "name": "codex-shell-tool-mcp-npm-0.65.0.tgz"
+          "repo": "Agents2AgentsAI/ata",
+          "tag": "rust-v0.1.1",
+          "name": "ata-shell-tool-mcp-npm-0.1.1.tgz"
         }
       ]
     },
@@ -63,13 +63,13 @@
       "path": "package/vendor/aarch64-unknown-linux-musl/bash/ubuntu-24.04/bash",
       "providers": [
         {
-          "url": "https://github.com/openai/codex/releases/download/rust-v0.65.0/codex-shell-tool-mcp-npm-0.65.0.tgz"
+          "url": "https://github.com/Agents2AgentsAI/ata/releases/download/rust-v0.1.1/ata-shell-tool-mcp-npm-0.1.1.tgz"
         },
         {
           "type": "github-release",
-          "repo": "openai/codex",
-          "tag": "rust-v0.65.0",
-          "name": "codex-shell-tool-mcp-npm-0.65.0.tgz"
+          "repo": "Agents2AgentsAI/ata",
+          "tag": "rust-v0.1.1",
+          "name": "ata-shell-tool-mcp-npm-0.1.1.tgz"
         }
       ]
     },
