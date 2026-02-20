@@ -65,6 +65,5 @@ jobs:
       - name: Check root README ToC
         run: python3 scripts/readme_toc.py README.md
 
-
       - name: Prettier (run `pnpm run format:fix` to fix)
         run: pnpm run format
