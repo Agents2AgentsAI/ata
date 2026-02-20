@@ -7,6 +7,8 @@ pub enum UpdateAction {
     BunGlobalLatest,
     /// Update via `brew upgrade ata`.
     BrewUpgrade,
+    /// Update via the curl install script.
+    CurlInstall,
 }
 
 impl UpdateAction {
@@ -16,6 +18,10 @@ impl UpdateAction {
             UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@a2a-ai/ata"]),
             UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@a2a-ai/ata"]),
             UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "ata"]),
+            UpdateAction::CurlInstall => (
+                "sh",
+                &["-c", "curl -fsSL https://agents2agents.ai/ata/install.sh | sh"],
+            ),
         }
     }
 
@@ -56,6 +62,8 @@ fn detect_update_action(
         && (current_exe.starts_with("/opt/homebrew") || current_exe.starts_with("/usr/local"))
     {
         Some(UpdateAction::BrewUpgrade)
+    } else if cfg!(not(windows)) {
+        Some(UpdateAction::CurlInstall)
     } else {
         None
     }
@@ -67,9 +75,14 @@ mod tests {
 
     #[test]
     fn detects_update_action_without_env_mutation() {
+        // Fallback on non-Windows: curl installer.
         assert_eq!(
             detect_update_action(false, std::path::Path::new("/any/path"), false, false),
-            None
+            if cfg!(not(windows)) {
+                Some(UpdateAction::CurlInstall)
+            } else {
+                None
+            }
         );
         assert_eq!(
             detect_update_action(false, std::path::Path::new("/any/path"), true, false),
