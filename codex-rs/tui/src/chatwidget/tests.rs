@@ -2529,7 +2529,6 @@ async fn rate_limit_switch_prompt_switch_action_persists_model_selection() {
     let expected_provider = Some(
         expected_preset
             .provider_id
-            
             .unwrap_or_else(|| PROVIDER_OPENAI.to_string()),
     );
 

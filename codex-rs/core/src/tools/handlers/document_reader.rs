@@ -35,6 +35,9 @@ struct CachedSection {
 struct CachedDocument {
     title: String,
     sections: Vec<CachedSection>,
+    /// When streaming, tracks the next section index to fill.
+    /// `Some(n)` means sections `n..` still need content.
+    streaming_next: Option<usize>,
 }
 
 impl CachedDocument {
@@ -91,6 +94,22 @@ fn parse_sections(content: &str) -> Vec<CachedSection> {
     }
 
     sections
+}
+
+/// If the document has unfilled streaming sections, return a reminder string
+/// for the agent to continue filling them.
+fn streaming_unfilled_reminder(doc: &CachedDocument) -> String {
+    if let Some(next) = doc.streaming_next {
+        let unfilled: Vec<String> = (next..doc.sections.len()).map(|i| i.to_string()).collect();
+        if !unfilled.is_empty() {
+            return format!(
+                " Note: sections {} still need content. \
+                 Continue filling them with update_document_section after answering.",
+                unfilled.join(", ")
+            );
+        }
+    }
+    String::new()
 }
 
 // ---------------------------------------------------------------------------
@@ -372,25 +391,33 @@ impl ToolHandler for DocumentReaderHandler {
                 })?;
 
                 // Resolve title and content: use provided values, or fall back to cache.
-                let (title, doc_content) = {
+                let (title, doc_content, is_outline_only, section_count) = {
                     let mut cache = doc_cache.lock();
                     match (args.title, args.content) {
                         (Some(t), Some(c)) => {
                             // New document or full replacement — cache it.
                             let sections = parse_sections(&c);
+                            let sec_count = sections.len();
+                            // Detect outline-only: all headed sections have empty
+                            // content and there are at least 2 sections.
+                            let outline = sec_count > 1
+                                && sections
+                                    .iter()
+                                    .all(|s| s.heading.is_empty() || s.content.trim().is_empty());
                             cache.insert(
                                 args.document_id.clone(),
                                 CachedDocument {
                                     title: t.clone(),
                                     sections,
+                                    streaming_next: if outline { Some(0) } else { None },
                                 },
                             );
-                            (t, c)
+                            (t, c, outline, sec_count)
                         }
                         _ => {
                             // Re-display from cache.
                             if let Some(cached) = cache.get(&args.document_id) {
-                                (cached.title.clone(), cached.to_markdown())
+                                (cached.title.clone(), cached.to_markdown(), false, 0)
                             } else {
                                 return Err(FunctionCallError::RespondToModel(format!(
                                     "No cached document with id \"{}\". \
@@ -403,24 +430,35 @@ impl ToolHandler for DocumentReaderHandler {
                     }
                 };
 
+                let doc_id = args.document_id;
                 session
                     .send_event(
                         turn.as_ref(),
                         EventMsg::PresentDocument(PresentDocumentEvent {
                             call_id,
                             turn_id: turn.sub_id.clone(),
-                            document_id: args.document_id,
+                            document_id: doc_id.clone(),
                             title,
                             content: doc_content,
                         }),
                     )
                     .await;
-                "Document displayed in reading mode. The user can now navigate sections \
-                 and ask follow-up questions. When the user asks about a section, use \
-                 `append_to_section` to add your answer below the existing content (preferred). \
-                 Use `update_document_section` only if the user asks you to rewrite a section. \
-                 Do NOT output plain text responses \u{2014} only tool calls are visible to the user."
-                    .to_string()
+                if is_outline_only {
+                    format!(
+                        "Document outline is now visible to the user with {section_count} \
+                         empty sections. NOW fill section 0 by calling \
+                         update_document_section(document_id=\"{doc_id}\", section_index=0, \
+                         content=\"<full section content>\"). Do not output text \u{2014} \
+                         make the tool call immediately.",
+                    )
+                } else {
+                    "Document displayed in reading mode. The user can now navigate sections \
+                     and ask follow-up questions. When the user asks about a section, use \
+                     `append_to_section` to add your answer below the existing content (preferred). \
+                     Use `update_document_section` only if the user asks you to rewrite a section. \
+                     Do NOT output plain text responses \u{2014} only tool calls are visible to the user."
+                        .to_string()
+                }
             }
             "update_document_section" => {
                 let args: UpdateDocumentSectionArgs =
@@ -437,25 +475,48 @@ impl ToolHandler for DocumentReaderHandler {
                     )));
                 }
 
-                // Mirror the update in the cache.
-                {
+                // Mirror the update in the cache and advance streaming state.
+                let streaming_msg = {
                     let mut cache = doc_cache.lock();
-                    if let Some(doc) = cache.get_mut(&args.document_id)
-                        && let Some(section) = doc.sections.get_mut(args.section_index)
-                    {
-                        if let Some(rest) = args.content.strip_prefix("## ") {
-                            if let Some(nl) = rest.find('\n') {
-                                section.heading = rest[..nl].trim().to_string();
-                                section.content = rest[nl + 1..].to_string();
+                    let mut msg: Option<String> = None;
+                    if let Some(doc) = cache.get_mut(&args.document_id) {
+                        if let Some(section) = doc.sections.get_mut(args.section_index) {
+                            if let Some(rest) = args.content.strip_prefix("## ") {
+                                if let Some(nl) = rest.find('\n') {
+                                    section.heading = rest[..nl].trim().to_string();
+                                    section.content = rest[nl + 1..].to_string();
+                                } else {
+                                    section.heading = rest.trim().to_string();
+                                    section.content = String::new();
+                                }
                             } else {
-                                section.heading = rest.trim().to_string();
-                                section.content = String::new();
+                                section.content = args.content.clone();
                             }
-                        } else {
-                            section.content = args.content.clone();
+                        }
+                        // Advance streaming_next.
+                        if let Some(next) = doc.streaming_next {
+                            let new_next = next.max(args.section_index) + 1;
+                            if new_next < doc.sections.len() {
+                                let next_heading = doc.sections[new_next].heading.clone();
+                                doc.streaming_next = Some(new_next);
+                                msg = Some(format!(
+                                    "Section {idx} updated. NOW call \
+                                     update_document_section with \
+                                     section_index={new_next} ('{next_heading}'). \
+                                     Do not output text \u{2014} make the tool call \
+                                     immediately.",
+                                    idx = args.section_index,
+                                ));
+                            } else {
+                                doc.streaming_next = None;
+                                msg = Some(
+                                    "All sections filled. Wait for user interaction.".to_string(),
+                                );
+                            }
                         }
                     }
-                }
+                    msg
+                };
 
                 session
                     .send_event(
@@ -469,9 +530,11 @@ impl ToolHandler for DocumentReaderHandler {
                         }),
                     )
                     .await;
-                "Section updated. The user can see the change immediately. \
-                 Do NOT call present_reading_view again."
-                    .to_string()
+                streaming_msg.unwrap_or_else(|| {
+                    "Section updated. The user can see the change immediately. \
+                     Do NOT call present_reading_view again."
+                        .to_string()
+                })
             }
             "append_to_section" => {
                 let args: AppendToSectionArgs = serde_json::from_str(&arguments).map_err(|e| {
@@ -488,17 +551,20 @@ impl ToolHandler for DocumentReaderHandler {
                 }
 
                 // Mirror the append in the cache.
-                {
+                let streaming_reminder = {
                     let mut cache = doc_cache.lock();
-                    if let Some(doc) = cache.get_mut(&args.document_id)
-                        && let Some(section) = doc.sections.get_mut(args.section_index)
-                    {
-                        if !section.content.is_empty() && !section.content.ends_with('\n') {
-                            section.content.push('\n');
+                    if let Some(doc) = cache.get_mut(&args.document_id) {
+                        if let Some(section) = doc.sections.get_mut(args.section_index) {
+                            if !section.content.is_empty() && !section.content.ends_with('\n') {
+                                section.content.push('\n');
+                            }
+                            section.content.push_str(&args.content);
                         }
-                        section.content.push_str(&args.content);
+                        streaming_unfilled_reminder(doc)
+                    } else {
+                        String::new()
                     }
-                }
+                };
 
                 session
                     .send_event(
@@ -512,9 +578,10 @@ impl ToolHandler for DocumentReaderHandler {
                         }),
                     )
                     .await;
-                "Content appended to section. The user can see the change immediately. \
-                 Do NOT call present_reading_view again."
-                    .to_string()
+                format!(
+                    "Content appended to section. The user can see the change immediately. \
+                     Do NOT call present_reading_view again.{streaming_reminder}"
+                )
             }
             "patch_document_section" => {
                 let args: PatchDocumentSectionArgs =
@@ -532,16 +599,20 @@ impl ToolHandler for DocumentReaderHandler {
                 }
 
                 // Mirror the patch in the cache.
-                {
+                let streaming_reminder = {
                     let mut cache = doc_cache.lock();
-                    if let Some(doc) = cache.get_mut(&args.document_id)
-                        && let Some(section) = doc.sections.get_mut(args.section_index)
-                        && section.content.contains(&args.old_text)
-                    {
-                        section.content =
-                            section.content.replacen(&args.old_text, &args.new_text, 1);
+                    if let Some(doc) = cache.get_mut(&args.document_id) {
+                        if let Some(section) = doc.sections.get_mut(args.section_index)
+                            && section.content.contains(&args.old_text)
+                        {
+                            section.content =
+                                section.content.replacen(&args.old_text, &args.new_text, 1);
+                        }
+                        streaming_unfilled_reminder(doc)
+                    } else {
+                        String::new()
                     }
-                }
+                };
 
                 session
                     .send_event(
@@ -556,9 +627,10 @@ impl ToolHandler for DocumentReaderHandler {
                         }),
                     )
                     .await;
-                "Section patched. The user can see the change immediately. \
-                 Do NOT call present_reading_view again."
-                    .to_string()
+                format!(
+                    "Section patched. The user can see the change immediately. \
+                     Do NOT call present_reading_view again.{streaming_reminder}"
+                )
             }
             other => {
                 return Err(FunctionCallError::RespondToModel(format!(

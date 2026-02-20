@@ -28,8 +28,8 @@ Rules:
 
 ## Phase 0: Source KB Cards
 
-1. Call `kb_status` to get `kb_path` and verify KB exists.
-2. Call `kb_list_cards` to retrieve all cards.
+1. Determine `<kb_path>` per the `$kb` skill and verify KB exists.
+2. List all cards per `$kb`.
 3. Filter cards whose tags, titles, or topics relate to the user's question or requested topic.
 4. If related unrequested cards exist, present them: "I also found cards for X, Y — want me to include them in the briefing?"
 5. If no cards match the topic, tell the user: "No KB cards found for this topic. Run `$paper-synthesis` on relevant papers first, then re-run this briefing." The briefing synthesizes from existing KB content — it does not read papers itself.
@@ -38,7 +38,7 @@ Rules:
 
 For each relevant card:
 
-1. Call `kb_read_card` to get the full content.
+1. Read the card per `$kb` to get the full content.
 2. Extract:
    - The core contribution (from Summary or Deep Dive — the single most important idea)
    - The key result (one specific number with context)
@@ -52,7 +52,7 @@ Group the papers into 2-5 approach families based on their core paradigm. Each a
 
 ## Phase 2.5: Read Research Context (Optional)
 
-If `research-context.md` exists at the KB root (read via `kb_read_file` at path `research-context.md`), use it to tailor the briefing:
+If `<kb_path>/research-context.md` exists, use it to tailor the briefing:
 
 - **Priorities**: Weight the Recommendation section toward the user's documented priorities (e.g., if they care about inference latency, lead with approaches that address it).
 - **Not Interested In**: De-emphasize or briefly note approaches the user has dismissed, rather than giving them equal airtime.
@@ -116,7 +116,9 @@ For full technical walkthroughs of any paper above:
 
 **This section applies to the main agent only.** If this skill is loaded in a subagent, return results as text to the main agent — do NOT call `present_reading_view`.
 
-IMPORTANT: When the briefing is complete, the main agent MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the briefing title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
+**Phase 1 (Outline):** IMMEDIATELY call `present_reading_view` with `document_id` set to a unique slug, `title` to the briefing title, and `content` containing ONLY the `## ` section headings with empty bodies. Example content: `"## The Landscape\n\n## Approaches at a Glance\n\n## Recommendation"`. This opens the reading view instantly with "Generating..." placeholders.
+
+**Phase 2 (Fill):** The tool result will tell you to fill section 0. Immediately call `update_document_section(document_id, section_index=0, content="...")` with the FULL content for that section — do not output any text, just make the tool call. Each tool result tells you the next section to fill. Continue calling `update_document_section` for each subsequent section until all are filled.
 
 When the user asks follow-up questions about a specific section, use the most efficient update tool:
 - `append_to_section` — to add new information at the end of a section (most common for follow-up questions)
@@ -127,7 +129,7 @@ When the user asks follow-up questions about a specific section, use the most ef
 
 After presenting the briefing, do these:
 
-**1. Journal entry** — Append to `research-journal.md` at the KB root via `kb_write_file`. Prepend (newest first):
+**1. Journal entry** — Append to `<kb_path>/research-journal.md`. Prepend (newest first):
 
 ```markdown
 ## [Date] — Briefing: [Topic]
@@ -156,6 +158,6 @@ After presenting the briefing, do these:
 
 ## Graceful Degradation
 
-- **No KB tools configured**: Present the briefing in chat. Note that KB tools are needed for card-based briefings — without them, the skill cannot source content.
+- **No KB configured**: Present the briefing in chat. Note that a KB path is needed for card-based briefings — without one, the skill cannot source content.
 - **Few cards (1-2)**: Still produce the briefing, but note that coverage is thin and suggest adding more papers via `$paper-discovery` or `$paper-synthesis`.
 - **Cards lack depth**: If cards are shallow (abstract-only synthesis), note this in the briefing and suggest re-running `$paper-synthesis` with full PDF access.

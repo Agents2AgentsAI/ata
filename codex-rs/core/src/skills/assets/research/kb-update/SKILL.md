@@ -23,7 +23,7 @@ Invoke this skill when any of the following occur during conversation:
 ### Step 1: Identify the Target Card
 
 - Determine which KB card(s) the conversation insight applies to.
-- Call `kb_read_card` for each relevant card to get the current content.
+- Read each relevant card per `$kb` to get the current content.
 
 ### Step 2: Identify What the Conversation Added
 
@@ -80,7 +80,7 @@ Example addition to Connections:
 
 ### Step 5: Write Updated Card
 
-Call `kb_write_card` with the updated content. The card ID and frontmatter remain unchanged — only the body is modified.
+Write the updated card per `$kb`. The card ID and frontmatter remain unchanged — only the body is modified.
 
 ## What NOT to Update
 
@@ -118,14 +118,14 @@ During any kb-update interaction, watch for signals that the user is expressing 
 - "The tradeoff framing really helps me understand this" → This is a framing preference.
 - "I've decided to go with VQ-VAE tokenization" → This is a key decision.
 
-When you detect such signals, offer to update `research-context.md` at the KB root in addition to the card update:
+When you detect such signals, offer to update `<kb_path>/research-context.md` in addition to the card update:
 - "I also noticed you expressed a preference about [X]. Want me to record that in your research context so future briefings and reports account for it?"
-- If the user agrees, read `research-context.md` (create if it doesn't exist), merge the new item into the appropriate section (Priorities, Not Interested In, Framings That Work, or Key Decisions Made), and write it back.
+- If the user agrees, read `<kb_path>/research-context.md` (create if it doesn't exist), merge the new item into the appropriate section (Priorities, Not Interested In, Framings That Work, or Key Decisions Made), and write it back.
 
 This is lightweight and optional — never block a card update on research context. If the user says no or ignores the offer, proceed with the card update alone.
 
 ## Graceful Degradation
 
-- **No KB configured**: Tell the user that KB tools are needed to persist insights. Offer to present the insights in chat instead.
+- **No KB configured**: Tell the user that a KB path is needed to persist insights. Offer to present the insights in chat instead.
 - **Card not found**: If the referenced card doesn't exist, suggest running `$paper-synthesis` first to create it.
 - **Ambiguous card reference**: If it's unclear which card the insight applies to, ask the user to specify.

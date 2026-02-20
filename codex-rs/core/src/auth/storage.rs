@@ -293,10 +293,10 @@ static KEYRING_AUTH_CACHE: Lazy<Mutex<HashMap<String, Option<AuthDotJson>>>> =
 /// Remove the cached keyring entry for `codex_home` so the next
 /// `load()` re-reads from the OS keyring.
 pub(super) fn invalidate_keyring_cache(codex_home: &Path) {
-    if let Ok(key) = compute_store_key(codex_home) {
-        if let Ok(mut guard) = KEYRING_AUTH_CACHE.lock() {
-            guard.remove(&key);
-        }
+    if let Ok(key) = compute_store_key(codex_home)
+        && let Ok(mut guard) = KEYRING_AUTH_CACHE.lock()
+    {
+        guard.remove(&key);
     }
 }
 

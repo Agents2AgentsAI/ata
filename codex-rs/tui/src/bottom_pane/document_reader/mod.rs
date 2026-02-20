@@ -154,6 +154,10 @@ pub(crate) struct DocumentReaderView {
     /// Text extracted from visual selection, to be prepended to the next
     /// follow-up question as context.
     selection_context: Option<String>,
+
+    /// Set of section indices still awaiting content during streaming.
+    /// `Some(set)` means streaming is active; `None` means all sections are filled.
+    streaming_sections: Option<HashSet<usize>>,
 }
 
 impl DocumentReaderView {
@@ -170,6 +174,19 @@ impl DocumentReaderView {
         if !sections.is_empty() {
             visited_sections.insert(0);
         }
+
+        // Detect outline-only: all sections with headings have empty content,
+        // and there are at least 2 sections. This triggers streaming mode.
+        let streaming_sections = if sections.len() > 1
+            && sections
+                .iter()
+                .all(|s| s.heading.is_empty() || s.content.trim().is_empty())
+        {
+            Some((0..sections.len()).collect::<HashSet<usize>>())
+        } else {
+            None
+        };
+
         Self {
             document_id,
             title,
@@ -194,6 +211,7 @@ impl DocumentReaderView {
             search_input: String::new(),
             visual_select: None,
             selection_context: None,
+            streaming_sections,
         }
     }
 
@@ -212,6 +230,12 @@ impl DocumentReaderView {
 
     /// Update a section's content (full replacement).
     pub(crate) fn update_section(&mut self, section_index: usize, content: String) {
+        // Check if this is an initial streaming fill (not a user-triggered update).
+        let is_streaming_fill = self
+            .streaming_sections
+            .as_ref()
+            .is_some_and(|set| set.contains(&section_index));
+
         if let Some(section) = self.sections.get_mut(section_index) {
             // Re-derive heading from the new content if it starts with `## `.
             let (heading, body) = if let Some(rest) = content.strip_prefix("## ") {
@@ -225,12 +249,24 @@ impl DocumentReaderView {
             };
             section.heading = heading;
             section.content = body;
-            section.recently_updated = true;
-            // Full replacement → all body lines are changed.
-            section.changed_from_line = Some(0);
+
+            // Only show green "recently updated" highlight for actual edits,
+            // not for the initial streaming fill.
+            if !is_streaming_fill {
+                section.recently_updated = true;
+                section.changed_from_line = Some(0);
+            }
             section.invalidate_cache();
             self.resolve_pending(section_index);
             self.refresh_search();
+
+            // Remove from streaming set; clear streaming when all filled.
+            if let Some(ref mut set) = self.streaming_sections {
+                set.remove(&section_index);
+                if set.is_empty() {
+                    self.streaming_sections = None;
+                }
+            }
         }
     }
 
@@ -344,9 +380,19 @@ impl DocumentReaderView {
         // Send brief feedback to the agent about user interaction.
         let total = self.sections.len();
         let viewed = self.visited_sections.len();
+        let streaming_note = if let Some(ref set) = self.streaming_sections {
+            if !set.is_empty() {
+                " Some sections were still being generated. \
+                 Stop calling update_document_section."
+            } else {
+                ""
+            }
+        } else {
+            ""
+        };
         let feedback = format!(
             "[The user closed the document reader for \"{}\". \
-             They viewed {viewed} of {total} sections.]",
+             They viewed {viewed} of {total} sections.{streaming_note}]",
             self.title,
         );
         self.app_event_tx.send(AppEvent::CodexOp(Op::UserInput {
@@ -374,6 +420,29 @@ impl DocumentReaderView {
 
         let selection = self.selection_context.take();
 
+        // Include the current section content so the agent can reliably
+        // locate the right passage for inline patching.
+        let section_content = self
+            .sections
+            .get(self.current_section)
+            .map(|s| s.content.as_str())
+            .unwrap_or("");
+
+        // Formatting guidance shared by both selection and no-selection paths.
+        // The goal: answers must be self-contained when re-read later without
+        // remembering the original question.  A short italic lead-in line
+        // (*On …:*) gives context without a clunky "Q: / A:" format and
+        // without rewriting surrounding text.
+        let formatting_guidance = "\
+            IMPORTANT — standalone readability: the reader will revisit this document later \
+            without remembering what question they asked. Your answer MUST open with a short \
+            italic contextual lead-in that summarises the topic, e.g.:\n\
+            *On the role of dropout in preventing overfitting:* Dropout randomly …\n\
+            *[Clarification: batch size vs. learning rate]* The batch size …\n\
+            Keep the lead-in to one short phrase. Do NOT repeat the full question. \
+            Do NOT use a Q:/A: format. The annotation should read like an editorial note \
+            that makes the paragraph self-explanatory.";
+
         let tool_instructions = if let Some(ref sel) = selection {
             // The user highlighted specific text — tell the agent to patch
             // the answer in right after the selection.
@@ -384,21 +453,27 @@ impl DocumentReaderView {
                  old_text=\"<the selected text exactly>\", \
                  new_text=\"<the selected text>\\n\\n<your answer>\")\n\
                  This inserts your answer right after the selected passage. \
-                 Reproduce the selected text verbatim as old_text so the patch matches.",
+                 Reproduce the selected text verbatim as old_text so the patch matches.\n\n\
+                 {formatting_guidance}",
                 doc_id = self.document_id,
                 idx = self.current_section,
             )
         } else {
-            // No selection — give the agent the choice of append or patch.
+            // No selection — strongly prefer inline patch so answers appear
+            // next to the passage they explain.
             format!(
-                "You have two tools to respond:\n\
-                 1. append_to_section(document_id=\"{doc_id}\", section_index={idx}, content=\"...\") \
-                 — adds your answer at the end of the section. Use this for general questions.\n\
-                 2. patch_section(document_id=\"{doc_id}\", section_index={idx}, \
-                 old_text=\"<text from the section>\", \
-                 new_text=\"<that same text>\\n\\n<your answer>\") \
-                 — inserts your answer after a specific passage. Use this when the question is clearly \
-                 about a particular part of the section so the answer appears in context.",
+                "Current section content:\n---\n{section_content}\n---\n\n\
+                 PREFERRED — use patch_section to insert your answer inline:\n\
+                 patch_section(document_id=\"{doc_id}\", section_index={idx}, \
+                 old_text=\"<the passage the question is about>\", \
+                 new_text=\"<that same passage>\\n\\n<your answer>\")\n\
+                 Find the most relevant passage (paragraph, bullet list, or sentence) \
+                 and insert your answer right after it so it reads naturally in context. \
+                 Copy old_text verbatim from the section content above.\n\n\
+                 FALLBACK — use append ONLY when the question is about the section as a whole \
+                 and no specific passage is relevant:\n\
+                 append_to_section(document_id=\"{doc_id}\", section_index={idx}, content=\"...\")\n\n\
+                 {formatting_guidance}",
                 doc_id = self.document_id,
                 idx = self.current_section,
             )
@@ -1152,7 +1227,25 @@ impl Renderable for DocumentReaderView {
 
         // Header — no longer shows "thinking..." here; the spinner is in the composer.
         let current_pending = self.pending_sections.contains_key(&self.current_section);
-        let header = render::header_line(&self.title, section_num, section_count, false, w);
+        let streaming_status: Option<String> = self.streaming_sections.as_ref().and_then(|set| {
+            if set.is_empty() {
+                return None;
+            }
+            let filled = self.sections.len() - set.len();
+            Some(format!(
+                "generating {}/{}\u{2026}",
+                filled + 1,
+                self.sections.len()
+            ))
+        });
+        let header = render::header_line(
+            &self.title,
+            section_num,
+            section_count,
+            false,
+            streaming_status.as_deref(),
+            w,
+        );
         Paragraph::new(header).render(
             Rect {
                 y,
@@ -1180,7 +1273,19 @@ impl Renderable for DocumentReaderView {
             let inner_width = w.saturating_sub(4);
             self.last_inner_width.set(inner_width);
             if let Some(section) = self.sections.get(self.current_section) {
-                let mut raw_lines = section.rendered_lines(inner_width);
+                // If this section is awaiting content during streaming, show
+                // the loading indicator instead of the normal rendered lines.
+                let is_streaming_empty = self
+                    .streaming_sections
+                    .as_ref()
+                    .is_some_and(|set| set.contains(&self.current_section))
+                    && section.content.trim().is_empty();
+
+                let mut raw_lines = if is_streaming_empty {
+                    render::render_section_loading(&section.heading)
+                } else {
+                    section.rendered_lines(inner_width)
+                };
 
                 // Compute the rendered-line index from which changes begin.
                 // The heading adds ~2 rendered lines (heading text + blank).
@@ -1192,6 +1297,11 @@ impl Renderable for DocumentReaderView {
                 } else {
                     None
                 };
+
+                // Compute scroll overflow from section content alone — the
+                // pending indicator is transient chrome and should not trigger
+                // the "▼ scroll for more" indicator.
+                let content_total = raw_lines.len();
 
                 // Append pending indicator if the current section has a pending question.
                 if let Some((question, _)) = self.pending_sections.get(&self.current_section) {
@@ -1208,7 +1318,7 @@ impl Renderable for DocumentReaderView {
                 let offset = self.scroll_offset.get().min(max_offset);
                 self.scroll_offset.set(offset);
 
-                has_more_below = (offset as usize) + (content_height as usize) < total;
+                has_more_below = (offset as usize) + (content_height as usize) < content_total;
 
                 // Apply search highlights if a search is active.
                 let search_query = self
@@ -1315,6 +1425,17 @@ impl Renderable for DocumentReaderView {
                     );
                 }
             }
+        }
+
+        // Schedule periodic refresh while streaming is active so loading
+        // indicators stay visually responsive even between section updates.
+        if self
+            .streaming_sections
+            .as_ref()
+            .is_some_and(|set| !set.is_empty())
+        {
+            self.frame_requester
+                .schedule_frame_in(Duration::from_millis(500));
         }
 
         // === Render bottom-up from bottom_y ===
