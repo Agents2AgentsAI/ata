@@ -1,6 +1,7 @@
 //! Rendering helpers for the document reader view.
 
 use crate::markdown::append_markdown;
+use ratatui::style::Modifier;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -32,8 +33,14 @@ pub(super) fn render_section(
 
     // Section body rendered as markdown.
     if !content.is_empty() {
+        let clean = strip_citation_annotations(content);
         let wrap_width = width.saturating_sub(2).max(1) as usize;
-        append_markdown(content, Some(wrap_width), &mut lines);
+        append_markdown(&clean, Some(wrap_width), &mut lines);
+
+        // macOS Terminal.app renders ANSI italic (SGR 3) as reverse video,
+        // producing white-bg/black-text on dark terminals.  Replace italic
+        // with dim in the reading view to avoid this.
+        replace_italic_with_dim(&mut lines);
     }
 
     if lines.is_empty() {
@@ -43,11 +50,29 @@ pub(super) fn render_section(
     lines
 }
 
+/// Count the number of rendered body lines for a content string, accounting
+/// for markdown formatting and word wrapping.  Used to map raw content line
+/// indices to rendered line positions.
+pub(super) fn rendered_body_line_count(content: &str, width: u16) -> usize {
+    if content.is_empty() {
+        return 0;
+    }
+    let clean = strip_citation_annotations(content);
+    let wrap_width = width.saturating_sub(2).max(1) as usize;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    append_markdown(&clean, Some(wrap_width), &mut lines);
+    replace_italic_with_dim(&mut lines);
+    lines.len()
+}
+
 /// Render a placeholder for a section whose content is still being generated.
 ///
-/// Shows the heading in cyan bold (same as normal) followed by a dim italic
-/// "Generating..." indicator.
-pub(super) fn render_section_loading(heading: &str) -> Vec<Line<'static>> {
+/// Shows the heading in cyan bold (same as normal) followed by a shimmer
+/// animation (when enabled) or a static "Generating..." indicator.
+pub(super) fn render_section_loading(
+    heading: &str,
+    animations_enabled: bool,
+) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
     if !heading.is_empty() {
@@ -55,10 +80,13 @@ pub(super) fn render_section_loading(heading: &str) -> Vec<Line<'static>> {
         lines.push(Line::from(""));
     }
 
-    lines.push(Line::from(vec![
-        "  \u{25CB} ".dim(),
-        "Generating...".dim().italic(),
-    ]));
+    let label = "  \u{25CB} Generating\u{2026}";
+    if animations_enabled {
+        let shimmer = crate::shimmer::shimmer_spans(label);
+        lines.push(Line::from(shimmer));
+    } else {
+        lines.push(Line::from(label.to_string().dim()));
+    }
 
     lines
 }
@@ -90,9 +118,11 @@ pub(super) fn header_line(
         title.to_string()
     };
     let right = format!("{section_num}/{section_count}");
+    let left_width = unicode_width::UnicodeWidthStr::width(left.as_str());
+    let right_width = unicode_width::UnicodeWidthStr::width(right.as_str());
     let padding = inner_width
-        .saturating_sub(left.len())
-        .saturating_sub(right.len());
+        .saturating_sub(left_width)
+        .saturating_sub(right_width);
 
     let mut spans: Vec<Span<'static>> = Vec::new();
     spans.push("│ ".dim());
@@ -131,11 +161,12 @@ pub(super) fn separator(width: u16) -> Line<'static> {
 /// Build a separator with a centered text indicator (e.g. " ▼ scroll for more ").
 pub(super) fn separator_with_indicator(width: u16, label: &str) -> Line<'static> {
     let inner = (width as usize).saturating_sub(2);
-    if inner <= label.len() {
+    let label_width = unicode_width::UnicodeWidthStr::width(label);
+    if inner <= label_width {
         // Not enough room for the label — fall back to a plain separator.
         return separator(width);
     }
-    let remaining = inner - label.len();
+    let remaining = inner - label_width;
     let left = remaining / 2;
     let right = remaining - left;
     Line::from(vec![
@@ -217,7 +248,10 @@ pub(super) fn hints_line(
     };
 
     // Wrap in side borders to match the card.
-    let hints_width: usize = hints.iter().map(|s| s.content.len()).sum();
+    let hints_width: usize = hints
+        .iter()
+        .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
     let pad = (width as usize)
         .saturating_sub(4) // "│ " + " │"
         .saturating_sub(hints_width);
@@ -372,8 +406,8 @@ pub(super) fn draw_side_borders(
 
 /// Highlight all occurrences of `query` in a rendered line (case-insensitive).
 ///
-/// Matched substrings are rendered with reversed style. The original spans are
-/// split at match boundaries so that only the matched characters get the
+/// Matched substrings are rendered with magenta bold style. The original spans
+/// are split at match boundaries so that only the matched characters get the
 /// highlight style.
 pub(super) fn apply_search_highlights(line: Line<'static>, query: &str) -> Line<'static> {
     if query.is_empty() {
@@ -437,7 +471,10 @@ pub(super) fn apply_search_highlights(line: Line<'static>, query: &str) -> Line<
             let local_match_end = m_end.saturating_sub(span_start).min(span_text.len());
             if local_match_start < local_match_end {
                 let matched = &span_text[local_match_start..local_match_end];
-                new_spans.push(Span::styled(matched.to_string(), base_style.reversed()));
+                new_spans.push(Span::styled(
+                    matched.to_string(),
+                    base_style.magenta().bold().underlined(),
+                ));
             }
 
             pos_in_span = local_match_end;
@@ -492,4 +529,57 @@ pub(super) fn pending_indicator_lines(question: &str, width: u16) -> Vec<Line<'s
     ]));
 
     lines
+}
+
+/// Replace `Modifier::ITALIC` with `Modifier::UNDERLINED` in all spans and
+/// line styles.  macOS Terminal.app renders ANSI italic (SGR 3) as reverse
+/// video which produces jarring white-bg/black-text on dark terminals.  This
+/// is scoped to the reading view only so the shared markdown renderer stays
+/// unchanged for upstream compatibility.
+/// Strip OpenAI Responses API citation annotations from content.
+///
+/// The model inserts inline citations delimited by private-use Unicode
+/// characters: U+E200 (start), U+E201 (end), U+E202 (separator).
+/// These render as boxes/rectangles in terminal fonts.  We strip the
+/// entire `\u{e200}...\u{e201}` span plus any surrounding whitespace
+/// that would otherwise leave double-spaces or trailing blanks.
+pub(super) fn strip_citation_annotations(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    let mut chars = content.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{e200}' {
+            // Skip everything up to and including the closing \u{e201}.
+            for inner in chars.by_ref() {
+                if inner == '\u{e201}' {
+                    break;
+                }
+            }
+            // Collapse double-space left behind by stripping a citation
+            // that was preceded and followed by spaces.
+            if out.ends_with(' ') && chars.peek() == Some(&' ') {
+                chars.next();
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn replace_italic_with_dim(lines: &mut [Line<'static>]) {
+    fn fix_modifiers(add: &mut Modifier, sub: &mut Modifier) {
+        if add.contains(Modifier::ITALIC) {
+            *add = add.difference(Modifier::ITALIC).union(Modifier::UNDERLINED);
+        }
+        // Also clear italic from sub_modifier so we don't accidentally
+        // remove the replacement that we just added.
+        *sub = sub.difference(Modifier::ITALIC);
+    }
+
+    for line in lines.iter_mut() {
+        fix_modifiers(&mut line.style.add_modifier, &mut line.style.sub_modifier);
+        for span in &mut line.spans {
+            fix_modifiers(&mut span.style.add_modifier, &mut span.style.sub_modifier);
+        }
+    }
 }

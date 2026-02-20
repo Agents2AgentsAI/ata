@@ -77,7 +77,9 @@ The subagent returns raw extracted information from the paper. You decide how to
 
 **Phase 2 (Fill):** The tool result will tell you to fill section 0. Immediately call `update_document_section(document_id, section_index=0, content="...")` with the FULL content for that section — do not output any text, just make the tool call. Each tool result tells you the next section to fill. Continue calling `update_document_section` for each subsequent section until all are filled.
 
-For follow-up questions, use `append_to_section`, `patch_document_section`, or `update_document_section`.
+**Markdown formatting:** Always put a blank line before numbered list items (`1.`, `2.`, etc.) and before bullet list items (`-`, `*`). Without a blank line, the markdown parser treats `2.`, `3.`, etc. as plain text instead of list items, so they lose their formatting. This also applies to content after paragraphs, blockquotes, and code blocks.
+
+When the user asks follow-up questions — whether about a specific section or a broader request like "explain more intuitively" or "simplify this" — ALWAYS use the reading view tools. For section-specific questions, use `append_to_section` or `patch_document_section`. For broader re-explanations or different angles, use `update_document_section` to rewrite the relevant sections, or call `present_reading_view` with a new document_id for a completely fresh take. Never fall back to plain text for follow-ups on a topic with an active reading view. Write the answer as straight content — no editorial labels like "(clearer explanation)" or "(expanded)" in headings or topic lines.
 
 ## Graceful Degradation
 
