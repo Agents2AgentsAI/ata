@@ -119,7 +119,7 @@ jobs:
         working-directory: codex-rs
     env:
       # TODO: Re-enable once Azure Trusted Signing is configured.
-      HAS_AZURE_SIGNING: 'false'
+      HAS_AZURE_SIGNING: "false"
       # HAS_AZURE_SIGNING: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID != '' }}
 
     strategy:

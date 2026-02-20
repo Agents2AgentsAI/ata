@@ -3,18 +3,18 @@ name: cargo-deny
 on:
   pull_request:
     paths:
-      - 'codex-rs/**/Cargo.toml'
-      - 'codex-rs/Cargo.lock'
-      - 'codex-rs/deny.toml'
-      - '.github/workflows/cargo-deny.yml'
+      - "codex-rs/**/Cargo.toml"
+      - "codex-rs/Cargo.lock"
+      - "codex-rs/deny.toml"
+      - ".github/workflows/cargo-deny.yml"
   push:
     branches:
       - main
     paths:
-      - 'codex-rs/**/Cargo.toml'
-      - 'codex-rs/Cargo.lock'
-      - 'codex-rs/deny.toml'
-      - '.github/workflows/cargo-deny.yml'
+      - "codex-rs/**/Cargo.toml"
+      - "codex-rs/Cargo.lock"
+      - "codex-rs/deny.toml"
+      - ".github/workflows/cargo-deny.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}

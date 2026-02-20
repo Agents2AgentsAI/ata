@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'sdk/**'
-      - '.github/workflows/sdk.yml'
+      - "sdk/**"
+      - ".github/workflows/sdk.yml"
   push:
     branches: [main]
     paths:
-      - 'sdk/**'
-      - '.github/workflows/sdk.yml'
+      - "sdk/**"
+      - ".github/workflows/sdk.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}

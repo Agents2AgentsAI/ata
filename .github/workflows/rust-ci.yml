@@ -3,15 +3,15 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'codex-rs/**'
-      - '.github/workflows/rust-ci.yml'
-      - '.github/scripts/**'
+      - "codex-rs/**"
+      - ".github/workflows/rust-ci.yml"
+      - ".github/scripts/**"
   push:
     branches: [main]
     paths:
-      - 'codex-rs/**'
-      - '.github/workflows/rust-ci.yml'
-      - '.github/scripts/**'
+      - "codex-rs/**"
+      - ".github/workflows/rust-ci.yml"
+      - ".github/scripts/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}

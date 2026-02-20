@@ -3,7 +3,6 @@
 <p align="center">
   <img src="https://github.com/Agents2AgentsAI/ata/blob/main/.github/cli-splash.png" alt="Ata CLI splash" width="80%" />
 
-
 ---
 
 ## Quickstart
@@ -13,11 +12,13 @@
 Install globally with your preferred package manager:
 
 Install using npm
+
 ```shell
 npm install -g @a2a-ai/ata
 ```
 
 Install using curl (macOS/Linux)
+
 ```shell
 curl -fsSL https://agents2agents.ai/ata/install.sh | sh
 ```
