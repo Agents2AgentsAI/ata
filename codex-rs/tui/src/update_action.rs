@@ -20,7 +20,10 @@ impl UpdateAction {
             UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "ata"]),
             UpdateAction::CurlInstall => (
                 "sh",
-                &["-c", "curl -fsSL https://agents2agents.ai/ata/install.sh | sh"],
+                &[
+                    "-c",
+                    "curl -fsSL https://agents2agents.ai/ata/install.sh | sh",
+                ],
             ),
         }
     }
