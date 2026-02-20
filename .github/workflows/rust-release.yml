@@ -740,7 +740,7 @@ jobs:
           # Update cask
           sed -i "s/version \".*\"/version \"${VERSION}\"/" Casks/ata.rb
           sed -i "s/sha256 arm:   \".*\",/sha256 arm:   \"${cask_arm}\",/" Casks/ata.rb
-          sed -i "s/intel: \".*\"/intel: \"${cask_intel}\"/" Casks/ata.rb
+          sed -i "s/^         intel: \".*\"/         intel: \"${cask_intel}\"/" Casks/ata.rb
 
           # Update formula version
           sed -i "s/version \".*\"/version \"${VERSION}\"/" Formula/ata.rb
