@@ -43,19 +43,49 @@ pub(super) fn render_section(
     lines
 }
 
+/// Render a placeholder for a section whose content is still being generated.
+///
+/// Shows the heading in cyan bold (same as normal) followed by a dim italic
+/// "Generating..." indicator.
+pub(super) fn render_section_loading(heading: &str) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    if !heading.is_empty() {
+        lines.push(Line::from(heading.to_string().cyan().bold()));
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(vec![
+        "  \u{25CB} ".dim(),
+        "Generating...".dim().italic(),
+    ]));
+
+    lines
+}
+
 /// Build the header line with title left-aligned and section nav right-aligned.
+///
+/// When `streaming_status` is `Some("generating 3/8...")`, it is rendered dim
+/// italic after the title (replaces the "thinking..." position).
 pub(super) fn header_line(
     title: &str,
     section_num: usize,
     section_count: usize,
     waiting: bool,
+    streaming_status: Option<&str>,
     width: u16,
 ) -> Line<'static> {
     // Account for "│ " + " │" side borders (4 chars).
     let inner_width = (width as usize).saturating_sub(4);
 
-    let left = if waiting {
-        format!("{title}  thinking...")
+    let status_text = if waiting {
+        Some("thinking...")
+    } else {
+        streaming_status
+    };
+
+    let left = if let Some(st) = status_text {
+        format!("{title}  {st}")
     } else {
         title.to_string()
     };
@@ -66,10 +96,10 @@ pub(super) fn header_line(
 
     let mut spans: Vec<Span<'static>> = Vec::new();
     spans.push("│ ".dim());
-    if waiting {
+    if let Some(st) = status_text {
         let title_part = format!("{title}  ");
         spans.push(title_part.cyan().bold());
-        spans.push("thinking...".dim().italic());
+        spans.push(st.to_string().dim().italic());
     } else {
         spans.push(title.to_string().cyan().bold());
     }

@@ -57,8 +57,8 @@ Explore mode answers research questions by mapping the landscape of approaches a
 
 Before searching externally, check if the user already has relevant material:
 
-1. If KB is available, call `kb_status` then `kb_list_cards`. Filter cards whose tags or titles relate to the user's question.
-2. **Read research context**: If `research-context.md` exists at the KB root (via `kb_read_file`), use it to bias discovery:
+1. If KB is available, list all cards per `$kb`. Filter cards whose tags or titles relate to the user's question.
+2. **Read research context**: If `<kb_path>/research-context.md` exists, use it to bias discovery:
    - **Priorities**: Weight ranking toward papers relevant to the user's priorities (e.g., if they care about inference latency, rank latency-focused papers higher)
    - **Not Interested In**: De-prioritize papers in areas the user has dismissed
    - **Recent journal entries**: Optionally read `research-journal.md` to check what the user has explored recently — avoid re-discovering papers from recent sessions
@@ -269,7 +269,7 @@ What should someone entering this area pay attention to?]
 - **Sparse results for a facet**: The multi-facet design ensures other angles compensate
 - **Very broad topic**: Focus on the highest-citation papers and note that the user should narrow their question for deeper coverage
 - **Very narrow topic**: Broaden facets and rely more on citation expansion (Strategy B) to find related work
-- **No KB tools**: Present the briefing in chat only
+- **No KB configured**: Present the briefing in chat only
 
 ---
 
@@ -305,8 +305,8 @@ Each subagent returns a list of discovered papers with:
 
 #### Step 1: Read KB State
 
-1. Call `kb_status` to get `kb_path` and verify KB exists.
-2. Call `kb_list_cards` to retrieve all cards.
+1. Determine `<kb_path>` per the `$kb` skill and verify KB exists.
+2. List all cards per `$kb`.
 3. Extract from cards:
    - **Paper IDs**: DOI, arXiv ID, or S2 ID from card `refs` fields
    - **Topics**: from card `tags` fields
@@ -321,7 +321,7 @@ If the user specified `topic:<topic>`:
 
 #### Step 3: Fallback to Zotero (if no KB)
 
-If `kb_status` shows no cards or KB is not configured:
+If the KB has no cards or is not configured:
 1. Call `zotero_get_recent` with `limit=50` to get recent library items
 2. Call `zotero_get_tags` to get topic tags
 3. Extract paper IDs from Zotero items (DOI field)
@@ -395,7 +395,7 @@ When merging duplicates, combine discovery sources and rationales.
 #### Step 3: Filter Already-Known Papers
 
 Remove papers that are already in the user's knowledge base:
-- Match against `kb_list_cards` source refs (DOI, arXiv ID)
+- Match against KB card source refs (DOI, arXiv ID)
 - Match against card titles (fuzzy)
 
 Optionally, if Zotero is configured:
@@ -453,14 +453,14 @@ After the ranked list, group papers by topic area with brief rationale for each 
 - **No S2 API key**: Skip Strategy 2 (recommendation engine); still run citation graph + keyword search + author tracking
 - **No `paper_recommendations` tool**: Skip Strategy 2; proceed with remaining strategies
 - **Strategy failure**: If any single strategy fails (API error, timeout), log a warning and continue with results from other strategies
-- **No KB tools**: Present the report in chat only
+- **No KB configured**: Present the report in chat only
 - **Few seed papers (< 3)**: Reduce citation graph exploration but increase trend scanner and author tracker scope
 
 ## Post-Discovery Housekeeping
 
 After presenting the discovery report, do these:
 
-**1. Journal entry** — Append to `research-journal.md` at the KB root via `kb_write_file`. Prepend (newest first):
+**1. Journal entry** — Append to `<kb_path>/research-journal.md`. Prepend (newest first):
 
 ```markdown
 ## [Date] — Discovery: [Topic/Question]
@@ -485,7 +485,9 @@ After presenting the discovery report, do these:
 
 **This section applies to the main agent only.** Subagents (e.g., citation explorer, recommendation engine, trend scanner) return their results as structured text to the main agent — they never call `present_reading_view` because the user is interacting with the main agent, not the subagent.
 
-IMPORTANT: When a discovery or explore mode report is complete, the main agent MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the report title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
+**Phase 1 (Outline):** IMMEDIATELY call `present_reading_view` with `document_id` set to a unique slug, `title` to the report title, and `content` containing ONLY the `## ` section headings with empty bodies. Example content: `"## The Landscape\n\n## Approaches\n\n## Reading Plan\n\n## Open Questions"`. This opens the reading view instantly with "Generating..." placeholders.
+
+**Phase 2 (Fill):** The tool result will tell you to fill section 0. Immediately call `update_document_section(document_id, section_index=0, content="...")` with the FULL content for that section — do not output any text, just make the tool call. Each tool result tells you the next section to fill. Continue calling `update_document_section` for each subsequent section until all are filled.
 
 When the user asks follow-up questions about a specific section, use the most efficient update tool:
 - `append_to_section` — to add new information at the end of a section (most common for follow-up questions)

@@ -28,11 +28,11 @@ For multi-topic or multi-thread analysis, launch one subagent per major thread t
 >
 > Thread ID: [HN item ID]
 > Topic context: [what the user is investigating]
-> KB path: [value from kb_status]
+> KB path: [value from $kb]
 
 ### What Subagents Return
 
-Each subagent writes the KB card directly via `kb_write_card`. After completing, the subagent returns a concise report:
+Each subagent writes the KB card directly per `$kb`. After completing, the subagent returns a concise report:
 - Card ID that was written
 - Thread title, URL, points, comment count
 - 3-5 sentence summary of the key community signal
@@ -41,7 +41,7 @@ Each subagent writes the KB card directly via `kb_write_card`. After completing,
 
 ### Main Agent Role
 
-1. Call `kb_status` to get `kb_path`
+1. Determine `<kb_path>` per the `$kb` skill
 2. Run the Discovery phase to find relevant threads
 3. Launch subagents for the top threads (in parallel when multiple)
 4. Collect subagent reports and present a unified summary to the user
@@ -51,8 +51,8 @@ Each subagent writes the KB card directly via `kb_write_card`. After completing,
 
 Before searching, check the KB for existing coverage:
 
-1. Call `kb_status` to get `kb_path`.
-2. Call `kb_search` with the topic query. Look for cards with `source_type: hackernews`.
+1. Determine `<kb_path>` per the `$kb` skill.
+2. Search cards per `$kb` with the topic query. Look for cards with `source_type: hackernews`.
 3. If a matching card exists and is recent (check `date_updated`), return it and ask the user if they want a fresh search.
 4. Otherwise, proceed to Phase 1.
 
@@ -129,7 +129,7 @@ Analyze the thread and extract these dimensions:
 
 ## Phase 3: KB Card Storage
 
-If `kb_write_card` is available, store the synthesis as a KB card.
+Store the synthesis as a KB card per `$kb`.
 
 ### Card ID Convention
 
@@ -246,17 +246,17 @@ emerging consensus, or new alternatives entering the conversation.>
 For particularly rich topics (5+ threads, complex sentiment landscape), additionally save a longer report:
 
 ```
-kb_write_file(
-  path: "community-analysis/<topic-slug>.md",
-  content: <full analysis with per-thread breakdowns>
-)
+Write to `<kb_path>/community-analysis/<topic-slug>.md`
+with the full analysis and per-thread breakdowns.
 ```
 
 This complements the card (which is a structured summary) with the full analytical narrative.
 
 ## Presentation
 
-IMPORTANT: When the synthesis is complete, you MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the synthesis title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
+**Phase 1 (Outline):** IMMEDIATELY call `present_reading_view` with `document_id` set to a unique slug, `title` to the synthesis title, and `content` containing ONLY the `## ` section headings with empty bodies. Example content: `"## Overview\n\n## Community Sentiment\n\n## Key Arguments\n\n## Practitioner Reports"`. This opens the reading view instantly with "Generating..." placeholders.
+
+**Phase 2 (Fill):** The tool result will tell you to fill section 0. Immediately call `update_document_section(document_id, section_index=0, content="...")` with the FULL content for that section — do not output any text, just make the tool call. Each tool result tells you the next section to fill. Continue calling `update_document_section` for each subsequent section until all are filled.
 
 When the user asks follow-up questions about a specific section, use the most efficient update tool:
 - `append_to_section` — to add new information at the end of a section (most common for follow-up questions)
@@ -265,7 +265,7 @@ When the user asks follow-up questions about a specific section, use the most ef
 
 ## Graceful Degradation
 
-- **No KB tools configured**: Output the full synthesis in chat; skip card storage.
+- **No KB configured**: Output the full synthesis in chat; skip card storage.
 - **No `hn_search` available**: Tell the user that Hacker News search requires the `research-hackernews` feature flag and suggest they add it to their build.
 - **No threads found**: Report "No Hacker News discussions found for this topic" and suggest alternative search terms or broader queries.
 - **Threads have few comments**: Adjust expectations in the synthesis — note that community signal is thin and findings should be treated as preliminary.

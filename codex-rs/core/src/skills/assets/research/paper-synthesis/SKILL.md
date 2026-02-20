@@ -33,19 +33,19 @@ Choose **one** path based on user input:
 > $paper-synthesizer
 >
 > Paper: [paper URL — convert arXiv abs/ to pdf/ first]
-> [If main agent has KB path from kb_status: KB path: [value]]
+> [If main agent has KB path: KB path: [value]]
 > [For Zotero papers: item key, PDF path, and any notes already retrieved]
 > [If research-context.md exists: User priorities: … Emphasize: … User project: …]
 
 ### Single-Paper Path
-1. Call `kb_status` and `kb_search` in parallel (if KB tools available). Optionally read `research-context.md` via `kb_read_file`.
-2. If a card with a Deep Dive exists → `kb_read_card` → `present_reading_view` → done.
+1. Check KB status and search for existing cards per `$kb` (if KB path is available). Optionally read `<kb_path>/research-context.md`.
+2. If a card with a Deep Dive exists → read it per `$kb` → `present_reading_view` → done.
 3. Resolve identifier via Pre-Synthesis.
 4. Spawn one subagent via `spawn_agent`. Then call `wait` for the subagent to complete.
 5. Present the result (see Presentation below).
 
 ### Multi-Paper Path
-1. Call `kb_status` and `kb_search` for each paper in parallel. Optionally read `research-context.md`.
+1. Check KB status and search for existing cards per `$kb` for each paper in parallel. Optionally read `research-context.md`.
 2. Skip papers that already have cards. Resolve identifiers for missing papers.
 3. Spawn one subagent per missing paper, in parallel.
 4. Collect card IDs. Tell the user which cards were written.
@@ -53,7 +53,7 @@ Choose **one** path based on user input:
 
 ## Post-Synthesis
 
-**Journal.** After card is written and reading view presented, append to `research-journal.md` via `kb_write_file`:
+**Journal.** After card is written and reading view presented, append to `<kb_path>/research-journal.md`:
 
 ```markdown
 ## [Date] — Synthesized: [Paper Title]
@@ -69,17 +69,19 @@ Choose **one** path based on user input:
 The subagent returns raw extracted information from the paper. You decide how to present it based on what the user asked and the nature of the content.
 
 **Choose the format:**
-- **Full synthesis / deep dive / explain** → use `present_reading_view`
+- **Full synthesis / deep dive / explain** → use `present_reading_view` (two-phase, below)
 - **Quick question** ("what's the main idea?", "how does X work?") → answer directly in chat
 - **Brief summary** → chat for short responses, reading view for longer ones
 
-**When using `present_reading_view`:** organize the content into clear `##` sections so the user can navigate. Use your judgment on what sections make sense for this paper — how technical to be, whether to include equations or intuitive explanations, whether to use code examples, how to structure the narrative. Break content into small, focused sections rather than one long block.
+**Phase 1 (Outline):** IMMEDIATELY call `present_reading_view` with `document_id` set to a unique slug, `title` to the report title, and `content` containing ONLY the `## ` section headings with empty bodies. Example content: `"## Introduction\n\n## Core Method\n\n## Experiments\n\n## Discussion"`. This opens the reading view instantly with "Generating..." placeholders.
+
+**Phase 2 (Fill):** The tool result will tell you to fill section 0. Immediately call `update_document_section(document_id, section_index=0, content="...")` with the FULL content for that section — do not output any text, just make the tool call. Each tool result tells you the next section to fill. Continue calling `update_document_section` for each subsequent section until all are filled.
 
 For follow-up questions, use `append_to_section`, `patch_document_section`, or `update_document_section`.
 
 ## Graceful Degradation
 
-- **No KB tools**: Skip `kb_status`/`kb_search`. Spawn the subagent directly and present the result.
+- **No KB configured**: Skip KB checks. Spawn the subagent directly and present the result.
 - **No `paper_get`**: Rely on `attach_url_files`; extract metadata from paper text.
 - **PDF download fails**: Synthesize from abstract and user context. Note the limitation.
 - **User provides only a title**: Search with available tools. If not found, ask for a URL or arXiv ID.

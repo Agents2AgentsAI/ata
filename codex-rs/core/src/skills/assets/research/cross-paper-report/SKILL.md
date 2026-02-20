@@ -55,7 +55,7 @@ Before diving into full technical detail, each card explanation should establish
 
 ## Prerequisites
 
-Call `kb_status` first. The response includes `kb_path` — use that value wherever this document says `<kb_path>`.
+Determine `<kb_path>` per the `$kb` skill (default `~/.ata/knowledge-base` unless configured otherwise).
 
 ## Scale Detection
 
@@ -68,7 +68,7 @@ After reading all requested cards, check the count:
 
 After reading the requested cards but before writing explanations, check whether the KB contains other cards that are topically relevant and would strengthen the report.
 
-1. Call `kb_list_cards` to see all available cards.
+1. List all cards per `$kb` to see all available cards.
 2. For each requested card, scan its `tags`, `connections`, and the topics mentioned in its body. Identify other KB cards that share tags, are cited in connections, or address closely related methods.
 3. If relevant unrequested cards exist, present them to the user:
    > "Your KB also has cards for [list] which are related to this topic. Want me to include any of them? Adding them would strengthen the comparison by covering [specific dimension, e.g., 'alternative action representations' or 'data augmentation methods']."
@@ -80,7 +80,7 @@ This step prevents narrow reports that miss important context available in the K
 
 ## Phase 1: Deep Technical Explanation of Each Card
 
-Read all requested cards via `kb_read_card` (or `kb_list_cards` + `kb_read_card` when the user says "all" or refers to a broad set).
+Read all requested cards per `$kb` (or list + read all cards when the user says "all" or refers to a broad set).
 
 ### Coverage-First Principle
 
@@ -150,7 +150,7 @@ Supporting cards do NOT need: full stage-by-stage walkthroughs, Details blocks, 
 
 ## Phase 2: Cross-Card Comparative Synthesis
 
-**Research context awareness:** Before writing the comparison, read `research-context.md` from the KB root via `kb_read_file` (if it exists). If the user has documented priorities (e.g., "inference latency matters most"), frame comparative dimensions around those priorities — lead with the dimensions the user cares about, de-emphasize dimensions they've marked as unimportant.
+**Research context awareness:** Before writing the comparison, read `<kb_path>/research-context.md` (if it exists). If the user has documented priorities (e.g., "inference latency matters most"), frame comparative dimensions around those priorities — lead with the dimensions the user cares about, de-emphasize dimensions they've marked as unimportant.
 
 Produce this phase when 2 or more cards are involved. Skip for single-card requests.
 
@@ -176,7 +176,7 @@ Use specifics throughout. Every comparison claim should cite a concrete detail f
 
 Before finalizing, verify depth mechanically:
 
-1. **Per-card word count.** For each card's section in the explanation, estimate word count. Focal cards must be at least 800 words; supporting cards must be at least 400 words. If ANY card section is below its tier's floor, STOP and expand it. Re-read the relevant KB card via `kb_read_card` and deepen the shallow section.
+1. **Per-card word count.** For each card's section in the explanation, estimate word count. Focal cards must be at least 800 words; supporting cards must be at least 400 words. If ANY card section is below its tier's floor, STOP and expand it. Re-read the relevant KB card per `$kb` and deepen the shallow section.
 2. **Equation intuitions.** Check that every equation has a full-paragraph intuition (3–5 sentences explaining why it works and what happens at boundary conditions), not a one-liner like "continuous motion is snapped to a symbol."
 3. **Stage walkthrough depth.** Check that every stage in a stage-by-stage walkthrough has 2–3 full paragraphs — not a single sentence. A one-sentence stage description violates the depth contract.
 4. **Comparison specificity.** Check that the cross-card comparison has at least one full paragraph per dimension with concrete numbers and implementation details traced from individual cards — not generic claims like "X is bigger than Y."
@@ -187,7 +187,9 @@ If depth is insufficient at any checkpoint, expand before finalizing.
 
 **This section applies to the main agent only.** Cluster subagents in the Large-Set workflow return their content as text to the main agent — they never call `present_reading_view` because the user is interacting with the main agent.
 
-IMPORTANT: When the deep narrative explanation is complete, the main agent MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the report title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
+**Phase 1 (Outline):** IMMEDIATELY call `present_reading_view` with `document_id` set to a unique slug, `title` to the report title, and `content` containing ONLY the `## ` section headings with empty bodies. Example content: `"## Introduction\n\n## Core Method\n\n## Experiments\n\n## Discussion"`. This opens the reading view instantly with "Generating..." placeholders.
+
+**Phase 2 (Fill):** The tool result will tell you to fill section 0. Immediately call `update_document_section(document_id, section_index=0, content="...")` with the FULL content for that section — do not output any text, just make the tool call. Each tool result tells you the next section to fill. Continue calling `update_document_section` for each subsequent section until all are filled.
 
 When the user asks follow-up questions about a specific section, use the most efficient update tool:
 - `append_to_section` — to add new information at the end of a section (most common for follow-up questions)
@@ -198,7 +200,7 @@ When the user asks follow-up questions about a specific section, use the most ef
 
 After the report is complete (both reading view + PDF delivered), do these:
 
-**1. Journal entry** — Append to `research-journal.md` at the KB root via `kb_write_file`. Prepend (newest first):
+**1. Journal entry** — Append to `<kb_path>/research-journal.md`. Prepend (newest first):
 
 ```markdown
 ## [Date] — Cross-Paper Report: [Topic/Title]
@@ -277,7 +279,7 @@ Launch **one subagent per cluster**, all in parallel. Each subagent runs the ful
 > Invoke the `cross-paper-report` skill for cards `[card-id-1]`, `[card-id-2]`, ..., `[card-id-N]`. The KB path is `[kb_path]`. This is a cluster sub-report titled "[Cluster Name]".
 >
 > Follow the skill's standard workflow (Phases 1–2) with these overrides:
-> - **Skip Phase 0** (Related Card Discovery) — you work only on the assigned cards. Do NOT call `kb_list_cards` to discover additional cards.
+> - **Skip Phase 0** (Related Card Discovery) — you work only on the assigned cards. Do NOT list cards to discover additional ones.
 > - **Skip the Presentation section** — do NOT call `present_reading_view`. The user is on the main agent, not on you. Return your content as text to the main agent.
 > - **All cards are focal** — no tiered depth. Every card gets the full 800–2500 word treatment.
 > - **No user confirmation** — do not present tier assignments or card additions for approval. Execute autonomously.

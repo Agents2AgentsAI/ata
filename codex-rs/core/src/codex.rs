@@ -141,7 +141,6 @@ pub enum SteerInputError {
     InvalidFileInput(String),
 }
 use crate::data::SharedDataToolkit;
-use crate::kb::SharedKbToolkit;
 
 mod file_attachments;
 
@@ -313,7 +312,6 @@ impl Codex {
         dynamic_tools: Vec<DynamicToolSpec>,
         research_toolkit: Option<Arc<SharedResearchToolkit>>,
         data_toolkit: Option<Arc<SharedDataToolkit>>,
-        kb_toolkit: Option<Arc<SharedKbToolkit>>,
         persist_extended_history: bool,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -452,7 +450,6 @@ impl Codex {
             agent_control,
             research_toolkit,
             data_toolkit,
-            kb_toolkit,
         )
         .instrument(session_init_span)
         .await
@@ -1044,7 +1041,6 @@ impl Session {
         agent_control: AgentControl,
         research_toolkit: Option<Arc<SharedResearchToolkit>>,
         data_toolkit: Option<Arc<SharedDataToolkit>>,
-        kb_toolkit: Option<Arc<SharedKbToolkit>>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -1348,7 +1344,6 @@ impl Session {
             models_manager: Arc::clone(&models_manager),
             research_toolkit,
             data_toolkit,
-            kb_toolkit,
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             file_watcher,
@@ -5384,7 +5379,6 @@ async fn built_tools(
         turn_context.dynamic_tools.as_slice(),
         sess.services.research_toolkit.as_ref(),
         sess.services.data_toolkit.as_ref(),
-        sess.services.kb_toolkit.as_ref(),
     )))
 }
 
@@ -7686,7 +7680,6 @@ mod tests {
             models_manager: Arc::clone(&models_manager),
             research_toolkit: None,
             data_toolkit: None,
-            kb_toolkit: None,
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             file_watcher,
@@ -7842,7 +7835,6 @@ mod tests {
             models_manager: Arc::clone(&models_manager),
             research_toolkit: None,
             data_toolkit: None,
-            kb_toolkit: None,
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             file_watcher,

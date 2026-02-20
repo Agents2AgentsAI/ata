@@ -11,7 +11,7 @@ Convert an existing cross-paper-report narrative into a professionally formatted
 
 ## Prerequisites
 
-Call `kb_status` first. The response includes `kb_path` — use that value wherever this document says `<kb_path>`.
+Determine `<kb_path>` per the `$kb` skill (default `~/.ata/knowledge-base` unless configured otherwise).
 
 A deep narrative explanation must already exist (produced by `$cross-paper-report`). If no narrative exists yet, tell the user to run `$cross-paper-report` first.
 

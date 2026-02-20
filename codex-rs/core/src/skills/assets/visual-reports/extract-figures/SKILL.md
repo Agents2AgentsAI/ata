@@ -13,7 +13,7 @@ Extract high-quality figures from research paper PDFs and store them in KB cards
 
 - `pdf_extract_figures` tool must be available.
 - A PDF must have been fetched (via `attach_url_files` or a local path).
-- Call `kb_status` first to get `kb_path`.
+- Determine `<kb_path>` per the `$kb` skill.
 
 ## Extraction Workflow
 
@@ -34,11 +34,11 @@ Extract high-quality figures from research paper PDFs and store them in KB cards
 
 4. **Move only the selected figures** into the KB assets directory: `mkdir -p <kb_path>/assets/<card-id>/ && cp <selected-figure-paths> <kb_path>/assets/<card-id>/`. Then delete the temp directory (`rm -rf /tmp/pdf-figures-<card-id>/`).
 
-5. Pass the selected figures to `kb_write_card` via the `figures` field, using their new paths under `assets/<card-id>/`, with a short `caption` for each and the `page` number.
+5. Update the card per `$kb` with the `figures` field, using their new paths under `assets/<card-id>/`, with a short `caption` for each and the `page` number.
 
 ## Graceful Degradation
 
 - **No `pdf_extract_figures` available**: Report that figure extraction requires the `pdf_extract_figures` tool.
 - **PDF not available**: Cannot extract figures without a PDF source. Ask the user for a PDF URL or path.
 - **No figures extracted**: Some papers have no extractable figures (text-heavy, or figures are embedded in unusual formats). Report this and move on.
-- **No KB tools configured**: Output figure paths and captions directly in chat instead of storing in KB.
+- **No KB configured**: Output figure paths and captions directly in chat instead of storing in KB.
