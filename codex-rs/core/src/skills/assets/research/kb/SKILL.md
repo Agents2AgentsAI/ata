@@ -13,7 +13,7 @@ The knowledge base is a directory of markdown files with YAML frontmatter, organ
 
 ## KB Path
 
-The KB directory defaults to `~/.ata/knowledge-base`. If the user has configured a custom path via `kb.kb_path` in their config.toml, use that instead. When another skill passes you a KB path, use that value.
+The KB directory is `~/.ata/knowledge-base`. Use this path directly — do not read config.toml to determine it.
 
 Resolve `~` to the user's home directory. The KB path is referred to as `<kb_path>` throughout this document.
 

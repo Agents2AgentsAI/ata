@@ -192,9 +192,15 @@ pub static PRESENT_DOCUMENT_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
                        navigate and ask follow-up questions about. Use this instead of inline \
                        text whenever your response is a structured explanation with multiple \
                        sections — paper walkthroughs, deep dives, research briefings, organized \
-                       reports, or any long-form content (roughly 500+ words) with ## headings. \
+                       reports, or any multi-section content with ## headings. \
+                       FOLLOW-UPS: When a reading view was previously presented and the user \
+                       asks ANY follow-up about the same topic (re-explain, simplify, go deeper, \
+                       different angle, etc.), ALWAYS use the reading view tools — either \
+                       update/append to the existing document or present a fresh one. Never \
+                       fall back to plain text for follow-ups on a topic that has a reading view. \
                        Do NOT use this for short answers, confirmations, or conversational \
-                       replies. IMPORTANT: Never mention 'KB', 'knowledge base', 'card', or \
+                       replies unrelated to an active document. \
+                       IMPORTANT: Never mention 'KB', 'knowledge base', 'card', or \
                        'card ID' in the title or content — the user cares about the subject \
                        matter, not internal storage. Use the paper/topic name as the title \
                        (e.g. 'Cosmos Policy Walkthrough', not 'KB Walkthrough: paper-cosmos-policy'). \
@@ -453,10 +459,14 @@ impl ToolHandler for DocumentReaderHandler {
                     )
                 } else {
                     "Document displayed in reading mode. The user can now navigate sections \
-                     and ask follow-up questions. When the user asks about a section, use \
-                     `append_to_section` to add your answer below the existing content (preferred). \
-                     Use `update_document_section` only if the user asks you to rewrite a section. \
-                     Do NOT output plain text responses \u{2014} only tool calls are visible to the user."
+                     and ask follow-up questions. For ANY follow-up about this topic \u{2014} \
+                     whether about a specific section or a broad request like 'explain more \
+                     intuitively' or 'simplify this' \u{2014} use the reading view tools: \
+                     `append_to_section` to add below existing content (preferred for additions), \
+                     `update_document_section` to rewrite a section (for re-explanations or \
+                     different angles), or `present_reading_view` with a new document_id for a \
+                     completely fresh take. Do NOT output plain text responses \u{2014} always \
+                     use reading view tools for follow-ups on this topic."
                         .to_string()
                 }
             }

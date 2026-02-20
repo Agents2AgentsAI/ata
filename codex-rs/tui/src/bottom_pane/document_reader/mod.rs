@@ -46,11 +46,17 @@ struct DocumentSection {
     /// Set to `true` when this section was just updated via `update_document_section`.
     /// Cleared when the user navigates away. Used to highlight changes.
     recently_updated: bool,
-    /// The rendered-line index from which changes start.  `Some(0)` means the
-    /// entire body was replaced; `Some(n)` means lines `n..` are new/changed.
-    /// `None` means no per-line change tracking (all lines use the section-wide
-    /// `recently_updated` flag for the heading indicator only).
+    /// The raw-content line index from which changes start.  `Some(0)` means
+    /// the entire body was replaced; `Some(n)` means lines `n..` are
+    /// new/changed.  `None` means no per-line change tracking (all lines use
+    /// the section-wide `recently_updated` flag for the heading indicator
+    /// only).
     changed_from_line: Option<usize>,
+    /// Exclusive upper bound of the changed region (raw-content line index).
+    /// `None` means "to the end of the section" (used for appends and full
+    /// replacements).  `Some(n)` means only lines in `[changed_from_line, n)`
+    /// are highlighted.
+    changed_to_line: Option<usize>,
 }
 
 impl DocumentSection {
@@ -255,6 +261,7 @@ impl DocumentReaderView {
             if !is_streaming_fill {
                 section.recently_updated = true;
                 section.changed_from_line = Some(0);
+                section.changed_to_line = None;
             }
             section.invalidate_cache();
             self.resolve_pending(section_index);
@@ -284,6 +291,7 @@ impl DocumentReaderView {
             section.content.push_str(&content);
             section.recently_updated = true;
             section.changed_from_line = Some(existing_line_count);
+            section.changed_to_line = None; // appended content runs to the end
             section.invalidate_cache();
             self.resolve_pending(section_index);
 
@@ -301,10 +309,40 @@ impl DocumentReaderView {
     pub(crate) fn patch_section(&mut self, section_index: usize, old_text: &str, new_text: &str) {
         if let Some(section) = self.sections.get_mut(section_index) {
             if let Some(byte_offset) = section.content.find(old_text) {
-                let line_before = section.content[..byte_offset].matches('\n').count();
+                let lines_before_match = section.content[..byte_offset].matches('\n').count();
+
+                // Compare old and new text line-by-line to narrow the
+                // highlighted region to only the lines that actually differ.
+                let old_lines: Vec<&str> = old_text.lines().collect();
+                let new_lines: Vec<&str> = new_text.lines().collect();
+                let common_prefix = old_lines
+                    .iter()
+                    .zip(new_lines.iter())
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                let max_suffix = old_lines
+                    .len()
+                    .saturating_sub(common_prefix)
+                    .min(new_lines.len().saturating_sub(common_prefix));
+                let common_suffix = old_lines
+                    .iter()
+                    .rev()
+                    .zip(new_lines.iter().rev())
+                    .take(max_suffix)
+                    .take_while(|(a, b)| a == b)
+                    .count();
+
+                let changed_from = lines_before_match + common_prefix;
+                let changed_to = lines_before_match + new_lines.len() - common_suffix;
+
                 section.content = section.content.replacen(old_text, new_text, 1);
                 section.recently_updated = true;
-                section.changed_from_line = Some(line_before);
+                section.changed_from_line = Some(changed_from);
+                section.changed_to_line = if changed_to < section.content.lines().count() {
+                    Some(changed_to)
+                } else {
+                    None // runs to end
+                };
                 section.invalidate_cache();
             }
             self.resolve_pending(section_index);
@@ -363,6 +401,7 @@ impl DocumentReaderView {
         {
             section.recently_updated = false;
             section.changed_from_line = None;
+            section.changed_to_line = None;
             section.invalidate_cache();
         }
     }
@@ -1144,11 +1183,33 @@ impl Renderable for DocumentReaderView {
     fn desired_height(&self, width: u16) -> u16 {
         // Content lines inside the card (accounting for 2-char padding each side).
         let inner_width = width.saturating_sub(4);
-        let section_lines = self
-            .sections
-            .get(self.current_section)
-            .map(|s| s.rendered_lines(inner_width).len() as u16)
-            .unwrap_or(1);
+
+        // When the current section is streaming-empty, the render path uses
+        // `render_section_loading` (3 lines: heading + blank + indicator)
+        // instead of `rendered_lines` (2 lines: heading + blank).  Use the
+        // same line count here so the card requests enough vertical space
+        // for the loading indicator to be visible.
+        let is_streaming_empty = self
+            .streaming_sections
+            .as_ref()
+            .is_some_and(|set| set.contains(&self.current_section))
+            && self
+                .sections
+                .get(self.current_section)
+                .is_some_and(|s| s.content.trim().is_empty());
+
+        let section_lines = if is_streaming_empty {
+            let heading = self
+                .sections
+                .get(self.current_section)
+                .map_or("", |s| s.heading.as_str());
+            render::render_section_loading(heading, false).len() as u16
+        } else {
+            self.sections
+                .get(self.current_section)
+                .map(|s| s.rendered_lines(inner_width).len() as u16)
+                .unwrap_or(1)
+        };
 
         let extra_rows = match self.focus {
             ReaderFocus::Composer => 1 + self.input_height(inner_width), // separator + input
@@ -1282,18 +1343,41 @@ impl Renderable for DocumentReaderView {
                     && section.content.trim().is_empty();
 
                 let mut raw_lines = if is_streaming_empty {
-                    render::render_section_loading(&section.heading)
+                    render::render_section_loading(&section.heading, self.animations_enabled)
                 } else {
                     section.rendered_lines(inner_width)
                 };
 
-                // Compute the rendered-line index from which changes begin.
-                // The heading adds ~2 rendered lines (heading text + blank).
+                // Compute the rendered-line range that should get green
+                // borders.  We render the unchanged prefix/suffix of the raw
+                // content separately to get an accurate rendered-line count
+                // (markdown word-wrapping can change line counts).
                 let heading_rendered_lines: usize = if section.heading.is_empty() { 0 } else { 2 };
                 let changed_from_rendered: Option<usize> = if section.recently_updated {
-                    section
-                        .changed_from_line
-                        .map(|content_line| heading_rendered_lines + content_line)
+                    section.changed_from_line.map(|content_line| {
+                        let prefix: String = section
+                            .content
+                            .lines()
+                            .take(content_line)
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        heading_rendered_lines
+                            + render::rendered_body_line_count(&prefix, inner_width)
+                    })
+                } else {
+                    None
+                };
+                let changed_to_rendered: Option<usize> = if section.recently_updated {
+                    section.changed_to_line.map(|content_line| {
+                        let prefix: String = section
+                            .content
+                            .lines()
+                            .take(content_line)
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        heading_rendered_lines
+                            + render::rendered_body_line_count(&prefix, inner_width)
+                    })
                 } else {
                     None
                 };
@@ -1353,7 +1437,8 @@ impl Renderable for DocumentReaderView {
                         break;
                     }
                     let abs_line = offset as usize + i;
-                    let is_changed = changed_from_rendered.is_some_and(|from| abs_line >= from);
+                    let is_changed = changed_from_rendered.is_some_and(|from| abs_line >= from)
+                        && changed_to_rendered.is_none_or(|to| abs_line < to);
 
                     // Apply char-level selection highlight when inside the
                     // visual selection range, then wrap in side borders.
@@ -1435,7 +1520,7 @@ impl Renderable for DocumentReaderView {
             .is_some_and(|set| !set.is_empty())
         {
             self.frame_requester
-                .schedule_frame_in(Duration::from_millis(500));
+                .schedule_frame_in(Duration::from_millis(100));
         }
 
         // === Render bottom-up from bottom_y ===
@@ -1655,6 +1740,7 @@ fn parse_sections(_title: &str, content: &str) -> Vec<DocumentSection> {
                 rendered: RefCell::new(None),
                 recently_updated: false,
                 changed_from_line: None,
+                changed_to_line: None,
             });
             current_heading = heading_text.trim().to_string();
             current_content = String::new();
@@ -1673,6 +1759,7 @@ fn parse_sections(_title: &str, content: &str) -> Vec<DocumentSection> {
         rendered: RefCell::new(None),
         recently_updated: false,
         changed_from_line: None,
+        changed_to_line: None,
     });
 
     // Drop the empty preamble section when the document starts with `## `.
@@ -1802,6 +1889,56 @@ mod tests {
     // -----------------------------------------------------------------------
     // Rendering tests
     // -----------------------------------------------------------------------
+
+    #[test]
+    fn streaming_outline_shows_generating_indicator() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        // Outline-only content: all sections have headings but no body.
+        let outline = "## Overview\n\n## Methodology\n\n## Results";
+        let view = DocumentReaderView::new(
+            "test-streaming".to_string(),
+            "Streaming Test".to_string(),
+            outline.to_string(),
+            tx,
+            false, // animations_enabled = false so we get static text
+            crate::tui::FrameRequester::test_dummy(),
+        );
+        // streaming_sections should be active.
+        assert!(
+            view.streaming_sections.is_some(),
+            "streaming should be detected for outline-only content"
+        );
+        let area = Rect::new(0, 0, 60, 15);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        let snap = snapshot_buffer(&buf);
+        eprintln!("--- streaming outline snapshot ---\n{snap}\n---");
+        assert!(
+            snap.contains("Generating"),
+            "loading indicator should show for unfilled streaming section"
+        );
+        assert!(
+            !snap.contains("scroll for more"),
+            "scroll indicator should NOT show for streaming-empty section"
+        );
+    }
+
+    #[test]
+    fn citation_annotations_are_stripped() {
+        let input = "Some text \u{e200}cite\u{e202}turn2view0\u{e201} more text";
+        let result = render::strip_citation_annotations(input);
+        assert_eq!(result, "Some text more text");
+
+        // Multiple citations.
+        let input2 = "A \u{e200}cite\u{e202}turn0view0\u{e202}turn2view0\u{e201} B \u{e200}cite\u{e202}turn2view1\u{e201} C";
+        let result2 = render::strip_citation_annotations(input2);
+        assert_eq!(result2, "A B C");
+
+        // No citations — passthrough.
+        let plain = "No citations here";
+        assert_eq!(render::strip_citation_annotations(plain), plain);
+    }
 
     #[test]
     fn initial_render_shows_title_and_first_section() {
