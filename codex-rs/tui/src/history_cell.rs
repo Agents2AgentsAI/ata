@@ -2500,6 +2500,8 @@ mod tests {
             status: codex_core::protocol::AgentStatus::Errored(
                 "collab manager unavailable".to_string(),
             ),
+            new_agent_nickname: None,
+            new_agent_role: None,
         });
         let rendered = render_transcript(&cell).join("\n");
         insta::assert_snapshot!(rendered);

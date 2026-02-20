@@ -53,6 +53,7 @@ use core_test_support::wait_for_event;
 use dunce::canonicalize as normalize_path;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
+use regex_lite::escape as regex_escape;
 use serde_json::json;
 use std::io::Write;
 use std::sync::Arc;
@@ -62,7 +63,6 @@ use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::body_string_contains;
-use wiremock::matchers::header;
 use wiremock::matchers::header_regex;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
@@ -159,6 +159,32 @@ fn write_auth_json(
     .unwrap();
 
     fake_jwt
+}
+
+#[expect(clippy::panic)]
+fn resolve_existing_env_var_for_api_key() -> (String, String) {
+    for key in [
+        "OPENAI_API_KEY",
+        "USERNAME",
+        "USER",
+        "LOGNAME",
+        "HOME",
+        "PATH",
+        "TEMP",
+        "TMP",
+    ] {
+        if let Ok(value) = std::env::var(key)
+            && !value.trim().is_empty()
+        {
+            return (key.to_string(), value);
+        }
+    }
+
+    if let Some((key, value)) = std::env::vars().find(|(_, value)| !value.trim().is_empty()) {
+        return (key, value);
+    }
+
+    panic!("expected at least one non-empty environment variable");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -583,6 +609,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         codex_home.path().to_path_buf(),
         auth_manager,
         SessionSource::Exec,
+        config.model_catalog.clone(),
     );
     let NewThread { thread: codex, .. } = thread_manager
         .start_thread(config)
@@ -1861,9 +1888,9 @@ async fn incomplete_response_emits_content_filter_error_message() -> anyhow::Res
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn azure_overrides_assign_properties_used_for_responses_url() {
     skip_if_no_network!();
-    let existing_env_var_with_random_value = if cfg!(windows) { "USERNAME" } else { "USER" };
-    let expected_auth_token = std::env::var(existing_env_var_with_random_value).unwrap();
-    let expected_auth_header = format!("Bearer {expected_auth_token}");
+    let (existing_env_var_with_random_value, existing_env_var_value) =
+        resolve_existing_env_var_for_api_key();
+    let expected_auth_header = format!(r"^Bearer {}$", regex_escape(&existing_env_var_value));
 
     // Mock server
     let server = MockServer::start().await;
@@ -1880,8 +1907,8 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
     Mock::given(method("POST"))
         .and(path("/openai/responses"))
         .and(query_param("api-version", "2025-04-01-preview"))
-        .and(header("Custom-Header", "Value"))
-        .and(header("Authorization", expected_auth_header))
+        .and(header_regex("Custom-Header", "Value"))
+        .and(header_regex("Authorization", expected_auth_header.as_str()))
         .respond_with(first)
         .expect(1)
         .mount(&server)
@@ -1891,7 +1918,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         name: "custom".to_string(),
         base_url: Some(format!("{}/openai", server.uri())),
         // Reuse the existing environment variable to avoid using unsafe code
-        env_key: Some(existing_env_var_with_random_value.to_string()),
+        env_key: Some(existing_env_var_with_random_value),
         experimental_bearer_token: None,
         query_params: Some(std::collections::HashMap::from([(
             "api-version".to_string(),
@@ -1940,9 +1967,9 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn env_var_overrides_loaded_auth() {
     skip_if_no_network!();
-    let existing_env_var_with_random_value = if cfg!(windows) { "USERNAME" } else { "USER" };
-    let expected_auth_token = std::env::var(existing_env_var_with_random_value).unwrap();
-    let expected_auth_header = format!("Bearer {expected_auth_token}");
+    let (existing_env_var_with_random_value, existing_env_var_value) =
+        resolve_existing_env_var_for_api_key();
+    let expected_auth_header = format!(r"^Bearer {}$", regex_escape(&existing_env_var_value));
 
     // Mock server
     let server = MockServer::start().await;
@@ -1959,8 +1986,8 @@ async fn env_var_overrides_loaded_auth() {
     Mock::given(method("POST"))
         .and(path("/openai/responses"))
         .and(query_param("api-version", "2025-04-01-preview"))
-        .and(header("Custom-Header", "Value"))
-        .and(header("Authorization", expected_auth_header))
+        .and(header_regex("Custom-Header", "Value"))
+        .and(header_regex("Authorization", expected_auth_header.as_str()))
         .respond_with(first)
         .expect(1)
         .mount(&server)
@@ -1970,7 +1997,7 @@ async fn env_var_overrides_loaded_auth() {
         name: "custom".to_string(),
         base_url: Some(format!("{}/openai", server.uri())),
         // Reuse the existing environment variable to avoid using unsafe code
-        env_key: Some(existing_env_var_with_random_value.to_string()),
+        env_key: Some(existing_env_var_with_random_value),
         query_params: Some(std::collections::HashMap::from([(
             "api-version".to_string(),
             "2025-04-01-preview".to_string(),

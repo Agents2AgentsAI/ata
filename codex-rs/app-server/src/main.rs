@@ -8,7 +8,6 @@ use std::path::PathBuf;
 
 // Debug-only test hook: lets integration tests point the server at a temporary
 // managed config file without writing to /etc.
-#[cfg(debug_assertions)]
 const MANAGED_CONFIG_PATH_ENV_VAR: &str = "CODEX_APP_SERVER_MANAGED_CONFIG_PATH";
 
 #[derive(Debug, Parser)]
@@ -24,6 +23,9 @@ struct AppServerArgs {
 }
 
 fn main() -> anyhow::Result<()> {
+    if codex_core::maybe_run_zsh_exec_wrapper_mode()? {
+        return Ok(());
+    }
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
         let args = AppServerArgs::parse();
         let managed_config_path = managed_config_path_from_debug_env();

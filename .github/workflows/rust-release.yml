@@ -59,7 +59,7 @@ jobs:
     env:
       CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
       # TODO: Re-enable once Apple signing is configured.
-      HAS_APPLE_SIGNING: 'false'
+      HAS_APPLE_SIGNING: "false"
       # HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
 
     strategy:

@@ -14,6 +14,7 @@ use crate::skills::model::SkillPolicy;
 use crate::skills::model::SkillToolDependency;
 use crate::skills::permissions::SkillManifestPermissions;
 use crate::skills::permissions::compile_permission_profile;
+use crate::skills::system::research_cache_root_dir;
 use crate::skills::system::system_cache_root_dir;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::protocol::SkillScope;
@@ -219,6 +220,15 @@ fn skill_roots_from_layer_stack_inner(
                 // special case (not a config layer).
                 roots.push(SkillRoot {
                     path: system_cache_root_dir(config_folder.as_path()),
+                    scope: SkillScope::System,
+                });
+
+                // Research skills are cached under `$CODEX_HOME/skills/.system-research`.
+                // The directory only exists when the binary was compiled with the
+                // `research` feature; otherwise `discover_skills_under_root` returns
+                // immediately because the path doesn't exist on disk.
+                roots.push(SkillRoot {
+                    path: research_cache_root_dir(config_folder.as_path()),
                     scope: SkillScope::System,
                 });
             }
@@ -925,6 +935,10 @@ mod tests {
                     SkillScope::System,
                     user_folder.join("skills").join(".system")
                 ),
+                (
+                    SkillScope::System,
+                    user_folder.join("skills").join(".system-research")
+                ),
                 (SkillScope::Admin, system_folder.join("skills")),
             ]
         );
@@ -983,6 +997,10 @@ mod tests {
                 (
                     SkillScope::System,
                     user_folder.join("skills").join(".system")
+                ),
+                (
+                    SkillScope::System,
+                    user_folder.join("skills").join(".system-research")
                 ),
             ]
         );
@@ -1372,6 +1390,7 @@ permissions:
                     }
                 ),
                 network: None,
+                allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
                 macos_seatbelt_profile_extensions,
@@ -1408,6 +1427,7 @@ permissions: {}
                 crate::protocol::SandboxPolicy::new_read_only_policy(),
             ),
             network: None,
+            allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
             macos_seatbelt_profile_extensions: Some(
@@ -1421,6 +1441,7 @@ permissions: {}
                 crate::protocol::SandboxPolicy::new_read_only_policy(),
             ),
             network: None,
+            allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
             macos_seatbelt_profile_extensions: None,
@@ -1515,6 +1536,7 @@ permissions:
                     crate::protocol::SandboxPolicy::new_read_only_policy(),
                 ),
                 network: None,
+                allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
                 macos_seatbelt_profile_extensions: None,
@@ -2583,7 +2605,7 @@ permissions:
             .into_iter()
             .map(|root| root.scope)
             .collect();
-        let mut expected = vec![SkillScope::User, SkillScope::System];
+        let mut expected = vec![SkillScope::User, SkillScope::System, SkillScope::System];
         if home_dir().is_some() {
             expected.insert(1, SkillScope::User);
         }
