@@ -11,6 +11,9 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use serde_json::Value;
 
+const TEST_PDF_URL: &str =
+    "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf";
+
 fn request_contains_url_file(body: &Value) -> bool {
     body.get("input")
         .and_then(Value::as_array)
@@ -35,7 +38,7 @@ async fn file_related_invalid_request_drops_url_attachments_and_retries() -> Res
     let call_id = "attach-1";
     let args = serde_json::json!({
         "files": [
-            {"url": "https://example.com/doc.pdf"}
+            {"url": TEST_PDF_URL}
         ],
     });
     let arguments = serde_json::to_string(&args)?;
@@ -99,7 +102,7 @@ async fn non_file_invalid_request_does_not_retry_or_drop_url_attachments() -> Re
     let call_id = "attach-2";
     let args = serde_json::json!({
         "files": [
-            {"url": "https://example.com/doc.pdf"}
+            {"url": TEST_PDF_URL}
         ],
     });
     let arguments = serde_json::to_string(&args)?;
@@ -155,7 +158,7 @@ async fn context_window_exceeded_drops_url_attachments_only_once_per_turn() -> R
 
     let args = serde_json::json!({
         "files": [
-            {"url": "https://example.com/doc.pdf"}
+            {"url": TEST_PDF_URL}
         ],
     });
     let arguments = serde_json::to_string(&args)?;
@@ -249,7 +252,7 @@ async fn context_window_exceeded_then_file_related_invalid_request_still_recover
 
     let args = serde_json::json!({
         "files": [
-            {"url": "https://example.com/doc.pdf"}
+            {"url": TEST_PDF_URL}
         ],
     });
     let arguments = serde_json::to_string(&args)?;

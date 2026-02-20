@@ -62,6 +62,7 @@ use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::body_string_contains;
+use wiremock::matchers::header;
 use wiremock::matchers::header_regex;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
@@ -1861,6 +1862,8 @@ async fn incomplete_response_emits_content_filter_error_message() -> anyhow::Res
 async fn azure_overrides_assign_properties_used_for_responses_url() {
     skip_if_no_network!();
     let existing_env_var_with_random_value = if cfg!(windows) { "USERNAME" } else { "USER" };
+    let expected_auth_token = std::env::var(existing_env_var_with_random_value).unwrap();
+    let expected_auth_header = format!("Bearer {expected_auth_token}");
 
     // Mock server
     let server = MockServer::start().await;
@@ -1877,15 +1880,8 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
     Mock::given(method("POST"))
         .and(path("/openai/responses"))
         .and(query_param("api-version", "2025-04-01-preview"))
-        .and(header_regex("Custom-Header", "Value"))
-        .and(header_regex(
-            "Authorization",
-            format!(
-                "Bearer {}",
-                std::env::var(existing_env_var_with_random_value).unwrap()
-            )
-            .as_str(),
-        ))
+        .and(header("Custom-Header", "Value"))
+        .and(header("Authorization", expected_auth_header))
         .respond_with(first)
         .expect(1)
         .mount(&server)
@@ -1945,6 +1941,8 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
 async fn env_var_overrides_loaded_auth() {
     skip_if_no_network!();
     let existing_env_var_with_random_value = if cfg!(windows) { "USERNAME" } else { "USER" };
+    let expected_auth_token = std::env::var(existing_env_var_with_random_value).unwrap();
+    let expected_auth_header = format!("Bearer {expected_auth_token}");
 
     // Mock server
     let server = MockServer::start().await;
@@ -1961,15 +1959,8 @@ async fn env_var_overrides_loaded_auth() {
     Mock::given(method("POST"))
         .and(path("/openai/responses"))
         .and(query_param("api-version", "2025-04-01-preview"))
-        .and(header_regex("Custom-Header", "Value"))
-        .and(header_regex(
-            "Authorization",
-            format!(
-                "Bearer {}",
-                std::env::var(existing_env_var_with_random_value).unwrap()
-            )
-            .as_str(),
-        ))
+        .and(header("Custom-Header", "Value"))
+        .and(header("Authorization", expected_auth_header))
         .respond_with(first)
         .expect(1)
         .mount(&server)

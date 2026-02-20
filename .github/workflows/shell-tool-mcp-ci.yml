@@ -12,6 +12,10 @@ on:
       - 'shell-tool-mcp/**'
       - '.github/workflows/shell-tool-mcp-ci.yml'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
+
 env:
   NODE_VERSION: 22
 

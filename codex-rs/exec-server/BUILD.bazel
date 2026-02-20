@@ -6,6 +6,6 @@ codex_rust_crate(
     integration_deps_extra = ["//codex-rs/exec-server/tests/common:common"],
     test_tags = ["no-sandbox"],
     extra_binaries = [
-        "//codex-rs/cli:codex",
+        "//codex-rs/cli:ata",
     ],
 )
