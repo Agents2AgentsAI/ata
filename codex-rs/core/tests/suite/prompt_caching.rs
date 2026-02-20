@@ -145,7 +145,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     };
     expected_tools_names.extend([
         "update_plan",
-        "present_document",
+        "present_reading_view",
         "update_document_section",
         "append_to_section",
         "patch_document_section",
