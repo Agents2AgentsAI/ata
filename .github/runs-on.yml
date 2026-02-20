@@ -42,7 +42,7 @@ runners:
     image: ubuntu24-full-arm64
     family: ["c7g", "m7g"]
     cpu: [8, 16]
-    ram: [16, 32]
+    ram: [32, 64]
     spot: false
 
   release-windows-x64:
