@@ -2,8 +2,6 @@
 
 // This is an instance of the fork of Bash that we bundle with
 // https://www.npmjs.com/package/@a2a-ai/ata-shell-tool-mcp.
-// TODO: Update release URLs + digests below once the first ata release
-// with shell-tool-mcp artifacts is published.
 // Fetching the prebuilt version via DotSlash makes it easier to write
 // integration tests for the MCP server.
 //
@@ -17,9 +15,9 @@
     // https://github.com/openai/codex/pull/7295, so we only provide an
     // Apple Silicon build for now.
     "macos-aarch64": {
-      "size": 37003612,
+      "size": 53713807,
       "hash": "blake3",
-      "digest": "d9cd5928c993b65c340507931c61c02bd6e9179933f8bf26a548482bb5fa53bb",
+      "digest": "df9bd849fd6685e90cff2b915128ef8136d1a7987289967f1ad1cbed6eeb1082",
       "format": "tar.gz",
       "path": "package/vendor/aarch64-apple-darwin/bash/macos-15/bash",
       "providers": [
@@ -38,9 +36,9 @@
     // binaries are actually linked against `glibc`, but the
     // `codex-execve-wrapper` that invokes them is linked against `musl`.
     "linux-x86_64": {
-      "size": 37003612,
+      "size": 53713807,
       "hash": "blake3",
-      "digest": "d9cd5928c993b65c340507931c61c02bd6e9179933f8bf26a548482bb5fa53bb",
+      "digest": "df9bd849fd6685e90cff2b915128ef8136d1a7987289967f1ad1cbed6eeb1082",
       "format": "tar.gz",
       "path": "package/vendor/x86_64-unknown-linux-musl/bash/ubuntu-24.04/bash",
       "providers": [
@@ -56,9 +54,9 @@
       ]
     },
     "linux-aarch64": {
-      "size": 37003612,
+      "size": 53713807,
       "hash": "blake3",
-      "digest": "d9cd5928c993b65c340507931c61c02bd6e9179933f8bf26a548482bb5fa53bb",
+      "digest": "df9bd849fd6685e90cff2b915128ef8136d1a7987289967f1ad1cbed6eeb1082",
       "format": "tar.gz",
       "path": "package/vendor/aarch64-unknown-linux-musl/bash/ubuntu-24.04/bash",
       "providers": [
