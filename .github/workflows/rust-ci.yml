@@ -13,6 +13,10 @@ on:
       - '.github/workflows/rust-ci.yml'
       - '.github/scripts/**'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
+
 # CI builds in debug (dev) for faster signal.
 
 jobs:
@@ -96,8 +100,8 @@ jobs:
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
     needs: changed
-    # Keep job-level if to avoid spinning up runners when not needed
-    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    # Skip expensive matrix jobs on draft PRs and when no relevant files changed.
+    if: ${{ !github.event.pull_request.draft && (needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push') }}
     defaults:
       run:
         working-directory: codex-rs
@@ -445,7 +449,7 @@ jobs:
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
     needs: changed
-    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    if: ${{ !github.event.pull_request.draft && (needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push') }}
     defaults:
       run:
         working-directory: codex-rs
@@ -638,6 +642,12 @@ jobs:
           echo "shear  : ${{ needs.cargo_shear.result }}"
           echo "lint   : ${{ needs.lint_build.result }}"
           echo "tests  : ${{ needs.tests.result }}"
+
+          # Draft PRs intentionally skip expensive jobs.
+          if [[ '${{ github.event.pull_request.draft }}' == 'true' ]]; then
+            echo 'Draft PR -> expensive CI skipped.'
+            exit 0
+          fi
 
           # If nothing relevant changed (PR touching only root README, etc.),
           # declare success regardless of other jobs.

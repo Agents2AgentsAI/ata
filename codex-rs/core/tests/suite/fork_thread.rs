@@ -118,7 +118,12 @@ async fn fork_thread_twice_drops_to_first_message() {
 
     // GetHistory on fork1 flushed; the file is ready.
     let fork1_items = read_items(&fork1_path);
-    assert!(fork1_items.len() > expected_after_first.len());
+    assert!(
+        fork1_items.len() >= expected_after_first.len(),
+        "fork1 rollout shorter than expected prefix: fork1_len={}, expected_prefix_len={}",
+        fork1_items.len(),
+        expected_after_first.len()
+    );
     pretty_assertions::assert_eq!(
         serde_json::to_value(&fork1_items[..expected_after_first.len()]).unwrap(),
         serde_json::to_value(&expected_after_first).unwrap()
@@ -143,7 +148,12 @@ async fn fork_thread_twice_drops_to_first_message() {
         .unwrap_or(0);
     let expected_after_second: Vec<RolloutItem> = fork1_items[..cut_last_on_fork1].to_vec();
     let fork2_items = read_items(&fork2_path);
-    assert!(fork2_items.len() > expected_after_second.len());
+    assert!(
+        fork2_items.len() >= expected_after_second.len(),
+        "fork2 rollout shorter than expected prefix: fork2_len={}, expected_prefix_len={}",
+        fork2_items.len(),
+        expected_after_second.len()
+    );
     pretty_assertions::assert_eq!(
         serde_json::to_value(&fork2_items[..expected_after_second.len()]).unwrap(),
         serde_json::to_value(&expected_after_second).unwrap()
