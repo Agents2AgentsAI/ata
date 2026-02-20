@@ -687,6 +687,86 @@ jobs:
             exit "${publish_status}"
           done
 
+  update-homebrew:
+    # Update the Homebrew tap with new version and SHA256 hashes.
+    # Requires a PAT with repo scope stored as HOMEBREW_TAP_TOKEN.
+    # Only runs for stable releases (not alpha/beta).
+    if: ${{ !contains(needs.release.outputs.version, '-') }}
+    name: Update Homebrew tap
+    needs: release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download release artifacts and update tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          # Download the 6 artifacts needed for the tap
+          tmp="$(mktemp -d)"
+          artifacts=(
+            "ata-aarch64-apple-darwin.dmg"
+            "ata-x86_64-apple-darwin.dmg"
+            "ata-aarch64-apple-darwin.tar.gz"
+            "ata-x86_64-apple-darwin.tar.gz"
+            "ata-aarch64-unknown-linux-musl.tar.gz"
+            "ata-x86_64-unknown-linux-musl.tar.gz"
+          )
+          for artifact in "${artifacts[@]}"; do
+            gh release download "${TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "${artifact}" \
+              --dir "${tmp}"
+          done
+
+          # Compute SHA256 hashes
+          sha() { sha256sum "${tmp}/$1" | cut -d' ' -f1; }
+          cask_arm="$(sha ata-aarch64-apple-darwin.dmg)"
+          cask_intel="$(sha ata-x86_64-apple-darwin.dmg)"
+          formula_darwin_arm="$(sha ata-aarch64-apple-darwin.tar.gz)"
+          formula_darwin_intel="$(sha ata-x86_64-apple-darwin.tar.gz)"
+          formula_linux_arm="$(sha ata-aarch64-unknown-linux-musl.tar.gz)"
+          formula_linux_intel="$(sha ata-x86_64-unknown-linux-musl.tar.gz)"
+
+          # Clone the tap repo
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/Agents2AgentsAI/homebrew-tap.git" tap
+          cd tap
+
+          # Update cask
+          sed -i "s/version \".*\"/version \"${VERSION}\"/" Casks/ata.rb
+          sed -i "s/sha256 arm:   \".*\",/sha256 arm:   \"${cask_arm}\",/" Casks/ata.rb
+          sed -i "s/intel: \".*\"/intel: \"${cask_intel}\"/" Casks/ata.rb
+
+          # Update formula version
+          sed -i "s/version \".*\"/version \"${VERSION}\"/" Formula/ata.rb
+
+          # Update formula SHA256s (in order of appearance)
+          python3 -c "
+          import re
+          with open('Formula/ata.rb') as f:
+              content = f.read()
+          shas = ['${formula_darwin_arm}', '${formula_darwin_intel}', '${formula_linux_arm}', '${formula_linux_intel}']
+          i = 0
+          def replacer(m):
+              global i
+              result = f'sha256 \"{shas[i]}\"'
+              i += 1
+              return result
+          content = re.sub(r'sha256 \"[^\"]+\"', replacer, content)
+          with open('Formula/ata.rb', 'w') as f:
+              f.write(content)
+          "
+
+          # Commit and push
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Update ata to ${VERSION}"
+          git push
+
   update-branch:
     name: Update latest-alpha-cli branch
     permissions:
