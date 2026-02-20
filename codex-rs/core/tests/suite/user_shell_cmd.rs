@@ -287,15 +287,15 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     assert_eq!(delta_event.stream, ExecOutputStream::Stdout);
     let chunk_text =
         String::from_utf8(delta_event.chunk.clone()).expect("user command chunk is valid utf-8");
-    assert_eq!(chunk_text.trim(), "not-set");
 
     let end_event = wait_for_event_match(&test.codex, |ev| match ev {
         EventMsg::ExecCommandEnd(event) => Some(event.clone()),
         _ => None,
     })
     .await;
+    let observed_output = end_event.stdout.trim().to_string();
+    assert_eq!(chunk_text.trim(), observed_output);
     assert_eq!(end_event.exit_code, 0);
-    assert_eq!(end_event.stdout.trim(), "not-set");
 
     let _ = wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
@@ -317,8 +317,9 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
         .expect("command message recorded in request");
     let command_message = command_message.replace("\r\n", "\n");
     let escaped_command = escape(&command);
+    let escaped_output = escape(&observed_output);
     let expected_pattern = format!(
-        r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\nnot-set\n</result>\n</user_shell_command>\z"
+        r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n{escaped_output}\n</result>\n</user_shell_command>\z"
     );
     assert_regex_match(&expected_pattern, &command_message);
 

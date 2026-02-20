@@ -12,6 +12,10 @@ on:
       - 'sdk/**'
       - '.github/workflows/sdk.yml'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
+
 jobs:
   sdks:
     runs-on: ubuntu-latest

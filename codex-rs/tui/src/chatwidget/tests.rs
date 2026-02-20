@@ -5457,6 +5457,9 @@ async fn approvals_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.config.notices.hide_full_access_warning = None;
+    chat.set_windows_sandbox_mode(None);
+    chat.set_feature_enabled(Feature::WindowsSandbox, false);
+    chat.set_feature_enabled(Feature::WindowsSandboxElevated, false);
     chat.open_approvals_popup();
 
     let popup = render_bottom_popup(&chat, 80);
@@ -5475,6 +5478,7 @@ async fn approvals_selection_popup_snapshot_windows_degraded_sandbox() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.config.notices.hide_full_access_warning = None;
+    chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
     chat.set_feature_enabled(Feature::WindowsSandbox, true);
     chat.set_feature_enabled(Feature::WindowsSandboxElevated, false);
 

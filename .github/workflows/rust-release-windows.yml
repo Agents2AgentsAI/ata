@@ -23,7 +23,7 @@ on:
 jobs:
   build-windows-binaries:
     name: Build Windows binaries - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
-    runs-on: ${{ matrix.runs_on }}
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 120
     permissions:
       contents: read
@@ -37,19 +37,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: windows-latest
+          - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: primary
             build_args: --bin ata --bin ata-responses-api-proxy
-            runs_on: windows-latest
-          - runner: windows-latest
+            runs_on: "runs-on=${{ github.run_id }}/runner=release-windows-x64"
+          - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: helpers
             build_args: --bin ata-windows-sandbox-setup --bin ata-command-runner
-            runs_on: windows-latest
+            runs_on: "runs-on=${{ github.run_id }}/runner=release-windows-x64"
 
     steps:
       - uses: actions/checkout@v6
+      - name: Activate RunsOn
+        if: ${{ contains(matrix.runs_on || '', 'runs-on=') }}
+        uses: runs-on/action@v2
+      - name: Set up MSVC dev environment
+        uses: ilammy/msvc-dev-cmd@v1
       - name: Print runner specs (Windows)
         shell: powershell
         run: |
@@ -104,7 +109,7 @@ jobs:
     needs:
       - build-windows-binaries
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
-    runs-on: ${{ matrix.runs_on }}
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 120
     permissions:
       contents: read
@@ -119,12 +124,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: windows-latest
+          - runner: windows-x64
             target: x86_64-pc-windows-msvc
-            runs_on: windows-latest
+            runs_on: "runs-on=${{ github.run_id }}/runner=release-windows-x64"
 
     steps:
       - uses: actions/checkout@v6
+      - name: Activate RunsOn
+        if: ${{ contains(matrix.runs_on || '', 'runs-on=') }}
+        uses: runs-on/action@v2
 
       - name: Download prebuilt Windows primary binaries
         uses: actions/download-artifact@v7

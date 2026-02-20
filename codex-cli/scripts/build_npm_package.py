@@ -26,6 +26,13 @@ ATA_PLATFORM_PACKAGES: dict[str, dict[str, str]] = {
         "os": "linux",
         "cpu": "x64",
     },
+    "ata-linux-arm64": {
+        "npm_name": "@a2a-ai/ata-linux-arm64",
+        "npm_tag": "linux-arm64",
+        "target_triple": "aarch64-unknown-linux-musl",
+        "os": "linux",
+        "cpu": "arm64",
+    },
     "ata-darwin-x64": {
         "npm_name": "@a2a-ai/ata-darwin-x64",
         "npm_tag": "darwin-x64",
@@ -56,6 +63,7 @@ PACKAGE_EXPANSIONS: dict[str, list[str]] = {
 PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
     "ata": [],
     "ata-linux-x64": ["ata", "rg"],
+    "ata-linux-arm64": ["ata", "rg"],
     "ata-darwin-x64": ["ata", "rg"],
     "ata-darwin-arm64": ["ata", "rg"],
     "ata-win32-x64": ["ata", "rg", "ata-windows-sandbox-setup", "ata-command-runner"],

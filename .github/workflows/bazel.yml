@@ -5,21 +5,6 @@ name: Bazel (experimental)
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'codex-rs/**'
-      - '*.bazel'
-      - '*.bzl'
-      - 'MODULE.bazel*'
-      - '.github/workflows/bazel.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'codex-rs/**'
-      - '*.bazel'
-      - '*.bzl'
-      - 'MODULE.bazel*'
-      - '.github/workflows/bazel.yml'
 
 concurrency:
   # Cancel previous actions from the same PR or branch except 'main' branch.
@@ -51,6 +36,7 @@ jobs:
           #- os: windows-latest
           #  target: x86_64-pc-windows-gnullvm
     runs-on: ${{ matrix.os }}
+    if: ${{ !github.event.pull_request.draft }}
 
     # Configure a human readable name for each job
     name: Local Bazel build on ${{ matrix.os }} for ${{ matrix.target }}

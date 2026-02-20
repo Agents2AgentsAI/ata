@@ -1,3 +1,10 @@
+images:
+  windows25-vstoolchain-x64:
+    platform: "windows"
+    arch: "x64"
+    owner: "self"
+    name: "runs-on-windows25-vstoolchain-x64-*"
+
 runners:
   # --- CI (smaller, spot, cost-optimized) ---
   ci-linux-x64:
@@ -13,11 +20,10 @@ runners:
     family: ["c7g", "m7g"]
     cpu: [4, 8]
     ram: [16, 32]
-    spot: price-capacity-optimized
-    retry: when-interrupted
+    spot: false
 
   ci-windows-x64:
-    image: windows25-full-x64
+    image: windows25-vstoolchain-x64
     family: ["c7i-flex", "m7i-flex"]
     cpu: [4, 8]
     ram: [16, 32]
@@ -40,7 +46,7 @@ runners:
     spot: false
 
   release-windows-x64:
-    image: windows25-full-x64
+    image: windows25-vstoolchain-x64
     family: ["c7i", "m7i"]
     cpu: [8, 16]
     ram: [16, 32]
