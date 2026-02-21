@@ -8,11 +8,11 @@ help:
 # `codex`
 alias c := codex
 codex *args:
-    cargo run --bin codex -- "$@"
+    cargo run --bin codex --features research-all -- "$@"
 
 # `codex exec`
 exec *args:
-    cargo run --bin codex -- exec "$@"
+    cargo run --bin codex --features research-all -- exec "$@"
 
 # Run the CLI version of the file-search crate.
 file-search *args:
@@ -55,6 +55,10 @@ test:
 # Test all workspace members
 test-all:
     cargo nextest run --workspace --no-fail-fast
+
+# Test research crates with all features
+test-research:
+    cargo test -p codex-research-tools --all-features
 
 # Build and run Codex from source using Bazel.
 # Note we have to use the combination of `[no-cd]` and `--run_under="cd $PWD &&"`

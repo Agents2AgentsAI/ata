@@ -86,6 +86,8 @@ pub struct ResearchToolkit {
     cache: ResponseCache,
     paper_ids: PaperIdResolver,
     config: ResearchConfig,
+    #[cfg(feature = "patents")]
+    epo_auth: Option<clients::epo_auth::EpoAuthManager>,
 }
 
 impl ResearchToolkit {
@@ -100,11 +102,23 @@ impl ResearchToolkit {
             config.tool_timeout,
         );
 
+        #[cfg(feature = "patents")]
+        let epo_auth = match (&config.epo_consumer_key, &config.epo_consumer_secret) {
+            (Some(key), Some(secret)) => Some(clients::epo_auth::EpoAuthManager::new(
+                key.clone(),
+                secret.clone(),
+                &config.patents_base_url,
+            )),
+            _ => None,
+        };
+
         Self {
             http,
             cache: ResponseCache::new(config.cache_max_entries),
             paper_ids: PaperIdResolver,
             config,
+            #[cfg(feature = "patents")]
+            epo_auth,
         }
     }
 
@@ -128,6 +142,12 @@ impl ResearchToolkit {
         &self.paper_ids
     }
 
+    #[cfg(feature = "patents")]
+    #[must_use]
+    pub(crate) fn epo_auth(&self) -> Option<&clients::epo_auth::EpoAuthManager> {
+        self.epo_auth.as_ref()
+    }
+
     #[must_use]
     pub fn is_tool_configured(&self, tool_id: &str) -> bool {
         if tool_id.starts_with("zotero_") {
@@ -138,6 +158,11 @@ impl ResearchToolkit {
             // Unauthenticated GitHub access is still viable; a token only raises
             // the rate limit tier for better throughput.
             return true;
+        }
+
+        if tool_id == "patent_search" || tool_id == "patent_get" {
+            return self.config.epo_consumer_key.is_some()
+                && self.config.epo_consumer_secret.is_some();
         }
 
         // Paper + repo analysis tools intentionally remain available without API keys.

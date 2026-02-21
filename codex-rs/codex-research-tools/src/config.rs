@@ -15,7 +15,8 @@ pub struct ResearchConfig {
     pub zotero_user_id: Option<String>,
     pub openalex_email: Option<String>,
     pub github_token: Option<String>,
-    pub patents_api_key: Option<String>,
+    pub epo_consumer_key: Option<String>,
+    pub epo_consumer_secret: Option<String>,
     pub zotero_library_type: Option<String>,
     pub zotero_group_id: Option<String>,
     pub zotero_storage_dir: Option<String>,
@@ -100,7 +101,8 @@ impl Default for ResearchConfig {
             zotero_user_id: None,
             openalex_email: None,
             github_token: None,
-            patents_api_key: None,
+            epo_consumer_key: None,
+            epo_consumer_secret: None,
             zotero_library_type: None,
             zotero_group_id: None,
             zotero_storage_dir: None,
@@ -110,7 +112,7 @@ impl Default for ResearchConfig {
             zotero_base_url: DEFAULT_REMOTE_ZOTERO_BASE_URL.to_string(),
             github_api_base_url: "https://api.github.com".to_string(),
             hn_base_url: "https://hn.algolia.com/api/v1".to_string(),
-            patents_base_url: "https://serpapi.com".to_string(),
+            patents_base_url: "https://ops.epo.org/3.2".to_string(),
             connect_timeout: Duration::from_secs(10),
             request_timeout: Duration::from_secs(30),
             tool_timeout: Duration::from_secs(60),
@@ -156,7 +158,8 @@ impl ResearchConfig {
             zotero_user_id: std::env::var("ZOTERO_USER_ID").ok(),
             openalex_email: std::env::var("OPENALEX_EMAIL").ok(),
             github_token: std::env::var("GITHUB_TOKEN").ok(),
-            patents_api_key: std::env::var("SERPAPI_API_KEY").ok(),
+            epo_consumer_key: std::env::var("EPO_CONSUMER_KEY").ok(),
+            epo_consumer_secret: std::env::var("EPO_CONSUMER_SECRET").ok(),
             zotero_library_type: std::env::var("ZOTERO_LIBRARY_TYPE").ok(),
             zotero_group_id: std::env::var("ZOTERO_GROUP_ID").ok(),
             zotero_storage_dir: std::env::var("ZOTERO_STORAGE_DIR").ok(),
@@ -171,8 +174,8 @@ impl ResearchConfig {
                 .unwrap_or_else(|_| "https://api.github.com".to_string()),
             hn_base_url: std::env::var("HN_BASE_URL")
                 .unwrap_or_else(|_| "https://hn.algolia.com/api/v1".to_string()),
-            patents_base_url: std::env::var("SERPAPI_BASE_URL")
-                .unwrap_or_else(|_| "https://serpapi.com".to_string()),
+            patents_base_url: std::env::var("EPO_BASE_URL")
+                .unwrap_or_else(|_| "https://ops.epo.org/3.2".to_string()),
             ..Self::default()
         };
 
@@ -222,7 +225,7 @@ impl ResearchConfig {
             ),
             (
                 ResearchApi::Patents,
-                ApiRateLimit::new(45, Duration::from_secs(60), 3),
+                ApiRateLimit::new(25, Duration::from_secs(60), 2),
             ),
         ]);
 
@@ -261,7 +264,8 @@ impl fmt::Debug for ResearchConfig {
             .field("zotero_user_id", &self.zotero_user_id)
             .field("openalex_email", &self.openalex_email)
             .field("github_token", &redact(&self.github_token))
-            .field("patents_api_key", &redact(&self.patents_api_key))
+            .field("epo_consumer_key", &redact(&self.epo_consumer_key))
+            .field("epo_consumer_secret", &redact(&self.epo_consumer_secret))
             .field("zotero_library_type", &self.zotero_library_type)
             .field("zotero_group_id", &self.zotero_group_id)
             .field("zotero_storage_dir", &self.zotero_storage_dir)

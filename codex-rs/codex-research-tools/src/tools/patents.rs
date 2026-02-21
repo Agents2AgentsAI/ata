@@ -1,5 +1,6 @@
 use crate::ResearchToolkit;
 use crate::cache::CacheKey;
+use crate::error::ResearchError;
 use crate::error::Result;
 use crate::tools::cache_helpers::get_or_fetch_typed;
 use crate::tools::cache_helpers::hash_cache_payload;
@@ -12,6 +13,11 @@ pub(crate) async fn patent_search(
     toolkit: &ResearchToolkit,
     params: PatentSearchParams,
 ) -> Result<PatentSearchResult> {
+    let auth = toolkit.epo_auth().ok_or_else(|| ResearchError::NotConfigured {
+        tool: "patent_search",
+        reason: "EPO_CONSUMER_KEY and EPO_CONSUMER_SECRET are required. Register at https://developers.epo.org".to_string(),
+    })?;
+
     let params = normalize_search_params(params);
     let params_hash = hash_cache_payload(&params)?;
     let key = CacheKey {
@@ -20,11 +26,9 @@ pub(crate) async fn patent_search(
     };
     let ttl = toolkit.config().cache_ttls.patent_search;
     let base_url = toolkit.config().patents_base_url.clone();
-    let api_key = toolkit.config().patents_api_key.clone();
 
     get_or_fetch_typed(toolkit, key, ttl, || async {
-        crate::clients::patents::search(toolkit.http(), &base_url, api_key.as_deref(), &params)
-            .await
+        crate::clients::patents::search(toolkit.http(), &base_url, auth, &params).await
     })
     .await
 }
@@ -33,6 +37,11 @@ pub(crate) async fn patent_get(
     toolkit: &ResearchToolkit,
     params: PatentGetParams,
 ) -> Result<PatentDetail> {
+    let auth = toolkit.epo_auth().ok_or_else(|| ResearchError::NotConfigured {
+        tool: "patent_get",
+        reason: "EPO_CONSUMER_KEY and EPO_CONSUMER_SECRET are required. Register at https://developers.epo.org".to_string(),
+    })?;
+
     let params_hash = hash_cache_payload(&params)?;
     let key = CacheKey {
         tool_name: "patent_get",
@@ -40,11 +49,9 @@ pub(crate) async fn patent_get(
     };
     let ttl = toolkit.config().cache_ttls.patent_search;
     let base_url = toolkit.config().patents_base_url.clone();
-    let api_key = toolkit.config().patents_api_key.clone();
 
     get_or_fetch_typed(toolkit, key, ttl, || async {
-        crate::clients::patents::get_patent(toolkit.http(), &base_url, api_key.as_deref(), &params)
-            .await
+        crate::clients::patents::get_patent(toolkit.http(), &base_url, auth, &params).await
     })
     .await
 }

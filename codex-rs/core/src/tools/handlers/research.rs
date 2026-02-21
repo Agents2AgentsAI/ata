@@ -337,8 +337,11 @@ where
     if config.github_token.is_none() {
         config.github_token = resolve_secret("GITHUB_TOKEN");
     }
-    if config.patents_api_key.is_none() {
-        config.patents_api_key = resolve_secret("SERPAPI_API_KEY");
+    if config.epo_consumer_key.is_none() {
+        config.epo_consumer_key = resolve_secret("EPO_CONSUMER_KEY");
+    }
+    if config.epo_consumer_secret.is_none() {
+        config.epo_consumer_secret = resolve_secret("EPO_CONSUMER_SECRET");
     }
 }
 

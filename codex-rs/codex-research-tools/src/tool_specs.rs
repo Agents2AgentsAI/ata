@@ -675,13 +675,13 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 id: "patent_search",
                 native_name: "patent_search",
                 mcp_name: "search_patents",
-                description: "Search USPTO patents by keyword, inventor, assignee, CPC classification code, and date range. Returns patent titles, abstracts, inventors, assignees, CPC codes, and citation counts.",
+                description: "Search patents worldwide via the European Patent Office (EPO) Open Patent Services. Use this tool instead of web search whenever the user asks about patents. Covers 90+ patent offices with daily updates. Filter by keyword, inventor, assignee, CPC code, and date range. Returns structured patent metadata including titles, abstracts, inventors, assignees, and classification codes.",
                 input_schema: json!({
                     "type": "object",
                     "properties": {
-                        "query": { "type": "string", "description": "Text search across patent title and abstract" },
+                        "query": { "type": "string", "description": "Text search across patent title and abstract. Use \"*\" to match all patents when filtering only by assignee, inventor, or date." },
                         "inventor": { "type": "string", "description": "Filter by inventor name" },
-                        "assignee": { "type": "string", "description": "Filter by assignee/organization" },
+                        "assignee": { "type": "string", "description": "Filter by patent assignee/applicant (e.g. \"Apple Inc\", \"Google LLC\")" },
                         "cpc_code": { "type": "string", "description": "Filter by CPC classification code prefix" },
                         "date_from": { "type": "string", "description": "Publication date start (YYYY-MM-DD)" },
                         "date_to": { "type": "string", "description": "Publication date end (YYYY-MM-DD)" },
@@ -701,11 +701,11 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 id: "patent_get",
                 native_name: "patent_get",
                 mcp_name: "get_patent",
-                description: "Get detailed patent information by patent number, including title, abstract, inventors, assignees, CPC codes, filing date, and citation counts.",
+                description: "Get detailed patent information from EPO. Use this tool to retrieve full metadata for a specific patent, including title, abstract, inventors, assignees, CPC codes, and claims text.",
                 input_schema: json!({
                     "type": "object",
                     "properties": {
-                        "patent_id": { "type": "string", "description": "Patent number (e.g. \"11234567\")" }
+                        "patent_id": { "type": "string", "description": "Patent publication number (e.g. \"EP1000000A1\", \"US11234567B2\")" }
                     },
                     "required": ["patent_id"],
                     "additionalProperties": false

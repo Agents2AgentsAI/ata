@@ -98,9 +98,9 @@ Check if insights from the conversation should be persisted to KB cards:
 
 1. For each KB card referenced in the conversation, check if the discussion produced insights not in the card.
 2. If yes, offer to update: "This conversation produced insights about [papers]. Want me to update the KB cards with these findings? This would add [brief description] to [card-ids]."
-3. If the user agrees, apply the `$kb-update` protocol (read card, append Discussion Notes, write card).
+3. If the user agrees, apply the update protocol from `$kb` (read card, append Discussion Notes, write card).
 
-This connects conversation-report to kb-update — the report presents the conversation in chat, while kb-update persists paper-specific insights back to individual cards for future reference.
+This connects conversation-report to KB updates — the report presents the conversation in chat, while the KB update protocol persists paper-specific insights back to individual cards for future reference.
 
 ### 3. Research Journal Entry
 Append a structured entry to `<kb_path>/research-journal.md`. If the file doesn't exist yet, create it. New entries are **prepended** (newest first) so the most recent session is at the top.
