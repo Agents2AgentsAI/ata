@@ -408,6 +408,9 @@ async fn shell_command_snapshot_preserves_shell_environment_policy_set() -> Resu
     )
     .await?;
     let snapshot_path = wait_for_snapshot(&codex_home).await?;
+    // Allow the async snapshot task to finish validation and publish
+    // via the watch channel, so the next turn's command handler sees it.
+    sleep(Duration::from_millis(250)).await;
     fs::write(&snapshot_path, snapshot_override_content_for_policy_test()).await?;
 
     let command = command_asserting_policy_after_snapshot();
@@ -456,6 +459,9 @@ async fn linux_unified_exec_snapshot_preserves_shell_environment_policy_set() ->
     )
     .await?;
     let snapshot_path = wait_for_snapshot(&codex_home).await?;
+    // Allow the async snapshot task to finish validation and publish
+    // via the watch channel, so the next turn's command handler sees it.
+    sleep(Duration::from_millis(250)).await;
     fs::write(&snapshot_path, snapshot_override_content_for_policy_test()).await?;
 
     let command = command_asserting_policy_after_snapshot();

@@ -80,8 +80,7 @@ impl KbBridgeHandler {
             }
             "kb_write_overview" => {
                 let params: WriteOverviewArgs = parse_arguments(arguments)?;
-                self
-                    .kb
+                self.kb
                     .write_overview(&params.topic, &params.content)
                     .await
                     .map_err(map_kb_error)?;
