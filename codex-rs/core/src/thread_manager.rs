@@ -14,6 +14,7 @@ use crate::default_client::build_reqwest_client_with_timeouts;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
+use crate::features::Features;
 use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
 #[cfg(feature = "kb")]
@@ -529,7 +530,7 @@ impl ThreadManagerState {
         persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
         let watch_registration = self.file_watcher.register_config(&config);
-        let research_toolkit = if config.features.enabled(Feature::Research) {
+        let research_toolkit = if any_research_feature_enabled(&config.features) {
             #[cfg(feature = "research")]
             {
                 Some(
@@ -697,6 +698,17 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
     } else {
         InitialHistory::Forked(rolled)
     }
+}
+
+/// Returns `true` when the master `Research` toggle or any per-category research
+/// feature is enabled, so the research toolkit should be initialised.
+fn any_research_feature_enabled(f: &Features) -> bool {
+    f.enabled(Feature::Research)
+        || f.enabled(Feature::ResearchPaperSearch)
+        || f.enabled(Feature::ResearchZotero)
+        || f.enabled(Feature::ResearchHackerNews)
+        || f.enabled(Feature::ResearchPatents)
+        || f.enabled(Feature::ResearchRepoAnalysis)
 }
 
 #[cfg(test)]
