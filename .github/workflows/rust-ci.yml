@@ -1,6 +1,21 @@
 name: rust-ci
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "codex-rs/**"
+      - ".github/workflows/rust-ci.yml"
+      - ".github/scripts/**"
+  push:
+    branches: [main]
+    paths:
+      - "codex-rs/**"
+      - ".github/workflows/rust-ci.yml"
+      - ".github/scripts/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 # CI builds in debug (dev) for faster signal.
 
@@ -85,8 +100,8 @@ jobs:
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
     needs: changed
-    # Keep job-level if to avoid spinning up runners when not needed
-    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    # Skip expensive matrix jobs on draft PRs and when no relevant files changed.
+    if: ${{ !github.event.pull_request.draft && (needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push') }}
     defaults:
       run:
         working-directory: codex-rs
@@ -102,48 +117,35 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macOS — GitHub-hosted (no RunsOn macOS support).
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
             profile: dev
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
             profile: dev
-          - runner: ubuntu-24.04
+          # Linux — RunsOn w/ S3 magic cache.
+          - runner: ubuntu-x64
             target: x86_64-unknown-linux-musl
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-x64
-          - runner: ubuntu-24.04
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-x64/extras=s3-cache"
+          - runner: ubuntu-x64
             target: x86_64-unknown-linux-gnu
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-x64
-          - runner: ubuntu-24.04-arm
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-x64/extras=s3-cache"
+          - runner: ubuntu-arm64
             target: aarch64-unknown-linux-musl
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-arm64
-          - runner: ubuntu-24.04-arm
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache"
+          - runner: ubuntu-arm64
             target: aarch64-unknown-linux-gnu
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-arm64
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache"
+          # Windows — RunsOn (no magic cache on Windows).
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
-          - runner: windows-arm64
-            target: aarch64-pc-windows-msvc
-            profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-windows-x64"
 
           # Also run representative release builds on Mac and Linux because
           # there could be release-only build errors we want to catch.
@@ -152,33 +154,27 @@ jobs:
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
             profile: release
-          - runner: ubuntu-24.04
+          - runner: ubuntu-x64
             target: x86_64-unknown-linux-musl
             profile: release
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-x64
-          - runner: ubuntu-24.04-arm
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-x64/extras=s3-cache"
+          - runner: ubuntu-arm64
             target: aarch64-unknown-linux-musl
             profile: release
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-arm64
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache"
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: release
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
-          - runner: windows-arm64
-            target: aarch64-pc-windows-msvc
-            profile: release
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-windows-x64"
 
     steps:
       - uses: actions/checkout@v6
+      - name: Activate RunsOn
+        if: ${{ contains(matrix.runs_on || '', 'runs-on=') }}
+        uses: runs-on/action@v2
+      - name: Set up MSVC dev environment
+        if: ${{ runner.os == 'Windows' }}
+        uses: ilammy/msvc-dev-cmd@v1
       - name: Install Linux build dependencies
         if: ${{ runner.os == 'Linux' }}
         shell: bash
@@ -423,11 +419,13 @@ jobs:
       - name: sccache stats
         if: always() && env.USE_SCCACHE == 'true'
         continue-on-error: true
+        working-directory: .
         run: sccache --show-stats || true
 
       - name: sccache summary
         if: always() && env.USE_SCCACHE == 'true'
         shell: bash
+        working-directory: .
         run: |
           {
             echo "### sccache stats — ${{ matrix.target }} (${{ matrix.profile }})";
@@ -451,7 +449,7 @@ jobs:
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
     needs: changed
-    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    if: ${{ !github.event.pull_request.draft && (needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push') }}
     defaults:
       run:
         working-directory: codex-rs
@@ -468,33 +466,27 @@ jobs:
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
             profile: dev
-          - runner: ubuntu-24.04
+          - runner: ubuntu-x64
             target: x86_64-unknown-linux-gnu
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-x64
-          - runner: ubuntu-24.04-arm
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-x64/extras=s3-cache"
+          - runner: ubuntu-arm64
             target: aarch64-unknown-linux-gnu
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-arm64
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache"
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
-          - runner: windows-arm64
-            target: aarch64-pc-windows-msvc
-            profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-windows-x64"
 
     steps:
       - uses: actions/checkout@v6
+      - name: Activate RunsOn
+        if: ${{ contains(matrix.runs_on || '', 'runs-on=') }}
+        uses: runs-on/action@v2
+      - name: Set up MSVC dev environment
+        if: ${{ runner.os == 'Windows' }}
+        uses: ilammy/msvc-dev-cmd@v1
       - name: Install Linux build dependencies
         if: ${{ runner.os == 'Linux' }}
         shell: bash
@@ -505,7 +497,6 @@ jobs:
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
           fi
       # Some integration tests rely on DotSlash being installed.
-      # See https://github.com/openai/codex/pull/7617.
       - name: Install DotSlash
         uses: facebook/install-dotslash@v2
 
@@ -577,17 +568,6 @@ jobs:
           tool: nextest
           version: 0.9.103
 
-      - name: Enable unprivileged user namespaces (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          # Required for bubblewrap to work on Linux CI runners.
-          sudo sysctl -w kernel.unprivileged_userns_clone=1
-          # Ubuntu 24.04+ can additionally gate unprivileged user namespaces
-          # behind AppArmor.
-          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-
       - name: tests
         id: test
         run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings
@@ -626,11 +606,13 @@ jobs:
       - name: sccache stats
         if: always() && env.USE_SCCACHE == 'true'
         continue-on-error: true
+        working-directory: .
         run: sccache --show-stats || true
 
       - name: sccache summary
         if: always() && env.USE_SCCACHE == 'true'
         shell: bash
+        working-directory: .
         run: |
           {
             echo "### sccache stats — ${{ matrix.target }} (tests)";
@@ -660,6 +642,12 @@ jobs:
           echo "shear  : ${{ needs.cargo_shear.result }}"
           echo "lint   : ${{ needs.lint_build.result }}"
           echo "tests  : ${{ needs.tests.result }}"
+
+          # Draft PRs intentionally skip expensive jobs.
+          if [[ '${{ github.event.pull_request.draft }}' == 'true' ]]; then
+            echo 'Draft PR -> expensive CI skipped.'
+            exit 0
+          fi
 
           # If nothing relevant changed (PR touching only root README, etc.),
           # declare success regardless of other jobs.
