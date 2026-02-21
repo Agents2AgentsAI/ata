@@ -144,6 +144,7 @@ use crate::data::SharedDataToolkit;
 use crate::kb::SharedKbToolkit;
 
 mod file_attachments;
+mod url_file_recovery;
 
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
@@ -276,6 +277,8 @@ pub(crate) use file_attachments::UrlAttachmentInjectionError;
 pub(crate) use file_attachments::file_capabilities_for_provider;
 use file_attachments::refresh_uploaded_file_references;
 pub(crate) use file_attachments::resolve_and_prepare_file_inputs;
+use url_file_recovery::drop_last_turn_url_file_attachments;
+use url_file_recovery::read_cached_pdf_as_inline_content;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -4610,56 +4613,6 @@ pub(crate) async fn run_turn(
     // one instance across retries within this turn.
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
-
-    async fn drop_last_turn_url_file_attachments(
-        sess: &Arc<Session>,
-    ) -> Vec<crate::context_manager::DroppedUrlFileInfo> {
-        let url_attachments_in_turn = {
-            let mut active = sess.active_turn.lock().await;
-            match active.as_mut() {
-                Some(active_turn) => {
-                    let turn_state = active_turn.turn_state.lock().await;
-                    turn_state.url_attachments_injected()
-                }
-                None => 0,
-            }
-        };
-        let mut state = sess.state.lock().await;
-        state
-            .history
-            .drop_last_turn_url_files(url_attachments_in_turn)
-    }
-
-    async fn read_cached_pdf_as_inline_content(
-        codex_home: &Path,
-        url_str: &str,
-        filename: Option<String>,
-    ) -> Option<ContentItem> {
-        use base64::Engine;
-        use crate::tools::url_downloader::cache_entry_dir;
-        use crate::tools::url_validation::normalize_url_for_cache;
-
-        let parsed_url = url::Url::parse(url_str).ok()?;
-        let normalized_key = normalize_url_for_cache(&parsed_url);
-        let cache_dir = cache_entry_dir(codex_home, &normalized_key);
-        let mut entries = tokio::fs::read_dir(&cache_dir).await.ok()?;
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "pdf") {
-                let bytes = tokio::fs::read(&path).await.ok()?;
-                if bytes.starts_with(b"%PDF") {
-                    let base64_data =
-                        base64::engine::general_purpose::STANDARD.encode(&bytes);
-                    return Some(ContentItem::inline_file(
-                        base64_data,
-                        "application/pdf".to_string(),
-                        filename,
-                    ));
-                }
-            }
-        }
-        None
-    }
 
     let mut context_window_url_file_recovery_attempted = false;
     let mut file_rejection_url_file_recovery_attempted = false;
