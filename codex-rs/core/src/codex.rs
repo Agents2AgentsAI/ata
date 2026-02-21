@@ -4616,6 +4616,8 @@ pub(crate) async fn run_turn(
 
     let mut context_window_url_file_recovery_attempted = false;
     let mut file_rejection_url_file_recovery_attempted = false;
+    let is_subagent = matches!(turn_context.session_source, SessionSource::SubAgent(_));
+    let mut subagent_file_error_soft_recovery_attempted = false;
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -4926,8 +4928,47 @@ pub(crate) async fn run_turn(
 
                     // No URL files to drop — surface the error normally.
                     info!("Turn error (file-related): {user_message}");
-                } else {
+                } else if map_user_facing_file_error_from_message(message).is_none() {
                     info!("Turn error: {message:#}");
+                }
+                // else: second attempt with file error — fall through
+
+                // ── Subagent soft recovery ──
+                // For subagents, instead of terminating on a file error, inject a
+                // message telling the model what happened so it can continue its
+                // task without the problematic file.
+                if is_subagent
+                    && !subagent_file_error_soft_recovery_attempted
+                    && let Some(mapped) = map_user_facing_file_error_from_message(message)
+                {
+                    subagent_file_error_soft_recovery_attempted = true;
+                    let user_message = &mapped.user_message;
+                    info!("Subagent file error soft recovery: {user_message}");
+
+                    // Drop any remaining URL file attachments (covers reinjected cached bytes)
+                    drop_last_turn_url_file_attachments(&sess).await;
+
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::Warning(WarningEvent {
+                            message: format!("File error in subagent (continuing): {user_message}"),
+                        }),
+                    )
+                    .await;
+
+                    let _ = sess
+                        .inject_response_items(vec![ResponseInputItem::Message {
+                            role: "user".to_string(),
+                            content: vec![ContentItem::InputText {
+                                text: format!(
+                                    "[System: A file attachment was rejected by the provider: \
+                                     \"{user_message}\". The file has been removed from context. \
+                                     Continue your task without the rejected file.]"
+                                ),
+                            }],
+                        }])
+                        .await;
+                    continue;
                 }
 
                 let event =

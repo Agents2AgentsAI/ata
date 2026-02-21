@@ -746,8 +746,16 @@ mod tests {
     fn developer_instruction_override_composes_with_existing_value() {
         let override_value =
             build_research_developer_instruction_override(Some("Use terse bullet lists."));
-        assert!(override_value.contains("Use terse bullet lists."));
-        assert!(override_value.contains(RESEARCHER_SYSTEM_PROMPT));
+        let parsed_override: toml::Value = toml::from_str(&override_value).expect("valid toml");
+        let developer_instructions = parsed_override
+            .get("developer_instructions")
+            .and_then(toml::Value::as_str)
+            .expect("developer_instructions string");
+        let normalized_developer_instructions = developer_instructions.replace("\r\n", "\n");
+        let normalized_research_prompt = RESEARCHER_SYSTEM_PROMPT.replace("\r\n", "\n");
+
+        assert!(normalized_developer_instructions.contains("Use terse bullet lists."));
+        assert!(normalized_developer_instructions.contains(&normalized_research_prompt));
     }
 
     #[test]
