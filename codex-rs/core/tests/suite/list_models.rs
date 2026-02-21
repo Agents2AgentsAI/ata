@@ -86,7 +86,7 @@ fn extra_local_presets() -> Vec<ModelPreset> {
     vec![
         bengalfox(),
         boomslang(),
-        claude_sonnet_4_5(),
+        claude_sonnet_4_6(),
         claude_opus_4_5(),
         gemini_3_pro_preview(),
         gemini_3_flash_preview(),
@@ -170,11 +170,11 @@ fn boomslang() -> ModelPreset {
     }
 }
 
-fn claude_sonnet_4_5() -> ModelPreset {
+fn claude_sonnet_4_6() -> ModelPreset {
     ModelPreset {
-        id: "claude-sonnet-4-5".to_string(),
-        model: "claude-sonnet-4-5".to_string(),
-        display_name: "Claude Sonnet 4-5".to_string(),
+        id: "claude-sonnet-4-6".to_string(),
+        model: "claude-sonnet-4-6".to_string(),
+        display_name: "Claude Sonnet 4-6".to_string(),
         description: "Anthropic's balanced model for coding tasks.".to_string(),
         default_reasoning_effort: ReasoningEffort::Medium,
         supported_reasoning_efforts: vec![
