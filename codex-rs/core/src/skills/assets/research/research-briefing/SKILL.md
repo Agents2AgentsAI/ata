@@ -109,7 +109,7 @@ the whole point of a briefing is to help the user decide where to focus.]
 For full technical walkthroughs of any paper above:
 - `$cross-paper-report [card-ids]` for deep multi-paper analysis
 - `$paper-synthesis [arxiv-url]` for single-paper deep dive
-- Chat about any paper and ask follow-up questions — insights will be saved via `$kb-update`
+- Chat about any paper and ask follow-up questions — insights will be saved to KB cards per `$kb`
 ```
 
 ## Presentation (Main Agent Only)

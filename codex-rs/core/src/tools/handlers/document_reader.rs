@@ -250,7 +250,11 @@ pub static UPDATE_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     ToolSpec::Function(ResponsesApiTool {
         name: "update_document_section".to_string(),
         description: "Update a specific section of a document currently being read by the user. \
-                       Use this when the user asks a follow-up question about a section."
+                       Use this when the user asks a follow-up question about a section. \
+                       Content style: write straight prose that continues the section\u{2019}s \
+                       voice. Do NOT prefix with bold/italic topic lines like \
+                       '**On the efficiency gains:**' or '*Regarding caching:*' \u{2014} \
+                       just write the content directly."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -286,6 +290,25 @@ pub static APPEND_TO_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         "content".to_string(),
         JsonSchema::String {
             description: Some("Markdown content to append at the end of the section".to_string()),
+        },
+    );
+    properties.insert(
+        "foldable".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "When true, content appears in a collapsible region. Use for supplementary \
+                 content (explanations, examples). Default: false."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "summary".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Short summary shown when collapsed. Falls back to first line of content."
+                    .to_string(),
+            ),
         },
     );
 
@@ -334,6 +357,25 @@ pub static PATCH_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         "new_text".to_string(),
         JsonSchema::String {
             description: Some("Replacement text".to_string()),
+        },
+    );
+    properties.insert(
+        "foldable".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "When true, content appears in a collapsible region. Use for supplementary \
+                 content (explanations, examples). Default: false."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "summary".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Short summary shown when collapsed. Falls back to first line of content."
+                    .to_string(),
+            ),
         },
     );
 
@@ -462,11 +504,16 @@ impl ToolHandler for DocumentReaderHandler {
                      and ask follow-up questions. For ANY follow-up about this topic \u{2014} \
                      whether about a specific section or a broad request like 'explain more \
                      intuitively' or 'simplify this' \u{2014} use the reading view tools: \
-                     `append_to_section` to add below existing content (preferred for additions), \
-                     `update_document_section` to rewrite a section (for re-explanations or \
-                     different angles), or `present_reading_view` with a new document_id for a \
-                     completely fresh take. Do NOT output plain text responses \u{2014} always \
-                     use reading view tools for follow-ups on this topic."
+                     `update_document_section` to rewrite a section with the answer woven in \
+                     at the relevant location (preferred \u{2014} keeps explanations inline \
+                     where the concept appears), `patch_document_section` to insert content \
+                     right after a specific passage, or `append_to_section` only when adding \
+                     genuinely new content that belongs at the end of a section. \
+                     Do NOT output plain text responses \u{2014} always \
+                     use reading view tools for follow-ups on this topic. \
+                     Content style: write straight prose that continues the section\u{2019}s \
+                     voice. Never prefix with bold/italic topic lines like \
+                     '**On the efficiency gains:**' \u{2014} just write the content directly."
                         .to_string()
                 }
             }
@@ -486,7 +533,7 @@ impl ToolHandler for DocumentReaderHandler {
                 }
 
                 // Mirror the update in the cache and advance streaming state.
-                let streaming_msg = {
+                let (streaming_msg, reopen_payload) = {
                     let mut cache = doc_cache.lock();
                     let mut msg: Option<String> = None;
                     if let Some(doc) = cache.get_mut(&args.document_id) {
@@ -525,8 +572,33 @@ impl ToolHandler for DocumentReaderHandler {
                             }
                         }
                     }
-                    msg
+                    // When not streaming, capture payload to re-open the
+                    // reading view in case the user closed it.
+                    let reopen = if msg.is_none() {
+                        cache
+                            .get(&args.document_id)
+                            .map(|doc| (doc.title.clone(), doc.to_markdown()))
+                    } else {
+                        None
+                    };
+                    (msg, reopen)
                 };
+
+                // Re-open the reading view if the user closed it (non-streaming).
+                if let Some((title, full_content)) = reopen_payload {
+                    session
+                        .send_event(
+                            turn.as_ref(),
+                            EventMsg::PresentDocument(PresentDocumentEvent {
+                                call_id: call_id.clone(),
+                                turn_id: turn.sub_id.clone(),
+                                document_id: args.document_id.clone(),
+                                title,
+                                content: full_content,
+                            }),
+                        )
+                        .await;
+                }
 
                 session
                     .send_event(
@@ -541,9 +613,7 @@ impl ToolHandler for DocumentReaderHandler {
                     )
                     .await;
                 streaming_msg.unwrap_or_else(|| {
-                    "Section updated. The user can see the change immediately. \
-                     Do NOT call present_reading_view again."
-                        .to_string()
+                    "Section updated. The user can see the change immediately.".to_string()
                 })
             }
             "append_to_section" => {
@@ -561,9 +631,9 @@ impl ToolHandler for DocumentReaderHandler {
                 }
 
                 // Mirror the append in the cache.
-                let streaming_reminder = {
+                let (streaming_reminder, reopen_payload) = {
                     let mut cache = doc_cache.lock();
-                    if let Some(doc) = cache.get_mut(&args.document_id) {
+                    let reminder = if let Some(doc) = cache.get_mut(&args.document_id) {
                         if let Some(section) = doc.sections.get_mut(args.section_index) {
                             if !section.content.is_empty() && !section.content.ends_with('\n') {
                                 section.content.push('\n');
@@ -573,8 +643,37 @@ impl ToolHandler for DocumentReaderHandler {
                         streaming_unfilled_reminder(doc)
                     } else {
                         String::new()
-                    }
+                    };
+                    // When not streaming, capture payload to re-open the
+                    // reading view in case the user closed it.
+                    let reopen = if reminder.is_empty() {
+                        cache
+                            .get(&args.document_id)
+                            .map(|doc| (doc.title.clone(), doc.to_markdown()))
+                    } else {
+                        None
+                    };
+                    (reminder, reopen)
                 };
+
+                let foldable = args.foldable.unwrap_or(false);
+                let summary = args.summary;
+
+                // Re-open the reading view if the user closed it (non-streaming).
+                if let Some((title, full_content)) = reopen_payload {
+                    session
+                        .send_event(
+                            turn.as_ref(),
+                            EventMsg::PresentDocument(PresentDocumentEvent {
+                                call_id: call_id.clone(),
+                                turn_id: turn.sub_id.clone(),
+                                document_id: args.document_id.clone(),
+                                title,
+                                content: full_content,
+                            }),
+                        )
+                        .await;
+                }
 
                 session
                     .send_event(
@@ -585,12 +684,14 @@ impl ToolHandler for DocumentReaderHandler {
                             document_id: args.document_id,
                             section_index: args.section_index,
                             content: args.content,
+                            foldable,
+                            summary,
                         }),
                     )
                     .await;
                 format!(
-                    "Content appended to section. The user can see the change immediately. \
-                     Do NOT call present_reading_view again.{streaming_reminder}"
+                    "Content appended to section. The user can see the change immediately.\
+                     {streaming_reminder}"
                 )
             }
             "patch_document_section" => {
@@ -609,9 +710,9 @@ impl ToolHandler for DocumentReaderHandler {
                 }
 
                 // Mirror the patch in the cache.
-                let streaming_reminder = {
+                let (streaming_reminder, reopen_payload) = {
                     let mut cache = doc_cache.lock();
-                    if let Some(doc) = cache.get_mut(&args.document_id) {
+                    let reminder = if let Some(doc) = cache.get_mut(&args.document_id) {
                         if let Some(section) = doc.sections.get_mut(args.section_index)
                             && section.content.contains(&args.old_text)
                         {
@@ -621,8 +722,37 @@ impl ToolHandler for DocumentReaderHandler {
                         streaming_unfilled_reminder(doc)
                     } else {
                         String::new()
-                    }
+                    };
+                    // When not streaming, capture payload to re-open the
+                    // reading view in case the user closed it.
+                    let reopen = if reminder.is_empty() {
+                        cache
+                            .get(&args.document_id)
+                            .map(|doc| (doc.title.clone(), doc.to_markdown()))
+                    } else {
+                        None
+                    };
+                    (reminder, reopen)
                 };
+
+                let foldable = args.foldable.unwrap_or(false);
+                let summary = args.summary;
+
+                // Re-open the reading view if the user closed it (non-streaming).
+                if let Some((title, full_content)) = reopen_payload {
+                    session
+                        .send_event(
+                            turn.as_ref(),
+                            EventMsg::PresentDocument(PresentDocumentEvent {
+                                call_id: call_id.clone(),
+                                turn_id: turn.sub_id.clone(),
+                                document_id: args.document_id.clone(),
+                                title,
+                                content: full_content,
+                            }),
+                        )
+                        .await;
+                }
 
                 session
                     .send_event(
@@ -634,12 +764,14 @@ impl ToolHandler for DocumentReaderHandler {
                             section_index: args.section_index,
                             old_text: args.old_text,
                             new_text: args.new_text,
+                            foldable,
+                            summary,
                         }),
                     )
                     .await;
                 format!(
-                    "Section patched. The user can see the change immediately. \
-                     Do NOT call present_reading_view again.{streaming_reminder}"
+                    "Section patched. The user can see the change immediately.\
+                     {streaming_reminder}"
                 )
             }
             other => {

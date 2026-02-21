@@ -44,6 +44,12 @@ pub struct AppendToSectionArgs {
     pub section_index: usize,
     /// Markdown content to append at the end of the section.
     pub content: String,
+    /// When true, the appended content appears in a collapsible region.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foldable: Option<bool>,
+    /// Short summary shown when the fold is collapsed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 /// Arguments for the `patch_document_section` tool call (find-and-replace).
@@ -58,6 +64,12 @@ pub struct PatchDocumentSectionArgs {
     pub old_text: String,
     /// Replacement text.
     pub new_text: String,
+    /// When true, the patched content appears in a collapsible region.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foldable: Option<bool>,
+    /// Short summary shown when the fold is collapsed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 /// Event emitted when the agent calls `present_reading_view`.
@@ -88,6 +100,12 @@ pub struct AppendDocumentSectionEvent {
     pub document_id: String,
     pub section_index: usize,
     pub content: String,
+    /// Whether the appended content should be collapsible.
+    #[serde(default)]
+    pub foldable: bool,
+    /// Short summary shown when the fold is collapsed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 /// Event emitted when the agent calls `patch_document_section`.
@@ -99,6 +117,12 @@ pub struct PatchDocumentSectionEvent {
     pub section_index: usize,
     pub old_text: String,
     pub new_text: String,
+    /// Whether the patched content should be collapsible.
+    #[serde(default)]
+    pub foldable: bool,
+    /// Short summary shown when the fold is collapsed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 #[cfg(test)]
@@ -149,12 +173,25 @@ mod tests {
             document_id: "report-1".to_string(),
             section_index: 1,
             content: "Additional paragraphs.".to_string(),
+            foldable: Some(true),
+            summary: Some("Extra detail".to_string()),
         };
         let json = serde_json::to_string(&args).expect("serialize");
         let decoded: AppendToSectionArgs = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(args.document_id, decoded.document_id);
         assert_eq!(args.section_index, decoded.section_index);
         assert_eq!(args.content, decoded.content);
+        assert_eq!(args.foldable, decoded.foldable);
+        assert_eq!(args.summary, decoded.summary);
+    }
+
+    #[test]
+    fn append_to_section_args_backwards_compat() {
+        // JSON without foldable/summary fields should deserialize with None defaults.
+        let json = r#"{"document_id":"report-1","section_index":1,"content":"text"}"#;
+        let decoded: AppendToSectionArgs = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(decoded.foldable, None);
+        assert_eq!(decoded.summary, None);
     }
 
     #[test]
@@ -164,6 +201,8 @@ mod tests {
             section_index: 0,
             old_text: "old phrase".to_string(),
             new_text: "new phrase".to_string(),
+            foldable: Some(true),
+            summary: Some("Clarification".to_string()),
         };
         let json = serde_json::to_string(&args).expect("serialize");
         let decoded: PatchDocumentSectionArgs = serde_json::from_str(&json).expect("deserialize");
@@ -171,5 +210,33 @@ mod tests {
         assert_eq!(args.section_index, decoded.section_index);
         assert_eq!(args.old_text, decoded.old_text);
         assert_eq!(args.new_text, decoded.new_text);
+        assert_eq!(args.foldable, decoded.foldable);
+        assert_eq!(args.summary, decoded.summary);
+    }
+
+    #[test]
+    fn patch_document_section_args_backwards_compat() {
+        let json = r#"{"document_id":"report-1","section_index":0,"old_text":"a","new_text":"b"}"#;
+        let decoded: PatchDocumentSectionArgs = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(decoded.foldable, None);
+        assert_eq!(decoded.summary, None);
+    }
+
+    #[test]
+    fn append_event_backwards_compat() {
+        // Events without foldable/summary fields should deserialize with defaults.
+        let json =
+            r#"{"call_id":"c","turn_id":"t","document_id":"d","section_index":0,"content":"x"}"#;
+        let decoded: AppendDocumentSectionEvent = serde_json::from_str(json).expect("deserialize");
+        assert!(!decoded.foldable);
+        assert_eq!(decoded.summary, None);
+    }
+
+    #[test]
+    fn patch_event_backwards_compat() {
+        let json = r#"{"call_id":"c","turn_id":"t","document_id":"d","section_index":0,"old_text":"a","new_text":"b"}"#;
+        let decoded: PatchDocumentSectionEvent = serde_json::from_str(json).expect("deserialize");
+        assert!(!decoded.foldable);
+        assert_eq!(decoded.summary, None);
     }
 }

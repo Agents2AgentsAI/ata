@@ -59,6 +59,8 @@ impl BottomPane {
                 &ev.document_id,
                 ev.section_index,
                 ev.content.clone(),
+                ev.foldable,
+                ev.summary.clone(),
             );
             self.request_redraw();
         }
@@ -77,6 +79,8 @@ impl BottomPane {
                 ev.section_index,
                 &ev.old_text,
                 &ev.new_text,
+                ev.foldable,
+                ev.summary.clone(),
             );
             self.request_redraw();
         }

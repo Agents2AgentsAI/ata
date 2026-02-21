@@ -182,9 +182,20 @@ pub(super) fn hints_line(
     search_focused: bool,
     has_active_search: bool,
     visual_mode: bool,
+    has_folds: bool,
+    pending_quit: bool,
     width: u16,
 ) -> Line<'static> {
-    let hints: Vec<Span<'static>> = if search_focused {
+    let hints: Vec<Span<'static>> = if pending_quit {
+        vec![
+            "Close reading view? ".dim(),
+            "q/y".dim().bold(),
+            ": yes".dim(),
+            " | ".dim(),
+            "any other key".dim().bold(),
+            ": cancel".dim(),
+        ]
+    } else if search_focused {
         vec![
             "Enter".dim().bold(),
             ": search".dim(),
@@ -229,22 +240,38 @@ pub(super) fn hints_line(
             ": done".dim(),
         ]
     } else {
-        vec![
+        let mut h = vec![
             "hjkl".dim().bold(),
             ": move".dim(),
             " | ".dim(),
             "n/p".dim().bold(),
             ": section".dim(),
+        ];
+        if has_folds {
+            h.extend([
+                " | ".dim(),
+                "Space".dim().bold(),
+                ": collapse/expand".dim(),
+                " | ".dim(),
+                "[]".dim().bold(),
+                ": jump".dim(),
+            ]);
+        }
+        h.extend([
             " | ".dim(),
             "v".dim().bold(),
             ": select".dim(),
+            " | ".dim(),
+            "gx".dim().bold(),
+            ": open link".dim(),
             " | ".dim(),
             "Tab".dim().bold(),
             ": ask".dim(),
             " | ".dim(),
             "q".dim().bold(),
             ": done".dim(),
-        ]
+        ]);
+        h
     };
 
     // Wrap in side borders to match the card.
@@ -564,6 +591,144 @@ pub(super) fn strip_citation_annotations(content: &str) -> String {
         }
     }
     out
+}
+
+/// Apply fold regions as a post-processing step on rendered lines.
+///
+/// - **Collapsed** folds replace their line range with a single summary line.
+/// - **Expanded** folds prepend a `┊ ` border to each contained line.
+///
+/// `heading_line_count` is the number of rendered lines consumed by the heading
+/// (typically 2: heading text + blank line), used to offset byte-range → line-range
+/// mapping since fold byte ranges are relative to the content, not the heading.
+pub(super) fn apply_folds(
+    lines: Vec<Line<'static>>,
+    content: &str,
+    heading_line_count: usize,
+    width: u16,
+    folds: &[super::FoldRegion],
+) -> Vec<Line<'static>> {
+    if folds.is_empty() {
+        return lines;
+    }
+
+    // Convert each fold's byte range to a rendered-line range.
+    // We render content prefixes through the markdown pipeline to account
+    // for word wrapping — a single source line can span multiple rendered
+    // lines, so simple newline counting would misalign fold borders.
+    struct LineFold {
+        start_line: usize,
+        end_line: usize, // exclusive
+        summary: String,
+        collapsed: bool,
+    }
+
+    let mut line_folds: Vec<LineFold> = Vec::new();
+    for fold in folds {
+        let start_rendered =
+            rendered_body_line_count(&content[..fold.start.min(content.len())], width);
+        let end_rendered = rendered_body_line_count(&content[..fold.end.min(content.len())], width);
+
+        let start_line = heading_line_count + start_rendered;
+        let end_line = (heading_line_count + end_rendered).min(lines.len());
+
+        if start_line < end_line {
+            line_folds.push(LineFold {
+                start_line,
+                end_line,
+                summary: fold.summary.clone(),
+                collapsed: fold.collapsed,
+            });
+        }
+    }
+
+    // Sort by start_line for deterministic processing.
+    line_folds.sort_by_key(|f| f.start_line);
+
+    // Build output lines.
+    let mut out: Vec<Line<'static>> = Vec::with_capacity(lines.len());
+    let mut skip_until: usize = 0;
+
+    for (i, line) in lines.into_iter().enumerate() {
+        if i < skip_until {
+            continue;
+        }
+
+        // Check if a fold starts at this line.
+        if let Some(lf) = line_folds.iter().find(|f| f.start_line == i)
+            && lf.collapsed
+        {
+            // Emit a single collapsed summary line.
+            out.push(Line::from(vec![
+                "┊ ".dim().cyan(),
+                "[+] ".dim().cyan(),
+                lf.summary.clone().dim().cyan(),
+            ]));
+            skip_until = lf.end_line;
+            continue;
+        }
+
+        // Check if this line is inside any expanded fold.
+        let in_fold = line_folds
+            .iter()
+            .any(|f| !f.collapsed && i >= f.start_line && i < f.end_line);
+
+        if in_fold {
+            // Prepend fold border to the line.
+            let mut spans = vec![Span::from("┊ ").dim().cyan()];
+            spans.extend(line.spans);
+            out.push(Line::from(spans));
+        } else {
+            out.push(line);
+        }
+    }
+
+    out
+}
+
+/// Map a pre-fold rendered line index to the corresponding post-fold index.
+///
+/// Collapsed folds replace N lines with 1 summary line, shifting all
+/// subsequent lines up.  This function computes the adjusted index so
+/// that highlights (e.g. green "changed" borders) align with the actual
+/// post-fold lines returned by [`apply_folds`].
+pub(super) fn adjust_line_for_folds(
+    pre_fold_line: usize,
+    content: &str,
+    heading_line_count: usize,
+    width: u16,
+    folds: &[super::FoldRegion],
+) -> usize {
+    if folds.is_empty() {
+        return pre_fold_line;
+    }
+
+    // Build sorted (by start byte) list of collapsed fold line ranges.
+    let mut collapsed: Vec<(usize, usize)> = folds
+        .iter()
+        .filter(|f| f.collapsed)
+        .map(|f| {
+            let s = rendered_body_line_count(&content[..f.start.min(content.len())], width);
+            let e = rendered_body_line_count(&content[..f.end.min(content.len())], width);
+            (heading_line_count + s, heading_line_count + e)
+        })
+        .filter(|(s, e)| e > s)
+        .collect();
+    collapsed.sort_by_key(|(s, _)| *s);
+
+    let mut adjustment: usize = 0;
+    for (fold_start, fold_end) in &collapsed {
+        let removed = fold_end - fold_start - 1; // N lines → 1 summary = N-1 removed
+        if pre_fold_line > *fold_start {
+            if pre_fold_line >= *fold_end {
+                adjustment += removed;
+            } else {
+                // Target is inside the collapsed fold — map to summary line.
+                return fold_start.saturating_sub(adjustment);
+            }
+        }
+    }
+    pre_fold_line.saturating_sub(adjustment)
 }
 
 fn replace_italic_with_dim(lines: &mut [Line<'static>]) {

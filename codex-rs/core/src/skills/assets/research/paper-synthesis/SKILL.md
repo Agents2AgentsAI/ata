@@ -16,7 +16,6 @@ This skill orchestrates paper synthesis. The actual synthesis work is done by su
 3. **Subagent prompts must include `$paper-synthesizer`** to trigger the subagent skill. Do not write custom synthesis instructions.
 4. **No KB references in prose.** Never say "as summarized in your KB." Present explanations as your own understanding.
 5. **No re-researching.** After the subagent returns, do NOT call `web.run`, `web_search`, `attach_url_files`, or open any URLs. The subagent already fetched and read the paper. Use the subagent's output as your source material.
-6. **No unnecessary exploration.** Do not call `ls`, `exec_command`, or read skill files from disk. The skill instructions are already loaded.
 
 ## Pre-Synthesis: Resolve the Paper
 
@@ -33,36 +32,63 @@ Choose **one** path based on user input:
 > $paper-synthesizer
 >
 > Paper: [paper URL — convert arXiv abs/ to pdf/ first]
-> [If main agent has KB path: KB path: [value]]
 > [For Zotero papers: item key, PDF path, and any notes already retrieved]
 > [If research-context.md exists: User priorities: … Emphasize: … User project: …]
 
+The subagent extracts information, writes it to a staging file, and returns the file path. All KB operations (card creation, journal writes) are done by a background KB subagent.
+
 ### Single-Paper Path
-1. Check KB status and search for existing cards per `$kb` (if KB path is available). Optionally read `<kb_path>/research-context.md`.
-2. If a card with a Deep Dive exists → read it per `$kb` → `present_reading_view` → done.
-3. Resolve identifier via Pre-Synthesis.
-4. Spawn one subagent via `spawn_agent`. Then call `wait` for the subagent to complete.
-5. Present the result (see Presentation below).
+1. Resolve identifier via Pre-Synthesis.
+2. **Quick KB check** — search for an existing card with this paper's ID per `$kb`. If a card with a Deep Dive exists → read it → `present_reading_view` → done. Do not explore the KB beyond this one search. If no match, continue.
+3. Spawn one subagent via `spawn_agent`. Then call `wait` for the subagent to complete — it returns a staging file path.
+4. **Read the staging file** via `exec_command` (e.g., `cat ~/.ata/staging/paper-1706.03762.md`).
+5. **Present the result immediately** (see Presentation below). Do NOT write to KB before presenting.
+6. **Spawn a KB subagent** (fire-and-forget, do NOT call `wait`) to persist the card in the background:
+
+> $kb
+>
+> Process staged paper card.
+> Card ID: [kebab-case slug, e.g. paper-attention-is-all-you-need]
+> Tags: [relevant tags from the paper content]
+> Staging file: ~/.ata/staging/paper-[identifier].md
+> User signals: [1-2 sentences about what the user asked for and any interests/preferences revealed, e.g. "User asked for a detailed explanation of the Transformer with tables. Interested in attention mechanisms and NLP architectures."]
+>
+> 1. Read the staging file. Create a KB card in ~/.ata/knowledge-base/cards/ with proper frontmatter (id, title, tags, capsule, source, status: current, date_added, contributed_by: research-agent). Update index.json with any new tags.
+> 2. Append to research-journal.md (prepend newest first): "## [date] — Synthesized: [title]\n- Card: `[card-id]` | Source: [URL]"
+> 3. Update research-context.md with any new interests or preferences from the user signals. Read the file first (create if missing with sections: Project, Priorities, Not Interested In, Key Decisions Made). Merge — don't overwrite existing content.
+> 4. Delete the staging file.
 
 ### Multi-Paper Path
-1. Check KB status and search for existing cards per `$kb` for each paper in parallel. Optionally read `research-context.md`.
-2. Skip papers that already have cards. Resolve identifiers for missing papers.
+1. Resolve identifiers for all papers.
+2. **Quick KB check** — search for existing cards per `$kb` for each paper. Skip papers that already have cards.
 3. Spawn one subagent per missing paper, in parallel.
-4. Collect card IDs. Tell the user which cards were written.
-5. If the user wants comparison, suggest `$cross-paper-report` as a follow-up.
+4. Wait for all subagents — each returns a staging file path.
+5. **Read all staging files** via `exec_command` (e.g., `cat ~/.ata/staging/paper-*.md`).
+6. Present results to the user.
+7. **Spawn one KB subagent** (fire-and-forget) listing all staging files:
 
-## Post-Synthesis
+> $kb
+>
+> Process staged paper cards.
+> Cards: [list of card IDs and their staging file paths]
+> Tags: [tags per card]
+> User signals: [interests/preferences revealed by the multi-paper request]
+>
+> For each staging file: read it, create a KB card with proper frontmatter, update index.json. Append each to research-journal.md (prepend newest first). Update research-context.md with new interests from user signals (read first, merge, don't overwrite). Delete staging files when done.
 
-**Journal.** After card is written and reading view presented, append to `<kb_path>/research-journal.md`:
+6. If the user wants comparison, suggest `$cross-paper-report` as a follow-up.
 
-```markdown
-## [Date] — Synthesized: [Paper Title]
-- Card: `[card-id]` (created) | Source: [URL or "Zotero item KEY"]
-```
+## KB Card Persistence
 
-**Personalization.** If `research-context.md` exists, use it to adjust emphasis. Watch for preference signals; offer to update when detected.
+KB writes happen in the **background** via a fire-and-forget `$kb` subagent, AFTER the reading view is presented. The main agent never writes KB cards directly.
 
-**Follow-up persistence.** When the user exits the reading view, check if Q&A produced insights not in the KB card. If so, offer to persist via `$kb-update`.
+**How it works:** The paper-synthesizer subagent writes its analysis to `~/.ata/staging/paper-<identifier>.md` (with YAML frontmatter containing metadata) and returns only the file path. The main agent reads the file for presentation. After the reading view is presented, it spawns a `$kb` subagent with just the card ID, tags, and staging file path. The KB subagent reads from disk, formats the card, and handles all KB operations.
+
+Card ID convention: kebab-case slug from the paper title, prefixed with `paper-` (e.g., `paper-latent-diffusion`, `paper-cosmos-policy`).
+
+**Personalization.** If `research-context.md` exists, use it to adjust emphasis in the reading view. The KB subagent automatically updates research-context.md and research-journal.md in the background — include a "User signals" line in the spawn prompt describing what the user asked for and any preferences revealed.
+
+**Follow-up persistence.** When the user exits the reading view, check if Q&A produced insights not in the KB card. If so, offer to persist using the update protocol in `$kb`.
 
 ## Presentation
 
@@ -79,7 +105,7 @@ The subagent returns raw extracted information from the paper. You decide how to
 
 **Markdown formatting:** Always put a blank line before numbered list items (`1.`, `2.`, etc.) and before bullet list items (`-`, `*`). Without a blank line, the markdown parser treats `2.`, `3.`, etc. as plain text instead of list items, so they lose their formatting. This also applies to content after paragraphs, blockquotes, and code blocks.
 
-When the user asks follow-up questions — whether about a specific section or a broader request like "explain more intuitively" or "simplify this" — ALWAYS use the reading view tools. For section-specific questions, use `append_to_section` or `patch_document_section`. For broader re-explanations or different angles, use `update_document_section` to rewrite the relevant sections, or call `present_reading_view` with a new document_id for a completely fresh take. Never fall back to plain text for follow-ups on a topic with an active reading view. Write the answer as straight content — no editorial labels like "(clearer explanation)" or "(expanded)" in headings or topic lines.
+When the user asks follow-up questions — whether about a specific section or a broader request like "explain more intuitively" or "explain the KV cache" — ALWAYS use the reading view tools. Prefer `update_document_section` to rewrite the section with the answer woven in at the relevant location (keeps explanations inline where the concept appears). Use `patch_document_section` to insert content right after a specific passage. Use `append_to_section` only when adding genuinely new content that belongs at the end. For a completely fresh take, call `present_reading_view` with a new document_id. Never fall back to plain text for follow-ups on a topic with an active reading view. Write the answer as straight prose that continues the section's voice — no editorial labels like "(clearer explanation)" or "(expanded)", and no bold/italic topic-line prefixes like "**On the efficiency gains:**" or "*Regarding caching:*". Just write the content directly.
 
 ## Graceful Degradation
 

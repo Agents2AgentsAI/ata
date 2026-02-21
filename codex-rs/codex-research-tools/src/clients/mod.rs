@@ -12,6 +12,8 @@ pub(crate) mod github;
 pub(crate) mod hackernews;
 
 #[cfg(feature = "patents")]
+pub(crate) mod epo_auth;
+#[cfg(feature = "patents")]
 pub(crate) mod patents;
 
 #[cfg(feature = "zotero")]

@@ -1,3 +1,4 @@
+#[cfg(feature = "pdf_images")]
 use std::path::PathBuf;
 
 fn main() {
