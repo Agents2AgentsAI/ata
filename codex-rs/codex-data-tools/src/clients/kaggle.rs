@@ -708,7 +708,7 @@ mod tests {
         let base_url = server.uri();
 
         Mock::given(method("GET"))
-            .and(path("/datasets/data/openai/gpt-4-dataset"))
+            .and(path("/datasets/list/openai/gpt-4-dataset"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "datasetFiles": [
                     {
