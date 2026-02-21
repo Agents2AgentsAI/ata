@@ -373,6 +373,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         config.codex_home.clone(),
         cloud_auth_manager.clone(),
         SessionSource::Exec,
+        config.model_catalog.clone(),
     ));
     let default_model = thread_manager
         .get_models_manager()

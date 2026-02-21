@@ -803,6 +803,7 @@ mod tests {
             js_repl_enabled: false,
             js_repl_tools_only: false,
             experimental_supported_tools: Vec::new(),
+            allow_login_shell: false,
         }
     }
 }

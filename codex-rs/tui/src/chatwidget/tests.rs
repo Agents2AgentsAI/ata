@@ -69,6 +69,7 @@ use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::skills::model::SkillMetadata;
+use codex_core::terminal::TerminalName;
 use codex_otel::OtelManager;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
@@ -196,6 +197,7 @@ async fn resumed_initial_messages_render_history() {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "assistant reply".to_string(),
+                phase: None,
             }),
         ]),
         network_proxy: None,
@@ -1860,7 +1862,7 @@ async fn make_chatwidget_manual(
     let auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
     let codex_home = cfg.codex_home.clone();
-    let models_manager = Arc::new(ModelsManager::new(codex_home, auth_manager.clone()));
+    let models_manager = Arc::new(ModelsManager::new(codex_home, auth_manager.clone(), None));
     let reasoning_effort = None;
     let base_mode = CollaborationMode {
         mode: ModeKind::Default,
@@ -1906,6 +1908,7 @@ async fn make_chatwidget_manual(
         agent_turn_running: false,
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),
+        connectors_force_refetch_pending: false,
         connectors_prefetch_in_flight: false,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
@@ -1919,6 +1922,7 @@ async fn make_chatwidget_manual(
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
+        queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
         suppress_session_configured_redraw: false,
         pending_notification: None,
         quit_shortcut_expires_at: None,
@@ -1985,7 +1989,7 @@ async fn make_chatwidget_with_provider(
     let auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
     let codex_home = cfg.codex_home.clone();
-    let models_manager = Arc::new(ModelsManager::new(codex_home, auth_manager.clone()));
+    let models_manager = Arc::new(ModelsManager::new(codex_home, auth_manager.clone(), None));
     let reasoning_effort = None;
     let base_mode = CollaborationMode {
         mode: ModeKind::Default,
@@ -2031,6 +2035,7 @@ async fn make_chatwidget_with_provider(
         agent_turn_running: false,
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),
+        connectors_force_refetch_pending: false,
         connectors_prefetch_in_flight: false,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
@@ -2071,6 +2076,7 @@ async fn make_chatwidget_with_provider(
         status_line_branch_lookup_complete: false,
         turn_runtime_metrics: Default::default(),
         turn_sleep_inhibitor: codex_utils_sleep_inhibitor::SleepInhibitor::new(false),
+        queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx, temp_dir)
@@ -2105,6 +2111,7 @@ fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.models_manager = Arc::new(ModelsManager::new(
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
+        None,
     ));
 }
 
@@ -3227,6 +3234,9 @@ async fn empty_enter_during_task_does_not_queue() {
 #[tokio::test]
 async fn alt_up_edits_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.queued_message_edit_binding = crate::key_hint::alt(KeyCode::Up);
+    chat.bottom_pane
+        .set_queued_message_edit_binding(crate::key_hint::alt(KeyCode::Up));
 
     // Simulate a running task so messages would normally be queued.
     chat.bottom_pane.set_task_running(true);
@@ -3251,6 +3261,77 @@ async fn alt_up_edits_most_recent_queued_message() {
     assert_eq!(
         chat.queued_user_messages.front().unwrap().text,
         "first queued"
+    );
+}
+
+async fn assert_shift_left_edits_most_recent_queued_message_for_terminal(
+    terminal_name: TerminalName,
+) {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_name);
+    chat.bottom_pane
+        .set_queued_message_edit_binding(chat.queued_message_edit_binding);
+
+    // Simulate a running task so messages would normally be queued.
+    chat.bottom_pane.set_task_running(true);
+
+    // Seed two queued messages.
+    chat.queued_user_messages
+        .push_back(UserMessage::from("first queued".to_string()));
+    chat.queued_user_messages
+        .push_back(UserMessage::from("second queued".to_string()));
+    chat.refresh_queued_user_messages();
+
+    // Press Shift+Left to edit the most recent (last) queued message.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+
+    // Composer should now contain the last queued message.
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "second queued".to_string()
+    );
+    // And the queue should now contain only the remaining (older) item.
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "first queued"
+    );
+}
+
+#[tokio::test]
+async fn shift_left_edits_most_recent_queued_message_in_apple_terminal() {
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::AppleTerminal)
+        .await;
+}
+
+#[tokio::test]
+async fn shift_left_edits_most_recent_queued_message_in_warp_terminal() {
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::WarpTerminal)
+        .await;
+}
+
+#[tokio::test]
+async fn shift_left_edits_most_recent_queued_message_in_vscode_terminal() {
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::VsCode).await;
+}
+
+#[test]
+fn queued_message_edit_binding_mapping_covers_special_terminals() {
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::AppleTerminal),
+        crate::key_hint::shift(KeyCode::Left)
+    );
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::WarpTerminal),
+        crate::key_hint::shift(KeyCode::Left)
+    );
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::VsCode),
+        crate::key_hint::shift(KeyCode::Left)
+    );
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::Iterm2),
+        crate::key_hint::alt(KeyCode::Up)
     );
 }
 
@@ -3771,6 +3852,7 @@ async fn unified_exec_wait_after_final_agent_message_snapshot() {
         id: "turn-1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Final response.".into(),
+            phase: None,
         }),
     });
     chat.handle_codex_event(Event {
@@ -4030,6 +4112,66 @@ async fn collab_mode_shift_tab_cycles_only_when_enabled_and_idle() {
 }
 
 #[tokio::test]
+async fn mode_switch_surfaces_model_change_notification_when_effective_model_changes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let default_model = chat.current_model().to_string();
+
+    let mut plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mode");
+    plan_mask.model = Some("gpt-5.1-codex-mini".to_string());
+    chat.set_collaboration_mask(plan_mask);
+
+    let plan_messages = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        plan_messages.contains("Model changed to gpt-5.1-codex-mini medium for Plan mode."),
+        "expected Plan-mode model switch notice, got: {plan_messages:?}"
+    );
+
+    let default_mask = collaboration_modes::default_mask(chat.models_manager.as_ref())
+        .expect("expected default collaboration mode");
+    chat.set_collaboration_mask(default_mask);
+
+    let default_messages = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let expected_default_message =
+        format!("Model changed to {default_model} default for Default mode.");
+    assert!(
+        default_messages.contains(&expected_default_message),
+        "expected Default-mode model switch notice, got: {default_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn mode_switch_surfaces_reasoning_change_notification_when_model_stays_same() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+
+    let plan_messages = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        plan_messages.contains("Model changed to gpt-5.3-codex medium for Plan mode."),
+        "expected reasoning-change notice in Plan mode, got: {plan_messages:?}"
+    );
+}
+
+#[tokio::test]
 async fn collab_slash_command_opens_picker_and_updates_mode() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
@@ -4094,7 +4236,12 @@ async fn plan_slash_command_switches_to_plan_mode() {
 
     chat.dispatch_command(SlashCommand::Plan);
 
-    assert!(rx.try_recv().is_err(), "plan should not emit an app event");
+    while let Ok(event) = rx.try_recv() {
+        assert!(
+            matches!(event, AppEvent::InsertHistoryCell(_)),
+            "plan should not emit a non-history app event: {event:?}"
+        );
+    }
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert_eq!(chat.current_collaboration_mode(), &initial);
 }
@@ -5050,6 +5197,42 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
     assert!(
         popup.contains("Installed 1 of 2 available apps."),
         "expected previous full snapshot to be preserved, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn apps_refresh_failure_with_cached_snapshot_triggers_pending_force_refetch() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+    chat.connectors_prefetch_in_flight = true;
+    chat.connectors_force_refetch_pending = true;
+
+    let full_connectors = vec![codex_chatgpt::connectors::AppInfo {
+        id: "unit_test_apps_refresh_failure_pending_connector".to_string(),
+        name: "Notion".to_string(),
+        description: Some("Workspace docs".to_string()),
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: Some("https://example.test/notion".to_string()),
+        is_accessible: true,
+        is_enabled: true,
+    }];
+    chat.connectors_cache = ConnectorsCacheState::Ready(ConnectorsSnapshot {
+        connectors: full_connectors.clone(),
+    });
+
+    chat.on_connectors_loaded(Err("failed to load apps".to_string()), true);
+
+    assert!(chat.connectors_prefetch_in_flight);
+    assert!(!chat.connectors_force_refetch_pending);
+    assert_matches!(
+        &chat.connectors_cache,
+        ConnectorsCacheState::Ready(snapshot) if snapshot.connectors == full_connectors
     );
 }
 
@@ -7495,6 +7678,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "First message".into(),
+            phase: None,
         }),
     });
 
@@ -7503,6 +7687,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Second message".into(),
+            phase: None,
         }),
     });
 
@@ -7548,6 +7733,7 @@ async fn final_reasoning_then_message_without_deltas_are_rendered() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Here is the result.".into(),
+            phase: None,
         }),
     });
 
@@ -7608,6 +7794,7 @@ async fn deltas_then_same_final_message_are_rendered_snapshot() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Here is the result.".into(),
+            phase: None,
         }),
     });
 
@@ -7629,7 +7816,12 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.handle_codex_event(Event {
         id: "t1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message:
+                "I’m going to search the repo for where “Change Approved” is rendered to update that view."
+                    .into(),
+            phase: None,
+        }),
     });
 
     let command = vec!["bash".into(), "-lc".into(), "rg \"Change Approved\"".into()];

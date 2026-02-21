@@ -1390,6 +1390,7 @@ permissions:
                     }
                 ),
                 network: None,
+                allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
                 macos_seatbelt_profile_extensions,
@@ -1426,6 +1427,7 @@ permissions: {}
                 crate::protocol::SandboxPolicy::new_read_only_policy(),
             ),
             network: None,
+            allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
             macos_seatbelt_profile_extensions: Some(
@@ -1439,6 +1441,7 @@ permissions: {}
                 crate::protocol::SandboxPolicy::new_read_only_policy(),
             ),
             network: None,
+            allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
             macos_seatbelt_profile_extensions: None,
@@ -1533,6 +1536,7 @@ permissions:
                     crate::protocol::SandboxPolicy::new_read_only_policy(),
                 ),
                 network: None,
+                allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
                 macos_seatbelt_profile_extensions: None,

@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell.rs
+assertion_line: 2507
+expression: rendered
+---
+• Agent spawn failed
+  └ You are helping me improve RepoMaster (arXiv:2505.21577).

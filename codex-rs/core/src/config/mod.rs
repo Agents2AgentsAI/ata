@@ -53,6 +53,8 @@ use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
 #[cfg(target_os = "macos")]
 use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
+use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
+use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use codex_app_server_protocol::Tools;
@@ -66,6 +68,7 @@ use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -84,12 +87,14 @@ use tempfile::tempdir;
 #[cfg(not(target_os = "macos"))]
 type MacOsSeatbeltProfileExtensions = ();
 
+use crate::config::permissions::network_proxy_config_from_permissions;
 use crate::config::profile::ConfigProfile;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
 pub mod edit;
 mod network_proxy_spec;
+mod permissions;
 pub mod profile;
 pub mod schema;
 pub mod service;
@@ -100,6 +105,8 @@ pub use codex_config::ConstraintResult;
 
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
+pub use permissions::NetworkToml;
+pub use permissions::PermissionsToml;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
 
@@ -110,6 +117,7 @@ pub use codex_git::GhostSnapshotConfig;
 /// the context window.
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
+pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
@@ -133,6 +141,15 @@ pub struct Permissions {
     pub sandbox_policy: Constrained<SandboxPolicy>,
     /// Effective network configuration applied to all spawned processes.
     pub network: Option<NetworkProxySpec>,
+    /// Whether the model may request a login shell for shell-based tools.
+    /// Default to `true`
+    ///
+    /// If `true`, the model may request a login shell (`login = true`), and
+    /// omitting `login` defaults to using a login shell.
+    /// If `false`, the model can never use a login shell: `login = true`
+    /// requests are rejected, and omitting `login` defaults to a non-login
+    /// shell.
+    pub allow_login_shell: bool,
     /// Policy used to build process environments for shell/unified exec.
     pub shell_environment_policy: ShellEnvironmentPolicy,
     /// Effective Windows sandbox mode derived from `[windows].sandbox` or
@@ -293,6 +310,13 @@ pub struct Config {
     /// When unset, Codex will bind to an ephemeral port chosen by the OS.
     pub mcp_oauth_callback_port: Option<u16>,
 
+    /// Optional redirect URI to use during MCP OAuth login.
+    ///
+    /// When set, this URI is used in the OAuth authorization request instead
+    /// of the local listener address. The local callback listener still binds
+    /// to 127.0.0.1 (using `mcp_oauth_callback_port` when provided).
+    pub mcp_oauth_callback_url: Option<String>,
+
     /// Combined provider map (defaults merged with user-defined overrides).
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
@@ -307,6 +331,9 @@ pub struct Config {
 
     /// Maximum number of agent threads that can be open concurrently.
     pub agent_max_threads: Option<usize>,
+
+    /// Maximum nesting depth allowed for spawned agent threads.
+    pub agent_max_depth: i32,
 
     /// User-defined role declarations keyed by role name.
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
@@ -359,6 +386,10 @@ pub struct Config {
     /// Optional override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
 
+    /// Optional full model catalog loaded from `model_catalog_json`.
+    /// When set, this replaces the bundled catalog for the current process.
+    pub model_catalog: Option<ModelsResponse>,
+
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
 
@@ -390,6 +421,10 @@ pub struct Config {
 
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
+
+    /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
+    /// Default: `300000` (5 minutes).
+    pub background_terminal_max_timeout: u64,
 
     /// Settings for ghost snapshots (used for undo).
     pub ghost_snapshot: GhostSnapshotConfig,
@@ -621,6 +656,27 @@ pub(crate) fn deserialize_config_toml_with_base(
     root_value
         .try_into()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+fn load_catalog_json(path: &AbsolutePathBuf) -> std::io::Result<ModelsResponse> {
+    let file_contents = std::fs::read_to_string(path)?;
+    serde_json::from_str::<ModelsResponse>(&file_contents).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "failed to parse model_catalog_json path `{}` as JSON: {err}",
+                path.display()
+            ),
+        )
+    })
+}
+
+fn load_model_catalog(
+    model_catalog_json: Option<AbsolutePathBuf>,
+) -> std::io::Result<Option<ModelsResponse>> {
+    model_catalog_json
+        .map(|path| load_catalog_json(&path))
+        .transpose()
 }
 
 fn filter_mcp_servers_by_requirements(
@@ -916,11 +972,25 @@ pub struct ConfigToml {
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
+    /// Whether the model may request a login shell for shell-based tools.
+    /// Default to `true`
+    ///
+    /// If `true`, the model may request a login shell (`login = true`), and
+    /// omitting `login` defaults to using a login shell.
+    /// If `false`, the model can never use a login shell: `login = true`
+    /// requests are rejected, and omitting `login` defaults to a non-login
+    /// shell.
+    pub allow_login_shell: Option<bool>,
+
     /// Sandbox mode to use.
     pub sandbox_mode: Option<SandboxMode>,
 
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
+
+    /// Nested permissions settings.
+    #[serde(default)]
+    pub permissions: Option<PermissionsToml>,
 
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
@@ -981,6 +1051,12 @@ pub struct ConfigToml {
     /// When unset, Codex will bind to an ephemeral port chosen by the OS.
     pub mcp_oauth_callback_port: Option<u16>,
 
+    /// Optional redirect URI to use during MCP OAuth login.
+    /// When set, this URI is used in the OAuth authorization request instead
+    /// of the local listener address. The local callback listener still binds
+    /// to 127.0.0.1 (using `mcp_oauth_callback_port` when provided).
+    pub mcp_oauth_callback_url: Option<String>,
+
     /// User-defined provider entries that extend/override the built-in list.
     #[serde(default)]
     pub model_providers: HashMap<String, ModelProviderInfo>,
@@ -993,6 +1069,10 @@ pub struct ConfigToml {
 
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
+
+    /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
+    /// Default: `300000` (5 minutes).
+    pub background_terminal_timeout: Option<u64>,
 
     /// Optional absolute path to the Node runtime used by `js_repl`.
     pub js_repl_node_path: Option<AbsolutePathBuf>,
@@ -1040,6 +1120,10 @@ pub struct ConfigToml {
 
     /// Override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
+
+    /// Optional path to a JSON model catalog (applied on startup only).
+    /// Per-thread `config` overrides are accepted but do not reapply this (no-ops).
+    pub model_catalog_json: Option<AbsolutePathBuf>,
 
     /// Optionally specify a personality for the model
     pub personality: Option<Personality>,
@@ -1200,6 +1284,11 @@ pub struct AgentsToml {
     /// When unset, no limit is enforced.
     #[schemars(range(min = 1))]
     pub max_threads: Option<usize>,
+
+    /// Maximum nesting depth allowed for spawned agent threads.
+    /// Root sessions start at depth 0.
+    #[schemars(range(min = 1))]
+    pub max_depth: Option<i32>,
 
     /// User-defined role declarations keyed by role name.
     ///
@@ -1576,6 +1665,8 @@ impl Config {
                 .clone(),
             None => ConfigProfile::default(),
         };
+        let configured_network_proxy_config =
+            network_proxy_config_from_permissions(cfg.permissions.as_ref());
 
         let feature_overrides = FeatureOverrides {
             include_apply_patch_tool: include_apply_patch_tool_override,
@@ -1704,6 +1795,7 @@ impl Config {
             .clone();
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
+        let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
 
         let history = cfg.history.unwrap_or_default();
 
@@ -1716,6 +1808,17 @@ impl Config {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "agents.max_threads must be at least 1",
+            ));
+        }
+        let agent_max_depth = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.max_depth)
+            .unwrap_or(DEFAULT_AGENT_MAX_DEPTH);
+        if agent_max_depth < 1 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.max_depth must be at least 1",
             ));
         }
         let agent_roles = cfg
@@ -1741,6 +1844,10 @@ impl Config {
             })
             .transpose()?
             .unwrap_or_default();
+        let background_terminal_max_timeout = cfg
+            .background_terminal_timeout
+            .unwrap_or(DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS)
+            .max(MIN_EMPTY_YIELD_TIME_MS);
 
         let ghost_snapshot = {
             let mut config = GhostSnapshotConfig::default();
@@ -1853,6 +1960,7 @@ impl Config {
         let review_model = override_review_model.or(cfg.review_model);
 
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
+        let model_catalog = load_model_catalog(cfg.model_catalog_json.clone())?;
 
         let log_dir = cfg
             .log_dir
@@ -1898,18 +2006,29 @@ impl Config {
         let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
-        let network = match network_requirements {
-            Some(Sourced { value, source }) => {
-                let network = NetworkProxySpec::from_constraints(&config_layer_stack, value)
-                    .map_err(|err| {
-                        std::io::Error::new(
-                            err.kind(),
-                            format!("failed to build managed network proxy from {source}: {err}"),
-                        )
-                    })?;
-                Some(network)
+        let (network_requirements, network_requirements_source) = match network_requirements {
+            Some(Sourced { value, source }) => (Some(value), Some(source)),
+            None => (None, None),
+        };
+        let has_network_requirements = network_requirements.is_some();
+        let network = NetworkProxySpec::from_config_and_constraints(
+            configured_network_proxy_config,
+            network_requirements,
+        )
+        .map_err(|err| {
+            if let Some(source) = network_requirements_source.as_ref() {
+                std::io::Error::new(
+                    err.kind(),
+                    format!("failed to build managed network proxy from {source}: {err}"),
+                )
+            } else {
+                err
             }
-            None => None,
+        })?;
+        let network = if has_network_requirements {
+            Some(network)
+        } else {
+            network.enabled().then_some(network)
         };
 
         let config = Self {
@@ -1925,6 +2044,7 @@ impl Config {
                 approval_policy: constrained_approval_policy.value,
                 sandbox_policy: constrained_sandbox_policy.value,
                 network,
+                allow_login_shell,
                 shell_environment_policy,
                 windows_sandbox_mode,
                 macos_seatbelt_profile_extensions: None,
@@ -1946,6 +2066,7 @@ impl Config {
             // is important in code to differentiate the mode from the store implementation.
             mcp_oauth_credentials_store_mode: cfg.mcp_oauth_credentials_store.unwrap_or_default(),
             mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
+            mcp_oauth_callback_url: cfg.mcp_oauth_callback_url.clone(),
             model_providers,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
             project_doc_fallback_filenames: cfg
@@ -1963,6 +2084,7 @@ impl Config {
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
             agent_max_threads,
+            agent_max_depth,
             agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
             codex_home,
@@ -1989,6 +2111,7 @@ impl Config {
                 .or(cfg.model_reasoning_summary)
                 .unwrap_or_default(),
             model_supports_reasoning_summaries: cfg.model_supports_reasoning_summaries,
+            model_catalog,
             model_verbosity: config_profile.model_verbosity.or(cfg.model_verbosity),
             chatgpt_base_url: config_profile
                 .chatgpt_base_url
@@ -2002,6 +2125,7 @@ impl Config {
             data: cfg.data.clone(),
             kb: cfg.kb.clone(),
             use_experimental_unified_exec_tool,
+            background_terminal_max_timeout,
             ghost_snapshot,
             features,
             suppress_unstable_features_warning: cfg
@@ -2346,6 +2470,96 @@ phase_2_model = "gpt-5"
                 phase_2_model: Some("gpt-5".to_string()),
             }
         );
+    }
+
+    #[test]
+    fn config_toml_deserializes_permissions_network() {
+        let toml = r#"
+[permissions.network]
+enabled = true
+proxy_url = "http://127.0.0.1:43128"
+enable_socks5 = false
+allow_upstream_proxy = false
+allowed_domains = ["openai.com"]
+"#;
+        let cfg: ConfigToml = toml::from_str(toml)
+            .expect("TOML deserialization should succeed for permissions.network");
+
+        assert_eq!(
+            cfg.permissions
+                .and_then(|permissions| permissions.network)
+                .expect("permissions.network should deserialize"),
+            NetworkToml {
+                enabled: Some(true),
+                proxy_url: Some("http://127.0.0.1:43128".to_string()),
+                admin_url: None,
+                enable_socks5: Some(false),
+                socks_url: None,
+                enable_socks5_udp: None,
+                allow_upstream_proxy: Some(false),
+                dangerously_allow_non_loopback_proxy: None,
+                dangerously_allow_non_loopback_admin: None,
+                dangerously_allow_all_unix_sockets: None,
+                mode: None,
+                allowed_domains: Some(vec!["openai.com".to_string()]),
+                denied_domains: None,
+                allow_unix_sockets: None,
+                allow_local_binding: None,
+            }
+        );
+    }
+
+    #[test]
+    fn permissions_network_enabled_populates_runtime_network_proxy_spec() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml {
+            permissions: Some(PermissionsToml {
+                network: Some(NetworkToml {
+                    enabled: Some(true),
+                    proxy_url: Some("http://127.0.0.1:43128".to_string()),
+                    enable_socks5: Some(false),
+                    ..Default::default()
+                }),
+            }),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+        let network = config
+            .permissions
+            .network
+            .as_ref()
+            .expect("enabled permissions.network should produce a NetworkProxySpec");
+
+        assert_eq!(network.proxy_host_and_port(), "127.0.0.1:43128");
+        assert!(!network.socks_enabled());
+        Ok(())
+    }
+
+    #[test]
+    fn permissions_network_disabled_by_default_does_not_start_proxy() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml {
+            permissions: Some(PermissionsToml {
+                network: Some(NetworkToml {
+                    allowed_domains: Some(vec!["openai.com".to_string()]),
+                    ..Default::default()
+                }),
+            }),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+        assert!(config.permissions.network.is_none());
+        Ok(())
     }
 
     #[test]
@@ -4185,6 +4399,7 @@ model = "gpt-5.1-codex"
         let cfg = ConfigToml {
             agents: Some(AgentsToml {
                 max_threads: None,
+                max_depth: None,
                 roles: BTreeMap::from([(
                     "researcher".to_string(),
                     AgentRoleToml {
@@ -4243,6 +4458,33 @@ config_file = "./agents/researcher.toml"
             Some(&role_config_path)
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn model_catalog_json_loads_from_path() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let catalog_path = codex_home.path().join("catalog.json");
+        let mut catalog: ModelsResponse =
+            serde_json::from_str(include_str!("../../models.json")).expect("valid models.json");
+        catalog.models = catalog.models.into_iter().take(1).collect();
+        std::fs::write(
+            &catalog_path,
+            serde_json::to_string(&catalog).expect("serialize catalog"),
+        )?;
+
+        let cfg = ConfigToml {
+            model_catalog_json: Some(AbsolutePathBuf::from_absolute_path(catalog_path)?),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.model_catalog, Some(catalog));
         Ok(())
     }
 
@@ -4382,6 +4624,7 @@ model_verbosity = "high"
                     approval_policy: Constrained::allow_any(AskForApproval::Never),
                     sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                     network: None,
+                    allow_login_shell: true,
                     shell_environment_policy: ShellEnvironmentPolicy::default(),
                     windows_sandbox_mode: None,
                     macos_seatbelt_profile_extensions: None,
@@ -4395,11 +4638,13 @@ model_verbosity = "high"
                 mcp_servers: Constrained::allow_any(HashMap::new()),
                 mcp_oauth_credentials_store_mode: Default::default(),
                 mcp_oauth_callback_port: None,
+                mcp_oauth_callback_url: None,
                 model_providers: fixture.model_provider_map.clone(),
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 project_doc_fallback_filenames: Vec::new(),
                 tool_output_token_limit: None,
                 agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+                agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
                 agent_roles: BTreeMap::new(),
                 memories: MemoriesConfig::default(),
                 codex_home: fixture.codex_home(),
@@ -4418,6 +4663,7 @@ model_verbosity = "high"
                 model_reasoning_effort: Some(ReasoningEffort::High),
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_supports_reasoning_summaries: None,
+                model_catalog: None,
                 model_verbosity: None,
                 personality: Some(Personality::Pragmatic),
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
@@ -4433,6 +4679,7 @@ model_verbosity = "high"
                 data: None,
                 kb: None,
                 use_experimental_unified_exec_tool: !cfg!(windows),
+                background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
                 suppress_unstable_features_warning: false,
@@ -4499,6 +4746,7 @@ model_verbosity = "high"
                 approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 network: None,
+                allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
                 macos_seatbelt_profile_extensions: None,
@@ -4512,11 +4760,13 @@ model_verbosity = "high"
             mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: Default::default(),
             mcp_oauth_callback_port: None,
+            mcp_oauth_callback_url: None,
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
             codex_home: fixture.codex_home(),
@@ -4535,6 +4785,7 @@ model_verbosity = "high"
             model_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
+            model_catalog: None,
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
@@ -4550,6 +4801,7 @@ model_verbosity = "high"
             data: None,
             kb: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
+            background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             suppress_unstable_features_warning: false,
@@ -4614,6 +4866,7 @@ model_verbosity = "high"
                 approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 network: None,
+                allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
                 macos_seatbelt_profile_extensions: None,
@@ -4627,11 +4880,13 @@ model_verbosity = "high"
             mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: Default::default(),
             mcp_oauth_callback_port: None,
+            mcp_oauth_callback_url: None,
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
             codex_home: fixture.codex_home(),
@@ -4650,6 +4905,7 @@ model_verbosity = "high"
             model_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
+            model_catalog: None,
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
@@ -4665,6 +4921,7 @@ model_verbosity = "high"
             data: None,
             kb: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
+            background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             suppress_unstable_features_warning: false,
@@ -4715,6 +4972,7 @@ model_verbosity = "high"
                 approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 network: None,
+                allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
                 macos_seatbelt_profile_extensions: None,
@@ -4728,11 +4986,13 @@ model_verbosity = "high"
             mcp_servers: Constrained::allow_any(HashMap::new()),
             mcp_oauth_credentials_store_mode: Default::default(),
             mcp_oauth_callback_port: None,
+            mcp_oauth_callback_url: None,
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
             codex_home: fixture.codex_home(),
@@ -4751,6 +5011,7 @@ model_verbosity = "high"
             model_reasoning_effort: Some(ReasoningEffort::High),
             model_reasoning_summary: ReasoningSummary::Detailed,
             model_supports_reasoning_summaries: None,
+            model_catalog: None,
             model_verbosity: Some(Verbosity::High),
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
@@ -4766,6 +5027,7 @@ model_verbosity = "high"
             data: None,
             kb: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
+            background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             suppress_unstable_features_warning: false,
@@ -5258,6 +5520,17 @@ trust_level = "untrusted"
     }
 
     #[test]
+    fn config_toml_deserializes_mcp_oauth_callback_url() {
+        let toml = r#"mcp_oauth_callback_url = "https://example.com/callback""#;
+        let cfg: ConfigToml =
+            toml::from_str(toml).expect("TOML deserialization should succeed for callback URL");
+        assert_eq!(
+            cfg.mcp_oauth_callback_url.as_deref(),
+            Some("https://example.com/callback")
+        );
+    }
+
+    #[test]
     fn config_loads_mcp_oauth_callback_port_from_toml() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let toml = r#"
@@ -5274,6 +5547,50 @@ mcp_oauth_callback_port = 5678
         )?;
 
         assert_eq!(config.mcp_oauth_callback_port, Some(5678));
+        Ok(())
+    }
+
+    #[test]
+    fn config_loads_allow_login_shell_from_toml() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg: ConfigToml = toml::from_str(
+            r#"
+model = "gpt-5.1"
+allow_login_shell = false
+"#,
+        )
+        .expect("TOML deserialization should succeed for allow_login_shell");
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(!config.permissions.allow_login_shell);
+        Ok(())
+    }
+
+    #[test]
+    fn config_loads_mcp_oauth_callback_url_from_toml() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let toml = r#"
+model = "gpt-5.1"
+mcp_oauth_callback_url = "https://example.com/callback"
+"#;
+        let cfg: ConfigToml =
+            toml::from_str(toml).expect("TOML deserialization should succeed for callback URL");
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.mcp_oauth_callback_url.as_deref(),
+            Some("https://example.com/callback")
+        );
         Ok(())
     }
 
