@@ -87,9 +87,8 @@ pub fn remove_card_from_overview(kb_path: &Path, topic: &str, card_id: &str) -> 
     let contents = std::fs::read_to_string(&overview_path)?;
     let link_pattern = format!("cards/{card_id}.md)");
 
-    let lines: Vec<&str> = contents.lines().collect();
-    let filtered: Vec<&str> = lines
-        .into_iter()
+    let filtered: Vec<&str> = contents
+        .lines()
         .filter(|line| !line.contains(&link_pattern))
         .collect();
 

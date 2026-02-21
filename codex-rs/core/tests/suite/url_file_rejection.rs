@@ -75,7 +75,7 @@ async fn file_related_invalid_request_drops_url_attachments_and_retries() -> Res
     .await;
 
     let fixture = test_codex().with_model("gpt-5.1").build(&server).await?;
-    prepopulate_url_file_cache(fixture.codex_home_path(), TEST_PDF_URL, VALID_PDF_BYTES).await;
+    prepopulate_url_file_cache(fixture.codex_home_path(), TEST_PDF_URL, VALID_PDF_BYTES).await?;
     fixture
         .submit_turn("attach a pdf and then continue if it fails")
         .await?;
@@ -140,7 +140,7 @@ async fn non_file_invalid_request_does_not_retry_or_drop_url_attachments() -> Re
     .await;
 
     let fixture = test_codex().with_model("gpt-5.1").build(&server).await?;
-    prepopulate_url_file_cache(fixture.codex_home_path(), TEST_PDF_URL, VALID_PDF_BYTES).await;
+    prepopulate_url_file_cache(fixture.codex_home_path(), TEST_PDF_URL, VALID_PDF_BYTES).await?;
     fixture
         .submit_turn("attach a pdf and then error for non-file reasons")
         .await?;
@@ -217,7 +217,7 @@ async fn context_window_exceeded_drops_url_attachments_only_once_per_turn() -> R
     .await;
 
     let fixture = test_codex().with_model("gpt-5.1").build(&server).await?;
-    prepopulate_url_file_cache(fixture.codex_home_path(), TEST_PDF_URL, VALID_PDF_BYTES).await;
+    prepopulate_url_file_cache(fixture.codex_home_path(), TEST_PDF_URL, VALID_PDF_BYTES).await?;
     fixture
         .submit_turn("attach a pdf repeatedly, even if the context window is exceeded")
         .await?;
@@ -312,7 +312,7 @@ async fn context_window_exceeded_then_file_related_invalid_request_still_recover
     .await;
 
     let fixture = test_codex().with_model("gpt-5.1").build(&server).await?;
-    prepopulate_url_file_cache(fixture.codex_home_path(), TEST_PDF_URL, VALID_PDF_BYTES).await;
+    prepopulate_url_file_cache(fixture.codex_home_path(), TEST_PDF_URL, VALID_PDF_BYTES).await?;
     fixture
         .submit_turn("attach a pdf; recover from context window and file rejection")
         .await?;

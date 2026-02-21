@@ -172,6 +172,7 @@ impl KnowledgeBase {
     }
 
     /// Write (create or update) a card.
+    #[allow(clippy::too_many_arguments)]
     pub async fn write_card(
         &self,
         id: String,
