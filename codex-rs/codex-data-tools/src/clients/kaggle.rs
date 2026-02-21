@@ -371,7 +371,7 @@ impl<'a> KaggleClient<'a> {
             name: response.title.unwrap_or_else(|| slug.clone()),
             source: DataSource::Kaggle {
                 owner: owner.clone(),
-                slug: slug,
+                slug,
             },
             description: response.description,
             size_bytes: response.total_bytes,

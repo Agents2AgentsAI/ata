@@ -80,12 +80,12 @@ impl KbBridgeHandler {
             }
             "kb_write_overview" => {
                 let params: WriteOverviewArgs = parse_arguments(arguments)?;
-                let output = self
+                self
                     .kb
                     .write_overview(&params.topic, &params.content)
                     .await
                     .map_err(map_kb_error)?;
-                serialize_tool_output(&serde_json::json!({"ok": true, "result": output}))
+                serialize_tool_output(&serde_json::json!({"ok": true, "result": ()}))
             }
             "kb_suggest_tags" => {
                 let params: SuggestTagsArgs = parse_arguments(arguments)?;

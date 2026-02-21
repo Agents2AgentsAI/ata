@@ -2673,13 +2673,12 @@ impl Session {
         }
         // Add developer instructions for Zotero when configured.
         #[cfg(feature = "research")]
-        if let Some(ref toolkit) = self.services.research_toolkit {
-            if toolkit.is_tool_configured("zotero_search") {
+        if let Some(ref toolkit) = self.services.research_toolkit
+            && toolkit.is_tool_configured("zotero_search") {
                 items.push(
                     DeveloperInstructions::new(ZOTERO_DEVELOPER_INSTRUCTIONS.to_string()).into(),
                 );
             }
-        }
         // Add developer instructions for memories.
         if let Some(memory_prompt) =
             build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
