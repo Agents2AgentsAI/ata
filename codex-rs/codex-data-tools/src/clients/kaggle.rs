@@ -651,9 +651,11 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut config = DataConfig::default();
-        config.kaggle_username = Some("test_user".to_string());
-        config.kaggle_key = Some("test_key".to_string());
+        let config = DataConfig {
+            kaggle_username: Some("test_user".to_string()),
+            kaggle_key: Some("test_key".to_string()),
+            ..Default::default()
+        };
         let http_client = create_test_http_client(&config);
         let client = KaggleClient::new(&http_client, &base_url, "test_user", "test_key", None);
 
@@ -690,9 +692,11 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut config = DataConfig::default();
-        config.kaggle_username = Some("test_user".to_string());
-        config.kaggle_key = Some("test_key".to_string());
+        let config = DataConfig {
+            kaggle_username: Some("test_user".to_string()),
+            kaggle_key: Some("test_key".to_string()),
+            ..Default::default()
+        };
         let http_client = create_test_http_client(&config);
         let client = KaggleClient::new(&http_client, &base_url, "test_user", "test_key", None);
 
@@ -724,9 +728,11 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut config = DataConfig::default();
-        config.kaggle_username = Some("test_user".to_string());
-        config.kaggle_key = Some("test_key".to_string());
+        let config = DataConfig {
+            kaggle_username: Some("test_user".to_string()),
+            kaggle_key: Some("test_key".to_string()),
+            ..Default::default()
+        };
         let http_client = create_test_http_client(&config);
         let client = KaggleClient::new(&http_client, &base_url, "test_user", "test_key", None);
 
@@ -749,8 +755,10 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut config = DataConfig::default();
-        config.kaggle_api_token = Some("test_api_token".to_string());
+        let config = DataConfig {
+            kaggle_api_token: Some("test_api_token".to_string()),
+            ..Default::default()
+        };
         let http_client = create_test_http_client(&config);
         let client = KaggleClient::new(
             &http_client,
@@ -780,9 +788,11 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut config = DataConfig::default();
-        config.kaggle_username = Some("test_user".to_string());
-        config.kaggle_key = Some("KGAT_token_from_key".to_string());
+        let config = DataConfig {
+            kaggle_username: Some("test_user".to_string()),
+            kaggle_key: Some("KGAT_token_from_key".to_string()),
+            ..Default::default()
+        };
         let http_client = create_test_http_client(&config);
         let client = KaggleClient::new(
             &http_client,
@@ -822,9 +832,11 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut config = DataConfig::default();
-        config.kaggle_username = Some("test_user".to_string());
-        config.kaggle_key = Some("test_key".to_string());
+        let config = DataConfig {
+            kaggle_username: Some("test_user".to_string()),
+            kaggle_key: Some("test_key".to_string()),
+            ..Default::default()
+        };
         let http_client = create_test_http_client(&config);
         let client = KaggleClient::new(&http_client, &base_url, "test_user", "test_key", None);
 
@@ -848,9 +860,11 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut config = DataConfig::default();
-        config.kaggle_username = Some("test_user".to_string());
-        config.kaggle_key = Some("test_key".to_string());
+        let config = DataConfig {
+            kaggle_username: Some("test_user".to_string()),
+            kaggle_key: Some("test_key".to_string()),
+            ..Default::default()
+        };
         let http_client = create_test_http_client(&config);
         let client = KaggleClient::new(&http_client, &base_url, "test_user", "test_key", None);
 
@@ -879,9 +893,11 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut config = DataConfig::default();
-        config.kaggle_username = Some("test_user".to_string());
-        config.kaggle_key = Some("test_key".to_string());
+        let config = DataConfig {
+            kaggle_username: Some("test_user".to_string()),
+            kaggle_key: Some("test_key".to_string()),
+            ..Default::default()
+        };
         let http_client = create_test_http_client(&config);
         let client = KaggleClient::new(&http_client, &base_url, "test_user", "test_key", None);
 

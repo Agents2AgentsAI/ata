@@ -975,9 +975,10 @@ mod tests {
 
     fn clear_oauth_keyring_cache(server_name: &str, url: &str) {
         if let Ok(key) = super::compute_store_key(server_name, url)
-            && let Ok(mut guard) = OAUTH_KEYRING_CACHE.lock() {
-                guard.remove(&key);
-            }
+            && let Ok(mut guard) = OAUTH_KEYRING_CACHE.lock()
+        {
+            guard.remove(&key);
+        }
     }
 
     #[derive(Clone, Debug)]
