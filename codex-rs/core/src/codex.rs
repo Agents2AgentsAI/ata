@@ -4611,7 +4611,9 @@ pub(crate) async fn run_turn(
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
 
-    async fn drop_last_turn_url_file_attachments(sess: &Arc<Session>) -> usize {
+    async fn drop_last_turn_url_file_attachments(
+        sess: &Arc<Session>,
+    ) -> Vec<crate::context_manager::DroppedUrlFileInfo> {
         let url_attachments_in_turn = {
             let mut active = sess.active_turn.lock().await;
             match active.as_mut() {
@@ -4626,6 +4628,37 @@ pub(crate) async fn run_turn(
         state
             .history
             .drop_last_turn_url_files(url_attachments_in_turn)
+    }
+
+    async fn read_cached_pdf_as_inline_content(
+        codex_home: &Path,
+        url_str: &str,
+        filename: Option<String>,
+    ) -> Option<ContentItem> {
+        use base64::Engine;
+        use crate::tools::url_downloader::cache_entry_dir;
+        use crate::tools::url_validation::normalize_url_for_cache;
+
+        let parsed_url = url::Url::parse(url_str).ok()?;
+        let normalized_key = normalize_url_for_cache(&parsed_url);
+        let cache_dir = cache_entry_dir(codex_home, &normalized_key);
+        let mut entries = tokio::fs::read_dir(&cache_dir).await.ok()?;
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "pdf") {
+                let bytes = tokio::fs::read(&path).await.ok()?;
+                if bytes.starts_with(b"%PDF") {
+                    let base64_data =
+                        base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    return Some(ContentItem::inline_file(
+                        base64_data,
+                        "application/pdf".to_string(),
+                        filename,
+                    ));
+                }
+            }
+        }
+        None
     }
 
     let mut context_window_url_file_recovery_attempted = false;
@@ -4823,14 +4856,15 @@ pub(crate) async fn run_turn(
             }
             Err(CodexErr::ContextWindowExceeded) => {
                 if !context_window_url_file_recovery_attempted {
-                    let dropped_url_files = drop_last_turn_url_file_attachments(&sess).await;
-                    if dropped_url_files > 0 {
+                    let dropped = drop_last_turn_url_file_attachments(&sess).await;
+                    if !dropped.is_empty() {
                         context_window_url_file_recovery_attempted = true;
                         sess.send_event(
                             &turn_context,
                             EventMsg::Warning(WarningEvent {
                                 message: format!(
-                                    "Dropped {dropped_url_files} attachment(s) because the context window was exceeded."
+                                    "Dropped {} attachment(s) because the context window was exceeded.",
+                                    dropped.len()
                                 ),
                             }),
                         )
@@ -4883,18 +4917,57 @@ pub(crate) async fn run_turn(
                         raw_message = %message,
                         "file-related InvalidRequest mapped for recovery"
                     );
-                    let dropped_url_files = drop_last_turn_url_file_attachments(&sess).await;
-                    if dropped_url_files > 0 {
+                    let dropped = drop_last_turn_url_file_attachments(&sess).await;
+                    if !dropped.is_empty() {
                         file_rejection_url_file_recovery_attempted = true;
-                        sess.send_event(
-                            &turn_context,
-                            EventMsg::Warning(WarningEvent {
-                                message: format!(
-                                    "Dropped {dropped_url_files} file attachment(s) that the provider rejected: {user_message}"
-                                ),
-                            }),
-                        )
-                        .await;
+
+                        // Try to re-inject dropped files using cached bytes
+                        let codex_home = &turn_context.config.codex_home;
+                        let mut reinjected = Vec::new();
+                        for info in &dropped {
+                            if let Some(url) = &info.url
+                                && let Some(item) = read_cached_pdf_as_inline_content(
+                                    codex_home,
+                                    url,
+                                    info.filename.clone(),
+                                )
+                                .await
+                            {
+                                reinjected.push(item);
+                            }
+                        }
+
+                        if reinjected.is_empty() {
+                            // No cached bytes available — emit warning like before
+                            sess.send_event(
+                                &turn_context,
+                                EventMsg::Warning(WarningEvent {
+                                    message: format!(
+                                        "Dropped {} file attachment(s) that the provider rejected: {user_message}",
+                                        dropped.len()
+                                    ),
+                                }),
+                            )
+                            .await;
+                        } else {
+                            // Re-inject as inline bytes via pending input
+                            let _ = sess
+                                .inject_response_items(vec![ResponseInputItem::Message {
+                                    role: "user".to_string(),
+                                    content: reinjected,
+                                }])
+                                .await;
+                            sess.send_event(
+                                &turn_context,
+                                EventMsg::Warning(WarningEvent {
+                                    message: format!(
+                                        "Re-attached {} file(s) using cached bytes after provider rejected URL: {user_message}",
+                                        dropped.len()
+                                    ),
+                                }),
+                            )
+                            .await;
+                        }
                         continue;
                     }
 
