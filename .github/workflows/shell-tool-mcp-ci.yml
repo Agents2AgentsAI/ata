@@ -2,6 +2,19 @@ name: shell-tool-mcp CI
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "shell-tool-mcp/**"
+      - ".github/workflows/shell-tool-mcp-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "shell-tool-mcp/**"
+      - ".github/workflows/shell-tool-mcp-ci.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 env:
   NODE_VERSION: 22

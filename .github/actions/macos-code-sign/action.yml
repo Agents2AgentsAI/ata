@@ -130,7 +130,7 @@ runs:
           keychain_args+=(--keychain "${APPLE_CODESIGN_KEYCHAIN}")
         fi
 
-        for binary in codex codex-responses-api-proxy; do
+        for binary in ata ata-responses-api-proxy; do
           path="codex-rs/target/${{ inputs.target }}/release/${binary}"
           codesign --force --options runtime --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$path"
         done
@@ -177,8 +177,8 @@ runs:
           notarize_submission "$binary" "$archive_path" "$notary_key_path"
         }
 
-        notarize_binary "codex"
-        notarize_binary "codex-responses-api-proxy"
+        notarize_binary "ata"
+        notarize_binary "ata-responses-api-proxy"
 
     - name: Sign and notarize macOS dmg
       if: ${{ inputs.sign-dmg == 'true' }}
@@ -206,7 +206,7 @@ runs:
 
         source "$GITHUB_ACTION_PATH/notary_helpers.sh"
 
-        dmg_path="codex-rs/target/${{ inputs.target }}/release/codex-${{ inputs.target }}.dmg"
+        dmg_path="codex-rs/target/${{ inputs.target }}/release/ata-${{ inputs.target }}.dmg"
 
         if [[ ! -f "$dmg_path" ]]; then
           echo "dmg $dmg_path not found"
@@ -219,7 +219,7 @@ runs:
         fi
 
         codesign --force --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$dmg_path"
-        notarize_submission "codex-${{ inputs.target }}.dmg" "$dmg_path" "$notary_key_path"
+        notarize_submission "ata-${{ inputs.target }}.dmg" "$dmg_path" "$notary_key_path"
         xcrun stapler staple "$dmg_path"
 
     - name: Remove signing keychain

@@ -1,82 +1,66 @@
 {
   "outputs": {
-    "codex": {
+    "ata": {
       "platforms": {
         "macos-aarch64": {
-          "regex": "^codex-aarch64-apple-darwin\\.zst$",
-          "path": "codex"
+          "regex": "^ata-aarch64-apple-darwin\\.zst$",
+          "path": "ata"
         },
         "macos-x86_64": {
-          "regex": "^codex-x86_64-apple-darwin\\.zst$",
-          "path": "codex"
+          "regex": "^ata-x86_64-apple-darwin\\.zst$",
+          "path": "ata"
         },
         "linux-x86_64": {
-          "regex": "^codex-x86_64-unknown-linux-musl\\.zst$",
-          "path": "codex"
+          "regex": "^ata-x86_64-unknown-linux-musl\\.zst$",
+          "path": "ata"
         },
         "linux-aarch64": {
-          "regex": "^codex-aarch64-unknown-linux-musl\\.zst$",
-          "path": "codex"
+          "regex": "^ata-aarch64-unknown-linux-musl\\.zst$",
+          "path": "ata"
         },
         "windows-x86_64": {
-          "regex": "^codex-x86_64-pc-windows-msvc\\.exe\\.zst$",
-          "path": "codex.exe"
-        },
-        "windows-aarch64": {
-          "regex": "^codex-aarch64-pc-windows-msvc\\.exe\\.zst$",
-          "path": "codex.exe"
+          "regex": "^ata-x86_64-pc-windows-msvc\\.exe\\.zst$",
+          "path": "ata.exe"
         }
       }
     },
-    "codex-responses-api-proxy": {
+    "ata-responses-api-proxy": {
       "platforms": {
         "macos-aarch64": {
-          "regex": "^codex-responses-api-proxy-aarch64-apple-darwin\\.zst$",
-          "path": "codex-responses-api-proxy"
+          "regex": "^ata-responses-api-proxy-aarch64-apple-darwin\\.zst$",
+          "path": "ata-responses-api-proxy"
         },
         "macos-x86_64": {
-          "regex": "^codex-responses-api-proxy-x86_64-apple-darwin\\.zst$",
-          "path": "codex-responses-api-proxy"
+          "regex": "^ata-responses-api-proxy-x86_64-apple-darwin\\.zst$",
+          "path": "ata-responses-api-proxy"
         },
         "linux-x86_64": {
-          "regex": "^codex-responses-api-proxy-x86_64-unknown-linux-musl\\.zst$",
-          "path": "codex-responses-api-proxy"
+          "regex": "^ata-responses-api-proxy-x86_64-unknown-linux-musl\\.zst$",
+          "path": "ata-responses-api-proxy"
         },
         "linux-aarch64": {
-          "regex": "^codex-responses-api-proxy-aarch64-unknown-linux-musl\\.zst$",
-          "path": "codex-responses-api-proxy"
+          "regex": "^ata-responses-api-proxy-aarch64-unknown-linux-musl\\.zst$",
+          "path": "ata-responses-api-proxy"
         },
         "windows-x86_64": {
-          "regex": "^codex-responses-api-proxy-x86_64-pc-windows-msvc\\.exe\\.zst$",
-          "path": "codex-responses-api-proxy.exe"
-        },
-        "windows-aarch64": {
-          "regex": "^codex-responses-api-proxy-aarch64-pc-windows-msvc\\.exe\\.zst$",
-          "path": "codex-responses-api-proxy.exe"
+          "regex": "^ata-responses-api-proxy-x86_64-pc-windows-msvc\\.exe\\.zst$",
+          "path": "ata-responses-api-proxy.exe"
         }
       }
     },
-    "codex-command-runner": {
+    "ata-command-runner": {
       "platforms": {
         "windows-x86_64": {
-          "regex": "^codex-command-runner-x86_64-pc-windows-msvc\\.exe\\.zst$",
-          "path": "codex-command-runner.exe"
-        },
-        "windows-aarch64": {
-          "regex": "^codex-command-runner-aarch64-pc-windows-msvc\\.exe\\.zst$",
-          "path": "codex-command-runner.exe"
+          "regex": "^ata-command-runner-x86_64-pc-windows-msvc\\.exe\\.zst$",
+          "path": "ata-command-runner.exe"
         }
       }
     },
-    "codex-windows-sandbox-setup": {
+    "ata-windows-sandbox-setup": {
       "platforms": {
         "windows-x86_64": {
-          "regex": "^codex-windows-sandbox-setup-x86_64-pc-windows-msvc\\.exe\\.zst$",
-          "path": "codex-windows-sandbox-setup.exe"
-        },
-        "windows-aarch64": {
-          "regex": "^codex-windows-sandbox-setup-aarch64-pc-windows-msvc\\.exe\\.zst$",
-          "path": "codex-windows-sandbox-setup.exe"
+          "regex": "^ata-windows-sandbox-setup-x86_64-pc-windows-msvc\\.exe\\.zst$",
+          "path": "ata-windows-sandbox-setup.exe"
         }
       }
     }

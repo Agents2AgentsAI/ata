@@ -13,7 +13,7 @@ permissions:
 jobs:
   close-stale-contributor-prs:
     # Prevent scheduled runs on forks
-    if: github.repository == 'openai/codex'
+    if: github.repository == 'Agents2AgentsAI/ata'
     runs-on: ubuntu-latest
     steps:
       - name: Close inactive PRs from contributors
