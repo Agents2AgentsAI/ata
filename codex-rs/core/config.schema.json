@@ -380,6 +380,21 @@
             "research": {
               "type": "boolean"
             },
+            "research_hacker_news": {
+              "type": "boolean"
+            },
+            "research_paper_search": {
+              "type": "boolean"
+            },
+            "research_patents": {
+              "type": "boolean"
+            },
+            "research_repo_analysis": {
+              "type": "boolean"
+            },
+            "research_zotero": {
+              "type": "boolean"
+            },
             "responses_websockets": {
               "type": "boolean"
             },
@@ -1709,6 +1724,21 @@
           "type": "boolean"
         },
         "research": {
+          "type": "boolean"
+        },
+        "research_hacker_news": {
+          "type": "boolean"
+        },
+        "research_paper_search": {
+          "type": "boolean"
+        },
+        "research_patents": {
+          "type": "boolean"
+        },
+        "research_repo_analysis": {
+          "type": "boolean"
+        },
+        "research_zotero": {
           "type": "boolean"
         },
         "responses_websockets": {

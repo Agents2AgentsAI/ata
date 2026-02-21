@@ -44,7 +44,7 @@ codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-data-tools = { workspace = true, optional = true }
 codex-kb = { workspace = true, optional = true }
-codex-research-tools = { workspace = true, optional = true }
+codex-research-tools = { workspace = true, features = ["paper_search", "zotero", "hackernews", "patents", "repo_analysis"] }
 codex-rmcp-client = { workspace = true }
 codex-state = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
@@ -122,12 +122,8 @@ zip = { workspace = true }
 deterministic_process_ids = []
 data = ["dep:codex-data-tools"]
 kb = ["dep:codex-kb"]
-research = ["dep:codex-research-tools"]
-research-hackernews = ["research", "codex-research-tools/hackernews"]
-research-latex = ["research", "codex-research-tools/latex"]
-research-pdf-images = ["research", "codex-research-tools/pdf_images"]
-research-patents = ["research", "codex-research-tools/patents"]
-research-repo = ["research", "codex-research-tools/repo_analysis"]
+research-latex = ["codex-research-tools/latex"]
+research-pdf-images = ["codex-research-tools/pdf_images"]
 test-support = []
 
 

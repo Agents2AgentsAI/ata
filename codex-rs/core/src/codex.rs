@@ -144,6 +144,7 @@ use crate::data::SharedDataToolkit;
 use crate::kb::SharedKbToolkit;
 
 mod file_attachments;
+mod url_file_recovery;
 
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
@@ -276,6 +277,8 @@ pub(crate) use file_attachments::UrlAttachmentInjectionError;
 pub(crate) use file_attachments::file_capabilities_for_provider;
 use file_attachments::refresh_uploaded_file_references;
 pub(crate) use file_attachments::resolve_and_prepare_file_inputs;
+use url_file_recovery::drop_last_turn_url_file_attachments;
+use url_file_recovery::read_cached_pdf_as_inline_content;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -554,7 +557,6 @@ pub(crate) struct Session {
     next_internal_sub_id: AtomicU64,
 }
 
-#[cfg(feature = "research")]
 const ZOTERO_DEVELOPER_INSTRUCTIONS: &str =
     include_str!("../templates/research/zotero_developer_instructions.md");
 
@@ -2672,7 +2674,6 @@ impl Session {
             items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
         }
         // Add developer instructions for Zotero when configured.
-        #[cfg(feature = "research")]
         if let Some(ref toolkit) = self.services.research_toolkit
             && toolkit.is_tool_configured("zotero_search")
         {
@@ -4613,25 +4614,9 @@ pub(crate) async fn run_turn(
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
 
-    async fn drop_last_turn_url_file_attachments(sess: &Arc<Session>) -> usize {
-        let url_attachments_in_turn = {
-            let mut active = sess.active_turn.lock().await;
-            match active.as_mut() {
-                Some(active_turn) => {
-                    let turn_state = active_turn.turn_state.lock().await;
-                    turn_state.url_attachments_injected()
-                }
-                None => 0,
-            }
-        };
-        let mut state = sess.state.lock().await;
-        state
-            .history
-            .drop_last_turn_url_files(url_attachments_in_turn)
-    }
-
     let mut context_window_url_file_recovery_attempted = false;
     let mut file_rejection_url_file_recovery_attempted = false;
+    let mut file_error_soft_recovery_attempted = false;
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -4825,14 +4810,15 @@ pub(crate) async fn run_turn(
             }
             Err(CodexErr::ContextWindowExceeded) => {
                 if !context_window_url_file_recovery_attempted {
-                    let dropped_url_files = drop_last_turn_url_file_attachments(&sess).await;
-                    if dropped_url_files > 0 {
+                    let dropped = drop_last_turn_url_file_attachments(&sess).await;
+                    if !dropped.is_empty() {
                         context_window_url_file_recovery_attempted = true;
                         sess.send_event(
                             &turn_context,
                             EventMsg::Warning(WarningEvent {
                                 message: format!(
-                                    "Dropped {dropped_url_files} attachment(s) because the context window was exceeded."
+                                    "Dropped {} attachment(s) because the context window was exceeded.",
+                                    dropped.len()
                                 ),
                             }),
                         )
@@ -4885,25 +4871,102 @@ pub(crate) async fn run_turn(
                         raw_message = %message,
                         "file-related InvalidRequest mapped for recovery"
                     );
-                    let dropped_url_files = drop_last_turn_url_file_attachments(&sess).await;
-                    if dropped_url_files > 0 {
+                    let dropped = drop_last_turn_url_file_attachments(&sess).await;
+                    if !dropped.is_empty() {
                         file_rejection_url_file_recovery_attempted = true;
-                        sess.send_event(
-                            &turn_context,
-                            EventMsg::Warning(WarningEvent {
-                                message: format!(
-                                    "Dropped {dropped_url_files} file attachment(s) that the provider rejected: {user_message}"
-                                ),
-                            }),
-                        )
-                        .await;
+
+                        // Try to re-inject dropped files using cached bytes
+                        let codex_home = &turn_context.config.codex_home;
+                        let mut reinjected = Vec::new();
+                        for info in &dropped {
+                            if let Some(url) = &info.url
+                                && let Some(item) = read_cached_pdf_as_inline_content(
+                                    codex_home,
+                                    url,
+                                    info.filename.clone(),
+                                )
+                                .await
+                            {
+                                reinjected.push(item);
+                            }
+                        }
+
+                        if reinjected.is_empty() {
+                            // No cached bytes available — emit warning like before
+                            sess.send_event(
+                                &turn_context,
+                                EventMsg::Warning(WarningEvent {
+                                    message: format!(
+                                        "Dropped {} file attachment(s) that the provider rejected: {user_message}",
+                                        dropped.len()
+                                    ),
+                                }),
+                            )
+                            .await;
+                        } else {
+                            // Re-inject as inline bytes via pending input
+                            let _ = sess
+                                .inject_response_items(vec![ResponseInputItem::Message {
+                                    role: "user".to_string(),
+                                    content: reinjected,
+                                }])
+                                .await;
+                            sess.send_event(
+                                &turn_context,
+                                EventMsg::Warning(WarningEvent {
+                                    message: format!(
+                                        "Re-attached {} file(s) using cached bytes after provider rejected URL: {user_message}",
+                                        dropped.len()
+                                    ),
+                                }),
+                            )
+                            .await;
+                        }
                         continue;
                     }
 
                     // No URL files to drop — surface the error normally.
                     info!("Turn error (file-related): {user_message}");
-                } else {
+                } else if map_user_facing_file_error_from_message(message).is_none() {
                     info!("Turn error: {message:#}");
+                }
+                // else: second attempt with file error — fall through
+
+                // ── File error soft recovery ──
+                // Instead of terminating on a file error, inject a message telling
+                // the model what happened so it can continue its task without the
+                // problematic file. Gated by a one-shot flag to prevent infinite loops.
+                if !file_error_soft_recovery_attempted
+                    && let Some(mapped) = map_user_facing_file_error_from_message(message)
+                {
+                    file_error_soft_recovery_attempted = true;
+                    let user_message = &mapped.user_message;
+                    info!("File error soft recovery: {user_message}");
+
+                    // Drop any remaining URL file attachments (covers reinjected cached bytes)
+                    drop_last_turn_url_file_attachments(&sess).await;
+
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::Warning(WarningEvent {
+                            message: format!("File error (continuing): {user_message}"),
+                        }),
+                    )
+                    .await;
+
+                    let _ = sess
+                        .inject_response_items(vec![ResponseInputItem::Message {
+                            role: "user".to_string(),
+                            content: vec![ContentItem::InputText {
+                                text: format!(
+                                    "[System: A file attachment was rejected by the provider: \
+                                     \"{user_message}\". The file has been removed from context. \
+                                     Continue your task without the rejected file.]"
+                                ),
+                            }],
+                        }])
+                        .await;
+                    continue;
                 }
 
                 let event =

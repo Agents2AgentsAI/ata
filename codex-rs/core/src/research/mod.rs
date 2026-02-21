@@ -15,7 +15,4 @@ pub use tool_names::configured_native_tool_context;
 pub use tool_names::native_tool_availability;
 pub use types::ResearchOutput;
 
-#[cfg(feature = "research")]
 pub(crate) type SharedResearchToolkit = codex_research_tools::ResearchToolkit;
-#[cfg(not(feature = "research"))]
-pub(crate) type SharedResearchToolkit = ();

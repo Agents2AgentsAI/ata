@@ -149,6 +149,16 @@ pub enum Feature {
     ResponsesWebsockets,
     /// Enable Responses API websocket v2 mode.
     ResponsesWebsocketsV2,
+    /// Enable research paper search tools (Semantic Scholar, arXiv, OpenAlex).
+    ResearchPaperSearch,
+    /// Enable Zotero library search, notes, annotations, citations.
+    ResearchZotero,
+    /// Enable Hacker News search and browsing tools.
+    ResearchHackerNews,
+    /// Enable USPTO patent search and retrieval tools.
+    ResearchPatents,
+    /// Enable repository cloning, summarization, and analysis tools.
+    ResearchRepoAnalysis,
 }
 
 impl Feature {
@@ -391,6 +401,20 @@ fn web_search_details() -> &'static str {
     "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml if you want to override it."
 }
 
+/// Research features are toggled via `/research` and should not trigger the
+/// under-development warning banner.
+fn is_research_feature(f: Feature) -> bool {
+    matches!(
+        f,
+        Feature::Research
+            | Feature::ResearchPaperSearch
+            | Feature::ResearchZotero
+            | Feature::ResearchHackerNews
+            | Feature::ResearchPatents
+            | Feature::ResearchRepoAnalysis
+    )
+}
+
 /// Keys accepted in `[features]` tables.
 fn feature_for_key(key: &str) -> Option<Feature> {
     for spec in FEATURES {
@@ -609,11 +633,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Research,
         key: "research",
-        stage: Stage::Experimental {
-            name: "Research Tools",
-            menu_description: "Enable research tool integrations (paper search, Zotero, repo analysis). Use `ata research` for the guided multi-phase workflow.",
-            announcement: "Research tools are available as an experimental feature. Use `ata research` to launch the full research workflow.",
-        },
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
@@ -698,6 +718,36 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
+    FeatureSpec {
+        id: Feature::ResearchPaperSearch,
+        key: "research_paper_search",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResearchZotero,
+        key: "research_zotero",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResearchHackerNews,
+        key: "research_hacker_news",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResearchPatents,
+        key: "research_patents",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResearchRepoAnalysis,
+        key: "research_repo_analysis",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
 ];
 
 /// Push a warning event if any under-development features are enabled.
@@ -726,7 +776,7 @@ pub fn maybe_push_unstable_features_warning(
             if !config.features.enabled(spec.id) {
                 continue;
             }
-            if matches!(spec.stage, Stage::UnderDevelopment) {
+            if matches!(spec.stage, Stage::UnderDevelopment) && !is_research_feature(spec.id) {
                 under_development_feature_keys.push(spec.key.to_string());
             }
         }

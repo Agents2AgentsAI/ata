@@ -13,7 +13,6 @@ use crate::kb::SharedKbToolkit;
 use crate::kb::tool_names::find_mcp_tool_matches as find_mcp_kb_tool_matches;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::research::SharedResearchToolkit;
-#[cfg(feature = "research")]
 use crate::research::tool_names::find_mcp_tool_matches;
 use crate::tools::handlers::APPEND_TO_SECTION_TOOL;
 use crate::tools::handlers::PATCH_DOCUMENT_SECTION_TOOL;
@@ -41,7 +40,6 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
-#[cfg(any(feature = "research", feature = "data", feature = "kb"))]
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -65,6 +63,8 @@ pub(crate) struct ToolsConfig {
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
     pub experimental_supported_tools: Vec<String>,
+    /// Per-category research feature flags for filtering research tools.
+    pub features: Features,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -127,6 +127,7 @@ impl ToolsConfig {
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
+            features: (*features).clone(),
         }
     }
 
@@ -1331,7 +1332,6 @@ pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, s
     serde_json::from_value::<JsonSchema>(input_schema)
 }
 
-#[cfg(feature = "research")]
 fn research_tool_to_openai_tool(
     tool: &codex_research_tools::tool_specs::ToolDef,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
@@ -1342,6 +1342,22 @@ fn research_tool_to_openai_tool(
         strict: false,
         parameters: input_schema,
     })
+}
+
+/// Check whether a research tool is enabled based on per-category feature flags.
+/// When the master `Research` toggle is on, all tools are enabled (backward compat).
+fn is_research_tool_enabled(tool_id: &str, features: &Features) -> bool {
+    if features.enabled(Feature::Research) {
+        return true;
+    }
+    match () {
+        _ if tool_id.starts_with("paper_") => features.enabled(Feature::ResearchPaperSearch),
+        _ if tool_id.starts_with("zotero_") => features.enabled(Feature::ResearchZotero),
+        _ if tool_id.starts_with("hn_") => features.enabled(Feature::ResearchHackerNews),
+        _ if tool_id.starts_with("patent_") => features.enabled(Feature::ResearchPatents),
+        _ if tool_id.starts_with("repo_") => features.enabled(Feature::ResearchRepoAnalysis),
+        _ => true,
+    }
 }
 
 #[cfg(feature = "data")]
@@ -1499,7 +1515,6 @@ pub(crate) fn build_specs(
     )
 }
 
-#[allow(dead_code)]
 pub(crate) fn build_specs_with_research(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
@@ -1527,8 +1542,6 @@ pub(crate) fn build_specs_with_toolkits(
     data_toolkit: Option<&Arc<SharedDataToolkit>>,
     kb_toolkit: Option<&Arc<SharedKbToolkit>>,
 ) -> ToolRegistryBuilder {
-    #[cfg(not(feature = "research"))]
-    let _ = research_toolkit;
     #[cfg(not(feature = "data"))]
     let _ = data_toolkit;
     #[cfg(not(feature = "kb"))]
@@ -1551,7 +1564,6 @@ pub(crate) fn build_specs_with_toolkits(
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::RequestUserInputHandler;
-    #[cfg(feature = "research")]
     use crate::tools::handlers::ResearchBridgeHandler;
     use crate::tools::handlers::SearchToolBm25Handler;
     use crate::tools::handlers::ShellCommandHandler;
@@ -1732,10 +1744,8 @@ pub(crate) fn build_specs_with_toolkits(
         builder.register_handler("close_agent", multi_agent_handler);
     }
 
-    #[cfg(feature = "research")]
     let mut suppressed_mcp_research_tool_names: BTreeSet<String> = BTreeSet::new();
 
-    #[cfg(feature = "research")]
     if let Some(toolkit) = research_toolkit {
         let research_handler = Arc::new(ResearchBridgeHandler::new(Arc::clone(toolkit)));
         let discovered_mcp_tools: BTreeMap<String, rmcp::model::Tool> = mcp_tools
@@ -1750,6 +1760,9 @@ pub(crate) fn build_specs_with_toolkits(
 
         for def in codex_research_tools::tool_specs::all_tool_defs() {
             if !toolkit.is_tool_configured(def.id) {
+                continue;
+            }
+            if !is_research_tool_enabled(def.id, &config.features) {
                 continue;
             }
 
@@ -1848,7 +1861,6 @@ pub(crate) fn build_specs_with_toolkits(
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
         for (name, tool) in entries.into_iter() {
-            #[cfg(feature = "research")]
             if suppressed_mcp_research_tool_names.contains(&name) {
                 continue;
             }
@@ -2035,12 +2047,12 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "research")]
     fn default_tools_config() -> ToolsConfig {
         let config = test_config();
         let model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-        let features = Features::with_defaults();
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Research);
         ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
@@ -2048,7 +2060,6 @@ mod tests {
         })
     }
 
-    #[cfg(feature = "research")]
     fn make_research_toolkit(
         mut config: codex_research_tools::config::ResearchConfig,
     ) -> Arc<SharedResearchToolkit> {
@@ -2063,7 +2074,6 @@ mod tests {
         ))
     }
 
-    #[cfg(feature = "research")]
     #[test]
     fn native_paper_tools_preempt_matching_mcp_tools() {
         let tools_config = default_tools_config();
