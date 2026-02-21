@@ -30,10 +30,7 @@ tracing = { workspace = true }
 urlencoding = { workspace = true }
 dirs = { workspace = true }
 dotenvy = { workspace = true }
-futures = { workspace = true }
-async-trait = { workspace = true }
 bytes = { workspace = true }
-tokio-util = { version = "0.7", features = ["io"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

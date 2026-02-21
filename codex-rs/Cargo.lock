@@ -1725,13 +1725,11 @@ dependencies = [
 name = "codex-data-tools"
 version = "0.0.0"
 dependencies = [
- "async-trait",
  "bytes",
  "chrono",
  "dashmap",
  "dirs",
  "dotenvy",
- "futures",
  "lru 0.16.3",
  "pretty_assertions",
  "rand 0.9.2",
@@ -1741,7 +1739,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tokio-util",
  "tracing",
  "tracing-subscriber",
  "urlencoding",
@@ -1933,15 +1930,12 @@ name = "codex-kb"
 version = "0.0.0"
 dependencies = [
  "chrono",
- "pretty_assertions",
- "regex",
  "serde",
  "serde_json",
  "serde_yaml",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tracing",
 ]
 
 [[package]]

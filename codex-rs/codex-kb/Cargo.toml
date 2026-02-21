@@ -9,15 +9,12 @@ workspace = true
 
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }
-regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "sync"] }
-tracing = { workspace = true }
 
 [dev-dependencies]
-pretty_assertions = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
