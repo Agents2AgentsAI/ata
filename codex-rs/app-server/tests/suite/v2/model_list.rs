@@ -173,10 +173,10 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
         },
         // Anthropic Claude models
         Model {
-            id: "claude-sonnet-4-5".to_string(),
-            model: "claude-sonnet-4-5".to_string(),
+            id: "claude-sonnet-4-6".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
             upgrade: None,
-            display_name: "Claude Sonnet 4-5".to_string(),
+            display_name: "Claude Sonnet 4-6".to_string(),
             description: "Anthropic's balanced model for coding tasks.".to_string(),
             hidden: false,
             supported_reasoning_efforts: vec![
@@ -421,7 +421,7 @@ async fn list_models_pagination_works() -> Result<()> {
     assert_eq!(fourth_items[0].id, "gpt-5.2");
     let fifth_cursor = fourth_cursor.ok_or_else(|| anyhow!("cursor for fifth page"))?;
 
-    // Fifth page: claude-sonnet-4-5
+    // Fifth page: claude-sonnet-4-6
     let fifth_request = mcp
         .send_list_models_request(ModelListParams {
             limit: Some(1),
@@ -442,7 +442,7 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(fifth_response)?;
 
     assert_eq!(fifth_items.len(), 1);
-    assert_eq!(fifth_items[0].id, "claude-sonnet-4-5");
+    assert_eq!(fifth_items[0].id, "claude-sonnet-4-6");
     let sixth_cursor = fifth_cursor.ok_or_else(|| anyhow!("cursor for sixth page"))?;
 
     // Sixth page: claude-opus-4-6

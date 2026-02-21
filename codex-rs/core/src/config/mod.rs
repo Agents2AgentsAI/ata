@@ -1893,7 +1893,7 @@ impl Config {
         let model = model.or(config_profile.model).or(cfg.model).or_else(|| {
             // If no model is specified, set a default based on the provider
             match model_provider_id.as_str() {
-                "anthropic" => Some("claude-sonnet-4-5".to_string()),
+                "anthropic" => Some("claude-sonnet-4-6".to_string()),
                 "gemini" => Some("gemini-2.0-flash".to_string()),
                 _ => None, // OpenAI and others will use the model manager's default
             }
