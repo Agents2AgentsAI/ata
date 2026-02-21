@@ -5560,7 +5560,7 @@ mod tests {
             .draw(|f| composer.render(f.area(), f.buffer_mut()))
             .expect("draw composer");
 
-        // Snapshot should show /resume as the first entry for /res.
+        // Snapshot should show /research as the first entry for /res.
         insta::assert_snapshot!("slash_popup_res", terminal.backend());
     }
 
@@ -5581,7 +5581,7 @@ mod tests {
         match &composer.active_popup {
             ActivePopup::Command(popup) => match popup.selected_item() {
                 Some(CommandItem::Builtin(cmd)) => {
-                    assert_eq!(cmd.command(), "resume")
+                    assert_eq!(cmd.command(), "research")
                 }
                 Some(CommandItem::UserPrompt(_)) => {
                     panic!("unexpected prompt selected for '/res'")

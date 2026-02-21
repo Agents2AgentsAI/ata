@@ -75,6 +75,7 @@ mod file_search_popup;
 mod footer;
 mod list_selection_view;
 mod prompt_args;
+mod research_tools_view;
 mod skill_popup;
 mod skills_toggle_view;
 mod slash_commands;
@@ -135,6 +136,8 @@ pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
+pub(crate) use research_tools_view::ResearchToolsView;
+pub(crate) use research_tools_view::build_research_tool_items;
 
 /// Pane displayed in the lower half of the chat UI.
 ///

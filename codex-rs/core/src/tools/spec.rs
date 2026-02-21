@@ -65,6 +65,10 @@ pub(crate) struct ToolsConfig {
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
     pub experimental_supported_tools: Vec<String>,
+    /// Per-category research feature flags for filtering research tools.
+    /// Used under `#[cfg(feature = "research")]`.
+    #[allow(dead_code)]
+    pub features: Features,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -127,6 +131,7 @@ impl ToolsConfig {
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
+            features: (*features).clone(),
         }
     }
 
@@ -1344,6 +1349,23 @@ fn research_tool_to_openai_tool(
     })
 }
 
+/// Check whether a research tool is enabled based on per-category feature flags.
+/// When the master `Research` toggle is on, all tools are enabled (backward compat).
+#[cfg(feature = "research")]
+fn is_research_tool_enabled(tool_id: &str, features: &Features) -> bool {
+    if features.enabled(Feature::Research) {
+        return true;
+    }
+    match () {
+        _ if tool_id.starts_with("paper_") => features.enabled(Feature::ResearchPaperSearch),
+        _ if tool_id.starts_with("zotero_") => features.enabled(Feature::ResearchZotero),
+        _ if tool_id.starts_with("hn_") => features.enabled(Feature::ResearchHackerNews),
+        _ if tool_id.starts_with("patent_") => features.enabled(Feature::ResearchPatents),
+        _ if tool_id.starts_with("repo_") => features.enabled(Feature::ResearchRepoAnalysis),
+        _ => true,
+    }
+}
+
 #[cfg(feature = "data")]
 fn data_tool_to_openai_tool(
     tool: &codex_data_tools::tool_specs::ToolDef,
@@ -1750,6 +1772,9 @@ pub(crate) fn build_specs_with_toolkits(
 
         for def in codex_research_tools::tool_specs::all_tool_defs() {
             if !toolkit.is_tool_configured(def.id) {
+                continue;
+            }
+            if !is_research_tool_enabled(def.id, &config.features) {
                 continue;
             }
 
