@@ -13,6 +13,7 @@ use exec_server_test_support::InteractiveClient;
 use exec_server_test_support::create_transport;
 use exec_server_test_support::create_transport_with_shell_path;
 use exec_server_test_support::notify_readable_sandbox;
+use exec_server_test_support::prefetch_dotslash_bash_artifact;
 use exec_server_test_support::write_default_execpolicy;
 use maplit::hashset;
 use pretty_assertions::assert_eq;
@@ -55,6 +56,10 @@ prefix_rule(
     .await?;
     let dotslash_cache_temp_dir = TempDir::new()?;
     let dotslash_cache = dotslash_cache_temp_dir.path();
+    if let Err(err) = prefetch_dotslash_bash_artifact(dotslash_cache).await {
+        eprintln!("skipping test because patched bash could not be fetched via dotslash: {err:#}");
+        return Ok(());
+    }
     let transport = create_transport(codex_home.as_ref(), dotslash_cache).await?;
     run_accept_elicitation_for_prompt_rule_with_transport(transport).await
 }
