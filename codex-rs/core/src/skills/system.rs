@@ -12,7 +12,6 @@ use thiserror::Error;
 const SYSTEM_SKILLS_DIR: Dir =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/skills/assets/samples");
 
-#[cfg(feature = "research")]
 const RESEARCH_SKILLS_DIR: Dir =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/skills/assets/research");
 
@@ -21,9 +20,7 @@ const RESEARCH_SKILLS_DIR_NAME: &str = ".system-research";
 const SKILLS_DIR_NAME: &str = "skills";
 const SYSTEM_SKILLS_MARKER_FILENAME: &str = ".ata-system-skills.marker";
 const SYSTEM_SKILLS_MARKER_SALT: &str = "v1";
-#[cfg(feature = "research")]
 const RESEARCH_SKILLS_MARKER_FILENAME: &str = ".codex-research-skills.marker";
-#[cfg(feature = "research")]
 const RESEARCH_SKILLS_MARKER_SALT: &str = "v1";
 
 /// Returns the on-disk cache location for embedded system skills.
@@ -112,7 +109,6 @@ pub(crate) fn install_system_skills(codex_home: &Path) -> Result<(), SystemSkill
 /// Installs embedded research skills into `CODEX_HOME/skills/.system-research`.
 ///
 /// Same caching strategy as [`install_system_skills`] but for research-feature-gated skills.
-#[cfg(feature = "research")]
 pub(crate) fn install_research_skills(codex_home: &Path) -> Result<(), SystemSkillsError> {
     let codex_home = AbsolutePathBuf::try_from(codex_home)
         .map_err(|source| SystemSkillsError::io("normalize codex home dir", source))?;
@@ -169,7 +165,6 @@ fn embedded_system_skills_fingerprint() -> String {
     format!("{:x}", hasher.finish())
 }
 
-#[cfg(feature = "research")]
 fn embedded_research_skills_fingerprint() -> String {
     let mut items = Vec::new();
     collect_fingerprint_items(&RESEARCH_SKILLS_DIR, &mut items);
@@ -279,7 +274,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "research")]
     #[test]
     fn research_fingerprint_traverses_nested_entries() {
         use super::RESEARCH_SKILLS_DIR;

@@ -554,7 +554,6 @@ pub(crate) struct Session {
     next_internal_sub_id: AtomicU64,
 }
 
-#[cfg(feature = "research")]
 const ZOTERO_DEVELOPER_INSTRUCTIONS: &str =
     include_str!("../templates/research/zotero_developer_instructions.md");
 
@@ -2672,7 +2671,6 @@ impl Session {
             items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
         }
         // Add developer instructions for Zotero when configured.
-        #[cfg(feature = "research")]
         if let Some(ref toolkit) = self.services.research_toolkit
             && toolkit.is_tool_configured("zotero_search")
         {

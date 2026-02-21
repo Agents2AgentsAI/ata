@@ -9,7 +9,6 @@ use crate::codex_thread::CodexThread;
 use crate::config::Config;
 #[cfg(feature = "data")]
 use crate::data::SharedDataToolkit;
-#[cfg(any(feature = "research", feature = "data"))]
 use crate::default_client::build_reqwest_client_with_timeouts;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -23,14 +22,12 @@ use crate::models_manager::manager::ModelsManager;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
-#[cfg(feature = "research")]
 use crate::research::SharedResearchToolkit;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::skills::SkillsManager;
 #[cfg(feature = "data")]
 use crate::tools::handlers::data::build_data_config;
-#[cfg(feature = "research")]
 use crate::tools::handlers::research::build_research_config;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
@@ -47,7 +44,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use tokio::runtime::Handle;
-#[cfg(any(feature = "research", feature = "data", feature = "kb"))]
 use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
@@ -144,7 +140,6 @@ pub(crate) struct ThreadManagerState {
     thread_created_tx: broadcast::Sender<ThreadId>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
-    #[cfg(feature = "research")]
     research_toolkit: OnceCell<Arc<SharedResearchToolkit>>,
     #[cfg(feature = "data")]
     data_toolkit: OnceCell<Arc<SharedDataToolkit>>,
@@ -176,7 +171,6 @@ impl ThreadManager {
                     auth_manager.clone(),
                     model_catalog,
                 )),
-                #[cfg(feature = "research")]
                 research_toolkit: OnceCell::new(),
                 #[cfg(feature = "data")]
                 data_toolkit: OnceCell::new(),
@@ -233,7 +227,6 @@ impl ThreadManager {
                     auth_manager.clone(),
                     provider,
                 )),
-                #[cfg(feature = "research")]
                 research_toolkit: OnceCell::new(),
                 #[cfg(feature = "data")]
                 data_toolkit: OnceCell::new(),
@@ -531,35 +524,25 @@ impl ThreadManagerState {
     ) -> CodexResult<NewThread> {
         let watch_registration = self.file_watcher.register_config(&config);
         let research_toolkit = if any_research_feature_enabled(&config.features) {
-            #[cfg(feature = "research")]
-            {
-                Some(
-                    self.research_toolkit
-                        .get_or_init(|| async {
-                            let research_config = build_research_config(
-                                config.research.as_ref(),
-                                config.codex_home.as_path(),
-                                config.cwd.as_path(),
-                            );
-                            Arc::new(codex_research_tools::ResearchToolkit::new(
-                                build_reqwest_client_with_timeouts(
-                                    Some(research_config.connect_timeout),
-                                    Some(research_config.request_timeout),
-                                ),
-                                research_config,
-                            ))
-                        })
-                        .await
-                        .clone(),
-                )
-            }
-            #[cfg(not(feature = "research"))]
-            {
-                warn!(
-                    "research feature flag is enabled in config, but codex-core was built without `--features research`"
-                );
-                None
-            }
+            Some(
+                self.research_toolkit
+                    .get_or_init(|| async {
+                        let research_config = build_research_config(
+                            config.research.as_ref(),
+                            config.codex_home.as_path(),
+                            config.cwd.as_path(),
+                        );
+                        Arc::new(codex_research_tools::ResearchToolkit::new(
+                            build_reqwest_client_with_timeouts(
+                                Some(research_config.connect_timeout),
+                                Some(research_config.request_timeout),
+                            ),
+                            research_config,
+                        ))
+                    })
+                    .await
+                    .clone(),
+            )
         } else {
             None
         };
