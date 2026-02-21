@@ -81,7 +81,11 @@ pub fn builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
 /// tool handler finds a cached entry for `url` without making a network
 /// request.  Intended for integration tests that need `url_file` content
 /// blocks to appear in API request bodies.
-pub async fn prepopulate_url_file_cache(codex_home: &std::path::Path, url: &str, content: &[u8]) -> anyhow::Result<()> {
+pub async fn prepopulate_url_file_cache(
+    codex_home: &std::path::Path,
+    url: &str,
+    content: &[u8],
+) -> anyhow::Result<()> {
     use crate::tools::url_downloader::cache_entry_dir;
     use crate::tools::url_validation::normalize_url_for_cache;
 
