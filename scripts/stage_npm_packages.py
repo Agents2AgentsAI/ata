@@ -78,28 +78,46 @@ def expand_packages(packages: list[str]) -> list[str]:
     return expanded
 
 
-def resolve_release_workflow(version: str) -> dict:
+def list_release_workflows(*, branch: str | None = None) -> list[dict]:
     stdout = subprocess.check_output(
         [
             "gh",
             "run",
             "list",
-            "--branch",
-            f"rust-v{version}",
+            "--repo",
+            GITHUB_REPO,
+            "--limit",
+            "200",
             "--json",
-            "workflowName,url,headSha",
+            "workflowName,url,headSha,headBranch,displayTitle",
             "--workflow",
             WORKFLOW_NAME,
-            "--jq",
-            "first(.[])",
+            *(["--branch", branch] if branch else []),
         ],
         cwd=REPO_ROOT,
         text=True,
     )
-    workflow = json.loads(stdout or "null")
-    if not workflow:
-        raise RuntimeError(f"Unable to find rust-release workflow for version {version}.")
-    return workflow
+    return json.loads(stdout or "[]")
+
+
+def resolve_release_workflow(version: str) -> dict:
+    release_branch = f"rust-v{version}"
+
+    # First try the exact release branch/tag name.
+    release_branch_runs = list_release_workflows(branch=release_branch)
+    if release_branch_runs:
+        return release_branch_runs[0]
+
+    # Fall back to scanning recent runs in case branch filtering misses older runs.
+    for workflow in list_release_workflows():
+        if workflow.get("headBranch") == release_branch:
+            return workflow
+
+    raise RuntimeError(
+        "Unable to find rust-release workflow for "
+        f"version {version} in {GITHUB_REPO} ({WORKFLOW_NAME}). "
+        "Pass --workflow-url to override the artifact source."
+    )
 
 
 def resolve_workflow_url(version: str, override: str | None) -> tuple[str, str | None]:

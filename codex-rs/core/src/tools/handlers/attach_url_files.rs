@@ -804,6 +804,7 @@ mod tests {
             js_repl_tools_only: false,
             experimental_supported_tools: Vec::new(),
             allow_login_shell: false,
+            features: crate::features::Features::with_defaults(),
         }
     }
 }

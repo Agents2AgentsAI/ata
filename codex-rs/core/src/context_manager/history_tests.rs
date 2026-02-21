@@ -535,7 +535,13 @@ fn drop_last_turn_url_files_removes_wrapped_url_files_and_tags() {
     }];
     let mut history = create_history_with_items(items);
 
-    assert_eq!(history.drop_last_turn_url_files(0), 1);
+    let dropped = history.drop_last_turn_url_files(0);
+    assert_eq!(dropped.len(), 1);
+    assert_eq!(
+        dropped[0].url.as_deref(),
+        Some("https://example.com/report.pdf")
+    );
+    assert_eq!(dropped[0].filename.as_deref(), Some("report.pdf"));
     assert_eq!(
         history.raw_items(),
         vec![ResponseItem::Message {
@@ -595,7 +601,8 @@ fn drop_last_turn_url_files_applies_to_multiple_user_messages_in_last_turn() {
     ];
     let mut history = create_history_with_items(items);
 
-    assert_eq!(history.drop_last_turn_url_files(0), 2);
+    let dropped = history.drop_last_turn_url_files(0);
+    assert_eq!(dropped.len(), 2);
     assert_eq!(history.raw_items(), vec![assistant_msg("prior turn")]);
 }
 
@@ -629,7 +636,11 @@ fn drop_last_turn_url_files_removes_download_path_input_files_when_budget_is_kno
     ];
     let mut history = create_history_with_items(items);
 
-    assert_eq!(history.drop_last_turn_url_files(1), 1);
+    let dropped = history.drop_last_turn_url_files(1);
+    assert_eq!(dropped.len(), 1);
+    // InputFile items produce entries with url: None
+    assert_eq!(dropped[0].url, None);
+    assert_eq!(dropped[0].filename.as_deref(), Some("downloaded.pdf"));
     assert_eq!(history.raw_items(), vec![assistant_msg("prior turn")]);
 }
 
