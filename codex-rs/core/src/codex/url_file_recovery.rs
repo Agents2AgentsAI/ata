@@ -47,8 +47,7 @@ pub(crate) async fn read_cached_pdf_as_inline_content(
         if path.extension().is_some_and(|ext| ext == "pdf") {
             let bytes = tokio::fs::read(&path).await.ok()?;
             if bytes.starts_with(b"%PDF") {
-                let base64_data =
-                    base64::engine::general_purpose::STANDARD.encode(&bytes);
+                let base64_data = base64::engine::general_purpose::STANDARD.encode(&bytes);
                 return Some(ContentItem::inline_file(
                     base64_data,
                     "application/pdf".to_string(),
