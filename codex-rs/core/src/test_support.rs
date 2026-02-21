@@ -81,19 +81,16 @@ pub fn builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
 /// tool handler finds a cached entry for `url` without making a network
 /// request.  Intended for integration tests that need `url_file` content
 /// blocks to appear in API request bodies.
-pub async fn prepopulate_url_file_cache(codex_home: &std::path::Path, url: &str, content: &[u8]) {
+pub async fn prepopulate_url_file_cache(codex_home: &std::path::Path, url: &str, content: &[u8]) -> anyhow::Result<()> {
     use crate::tools::url_downloader::cache_entry_dir;
     use crate::tools::url_validation::normalize_url_for_cache;
 
-    let parsed = url::Url::parse(url).expect("valid test URL");
+    let parsed = url::Url::parse(url)?;
     let normalized_cache_key = normalize_url_for_cache(&parsed);
     let filename = crate::tools::url_validation::derive_pdf_filename(&parsed, None);
     let dir = cache_entry_dir(codex_home, &normalized_cache_key);
-    tokio::fs::create_dir_all(&dir)
-        .await
-        .expect("create cache dir for test");
+    tokio::fs::create_dir_all(&dir).await?;
     let path = dir.join(filename);
-    tokio::fs::write(&path, content)
-        .await
-        .expect("write test cache file");
+    tokio::fs::write(&path, content).await?;
+    Ok(())
 }
