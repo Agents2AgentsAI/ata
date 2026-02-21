@@ -57,12 +57,6 @@ pub enum ConfigEdit {
 }
 
 pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
-    if items.is_empty() {
-        return ConfigEdit::ClearPath {
-            segments: vec!["tui".to_string(), "status_line".to_string()],
-        };
-    }
-
     let mut array = toml_edit::Array::new();
     for item in items {
         array.push(item.clone());
@@ -666,7 +660,7 @@ fn normalize_skill_config_path(path: &Path) -> String {
 pub fn default_model_for_provider(provider_id: &str) -> Option<&'static str> {
     match provider_id {
         "openai" => Some("gpt-5.2-codex"),
-        "anthropic" => Some("claude-sonnet-4-5"),
+        "anthropic" => Some("claude-sonnet-4-6"),
         "gemini" => Some("gemini-3-flash-preview"),
         _ => None, // Unknown provider, clear model
     }

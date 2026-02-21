@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_core::test_support::prepopulate_url_file_cache;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -11,8 +12,8 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use serde_json::Value;
 
-const TEST_PDF_URL: &str =
-    "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf";
+const TEST_PDF_URL: &str = "https://example.com/doc.pdf";
+const VALID_PDF_BYTES: &[u8] = b"%PDF-1.4\ntest content";
 
 fn request_contains_url_file(body: &Value) -> bool {
     body.get("input")
@@ -38,7 +39,7 @@ async fn file_related_invalid_request_drops_url_attachments_and_retries() -> Res
     let call_id = "attach-1";
     let args = serde_json::json!({
         "files": [
-            {"url": TEST_PDF_URL}
+            {"url": "https://example.com/doc.pdf"}
         ],
     });
     let arguments = serde_json::to_string(&args)?;
@@ -74,6 +75,7 @@ async fn file_related_invalid_request_drops_url_attachments_and_retries() -> Res
     .await;
 
     let fixture = test_codex().with_model("gpt-5.1").build(&server).await?;
+    prepopulate_url_file_cache(fixture.codex_home_path(), TEST_PDF_URL, VALID_PDF_BYTES).await?;
     fixture
         .submit_turn("attach a pdf and then continue if it fails")
         .await?;
@@ -102,7 +104,7 @@ async fn non_file_invalid_request_does_not_retry_or_drop_url_attachments() -> Re
     let call_id = "attach-2";
     let args = serde_json::json!({
         "files": [
-            {"url": TEST_PDF_URL}
+            {"url": "https://example.com/doc.pdf"}
         ],
     });
     let arguments = serde_json::to_string(&args)?;
@@ -138,6 +140,7 @@ async fn non_file_invalid_request_does_not_retry_or_drop_url_attachments() -> Re
     .await;
 
     let fixture = test_codex().with_model("gpt-5.1").build(&server).await?;
+    prepopulate_url_file_cache(fixture.codex_home_path(), TEST_PDF_URL, VALID_PDF_BYTES).await?;
     fixture
         .submit_turn("attach a pdf and then error for non-file reasons")
         .await?;
@@ -158,7 +161,7 @@ async fn context_window_exceeded_drops_url_attachments_only_once_per_turn() -> R
 
     let args = serde_json::json!({
         "files": [
-            {"url": TEST_PDF_URL}
+            {"url": "https://example.com/doc.pdf"}
         ],
     });
     let arguments = serde_json::to_string(&args)?;
@@ -214,6 +217,7 @@ async fn context_window_exceeded_drops_url_attachments_only_once_per_turn() -> R
     .await;
 
     let fixture = test_codex().with_model("gpt-5.1").build(&server).await?;
+    prepopulate_url_file_cache(fixture.codex_home_path(), TEST_PDF_URL, VALID_PDF_BYTES).await?;
     fixture
         .submit_turn("attach a pdf repeatedly, even if the context window is exceeded")
         .await?;
@@ -252,7 +256,7 @@ async fn context_window_exceeded_then_file_related_invalid_request_still_recover
 
     let args = serde_json::json!({
         "files": [
-            {"url": TEST_PDF_URL}
+            {"url": "https://example.com/doc.pdf"}
         ],
     });
     let arguments = serde_json::to_string(&args)?;
@@ -308,6 +312,7 @@ async fn context_window_exceeded_then_file_related_invalid_request_still_recover
     .await;
 
     let fixture = test_codex().with_model("gpt-5.1").build(&server).await?;
+    prepopulate_url_file_cache(fixture.codex_home_path(), TEST_PDF_URL, VALID_PDF_BYTES).await?;
     fixture
         .submit_turn("attach a pdf; recover from context window and file rejection")
         .await?;

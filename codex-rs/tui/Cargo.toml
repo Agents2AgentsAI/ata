@@ -17,6 +17,8 @@ path = "src/lib.rs"
 vt100-tests = []
 # Gate verbose debug logging inside the TUI implementation.
 debug-logs = []
+research-latex = ["codex-core/research-latex"]
+research-pdf-images = ["codex-core/research-pdf-images"]
 
 [lints]
 workspace = true

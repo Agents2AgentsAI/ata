@@ -75,6 +75,7 @@ mod file_search_popup;
 mod footer;
 mod list_selection_view;
 mod prompt_args;
+mod research_tools_view;
 mod skill_popup;
 mod skills_toggle_view;
 mod slash_commands;
@@ -135,6 +136,8 @@ pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
+pub(crate) use research_tools_view::ResearchToolsView;
+pub(crate) use research_tools_view::build_research_tool_items;
 
 /// Pane displayed in the lower half of the chat UI.
 ///
@@ -286,6 +289,13 @@ impl BottomPane {
 
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
         self.composer.set_personality_command_enabled(enabled);
+        self.request_redraw();
+    }
+
+    /// Update the key hint shown next to queued messages so it matches the
+    /// binding that `ChatWidget` actually listens for.
+    pub(crate) fn set_queued_message_edit_binding(&mut self, binding: KeyBinding) {
+        self.queued_user_messages.set_edit_binding(binding);
         self.request_redraw();
     }
 

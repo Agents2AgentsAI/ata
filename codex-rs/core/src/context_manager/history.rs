@@ -20,7 +20,15 @@ use codex_protocol::models::is_file_open_tag_text;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnContextItem;
 use std::ops::Deref;
+
+/// Information about a file attachment that was dropped from history.
+/// `url` is `Some` for `UrlFile` items and `None` for `InputFile` items.
+pub(crate) struct DroppedUrlFileInfo {
+    pub(crate) url: Option<String>,
+    pub(crate) filename: Option<String>,
+}
 
 /// Transcript of thread history
 #[derive(Debug, Clone, Default)]
@@ -28,6 +36,12 @@ pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
+    /// Previous turn context snapshot used for diffing context and producing
+    /// model-visible settings update items.
+    ///
+    /// When this is `None`, settings diffing treats the next turn as having no
+    /// baseline and emits a full reinjection of context state.
+    previous_context_item: Option<TurnContextItem>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -43,6 +57,7 @@ impl ContextManager {
         Self {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
+            previous_context_item: None,
         }
     }
 
@@ -52,6 +67,14 @@ impl ContextManager {
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         self.token_info = info;
+    }
+
+    pub(crate) fn set_previous_context_item(&mut self, item: Option<TurnContextItem>) {
+        self.previous_context_item = item;
+    }
+
+    pub(crate) fn previous_context_item(&self) -> Option<TurnContextItem> {
+        self.previous_context_item.clone()
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
@@ -187,14 +210,17 @@ impl ContextManager {
     /// attachments from the most recent turn until that count is exhausted. This supports URL
     /// attachments that were downloaded and injected as local `input_file` blocks.
     ///
-    /// Returns the number of removed URL attachment blocks.
-    pub(crate) fn drop_last_turn_url_files(&mut self, url_attachments_in_turn: usize) -> usize {
+    /// Returns information about each removed URL attachment (url and filename).
+    pub(crate) fn drop_last_turn_url_files(
+        &mut self,
+        url_attachments_in_turn: usize,
+    ) -> Vec<DroppedUrlFileInfo> {
         let Some(last_user_index) = self
             .items
             .iter()
             .rposition(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
         else {
-            return 0;
+            return Vec::new();
         };
 
         let turn_start = self.items[..last_user_index]
@@ -206,7 +232,7 @@ impl ContextManager {
 
         let remove_url_files_only = url_attachments_in_turn == 0;
         let mut remaining_url_attachments = url_attachments_in_turn;
-        let mut removed_total = 0usize;
+        let mut dropped = Vec::new();
         let mut index = self.items.len();
         while index > turn_start {
             if !remove_url_files_only && remaining_url_attachments == 0 {
@@ -241,6 +267,22 @@ impl ContextManager {
                         if !remove_url_files_only {
                             remaining_url_attachments = remaining_url_attachments.saturating_sub(1);
                         }
+                        // Capture info from the item being removed (at content_index + 1)
+                        match content.get(content_index + 1) {
+                            Some(ContentItem::UrlFile { url, filename, .. }) => {
+                                dropped.push(DroppedUrlFileInfo {
+                                    url: Some(url.clone()),
+                                    filename: filename.clone(),
+                                });
+                            }
+                            Some(ContentItem::InputFile { filename, .. }) => {
+                                dropped.push(DroppedUrlFileInfo {
+                                    url: None,
+                                    filename: filename.clone(),
+                                });
+                            }
+                            _ => {}
+                        }
                         content_index += 2;
                         if let Some(ContentItem::InputText { text }) = content.get(content_index)
                             && is_file_close_tag_text(text)
@@ -263,6 +305,22 @@ impl ContextManager {
                         if !remove_url_files_only {
                             remaining_url_attachments = remaining_url_attachments.saturating_sub(1);
                         }
+                        // Capture info from items being removed
+                        match content.get(content_index) {
+                            Some(ContentItem::UrlFile { url, filename, .. }) => {
+                                dropped.push(DroppedUrlFileInfo {
+                                    url: Some(url.clone()),
+                                    filename: filename.clone(),
+                                });
+                            }
+                            Some(ContentItem::InputFile { filename, .. }) => {
+                                dropped.push(DroppedUrlFileInfo {
+                                    url: None,
+                                    filename: filename.clone(),
+                                });
+                            }
+                            _ => {}
+                        }
                         if filtered.last().is_some_and(|item| {
                             matches!(item, ContentItem::InputText { text } if is_file_open_tag_text(text))
                         }) {
@@ -282,7 +340,6 @@ impl ContextManager {
                 }
 
                 if removed_in_message > 0 {
-                    removed_total = removed_total.saturating_add(removed_in_message);
                     *content = filtered;
                     should_remove_message = content.is_empty();
                 }
@@ -293,7 +350,7 @@ impl ContextManager {
             }
         }
 
-        removed_total
+        dropped
     }
 
     /// Drop the last `num_turns` user turns from this history.
