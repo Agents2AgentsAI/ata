@@ -28,7 +28,6 @@ codex-cloud-tasks = { path = "../cloud-tasks" }
 codex-utils-cli = { workspace = true }
 codex-core = { workspace = true }
 codex-exec = { workspace = true }
-codex-research-tools = { workspace = true, features = ["paper_search", "zotero", "hackernews", "patents", "repo_analysis"] }
 codex-execpolicy = { workspace = true }
 codex-login = { workspace = true }
 codex-mcp-server = { workspace = true }
@@ -55,10 +54,6 @@ tracing = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
-
-[features]
-research-latex = ["codex-core/research-latex", "codex-research-tools/latex"]
-research-pdf-images = ["codex-core/research-pdf-images", "codex-research-tools/pdf_images"]
 
 [dev-dependencies]
 assert_cmd = { workspace = true }

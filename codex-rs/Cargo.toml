@@ -395,8 +395,6 @@ unwrap_used = "deny"
 ignored = [
     "icu_provider",
     "openssl-sys",
-    "codex-utils-readiness",
-    "codex-secrets",
 ]
 
 [profile.dev]
