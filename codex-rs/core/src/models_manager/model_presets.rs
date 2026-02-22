@@ -14,9 +14,9 @@ pub const HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG: &str =
 pub(crate) static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
     vec![
         ModelPreset {
-            id: "gpt-5.2-codex".to_string(),
-            model: "gpt-5.2-codex".to_string(),
-            display_name: "gpt-5.2-codex".to_string(),
+            id: "gpt-5.3-codex".to_string(),
+            model: "gpt-5.3-codex".to_string(),
+            display_name: "gpt-5.3-codex".to_string(),
             description: "Latest frontier agentic coding model.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
             supported_reasoning_efforts: vec![
@@ -40,6 +40,38 @@ pub(crate) static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             supports_personality: true,
             is_default: true,
             upgrade: None,
+            show_in_picker: true,
+            supported_in_api: true,
+            input_modalities: default_input_modalities(),
+            provider_id: None,
+        },
+        ModelPreset {
+            id: "gpt-5.2-codex".to_string(),
+            model: "gpt-5.2-codex".to_string(),
+            display_name: "gpt-5.2-codex".to_string(),
+            description: "Frontier agentic coding model.".to_string(),
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Low,
+                    description: "Fast responses with lighter reasoning".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Medium,
+                    description: "Balances speed and reasoning depth for everyday tasks".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::High,
+                    description: "Greater reasoning depth for complex problems".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::XHigh,
+                    description: "Extra high reasoning depth for complex problems".to_string(),
+                },
+            ],
+            supports_personality: true,
+            is_default: false,
+            upgrade: Some(gpt_53_codex_upgrade()),
             show_in_picker: true,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
@@ -71,7 +103,7 @@ pub(crate) static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             ],
             supports_personality: false,
             is_default: false,
-            upgrade: Some(gpt_52_codex_upgrade()),
+            upgrade: Some(gpt_53_codex_upgrade()),
             show_in_picker: true,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
@@ -96,7 +128,7 @@ pub(crate) static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             ],
             supports_personality: false,
             is_default: false,
-            upgrade: Some(gpt_52_codex_upgrade()),
+            upgrade: Some(gpt_53_codex_upgrade()),
             show_in_picker: true,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
@@ -128,7 +160,7 @@ pub(crate) static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             ],
             supports_personality: false,
             is_default: false,
-            upgrade: Some(gpt_52_codex_upgrade()),
+            upgrade: Some(gpt_53_codex_upgrade()),
             show_in_picker: true,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
@@ -221,7 +253,7 @@ pub(crate) static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             ],
             supports_personality: false,
             is_default: false,
-            upgrade: Some(gpt_52_codex_upgrade()),
+            upgrade: Some(gpt_53_codex_upgrade()),
             show_in_picker: false,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
@@ -245,7 +277,7 @@ pub(crate) static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             ],
             supports_personality: false,
             is_default: false,
-            upgrade: Some(gpt_52_codex_upgrade()),
+            upgrade: Some(gpt_53_codex_upgrade()),
             show_in_picker: false,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
@@ -274,7 +306,7 @@ pub(crate) static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             ],
             supports_personality: false,
             is_default: false,
-            upgrade: Some(gpt_52_codex_upgrade()),
+            upgrade: Some(gpt_53_codex_upgrade()),
             show_in_picker: false,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
@@ -306,7 +338,7 @@ pub(crate) static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             ],
             supports_personality: false,
             is_default: false,
-            upgrade: Some(gpt_52_codex_upgrade()),
+            upgrade: Some(gpt_53_codex_upgrade()),
             show_in_picker: false,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
@@ -334,7 +366,7 @@ pub(crate) static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             ],
             supports_personality: false,
             is_default: false,
-            upgrade: Some(gpt_52_codex_upgrade()),
+            upgrade: Some(gpt_53_codex_upgrade()),
             show_in_picker: false,
             supported_in_api: true,
             input_modalities: default_input_modalities(),
@@ -489,23 +521,25 @@ pub(crate) static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
     ]
 });
 
-fn gpt_52_codex_upgrade() -> ModelUpgrade {
+fn gpt_53_codex_upgrade() -> ModelUpgrade {
     ModelUpgrade {
-        id: "gpt-5.2-codex".to_string(),
+        id: "gpt-5.3-codex".to_string(),
         reasoning_effort_mapping: None,
-        migration_config_key: "gpt-5.2-codex".to_string(),
-        model_link: Some("https://openai.com/index/introducing-gpt-5-2-codex".to_string()),
+        migration_config_key: "gpt-5.3-codex".to_string(),
+        model_link: Some("https://openai.com/index/introducing-gpt-5-3-codex".to_string()),
         upgrade_copy: Some(
-            "Ata is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work."
+            "Ata is now powered by gpt-5.3-codex, our most capable agentic coding model yet. It's built for long-running, project-scale work, with mid-turn steering + frequent progress updates so you can collaborate while it runs (and it's faster too)."
                 .to_string(),
         ),
         migration_markdown: Some(
             indoc! {r#"
                 **Ata just got an upgrade. Introducing {model_to}.**
 
-                Ata is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work. Learn more about {model_to} at https://openai.com/index/introducing-gpt-5-2-codex
+                Ata is now powered by {model_to}, our most capable agentic coding model yet. It's built for long-running, project-scale work, with mid-turn steering + frequent progress updates so you can collaborate while it runs (and it's faster too).
 
-                You can continue using {model_from} if you prefer.
+                Learn more: https://openai.com/index/introducing-gpt-5-3-codex/
+
+                You can keep using {model_from} if you prefer.
             "#}
             .to_string(),
         ),
