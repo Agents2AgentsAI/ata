@@ -17,6 +17,12 @@ Install using npm
 npm install -g @a2a-ai/ata
 ```
 
+Install using homebrew (macOS)
+
+```
+brew install ata
+```
+
 Install using curl (macOS/Linux)
 
 ```shell
