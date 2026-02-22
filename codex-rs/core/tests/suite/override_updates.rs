@@ -3,11 +3,11 @@ use codex_core::config::Constrained;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::COLLABORATION_MODE_CLOSE_TAG;
 use codex_core::protocol::COLLABORATION_MODE_OPEN_TAG;
+use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
-use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -47,7 +47,11 @@ async fn read_rollout_text(path: &Path) -> anyhow::Result<String> {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    Ok(std::fs::read_to_string(path)?)
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(err) => Err(err.into()),
+    }
 }
 
 fn rollout_developer_texts(text: &str) -> Vec<String> {
@@ -61,8 +65,7 @@ fn rollout_developer_texts(text: &str) -> Vec<String> {
             Ok(rollout) => rollout,
             Err(_) => continue,
         };
-        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) =
-            rollout.item
+        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = rollout.item
             && role == "developer"
         {
             for item in content {
@@ -86,8 +89,7 @@ fn rollout_environment_texts(text: &str) -> Vec<String> {
             Ok(rollout) => rollout,
             Err(_) => continue,
         };
-        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) =
-            rollout.item
+        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = rollout.item
             && role == "user"
         {
             for item in content {
@@ -103,7 +105,8 @@ fn rollout_environment_texts(text: &str) -> Vec<String> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn override_turn_context_without_user_turn_does_not_record_permissions_update() -> Result<()> {
+async fn override_turn_context_without_user_turn_does_not_record_permissions_update() -> Result<()>
+{
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -146,7 +149,8 @@ async fn override_turn_context_without_user_turn_does_not_record_permissions_upd
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn override_turn_context_without_user_turn_does_not_record_environment_update() -> Result<()> {
+async fn override_turn_context_without_user_turn_does_not_record_environment_update() -> Result<()>
+{
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -183,7 +187,8 @@ async fn override_turn_context_without_user_turn_does_not_record_environment_upd
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn override_turn_context_without_user_turn_does_not_record_collaboration_update() -> Result<()> {
+async fn override_turn_context_without_user_turn_does_not_record_collaboration_update() -> Result<()>
+{
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
