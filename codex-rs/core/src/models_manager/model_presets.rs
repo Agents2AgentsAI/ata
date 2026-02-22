@@ -427,6 +427,34 @@ pub(crate) static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             provider_id: Some("gemini".to_string()),
         },
         ModelPreset {
+            id: "gemini-3.1-pro-preview".to_string(),
+            model: "gemini-3.1-pro-preview".to_string(),
+            display_name: "Gemini 3.1 Pro".to_string(),
+            description: "Google's advanced model for complex tasks.".to_string(),
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Low,
+                    description: "Fast responses with lighter reasoning".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Medium,
+                    description: "Balanced reasoning for everyday tasks".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::High,
+                    description: "Deep reasoning for complex problems".to_string(),
+                },
+            ],
+            supports_personality: false,
+            is_default: false,
+            upgrade: None,
+            show_in_picker: true,
+            supported_in_api: true,
+            input_modalities: default_input_modalities(),
+            provider_id: Some("gemini".to_string()),
+        },
+        ModelPreset {
             id: "gemini-3-flash-preview".to_string(),
             model: "gemini-3-flash-preview".to_string(),
             display_name: "Gemini 3 Flash".to_string(),

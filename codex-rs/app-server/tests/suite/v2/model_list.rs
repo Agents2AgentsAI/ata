@@ -253,6 +253,32 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             is_default: false,
         },
         Model {
+            id: "gemini-3.1-pro-preview".to_string(),
+            model: "gemini-3.1-pro-preview".to_string(),
+            upgrade: None,
+            display_name: "Gemini 3.1 Pro".to_string(),
+            description: "Google's advanced model for complex tasks.".to_string(),
+            hidden: false,
+            supported_reasoning_efforts: vec![
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Low,
+                    description: "Fast responses with lighter reasoning".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Medium,
+                    description: "Balanced reasoning for everyday tasks".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::High,
+                    description: "Deep reasoning for complex problems".to_string(),
+                },
+            ],
+            default_reasoning_effort: ReasoningEffort::Medium,
+            input_modalities: vec![InputModality::Text, InputModality::Image],
+            supports_personality: false,
+            is_default: false,
+        },
+        Model {
             id: "gemini-3-flash-preview".to_string(),
             model: "gemini-3-flash-preview".to_string(),
             upgrade: None,
@@ -493,7 +519,7 @@ async fn list_models_pagination_works() -> Result<()> {
     assert_eq!(seventh_items[0].id, "gemini-3-pro-preview");
     let eighth_cursor = seventh_cursor.ok_or_else(|| anyhow!("cursor for eighth page"))?;
 
-    // Eighth page: gemini-3-flash-preview (last)
+    // Eighth page: gemini-3.1-pro-preview
     let eighth_request = mcp
         .send_list_models_request(ModelListParams {
             limit: Some(1),
@@ -514,8 +540,32 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(eighth_response)?;
 
     assert_eq!(eighth_items.len(), 1);
-    assert_eq!(eighth_items[0].id, "gemini-3-flash-preview");
-    assert!(eighth_cursor.is_none());
+    assert_eq!(eighth_items[0].id, "gemini-3.1-pro-preview");
+    let ninth_cursor = eighth_cursor.ok_or_else(|| anyhow!("cursor for ninth page"))?;
+
+    // Ninth page: gemini-3-flash-preview (last)
+    let ninth_request = mcp
+        .send_list_models_request(ModelListParams {
+            limit: Some(1),
+            cursor: Some(ninth_cursor.clone()),
+            include_hidden: None,
+        })
+        .await?;
+
+    let ninth_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(ninth_request)),
+    )
+    .await??;
+
+    let ModelListResponse {
+        data: ninth_items,
+        next_cursor: ninth_cursor,
+    } = to_response::<ModelListResponse>(ninth_response)?;
+
+    assert_eq!(ninth_items.len(), 1);
+    assert_eq!(ninth_items[0].id, "gemini-3-flash-preview");
+    assert!(ninth_cursor.is_none());
     Ok(())
 }
 

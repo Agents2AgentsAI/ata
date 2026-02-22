@@ -89,6 +89,7 @@ fn extra_local_presets() -> Vec<ModelPreset> {
         claude_sonnet_4_6(),
         claude_opus_4_5(),
         gemini_3_pro_preview(),
+        gemini_3_1_pro_preview(),
         gemini_3_flash_preview(),
     ]
 }
@@ -247,6 +248,34 @@ fn gemini_3_pro_preview() -> ModelPreset {
             effort(
                 ReasoningEffort::Low,
                 "Fast responses with lighter reasoning",
+            ),
+            effort(ReasoningEffort::High, "Deep reasoning for complex problems"),
+        ],
+        supports_personality: false,
+        is_default: false,
+        upgrade: None,
+        show_in_picker: true,
+        supported_in_api: true,
+        provider_id: Some("gemini".to_string()),
+        input_modalities: default_input_modalities(),
+    }
+}
+
+fn gemini_3_1_pro_preview() -> ModelPreset {
+    ModelPreset {
+        id: "gemini-3.1-pro-preview".to_string(),
+        model: "gemini-3.1-pro-preview".to_string(),
+        display_name: "Gemini 3.1 Pro".to_string(),
+        description: "Google's advanced model for complex tasks.".to_string(),
+        default_reasoning_effort: ReasoningEffort::Medium,
+        supported_reasoning_efforts: vec![
+            effort(
+                ReasoningEffort::Low,
+                "Fast responses with lighter reasoning",
+            ),
+            effort(
+                ReasoningEffort::Medium,
+                "Balanced reasoning for everyday tasks",
             ),
             effort(ReasoningEffort::High, "Deep reasoning for complex problems"),
         ],
