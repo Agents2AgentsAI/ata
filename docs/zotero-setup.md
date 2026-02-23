@@ -54,7 +54,6 @@ A Web API key lets you (or external tools) access your Zotero library over the i
 6. Click **Save Key**
 7. Copy the generated key and store it securely
 
-
 ### Finding Your User ID
 
 Your Zotero user ID is required when using the Web API. To find it:
@@ -75,12 +74,12 @@ If Zotero is running on your machine with the local API enabled, Ata connects au
 
 To access your Zotero library remotely, set the following environment variables:
 
-| Variable | Required | Description |
-|---|---|---|
-| `ZOTERO_API_KEY` | Yes | Your Web API key (created above) |
-| `ZOTERO_USER_ID` | Yes | Your Zotero user ID |
-| `ZOTERO_LIBRARY_TYPE` | No | Set to `user` or `group` to restrict to a single library. If omitted, Ata searches your personal library and all group libraries automatically. |
-| `ZOTERO_GROUP_ID` | No | Required if `ZOTERO_LIBRARY_TYPE` is `group` |
+| Variable              | Required | Description                                                                                                                                     |
+| --------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ZOTERO_API_KEY`      | Yes      | Your Web API key (created above)                                                                                                                |
+| `ZOTERO_USER_ID`      | Yes      | Your Zotero user ID                                                                                                                             |
+| `ZOTERO_LIBRARY_TYPE` | No       | Set to `user` or `group` to restrict to a single library. If omitted, Ata searches your personal library and all group libraries automatically. |
+| `ZOTERO_GROUP_ID`     | No       | Required if `ZOTERO_LIBRARY_TYPE` is `group`                                                                                                    |
 
 For example:
 
