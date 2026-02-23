@@ -2,6 +2,19 @@ name: sdk
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "sdk/**"
+      - ".github/workflows/sdk.yml"
+  push:
+    branches: [main]
+    paths:
+      - "sdk/**"
+      - ".github/workflows/sdk.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 jobs:
   sdks:
@@ -31,8 +44,8 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@1.93.0
 
-      - name: build codex
-        run: cargo build --bin codex
+      - name: build ata
+        run: cargo build --bin ata
         working-directory: codex-rs
 
       - name: Install dependencies

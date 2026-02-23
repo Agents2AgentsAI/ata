@@ -13,15 +13,15 @@ use codex_core::CodexThread;
 use codex_core::NewThread;
 use codex_core::ThreadManager;
 use codex_core::config::Config as CodexConfig;
-use codex_core::protocol::AgentMessageEvent;
-use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::Submission;
-use codex_core::protocol::TurnCompleteEvent;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::user_input::UserInput;
 use rmcp::model::CallToolResult;
 use rmcp::model::Content;
@@ -213,16 +213,19 @@ async fn run_codex_tool_session_inner(
                     .await;
 
                 match event.msg {
-                    EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-                        turn_id: _,
-                        command,
-                        cwd,
-                        call_id,
-                        reason: _,
-                        proposed_execpolicy_amendment: _,
-                        parsed_cmd,
-                        network_approval_context: _,
-                    }) => {
+                    EventMsg::ExecApprovalRequest(ev) => {
+                        let approval_id = ev.effective_approval_id();
+                        let ExecApprovalRequestEvent {
+                            turn_id: _,
+                            command,
+                            cwd,
+                            call_id,
+                            approval_id: _,
+                            reason: _,
+                            proposed_execpolicy_amendment: _,
+                            parsed_cmd,
+                            network_approval_context: _,
+                        } = ev;
                         handle_exec_approval_request(
                             command,
                             cwd,
@@ -232,6 +235,7 @@ async fn run_codex_tool_session_inner(
                             request_id_str.clone(),
                             event.id.clone(),
                             call_id,
+                            approval_id,
                             parsed_cmd,
                             thread_id,
                         )
@@ -358,6 +362,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::RequestUserInput(_)
                     | EventMsg::DynamicToolCallRequest(_)
                     | EventMsg::ContextCompacted(_)
+                    | EventMsg::ModelReroute(_)
                     | EventMsg::ThreadRolledBack(_)
                     | EventMsg::CollabAgentSpawnBegin(_)
                     | EventMsg::CollabAgentSpawnEnd(_)
@@ -369,6 +374,9 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::CollabCloseEnd(_)
                     | EventMsg::CollabResumeBegin(_)
                     | EventMsg::CollabResumeEnd(_)
+                    | EventMsg::RealtimeConversationStarted(_)
+                    | EventMsg::RealtimeConversationRealtime(_)
+                    | EventMsg::RealtimeConversationClosed(_)
                     | EventMsg::DeprecationNotice(_)
                     | EventMsg::PresentDocument(_)
                     | EventMsg::UpdateDocumentSection(_)
@@ -386,7 +394,7 @@ async fn run_codex_tool_session_inner(
             Err(e) => {
                 let result = create_call_tool_result_with_thread_id(
                     thread_id,
-                    format!("Ata runtime error: {e}"),
+                    format!("Codex runtime error: {e}"),
                     Some(true),
                 );
                 outgoing.send_response(request_id.clone(), result).await;

@@ -7,15 +7,8 @@ use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
-use codex_core::config::Config;
-use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::models_manager::manager::RefreshStrategy;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecCommandSource;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -26,6 +19,11 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::default_input_modalities;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_assistant_message;
@@ -92,8 +90,7 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
     .await;
 
     let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.enable(Feature::RemoteModels);
+    let config = load_default_config_for_test(&codex_home).await;
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let provider = ModelProviderInfo {
@@ -106,9 +103,7 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
         provider,
     );
 
-    manager
-        .list_models(&config, RefreshStrategy::OnlineIfUncached)
-        .await;
+    manager.list_models(RefreshStrategy::OnlineIfUncached).await;
 
     let model_info = manager.get_model_info("gpt-5.3-codex-test", &config).await;
 
@@ -163,7 +158,6 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
     } = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config.model = Some(requested_model.to_string());
         })
         .build(&server)
@@ -253,7 +247,6 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config.model = Some("gpt-5.1".to_string());
         });
     let TestCodex {
@@ -265,8 +258,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     } = builder.build(&server).await?;
 
     let models_manager = thread_manager.get_models_manager();
-    let available_model =
-        wait_for_model_available(&models_manager, REMOTE_MODEL_SLUG, &config).await;
+    let available_model = wait_for_model_available(&models_manager, REMOTE_MODEL_SLUG).await;
 
     assert_eq!(available_model.model, REMOTE_MODEL_SLUG);
 
@@ -376,13 +368,12 @@ async fn remote_models_truncation_policy_without_override_preserves_remote() -> 
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config.model = Some("gpt-5.1".to_string());
         });
     let test = builder.build(&server).await?;
 
     let models_manager = test.thread_manager.get_models_manager();
-    wait_for_model_available(&models_manager, slug, &test.config).await;
+    wait_for_model_available(&models_manager, slug).await;
 
     let model_info = models_manager.get_model_info(slug, &test.config).await;
     assert_eq!(
@@ -421,14 +412,13 @@ async fn remote_models_truncation_policy_with_tool_output_override() -> Result<(
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config.model = Some("gpt-5.1".to_string());
             config.tool_output_token_limit = Some(50);
         });
     let test = builder.build(&server).await?;
 
     let models_manager = test.thread_manager.get_models_manager();
-    wait_for_model_available(&models_manager, slug, &test.config).await;
+    wait_for_model_available(&models_manager, slug).await;
 
     let model_info = models_manager.get_model_info(slug, &test.config).await;
     assert_eq!(
@@ -503,7 +493,6 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config.model = Some("gpt-5.1".to_string());
         });
     let TestCodex {
@@ -515,7 +504,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     } = builder.build(&server).await?;
 
     let models_manager = thread_manager.get_models_manager();
-    wait_for_model_available(&models_manager, model, &config).await;
+    wait_for_model_available(&models_manager, model).await;
 
     codex
         .submit(Op::OverrideTurnContext {
@@ -576,8 +565,6 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
     .await;
 
     let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let provider = ModelProviderInfo {
@@ -590,9 +577,7 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
         provider,
     );
 
-    let available = manager
-        .list_models(&config, RefreshStrategy::OnlineIfUncached)
-        .await;
+    let available = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
     let remote = available
         .iter()
         .find(|model| model.model == "remote-alpha")
@@ -641,8 +626,6 @@ async fn remote_models_merge_adds_new_high_priority_first() -> Result<()> {
     .await;
 
     let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let provider = ModelProviderInfo {
@@ -655,9 +638,7 @@ async fn remote_models_merge_adds_new_high_priority_first() -> Result<()> {
         provider,
     );
 
-    let available = manager
-        .list_models(&config, RefreshStrategy::OnlineIfUncached)
-        .await;
+    let available = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
     assert_eq!(
         available.first().map(|model| model.model.as_str()),
         Some("remote-top")
@@ -692,8 +673,6 @@ async fn remote_models_merge_replaces_overlapping_model() -> Result<()> {
     .await;
 
     let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let provider = ModelProviderInfo {
@@ -706,9 +685,7 @@ async fn remote_models_merge_replaces_overlapping_model() -> Result<()> {
         provider,
     );
 
-    let available = manager
-        .list_models(&config, RefreshStrategy::OnlineIfUncached)
-        .await;
+    let available = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
     let overridden = available
         .iter()
         .find(|model| model.model == slug)
@@ -740,8 +717,6 @@ async fn remote_models_merge_preserves_bundled_models_on_empty_response() -> Res
     let _models_mock = mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
 
     let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let provider = ModelProviderInfo {
@@ -754,9 +729,7 @@ async fn remote_models_merge_preserves_bundled_models_on_empty_response() -> Res
         provider,
     );
 
-    let available = manager
-        .list_models(&config, RefreshStrategy::OnlineIfUncached)
-        .await;
+    let available = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
     let bundled_slug = bundled_model_slug();
     assert!(
         available.iter().any(|model| model.model == bundled_slug),
@@ -785,8 +758,6 @@ async fn remote_models_request_times_out_after_5s() -> Result<()> {
     .await;
 
     let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let provider = ModelProviderInfo {
@@ -802,7 +773,7 @@ async fn remote_models_request_times_out_after_5s() -> Result<()> {
     let start = Instant::now();
     let model = timeout(
         Duration::from_secs(7),
-        manager.get_default_model(&None, &config, RefreshStrategy::OnlineIfUncached),
+        manager.get_default_model(&None, RefreshStrategy::OnlineIfUncached),
     )
     .await;
     let elapsed = start.elapsed();
@@ -852,8 +823,6 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     .await;
 
     let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let provider = ModelProviderInfo {
@@ -867,13 +836,11 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     );
 
     let selected = manager
-        .get_default_model(&None, &config, RefreshStrategy::OnlineIfUncached)
+        .get_default_model(&None, RefreshStrategy::OnlineIfUncached)
         .await;
     assert_eq!(selected, "gpt-5.2-codex");
 
-    let available = manager
-        .list_models(&config, RefreshStrategy::OnlineIfUncached)
-        .await;
+    let available = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
     let hidden = available
         .iter()
         .find(|model| model.model == "codex-auto-balanced")
@@ -890,17 +857,11 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     Ok(())
 }
 
-async fn wait_for_model_available(
-    manager: &Arc<ModelsManager>,
-    slug: &str,
-    config: &Config,
-) -> ModelPreset {
+async fn wait_for_model_available(manager: &Arc<ModelsManager>, slug: &str) -> ModelPreset {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         if let Some(model) = {
-            let guard = manager
-                .list_models(config, RefreshStrategy::OnlineIfUncached)
-                .await;
+            let guard = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
             guard.iter().find(|model| model.model == slug).cloned()
         } {
             return model;

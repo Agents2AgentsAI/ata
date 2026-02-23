@@ -2,6 +2,7 @@ use crate::client_common::tools::FreeformTool;
 use crate::client_common::tools::FreeformToolFormat;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
+use crate::config::AgentRoleConfig;
 use crate::data::SharedDataToolkit;
 #[cfg(feature = "data")]
 use crate::data::tool_names::find_mcp_tool_matches as find_mcp_data_tool_matches;
@@ -9,7 +10,6 @@ use crate::features::Feature;
 use crate::features::Features;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::research::SharedResearchToolkit;
-#[cfg(feature = "research")]
 use crate::research::tool_names::find_mcp_tool_matches;
 use crate::tools::handlers::APPEND_TO_SECTION_TOOL;
 use crate::tools::handlers::PATCH_DOCUMENT_SECTION_TOOL;
@@ -37,7 +37,6 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
-#[cfg(any(feature = "research", feature = "data"))]
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -51,14 +50,18 @@ const SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE: &str =
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
+    pub allow_login_shell: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
+    pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub search_tool: bool,
     pub js_repl_enabled: bool,
     pub js_repl_tools_only: bool,
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
     pub experimental_supported_tools: Vec<String>,
+    /// Per-category research feature flags for filtering research tools.
+    pub features: Features,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -84,6 +87,8 @@ impl ToolsConfig {
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
+        } else if features.enabled(Feature::ShellZshFork) {
+            ConfigShellToolType::ShellCommand
         } else if features.enabled(Feature::UnifiedExec) {
             // If ConPTY not supported (for old Windows versions), fallback on ShellCommand.
             if codex_utils_pty::conpty_supported() {
@@ -109,27 +114,29 @@ impl ToolsConfig {
 
         Self {
             shell_type,
+            allow_login_shell: true,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
+            agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,
             js_repl_enabled: include_js_repl,
             js_repl_tools_only: include_js_repl_tools_only,
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
+            features: (*features).clone(),
         }
     }
-}
 
-pub(crate) fn filter_tools_for_model(tools: Vec<ToolSpec>, config: &ToolsConfig) -> Vec<ToolSpec> {
-    if !config.js_repl_tools_only {
-        return tools;
+    pub fn with_agent_roles(mut self, agent_roles: BTreeMap<String, AgentRoleConfig>) -> Self {
+        self.agent_roles = agent_roles;
+        self
     }
 
-    tools
-        .into_iter()
-        .filter(|spec| matches!(spec.name(), "js_repl" | "js_repl_reset"))
-        .collect()
+    pub fn with_allow_login_shell(mut self, allow_login_shell: bool) -> Self {
+        self.allow_login_shell = allow_login_shell;
+        self
+    }
 }
 
 /// Generic JSON‑Schema subset needed for our tool definitions
@@ -229,7 +236,7 @@ fn create_approval_parameters() -> BTreeMap<String, JsonSchema> {
     properties
 }
 
-fn create_exec_command_tool() -> ToolSpec {
+fn create_exec_command_tool(allow_login_shell: bool) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "cmd".to_string(),
@@ -250,14 +257,6 @@ fn create_exec_command_tool() -> ToolSpec {
             "shell".to_string(),
             JsonSchema::String {
                 description: Some("Shell binary to launch. Defaults to the user's default shell.".to_string()),
-            },
-        ),
-        (
-            "login".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "Whether to run the shell with -l/-i semantics. Defaults to true.".to_string(),
-                ),
             },
         ),
         (
@@ -287,6 +286,16 @@ fn create_exec_command_tool() -> ToolSpec {
             },
         ),
     ]);
+    if allow_login_shell {
+        properties.insert(
+            "login".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "Whether to run the shell with -l/-i semantics. Defaults to true.".to_string(),
+                ),
+            },
+        );
+    }
     properties.extend(create_approval_parameters());
 
     ToolSpec::Function(ResponsesApiTool {
@@ -403,7 +412,7 @@ Examples of valid command strings:
     })
 }
 
-fn create_shell_command_tool() -> ToolSpec {
+fn create_shell_command_tool(allow_login_shell: bool) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "command".to_string(),
@@ -420,6 +429,14 @@ fn create_shell_command_tool() -> ToolSpec {
             },
         ),
         (
+            "timeout_ms".to_string(),
+            JsonSchema::Number {
+                description: Some("The timeout for the command in milliseconds".to_string()),
+            },
+        ),
+    ]);
+    if allow_login_shell {
+        properties.insert(
             "login".to_string(),
             JsonSchema::Boolean {
                 description: Some(
@@ -427,14 +444,8 @@ fn create_shell_command_tool() -> ToolSpec {
                         .to_string(),
                 ),
             },
-        ),
-        (
-            "timeout_ms".to_string(),
-            JsonSchema::Number {
-                description: Some("The timeout for the command in milliseconds".to_string()),
-            },
-        ),
-    ]);
+        );
+    }
     properties.extend(create_approval_parameters());
 
     let description = if cfg!(windows) {
@@ -539,7 +550,7 @@ fn create_collab_input_items_schema() -> JsonSchema {
     }
 }
 
-fn create_spawn_agent_tool() -> ToolSpec {
+fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "message".to_string(),
@@ -554,7 +565,9 @@ fn create_spawn_agent_tool() -> ToolSpec {
         (
             "agent_type".to_string(),
             JsonSchema::String {
-                description: Some(crate::agent::role::spawn_tool_spec::build()),
+                description: Some(crate::agent::role::spawn_tool_spec::build(
+                    &config.agent_roles,
+                )),
             },
         ),
     ]);
@@ -562,7 +575,7 @@ fn create_spawn_agent_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
         description:
-            "Spawn a sub-agent for a well-scoped task. Returns the agent id to use to communicate with this agent."
+            "Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent."
                 .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -662,7 +675,7 @@ fn create_wait_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "wait".to_string(),
-        description: "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out."
+        description: "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out. Once the agent reaches his final status, a notification message will be received containing the same completed status."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -1084,7 +1097,24 @@ fn create_list_dir_tool() -> ToolSpec {
 }
 
 fn create_js_repl_tool() -> ToolSpec {
-    const JS_REPL_FREEFORM_GRAMMAR: &str = r#"start: /[\s\S]*/"#;
+    // Keep JS input freeform, but block the most common malformed payload shapes
+    // (JSON wrappers, quoted strings, and markdown fences) before they reach the
+    // runtime `reject_json_or_quoted_source` validation. The API's regex engine
+    // does not support look-around, so this uses a "first significant token"
+    // pattern rather than negative lookaheads.
+    const JS_REPL_FREEFORM_GRAMMAR: &str = r#"
+start: pragma_source | plain_source
+
+pragma_source: PRAGMA_LINE NEWLINE js_source
+plain_source: PLAIN_JS_SOURCE
+
+js_source: JS_SOURCE
+
+PRAGMA_LINE: /[ \t]*\/\/ codex-js-repl:[^\r\n]*/
+NEWLINE: /\r?\n/
+PLAIN_JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
+JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
+"#;
 
     ToolSpec::Freeform(FreeformTool {
         name: "js_repl".to_string(),
@@ -1299,7 +1329,6 @@ pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, s
     serde_json::from_value::<JsonSchema>(input_schema)
 }
 
-#[cfg(feature = "research")]
 fn research_tool_to_openai_tool(
     tool: &codex_research_tools::tool_specs::ToolDef,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
@@ -1310,6 +1339,22 @@ fn research_tool_to_openai_tool(
         strict: false,
         parameters: input_schema,
     })
+}
+
+/// Check whether a research tool is enabled based on per-category feature flags.
+/// When the master `Research` toggle is on, all tools are enabled (backward compat).
+fn is_research_tool_enabled(tool_id: &str, features: &Features) -> bool {
+    if features.enabled(Feature::Research) {
+        return true;
+    }
+    match () {
+        _ if tool_id.starts_with("paper_") => features.enabled(Feature::ResearchPaperSearch),
+        _ if tool_id.starts_with("zotero_") => features.enabled(Feature::ResearchZotero),
+        _ if tool_id.starts_with("hn_") => features.enabled(Feature::ResearchHackerNews),
+        _ if tool_id.starts_with("patent_") => features.enabled(Feature::ResearchPatents),
+        _ if tool_id.starts_with("repo_") => features.enabled(Feature::ResearchRepoAnalysis),
+        _ => true,
+    }
 }
 
 #[cfg(feature = "data")]
@@ -1446,7 +1491,6 @@ pub(crate) fn build_specs(
     build_specs_with_toolkits(config, mcp_tools, app_tools, dynamic_tools, None, None)
 }
 
-#[allow(dead_code)]
 pub(crate) fn build_specs_with_research(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
@@ -1472,8 +1516,6 @@ pub(crate) fn build_specs_with_toolkits(
     research_toolkit: Option<&Arc<SharedResearchToolkit>>,
     data_toolkit: Option<&Arc<SharedDataToolkit>>,
 ) -> ToolRegistryBuilder {
-    #[cfg(not(feature = "research"))]
-    let _ = research_toolkit;
     #[cfg(not(feature = "data"))]
     let _ = data_toolkit;
 
@@ -1492,7 +1534,6 @@ pub(crate) fn build_specs_with_toolkits(
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::RequestUserInputHandler;
-    #[cfg(feature = "research")]
     use crate::tools::handlers::ResearchBridgeHandler;
     use crate::tools::handlers::SearchToolBm25Handler;
     use crate::tools::handlers::ShellCommandHandler;
@@ -1526,7 +1567,10 @@ pub(crate) fn build_specs_with_toolkits(
             builder.push_spec_with_parallel_support(ToolSpec::LocalShell {}, true);
         }
         ConfigShellToolType::UnifiedExec => {
-            builder.push_spec_with_parallel_support(create_exec_command_tool(), true);
+            builder.push_spec_with_parallel_support(
+                create_exec_command_tool(config.allow_login_shell),
+                true,
+            );
             builder.push_spec(create_write_stdin_tool());
             builder.register_handler("exec_command", unified_exec_handler.clone());
             builder.register_handler("write_stdin", unified_exec_handler);
@@ -1535,7 +1579,10 @@ pub(crate) fn build_specs_with_toolkits(
             // Do nothing.
         }
         ConfigShellToolType::ShellCommand => {
-            builder.push_spec_with_parallel_support(create_shell_command_tool(), true);
+            builder.push_spec_with_parallel_support(
+                create_shell_command_tool(config.allow_login_shell),
+                true,
+            );
         }
     }
 
@@ -1655,7 +1702,7 @@ pub(crate) fn build_specs_with_toolkits(
 
     if config.collab_tools {
         let multi_agent_handler = Arc::new(MultiAgentHandler);
-        builder.push_spec(create_spawn_agent_tool());
+        builder.push_spec(create_spawn_agent_tool(config));
         builder.push_spec(create_send_input_tool());
         builder.push_spec(create_resume_agent_tool());
         builder.push_spec(create_wait_tool());
@@ -1667,10 +1714,8 @@ pub(crate) fn build_specs_with_toolkits(
         builder.register_handler("close_agent", multi_agent_handler);
     }
 
-    #[cfg(feature = "research")]
     let mut suppressed_mcp_research_tool_names: BTreeSet<String> = BTreeSet::new();
 
-    #[cfg(feature = "research")]
     if let Some(toolkit) = research_toolkit {
         let research_handler = Arc::new(ResearchBridgeHandler::new(Arc::clone(toolkit)));
         let discovered_mcp_tools: BTreeMap<String, rmcp::model::Tool> = mcp_tools
@@ -1685,6 +1730,9 @@ pub(crate) fn build_specs_with_toolkits(
 
         for def in codex_research_tools::tool_specs::all_tool_defs() {
             if !toolkit.is_tool_configured(def.id) {
+                continue;
+            }
+            if !is_research_tool_enabled(def.id, &config.features) {
                 continue;
             }
 
@@ -1749,7 +1797,6 @@ pub(crate) fn build_specs_with_toolkits(
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
         for (name, tool) in entries.into_iter() {
-            #[cfg(feature = "research")]
             if suppressed_mcp_research_tool_names.contains(&name) {
                 continue;
             }
@@ -1877,27 +1924,6 @@ mod tests {
         }
     }
 
-    fn assert_contains_tool_specs(tools: &[ToolSpec], expected_subset: &[&str]) {
-        use std::collections::HashSet;
-        let mut names = HashSet::new();
-        let mut duplicates = Vec::new();
-        for name in tools.iter().map(tool_name) {
-            if !names.insert(name) {
-                duplicates.push(name);
-            }
-        }
-        assert!(
-            duplicates.is_empty(),
-            "duplicate tool entries detected: {duplicates:?}"
-        );
-        for expected in expected_subset {
-            assert!(
-                names.contains(expected),
-                "expected tool {expected} to be present; had: {names:?}"
-            );
-        }
-    }
-
     fn shell_tool_name(config: &ToolsConfig) -> Option<&'static str> {
         match config.shell_type {
             ConfigShellToolType::Default => Some("shell"),
@@ -1953,12 +1979,12 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "research")]
     fn default_tools_config() -> ToolsConfig {
         let config = test_config();
         let model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-        let features = Features::with_defaults();
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Research);
         ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
@@ -1966,7 +1992,6 @@ mod tests {
         })
     }
 
-    #[cfg(feature = "research")]
     fn make_research_toolkit(
         mut config: codex_research_tools::config::ResearchConfig,
     ) -> Arc<SharedResearchToolkit> {
@@ -1981,7 +2006,6 @@ mod tests {
         ))
     }
 
-    #[cfg(feature = "research")]
     #[test]
     fn native_paper_tools_preempt_matching_mcp_tools() {
         let tools_config = default_tools_config();
@@ -2052,7 +2076,7 @@ mod tests {
         // Build expected from the same helpers used by the builder.
         let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
         for spec in [
-            create_exec_command_tool(),
+            create_exec_command_tool(true),
             create_write_stdin_tool(),
             PLAN_TOOL.clone(),
             PRESENT_DOCUMENT_TOOL.clone(),
@@ -2181,74 +2205,18 @@ mod tests {
     }
 
     #[test]
-    fn js_repl_tools_only_filters_model_tools() {
-        let config = test_config();
-        let model_info =
-            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-        let mut features = Features::with_defaults();
-        features.enable(Feature::JsRepl);
-        features.enable(Feature::JsReplToolsOnly);
+    fn js_repl_freeform_grammar_blocks_common_non_js_prefixes() {
+        let ToolSpec::Freeform(FreeformTool { format, .. }) = create_js_repl_tool() else {
+            panic!("js_repl should use a freeform tool spec");
+        };
 
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_info: &model_info,
-            features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
-        });
-        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-        let filtered = filter_tools_for_model(
-            tools.iter().map(|tool| tool.spec.clone()).collect(),
-            &tools_config,
-        );
-        assert_contains_tool_specs(&filtered, &["js_repl", "js_repl_reset"]);
-        assert!(
-            !filtered.iter().any(|tool| tool_name(tool) == "shell"),
-            "expected non-js_repl tools to be hidden when js_repl_tools_only is enabled"
-        );
-    }
-
-    #[test]
-    fn js_repl_tools_only_hides_dynamic_tools_from_model_tools() {
-        let config = test_config();
-        let model_info =
-            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-        let mut features = Features::with_defaults();
-        features.enable(Feature::JsRepl);
-        features.enable(Feature::JsReplToolsOnly);
-
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_info: &model_info,
-            features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
-        });
-        let dynamic_tools = vec![DynamicToolSpec {
-            name: "dynamic_echo".to_string(),
-            description: "echo dynamic payload".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string"}
-                },
-                "required": ["text"],
-                "additionalProperties": false
-            }),
-        }];
-        let (tools, _) = build_specs(&tools_config, None, None, &dynamic_tools).build();
-        assert!(
-            tools.iter().any(|tool| tool.spec.name() == "dynamic_echo"),
-            "expected dynamic tool in full router specs"
-        );
-
-        let filtered = filter_tools_for_model(
-            tools.iter().map(|tool| tool.spec.clone()).collect(),
-            &tools_config,
-        );
-        assert!(
-            !filtered
-                .iter()
-                .any(|tool| tool_name(tool) == "dynamic_echo"),
-            "expected dynamic tools to be hidden from direct model tools in js_repl_tools_only mode"
-        );
-        assert_contains_tool_specs(&filtered, &["js_repl", "js_repl_reset"]);
+        assert_eq!(format.syntax, "lark");
+        assert!(format.definition.contains("PRAGMA_LINE"));
+        assert!(format.definition.contains("`[^`]"));
+        assert!(format.definition.contains("``[^`]"));
+        assert!(format.definition.contains("PLAIN_JS_SOURCE"));
+        assert!(format.definition.contains("codex-js-repl:"));
+        assert!(!format.definition.contains("(?!"));
     }
 
     fn assert_model_tools(
@@ -2617,6 +2585,23 @@ mod tests {
             subset.push(shell_tool);
         }
         assert_contains_tool_names(&tools, &subset);
+    }
+
+    #[test]
+    fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
+        features.enable(Feature::ShellZshFork);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Live),
+        });
+
+        assert_eq!(tools_config.shell_type, ConfigShellToolType::ShellCommand);
     }
 
     #[test]
@@ -3115,7 +3100,7 @@ Examples of valid command strings:
 
     #[test]
     fn test_shell_command_tool() {
-        let tool = super::create_shell_command_tool();
+        let tool = super::create_shell_command_tool(true);
         let ToolSpec::Function(ResponsesApiTool {
             description, name, ..
         }) = &tool

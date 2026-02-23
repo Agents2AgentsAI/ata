@@ -20,8 +20,10 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
+use codex_protocol::protocol::CollabAgentRef;
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
 use codex_protocol::protocol::CollabAgentSpawnEndEvent;
+use codex_protocol::protocol::CollabAgentStatusEntry;
 use codex_protocol::protocol::CollabCloseBeginEvent;
 use codex_protocol::protocol::CollabCloseEndEvent;
 use codex_protocol::protocol::CollabResumeBeginEvent;
@@ -33,13 +35,14 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashMap;
 
 pub struct MultiAgentHandler;
 
 /// Minimum wait timeout to prevent tight polling loops from burning CPU.
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
-pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = 300_000;
+pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
 
 #[derive(Debug, Deserialize)]
 struct CloseAgentArgs {
@@ -106,6 +109,7 @@ mod spawn {
     #[derive(Debug, Serialize)]
     struct SpawnAgentResult {
         agent_id: String,
+        nickname: Option<String>,
     }
 
     pub async fn handle(
@@ -124,7 +128,7 @@ mod spawn {
         let prompt = input_preview(&input_items);
         let session_source = turn.session_source.clone();
         let child_depth = next_thread_spawn_depth(&session_source);
-        if exceeds_thread_spawn_depth_limit(child_depth) {
+        if exceeds_thread_spawn_depth_limit(child_depth, turn.config.agent_max_depth) {
             return Err(FunctionCallError::RespondToModel(
                 "Agent depth limit reached. Solve the task yourself.".to_string(),
             ));
@@ -156,7 +160,11 @@ mod spawn {
             .spawn_agent(
                 config,
                 input_items,
-                Some(thread_spawn_source(session.conversation_id, child_depth)),
+                Some(thread_spawn_source(
+                    session.conversation_id,
+                    child_depth,
+                    role_name,
+                )),
             )
             .await
             .map_err(collab_spawn_error);
@@ -165,8 +173,18 @@ mod spawn {
                 Some(*thread_id),
                 session.services.agent_control.get_status(*thread_id).await,
             ),
-            Err(err) => (None, AgentStatus::Errored(err.to_string())),
+            Err(_) => (None, AgentStatus::NotFound),
         };
+        let (new_agent_nickname, new_agent_role) = match new_thread_id {
+            Some(thread_id) => session
+                .services
+                .agent_control
+                .get_agent_nickname_and_role(thread_id)
+                .await
+                .unwrap_or((None, None)),
+            None => (None, None),
+        };
+        let nickname = new_agent_nickname.clone();
         session
             .send_event(
                 &turn,
@@ -174,6 +192,8 @@ mod spawn {
                     call_id,
                     sender_thread_id: session.conversation_id,
                     new_thread_id,
+                    new_agent_nickname,
+                    new_agent_role,
                     prompt,
                     status,
                 }
@@ -184,6 +204,7 @@ mod spawn {
 
         let content = serde_json::to_string(&SpawnAgentResult {
             agent_id: new_thread_id.to_string(),
+            nickname,
         })
         .map_err(|err| {
             FunctionCallError::Fatal(format!("failed to serialize spawn_agent result: {err}"))
@@ -224,6 +245,12 @@ mod send_input {
         let receiver_thread_id = agent_id(&args.id)?;
         let input_items = parse_collab_input(args.message, args.items)?;
         let prompt = input_preview(&input_items);
+        let (receiver_agent_nickname, receiver_agent_role) = session
+            .services
+            .agent_control
+            .get_agent_nickname_and_role(receiver_thread_id)
+            .await
+            .unwrap_or((None, None));
         if args.interrupt {
             session
                 .services
@@ -262,6 +289,8 @@ mod send_input {
                     call_id,
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id,
+                    receiver_agent_nickname,
+                    receiver_agent_role,
                     prompt,
                     status,
                 }
@@ -284,7 +313,6 @@ mod send_input {
 mod resume_agent {
     use super::*;
     use crate::agent::next_thread_spawn_depth;
-    use crate::rollout::find_thread_path_by_id_str;
     use std::sync::Arc;
 
     #[derive(Debug, Deserialize)]
@@ -305,8 +333,14 @@ mod resume_agent {
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: ResumeAgentArgs = parse_arguments(&arguments)?;
         let receiver_thread_id = agent_id(&args.id)?;
+        let (receiver_agent_nickname, receiver_agent_role) = session
+            .services
+            .agent_control
+            .get_agent_nickname_and_role(receiver_thread_id)
+            .await
+            .unwrap_or((None, None));
         let child_depth = next_thread_spawn_depth(&turn.session_source);
-        if exceeds_thread_spawn_depth_limit(child_depth) {
+        if exceeds_thread_spawn_depth_limit(child_depth, turn.config.agent_max_depth) {
             return Err(FunctionCallError::RespondToModel(
                 "Agent depth limit reached. Solve the task yourself.".to_string(),
             ));
@@ -319,6 +353,8 @@ mod resume_agent {
                     call_id: call_id.clone(),
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id,
+                    receiver_agent_nickname: receiver_agent_nickname.clone(),
+                    receiver_agent_role: receiver_agent_role.clone(),
                 }
                 .into(),
             )
@@ -331,15 +367,7 @@ mod resume_agent {
             .await;
         let error = if matches!(status, AgentStatus::NotFound) {
             // If the thread is no longer active, attempt to restore it from rollout.
-            match try_resume_closed_agent(
-                &session,
-                &turn,
-                receiver_thread_id,
-                &args.id,
-                child_depth,
-            )
-            .await
-            {
+            match try_resume_closed_agent(&session, &turn, receiver_thread_id, child_depth).await {
                 Ok(resumed_status) => {
                     status = resumed_status;
                     None
@@ -357,6 +385,12 @@ mod resume_agent {
             None
         };
 
+        let (receiver_agent_nickname, receiver_agent_role) = session
+            .services
+            .agent_control
+            .get_agent_nickname_and_role(receiver_thread_id)
+            .await
+            .unwrap_or((receiver_agent_nickname, receiver_agent_role));
         session
             .send_event(
                 &turn,
@@ -364,6 +398,8 @@ mod resume_agent {
                     call_id,
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id,
+                    receiver_agent_nickname,
+                    receiver_agent_role,
                     status: status.clone(),
                 }
                 .into(),
@@ -388,33 +424,16 @@ mod resume_agent {
         session: &Arc<Session>,
         turn: &Arc<TurnContext>,
         receiver_thread_id: ThreadId,
-        receiver_id: &str,
         child_depth: i32,
     ) -> Result<AgentStatus, FunctionCallError> {
-        let rollout_path = find_thread_path_by_id_str(
-            turn.config.codex_home.as_path(),
-            receiver_id,
-        )
-        .await
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "tool failed: failed to locate rollout for agent {receiver_thread_id}: {err}"
-            ))
-        })?
-        .ok_or_else(|| {
-            FunctionCallError::RespondToModel(format!(
-                "agent with id {receiver_thread_id} not found"
-            ))
-        })?;
-
         let config = build_agent_resume_config(turn.as_ref(), child_depth)?;
         let resumed_thread_id = session
             .services
             .agent_control
             .resume_agent_from_rollout(
                 config,
-                rollout_path,
-                thread_spawn_source(session.conversation_id, child_depth),
+                receiver_thread_id,
+                thread_spawn_source(session.conversation_id, child_depth, None),
             )
             .await
             .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
@@ -427,7 +446,7 @@ mod resume_agent {
     }
 }
 
-mod wait {
+pub(crate) mod wait {
     use super::*;
     use crate::agent::status::is_final;
     use futures::FutureExt;
@@ -447,10 +466,10 @@ mod wait {
         timeout_ms: Option<i64>,
     }
 
-    #[derive(Debug, Serialize)]
-    struct WaitResult {
-        status: HashMap<ThreadId, AgentStatus>,
-        timed_out: bool,
+    #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+    pub(crate) struct WaitResult {
+        pub(crate) status: HashMap<ThreadId, AgentStatus>,
+        pub(crate) timed_out: bool,
     }
 
     pub async fn handle(
@@ -470,6 +489,20 @@ mod wait {
             .iter()
             .map(|id| agent_id(id))
             .collect::<Result<Vec<_>, _>>()?;
+        let mut receiver_agents = Vec::with_capacity(receiver_thread_ids.len());
+        for receiver_thread_id in &receiver_thread_ids {
+            let (agent_nickname, agent_role) = session
+                .services
+                .agent_control
+                .get_agent_nickname_and_role(*receiver_thread_id)
+                .await
+                .unwrap_or((None, None));
+            receiver_agents.push(CollabAgentRef {
+                thread_id: *receiver_thread_id,
+                agent_nickname,
+                agent_role,
+            });
+        }
 
         // Validate timeout.
         // Very short timeouts encourage busy-polling loops in the orchestrator prompt and can
@@ -490,6 +523,7 @@ mod wait {
                 CollabWaitingBeginEvent {
                     sender_thread_id: session.conversation_id,
                     receiver_thread_ids: receiver_thread_ids.clone(),
+                    receiver_agents: receiver_agents.clone(),
                     call_id: call_id.clone(),
                 }
                 .into(),
@@ -519,6 +553,10 @@ mod wait {
                             CollabWaitingEndEvent {
                                 sender_thread_id: session.conversation_id,
                                 call_id: call_id.clone(),
+                                agent_statuses: build_wait_agent_statuses(
+                                    &statuses,
+                                    &receiver_agents,
+                                ),
                                 statuses,
                             }
                             .into(),
@@ -565,6 +603,7 @@ mod wait {
 
         // Convert payload.
         let statuses_map = statuses.clone().into_iter().collect::<HashMap<_, _>>();
+        let agent_statuses = build_wait_agent_statuses(&statuses_map, &receiver_agents);
         let result = WaitResult {
             status: statuses_map.clone(),
             timed_out: statuses.is_empty(),
@@ -577,6 +616,7 @@ mod wait {
                 CollabWaitingEndEvent {
                     sender_thread_id: session.conversation_id,
                     call_id,
+                    agent_statuses,
                     statuses: statuses_map,
                 }
                 .into(),
@@ -633,6 +673,12 @@ pub mod close_agent {
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: CloseAgentArgs = parse_arguments(&arguments)?;
         let agent_id = agent_id(&args.id)?;
+        let (receiver_agent_nickname, receiver_agent_role) = session
+            .services
+            .agent_control
+            .get_agent_nickname_and_role(agent_id)
+            .await
+            .unwrap_or((None, None));
         session
             .send_event(
                 &turn,
@@ -660,6 +706,8 @@ pub mod close_agent {
                             call_id: call_id.clone(),
                             sender_thread_id: session.conversation_id,
                             receiver_thread_id: agent_id,
+                            receiver_agent_nickname: receiver_agent_nickname.clone(),
+                            receiver_agent_role: receiver_agent_role.clone(),
                             status,
                         }
                         .into(),
@@ -686,6 +734,8 @@ pub mod close_agent {
                     call_id,
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id: agent_id,
+                    receiver_agent_nickname,
+                    receiver_agent_role,
                     status: status.clone(),
                 }
                 .into(),
@@ -707,6 +757,43 @@ pub mod close_agent {
 fn agent_id(id: &str) -> Result<ThreadId, FunctionCallError> {
     ThreadId::from_string(id)
         .map_err(|e| FunctionCallError::RespondToModel(format!("invalid agent id {id}: {e:?}")))
+}
+
+fn build_wait_agent_statuses(
+    statuses: &HashMap<ThreadId, AgentStatus>,
+    receiver_agents: &[CollabAgentRef],
+) -> Vec<CollabAgentStatusEntry> {
+    if statuses.is_empty() {
+        return Vec::new();
+    }
+
+    let mut entries = Vec::with_capacity(statuses.len());
+    let mut seen = HashMap::with_capacity(receiver_agents.len());
+    for receiver_agent in receiver_agents {
+        seen.insert(receiver_agent.thread_id, ());
+        if let Some(status) = statuses.get(&receiver_agent.thread_id) {
+            entries.push(CollabAgentStatusEntry {
+                thread_id: receiver_agent.thread_id,
+                agent_nickname: receiver_agent.agent_nickname.clone(),
+                agent_role: receiver_agent.agent_role.clone(),
+                status: status.clone(),
+            });
+        }
+    }
+
+    let mut extras = statuses
+        .iter()
+        .filter(|(thread_id, _)| !seen.contains_key(thread_id))
+        .map(|(thread_id, status)| CollabAgentStatusEntry {
+            thread_id: *thread_id,
+            agent_nickname: None,
+            agent_role: None,
+            status: status.clone(),
+        })
+        .collect::<Vec<_>>();
+    extras.sort_by(|left, right| left.thread_id.to_string().cmp(&right.thread_id.to_string()));
+    entries.extend(extras);
+    entries
 }
 
 fn collab_spawn_error(err: CodexErr) -> FunctionCallError {
@@ -733,10 +820,16 @@ fn collab_agent_error(agent_id: ThreadId, err: CodexErr) -> FunctionCallError {
     }
 }
 
-fn thread_spawn_source(parent_thread_id: ThreadId, depth: i32) -> SessionSource {
+fn thread_spawn_source(
+    parent_thread_id: ThreadId,
+    depth: i32,
+    agent_role: Option<&str>,
+) -> SessionSource {
     SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id,
         depth,
+        agent_nickname: None,
+        agent_role: agent_role.map(str::to_string),
     })
 }
 
@@ -829,7 +922,7 @@ fn build_agent_shared_config(
     config
         .permissions
         .sandbox_policy
-        .set(turn.sandbox_policy.clone())
+        .set(turn.sandbox_policy.get().clone())
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!("sandbox_policy is invalid: {err}"))
         })?;
@@ -840,7 +933,7 @@ fn build_agent_shared_config(
 
 fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32) {
     config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
-    if exceeds_thread_spawn_depth_limit(child_depth + 1) {
+    if exceeds_thread_spawn_depth_limit(child_depth + 1, config.agent_max_depth) {
         config.features.disable(Feature::Collab);
     }
 }
@@ -851,9 +944,9 @@ mod tests {
     use crate::AuthManager;
     use crate::CodexAuth;
     use crate::ThreadManager;
-    use crate::agent::MAX_THREAD_SPAWN_DEPTH;
     use crate::built_in_model_providers;
     use crate::codex::make_session_and_context;
+    use crate::config::DEFAULT_AGENT_MAX_DEPTH;
     use crate::config::types::ShellEnvironmentPolicy;
     use crate::function_tool::FunctionCallError;
     use crate::protocol::AskForApproval;
@@ -990,10 +1083,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "No role requiring it for now"]
     async fn spawn_agent_uses_explorer_role_and_sets_never_approval_policy() {
         #[derive(Debug, Deserialize)]
         struct SpawnAgentResult {
             agent_id: String,
+            nickname: Option<String>,
         }
 
         let (mut session, mut turn) = make_session_and_context().await;
@@ -1030,12 +1125,19 @@ mod tests {
         let result: SpawnAgentResult =
             serde_json::from_str(&content).expect("spawn_agent result should be json");
         let agent_id = agent_id(&result.agent_id).expect("agent_id should be valid");
+        assert!(
+            result
+                .nickname
+                .as_deref()
+                .is_some_and(|nickname| !nickname.is_empty())
+        );
         let snapshot = manager
             .get_thread(agent_id)
             .await
             .expect("spawned agent thread should exist")
             .config_snapshot()
             .await;
+        assert_eq!(snapshot.model, "gpt-5.1-codex-mini");
         assert_eq!(snapshot.approval_policy, AskForApproval::Never);
     }
 
@@ -1065,7 +1167,9 @@ mod tests {
 
         turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: session.conversation_id,
-            depth: MAX_THREAD_SPAWN_DEPTH,
+            depth: DEFAULT_AGENT_MAX_DEPTH,
+            agent_nickname: None,
+            agent_role: None,
         });
 
         let invocation = invocation(
@@ -1083,6 +1187,58 @@ mod tests {
                 "Agent depth limit reached. Solve the task yourself.".to_string()
             )
         );
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_allows_depth_up_to_configured_max_depth() {
+        #[derive(Debug, Deserialize)]
+        struct SpawnAgentResult {
+            agent_id: String,
+            nickname: Option<String>,
+        }
+
+        let (mut session, mut turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+
+        let mut config = (*turn.config).clone();
+        config.agent_max_depth = DEFAULT_AGENT_MAX_DEPTH + 1;
+        turn.config = Arc::new(config);
+        turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: session.conversation_id,
+            depth: DEFAULT_AGENT_MAX_DEPTH,
+            agent_nickname: None,
+            agent_role: None,
+        });
+
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({"message": "hello"})),
+        );
+        let output = MultiAgentHandler
+            .handle(invocation)
+            .await
+            .expect("spawn should succeed within configured depth");
+        let ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(content),
+            success,
+            ..
+        } = output
+        else {
+            panic!("expected function output");
+        };
+        let result: SpawnAgentResult =
+            serde_json::from_str(&content).expect("spawn_agent result should be json");
+        assert!(!result.agent_id.is_empty());
+        assert!(
+            result
+                .nickname
+                .as_deref()
+                .is_some_and(|nickname| !nickname.is_empty())
+        );
+        assert_eq!(success, Some(true));
     }
 
     #[tokio::test]
@@ -1441,7 +1597,9 @@ mod tests {
 
         turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: session.conversation_id,
-            depth: MAX_THREAD_SPAWN_DEPTH,
+            depth: DEFAULT_AGENT_MAX_DEPTH,
+            agent_nickname: None,
+            agent_role: None,
         });
 
         let invocation = invocation(
@@ -1459,12 +1617,6 @@ mod tests {
                 "Agent depth limit reached. Solve the task yourself.".to_string()
             )
         );
-    }
-
-    #[derive(Debug, Deserialize, PartialEq, Eq)]
-    struct WaitResult {
-        status: HashMap<ThreadId, AgentStatus>,
-        timed_out: bool,
     }
 
     #[tokio::test]
@@ -1552,11 +1704,11 @@ mod tests {
         else {
             panic!("expected function output");
         };
-        let result: WaitResult =
+        let result: wait::WaitResult =
             serde_json::from_str(&content).expect("wait result should be json");
         assert_eq!(
             result,
-            WaitResult {
+            wait::WaitResult {
                 status: HashMap::from([
                     (id_a, AgentStatus::NotFound),
                     (id_b, AgentStatus::NotFound),
@@ -1596,11 +1748,11 @@ mod tests {
         else {
             panic!("expected function output");
         };
-        let result: WaitResult =
+        let result: wait::WaitResult =
             serde_json::from_str(&content).expect("wait result should be json");
         assert_eq!(
             result,
-            WaitResult {
+            wait::WaitResult {
                 status: HashMap::new(),
                 timed_out: true
             }
@@ -1693,11 +1845,11 @@ mod tests {
         else {
             panic!("expected function output");
         };
-        let result: WaitResult =
+        let result: wait::WaitResult =
             serde_json::from_str(&content).expect("wait result should be json");
         assert_eq!(
             result,
-            WaitResult {
+            wait::WaitResult {
                 status: HashMap::from([(agent_id, AgentStatus::Shutdown)]),
                 timed_out: false
             }
@@ -1778,10 +1930,13 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         turn.cwd = temp_dir.path().to_path_buf();
         turn.codex_linux_sandbox_exe = Some(PathBuf::from("/bin/echo"));
-        turn.sandbox_policy = pick_allowed_sandbox_policy(
+        let sandbox_policy = pick_allowed_sandbox_policy(
             &turn.config.permissions.sandbox_policy,
             turn.config.permissions.sandbox_policy.get().clone(),
         );
+        turn.sandbox_policy
+            .set(sandbox_policy)
+            .expect("sandbox policy set");
 
         let config = build_agent_spawn_config(&base_instructions, &turn, 0).expect("spawn config");
         let mut expected = (*turn.config).clone();
@@ -1803,7 +1958,7 @@ mod tests {
         expected
             .permissions
             .sandbox_policy
-            .set(turn.sandbox_policy)
+            .set(turn.sandbox_policy.get().clone())
             .expect("sandbox policy set");
         assert_eq!(config, expected);
     }
@@ -1852,7 +2007,7 @@ mod tests {
         expected
             .permissions
             .sandbox_policy
-            .set(turn.sandbox_policy)
+            .set(turn.sandbox_policy.get().clone())
             .expect("sandbox policy set");
         assert_eq!(config, expected);
     }

@@ -22,6 +22,10 @@ use crate::history_cell::UpdateAvailableHistoryCell;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
+use crate::multi_agents::AgentPickerThreadEntry;
+use crate::multi_agents::agent_picker_status_dot_spans;
+use crate::multi_agents::format_agent_picker_item_name;
+use crate::multi_agents::sort_agent_picker_threads;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
@@ -29,6 +33,7 @@ use crate::resume_picker::SessionSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
+use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::AuthManager;
@@ -44,16 +49,6 @@ use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::FinalOutput;
-use codex_core::protocol::ListSkillsResponseEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::SessionSource;
-use codex_core::protocol::SkillErrorInfo;
-use codex_core::protocol::TokenUsage;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
@@ -66,7 +61,17 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::FinalOutput;
+use codex_protocol::protocol::ListSkillsResponseEvent;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SkillErrorInfo;
+use codex_protocol::protocol::TokenUsage;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -574,6 +579,7 @@ pub(crate) struct App {
     windows_sandbox: WindowsSandboxState,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
+    agent_picker_threads: HashMap<ThreadId, AgentPickerThreadEntry>,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<Event>>,
     primary_thread_id: Option<ThreadId>,
@@ -676,6 +682,66 @@ impl App {
 
         self.chat_widget
             .add_info_message(format!("Opened {url} in your browser."), None);
+    }
+
+    fn clear_ui_header_lines_with_version(
+        &self,
+        width: u16,
+        version: &'static str,
+    ) -> Vec<Line<'static>> {
+        history_cell::SessionHeaderHistoryCell::new_with_style(
+            self.chat_widget.current_model().to_string(),
+            ratatui::style::Style::default(),
+            self.chat_widget.current_reasoning_effort(),
+            self.config.cwd.clone(),
+            version,
+        )
+        .display_lines(width)
+    }
+
+    fn clear_ui_header_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.clear_ui_header_lines_with_version(width, CODEX_CLI_VERSION)
+    }
+
+    fn clear_terminal_ui(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        let is_alt_screen_active = tui.is_alt_screen_active();
+        let use_apple_terminal_clear_workaround = !is_alt_screen_active
+            && matches!(
+                codex_core::terminal::terminal_info().name,
+                codex_core::terminal::TerminalName::AppleTerminal
+            );
+
+        // Drop queued history insertions so stale transcript lines cannot be flushed after /clear.
+        tui.clear_pending_history_lines();
+
+        if is_alt_screen_active {
+            tui.terminal.clear_visible_screen()?;
+        } else if use_apple_terminal_clear_workaround {
+            // Terminal.app can leave mixed old/new glyphs behind when we purge + clear.
+            // Use a stricter ANSI reset, then redraw only a fresh session header box instead of
+            // replaying the initialization transcript preamble.
+            tui.terminal.clear_scrollback_and_visible_screen_ansi()?;
+        } else {
+            tui.terminal.clear_scrollback()?;
+            tui.terminal.clear_visible_screen()?;
+        }
+
+        let mut area = tui.terminal.viewport_area;
+        if area.y > 0 {
+            // After a full clear, anchor the inline viewport at the top and redraw a fresh header
+            // box. `insert_history_lines()` will shift the viewport down by the rendered height.
+            area.y = 0;
+            tui.terminal.set_viewport_area(area);
+        }
+        self.has_emitted_history_lines = false;
+
+        let width = tui.terminal.last_known_screen_size.width;
+        let header_lines = self.clear_ui_header_lines(width);
+        if !header_lines.is_empty() {
+            tui.insert_history_lines(header_lines);
+            self.has_emitted_history_lines = true;
+        }
+        Ok(())
     }
 
     async fn shutdown_current_thread(&mut self) {
@@ -807,37 +873,61 @@ impl App {
     async fn open_agent_picker(&mut self) {
         let thread_ids: Vec<ThreadId> = self.thread_event_channels.keys().cloned().collect();
         for thread_id in thread_ids {
-            if self.server.get_thread(thread_id).await.is_err() {
-                self.thread_event_channels.remove(&thread_id);
+            match self.server.get_thread(thread_id).await {
+                Ok(thread) => {
+                    let session_source = thread.config_snapshot().await.session_source;
+                    self.upsert_agent_picker_thread(
+                        thread_id,
+                        session_source.get_nickname(),
+                        session_source.get_agent_role(),
+                        false,
+                    );
+                }
+                Err(_) => {
+                    self.mark_agent_picker_thread_closed(thread_id);
+                }
             }
         }
 
-        if self.thread_event_channels.is_empty() {
+        if self.agent_picker_threads.is_empty() {
             self.chat_widget
                 .add_info_message("No agents available yet.".to_string(), None);
             return;
         }
 
-        let mut thread_ids: Vec<ThreadId> = self.thread_event_channels.keys().cloned().collect();
-        thread_ids.sort_by_key(ToString::to_string);
+        let mut agent_threads: Vec<(ThreadId, AgentPickerThreadEntry)> = self
+            .agent_picker_threads
+            .iter()
+            .map(|(thread_id, entry)| (*thread_id, entry.clone()))
+            .collect();
+        sort_agent_picker_threads(&mut agent_threads);
 
         let mut initial_selected_idx = None;
-        let items: Vec<SelectionItem> = thread_ids
+        let items: Vec<SelectionItem> = agent_threads
             .iter()
             .enumerate()
-            .map(|(idx, thread_id)| {
+            .map(|(idx, (thread_id, entry))| {
                 if self.active_thread_id == Some(*thread_id) {
                     initial_selected_idx = Some(idx);
                 }
                 let id = *thread_id;
+                let is_primary = self.primary_thread_id == Some(*thread_id);
+                let name = format_agent_picker_item_name(
+                    entry.agent_nickname.as_deref(),
+                    entry.agent_role.as_deref(),
+                    is_primary,
+                );
+                let uuid = thread_id.to_string();
                 SelectionItem {
-                    name: thread_id.to_string(),
+                    name: name.clone(),
+                    name_prefix_spans: agent_picker_status_dot_spans(entry.is_closed),
+                    description: Some(uuid.clone()),
                     is_current: self.active_thread_id == Some(*thread_id),
                     actions: vec![Box::new(move |tx| {
                         tx.send(AppEvent::SelectAgentThread(id));
                     })],
                     dismiss_on_select: true,
-                    search_value: Some(thread_id.to_string()),
+                    search_value: Some(format!("{name} {uuid}")),
                     ..Default::default()
                 }
             })
@@ -853,20 +943,51 @@ impl App {
         });
     }
 
+    fn upsert_agent_picker_thread(
+        &mut self,
+        thread_id: ThreadId,
+        agent_nickname: Option<String>,
+        agent_role: Option<String>,
+        is_closed: bool,
+    ) {
+        self.agent_picker_threads.insert(
+            thread_id,
+            AgentPickerThreadEntry {
+                agent_nickname,
+                agent_role,
+                is_closed,
+            },
+        );
+    }
+
+    fn mark_agent_picker_thread_closed(&mut self, thread_id: ThreadId) {
+        if let Some(entry) = self.agent_picker_threads.get_mut(&thread_id) {
+            entry.is_closed = true;
+        } else {
+            self.upsert_agent_picker_thread(thread_id, None, None, true);
+        }
+    }
+
     async fn select_agent_thread(&mut self, tui: &mut tui::Tui, thread_id: ThreadId) -> Result<()> {
         if self.active_thread_id == Some(thread_id) {
             return Ok(());
         }
 
-        let thread = match self.server.get_thread(thread_id).await {
-            Ok(thread) => thread,
+        let live_thread = match self.server.get_thread(thread_id).await {
+            Ok(thread) => Some(thread),
             Err(err) => {
-                self.chat_widget.add_error_message(format!(
-                    "Failed to attach to agent thread {thread_id}: {err}"
-                ));
-                return Ok(());
+                if self.thread_event_channels.contains_key(&thread_id) {
+                    self.mark_agent_picker_thread_closed(thread_id);
+                    None
+                } else {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to attach to agent thread {thread_id}: {err}"
+                    ));
+                    return Ok(());
+                }
             }
         };
+        let is_replay_only = live_thread.is_none();
 
         let previous_thread_id = self.active_thread_id;
         self.store_active_thread_receiver().await;
@@ -884,11 +1005,22 @@ impl App {
         self.active_thread_rx = Some(receiver);
 
         let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
-        let codex_op_tx = crate::chatwidget::spawn_op_forwarder(thread);
+        let codex_op_tx = if let Some(thread) = live_thread {
+            crate::chatwidget::spawn_op_forwarder(thread)
+        } else {
+            let (tx, _rx) = unbounded_channel();
+            tx
+        };
         self.chat_widget = ChatWidget::new_with_op_sender(init, codex_op_tx);
 
         self.reset_for_thread_switch(tui)?;
         self.replay_thread_snapshot(snapshot);
+        if is_replay_only {
+            self.chat_widget.add_info_message(
+                format!("Agent thread {thread_id} is closed. Replaying saved transcript."),
+                None,
+            );
+        }
         self.drain_active_thread_events(tui).await?;
 
         Ok(())
@@ -908,6 +1040,7 @@ impl App {
 
     fn reset_thread_event_state(&mut self) {
         self.thread_event_channels.clear();
+        self.agent_picker_threads.clear();
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
@@ -976,6 +1109,27 @@ impl App {
         self.refresh_status_line();
     }
 
+    fn should_wait_for_initial_session(session_selection: &SessionSelection) -> bool {
+        matches!(
+            session_selection,
+            SessionSelection::StartFresh | SessionSelection::Exit
+        )
+    }
+
+    fn should_handle_active_thread_events(
+        waiting_for_initial_session_configured: bool,
+        has_active_thread_receiver: bool,
+    ) -> bool {
+        has_active_thread_receiver && !waiting_for_initial_session_configured
+    }
+
+    fn should_stop_waiting_for_initial_session(
+        waiting_for_initial_session_configured: bool,
+        primary_thread_id: Option<ThreadId>,
+    ) -> bool {
+        waiting_for_initial_session_configured && primary_thread_id.is_some()
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
@@ -1003,14 +1157,15 @@ impl App {
             config.codex_home.clone(),
             auth_manager.clone(),
             SessionSource::Cli,
+            config.model_catalog.clone(),
         ));
         let mut model = thread_manager
             .get_models_manager()
-            .get_default_model(&config.model, &config, RefreshStrategy::Offline)
+            .get_default_model(&config.model, RefreshStrategy::Offline)
             .await;
         let available_models = thread_manager
             .get_models_manager()
-            .list_models(&config, RefreshStrategy::Offline)
+            .list_models(RefreshStrategy::Offline)
             .await;
         let exit_info = handle_model_migration_prompt_if_needed(
             tui,
@@ -1055,6 +1210,8 @@ impl App {
         let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
+        let wait_for_initial_session_configured =
+            Self::should_wait_for_initial_session(&session_selection);
         let mut chat_widget = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
@@ -1174,6 +1331,7 @@ impl App {
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
+            agent_picker_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -1188,8 +1346,8 @@ impl App {
                 != WindowsSandboxLevel::Disabled
                 && matches!(
                     app.config.permissions.sandbox_policy.get(),
-                    codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly { .. }
+                    codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                        | codex_protocol::protocol::SandboxPolicy::ReadOnly { .. }
                 )
                 && !app
                     .config
@@ -1235,6 +1393,7 @@ impl App {
 
         let mut thread_created_rx = thread_manager.subscribe_thread_created();
         let mut listen_for_threads = true;
+        let mut waiting_for_initial_session_configured = wait_for_initial_session_configured;
 
         let exit_reason = loop {
             let control = select! {
@@ -1247,7 +1406,10 @@ impl App {
                     } else {
                         None
                     }
-                }, if app.active_thread_rx.is_some() => {
+                }, if App::should_handle_active_thread_events(
+                    waiting_for_initial_session_configured,
+                    app.active_thread_rx.is_some()
+                ) => {
                     if let Some(event) = active {
                         app.handle_active_thread_event(tui, event).await?;
                     } else {
@@ -1274,6 +1436,12 @@ impl App {
                     AppRunControl::Continue
                 }
             };
+            if App::should_stop_waiting_for_initial_session(
+                waiting_for_initial_session_configured,
+                app.primary_thread_id,
+            ) {
+                waiting_for_initial_session_configured = false;
+            }
             match control {
                 AppRunControl::Continue => {}
                 AppRunControl::Exit(reason) => break reason,
@@ -1388,6 +1556,10 @@ impl App {
                 }
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::ClearUi => {
+                self.clear_terminal_ui(tui)?;
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::OpenResumePicker => {
                 match crate::resume_picker::run_resume_picker(tui, &self.config, false).await? {
                     SessionSelection::Resume(path) => {
@@ -1401,8 +1573,11 @@ impl App {
                         )
                         .await?
                         {
-                            Some(cwd) => cwd,
-                            None => current_cwd.clone(),
+                            crate::ResolveCwdOutcome::Continue(Some(cwd)) => cwd,
+                            crate::ResolveCwdOutcome::Continue(None) => current_cwd.clone(),
+                            crate::ResolveCwdOutcome::Exit => {
+                                return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+                            }
                         };
                         let mut resume_config = if crate::cwds_differ(&current_cwd, &resume_cwd) {
                             match self.rebuild_config_for_cwd(resume_cwd).await {
@@ -1689,6 +1864,10 @@ impl App {
             }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
+            }
+            AppEvent::OpenPlanReasoningScopePrompt { model, effort } => {
+                self.chat_widget
+                    .open_plan_reasoning_scope_prompt(model, effort);
             }
             AppEvent::OpenAllModelsPopup { models } => {
                 self.chat_widget.open_all_models_popup(models);
@@ -2012,7 +2191,7 @@ impl App {
                                     Line::from(vec!["• ".dim(), "Sandbox ready".into()]),
                                     Line::from(vec![
                                         "  ".into(),
-                                        "Ata can now safely edit files and execute commands in your computer"
+                                        "Codex can now safely edit files and execute commands in your computer"
                                             .dark_gray(),
                                     ]),
                                 ]);
@@ -2038,6 +2217,7 @@ impl App {
                 model,
                 effort,
                 provider,
+                ..
             } => {
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
@@ -2047,6 +2227,10 @@ impl App {
                     .await
                 {
                     Ok(()) => {
+                        let effort_label = effort
+                            .map(|selected_effort| selected_effort.to_string())
+                            .unwrap_or_else(|| "default".to_string());
+                        tracing::info!("Selected model: {model}, Selected effort: {effort_label}");
                         let mut message = format!("Model changed to {model}");
                         if let Some(label) = Self::reasoning_label_for(&model, effort) {
                             message.push(' ');
@@ -2124,8 +2308,8 @@ impl App {
                 #[cfg(target_os = "windows")]
                 let policy_is_workspace_write_or_ro = matches!(
                     &policy,
-                    codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly { .. }
+                    codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                        | codex_protocol::protocol::SandboxPolicy::ReadOnly { .. }
                 );
                 let policy_for_chat = policy.clone();
 
@@ -2248,6 +2432,11 @@ impl App {
             AppEvent::UpdateRateLimitSwitchPromptHidden(hidden) => {
                 self.chat_widget.set_rate_limit_switch_prompt_hidden(hidden);
             }
+            AppEvent::UpdatePlanModeReasoningEffort(effort) => {
+                self.config.plan_mode_reasoning_effort = effort;
+                self.chat_widget.set_plan_mode_reasoning_effort(effort);
+                self.refresh_status_line();
+            }
             AppEvent::PersistFullAccessWarningAcknowledged => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
                     .set_hide_full_access_warning(true)
@@ -2291,6 +2480,45 @@ impl App {
                     self.chat_widget.add_error_message(format!(
                         "Failed to save rate limit reminder preference: {err}"
                     ));
+                }
+            }
+            AppEvent::PersistPlanModeReasoningEffort(effort) => {
+                let profile = self.active_profile.as_deref();
+                let segments = if let Some(profile) = profile {
+                    vec![
+                        "profiles".to_string(),
+                        profile.to_string(),
+                        "plan_mode_reasoning_effort".to_string(),
+                    ]
+                } else {
+                    vec!["plan_mode_reasoning_effort".to_string()]
+                };
+                let edit = if let Some(effort) = effort {
+                    ConfigEdit::SetPath {
+                        segments,
+                        value: effort.to_string().into(),
+                    }
+                } else {
+                    ConfigEdit::ClearPath { segments }
+                };
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([edit])
+                    .apply()
+                    .await
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist plan mode reasoning effort"
+                    );
+                    if let Some(profile) = profile {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save Plan mode reasoning effort for profile `{profile}`: {err}"
+                        ));
+                    } else {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save Plan mode reasoning effort: {err}"
+                        ));
+                    }
                 }
             }
             AppEvent::PersistModelMigrationPromptAcknowledged {
@@ -2469,11 +2697,7 @@ impl App {
                     .await;
                 match apply_result {
                     Ok(()) => {
-                        self.config.tui_status_line = if ids.is_empty() {
-                            None
-                        } else {
-                            Some(ids.clone())
-                        };
+                        self.config.tui_status_line = Some(ids.clone());
                         self.chat_widget.setup_status_line(items);
                     }
                     Err(err) => {
@@ -2489,6 +2713,34 @@ impl App {
             }
             AppEvent::StatusLineSetupCancelled => {
                 self.chat_widget.cancel_status_line_setup();
+            }
+            AppEvent::SyntaxThemeSelected { name } => {
+                let edit = codex_core::config::edit::syntax_theme_edit(&name);
+                let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([edit])
+                    .apply()
+                    .await;
+                match apply_result {
+                    Ok(()) => {
+                        // Ensure the selected theme is active in the current
+                        // session.  The preview callback covers arrow-key
+                        // navigation, but if the user presses Enter without
+                        // navigating, the runtime theme must still be applied.
+                        if let Some(theme) = crate::render::highlight::resolve_theme_by_name(
+                            &name,
+                            Some(&self.config.codex_home),
+                        ) {
+                            crate::render::highlight::set_syntax_theme(theme);
+                        }
+                        self.sync_tui_theme_selection(name);
+                    }
+                    Err(err) => {
+                        self.restore_runtime_theme_from_config();
+                        tracing::error!(error = %err, "failed to persist theme selection");
+                        self.chat_widget
+                            .add_error_message(format!("Failed to save theme: {err}"));
+                    }
+                }
             }
         }
         Ok(AppRunControl::Continue)
@@ -2545,7 +2797,7 @@ impl App {
         if let Some((closed_thread_id, primary_thread_id)) =
             self.active_non_primary_shutdown_target(&event.msg)
         {
-            self.thread_event_channels.remove(&closed_thread_id);
+            self.mark_agent_picker_thread_closed(closed_thread_id);
             self.select_agent_thread(tui, primary_thread_id).await?;
             if self.active_thread_id == Some(primary_thread_id) {
                 self.chat_widget.add_info_message(
@@ -2587,6 +2839,12 @@ impl App {
             }
         };
         let config_snapshot = thread.config_snapshot().await;
+        self.upsert_agent_picker_thread(
+            thread_id,
+            config_snapshot.session_source.get_nickname(),
+            config_snapshot.session_source.get_agent_role(),
+            false,
+        );
         let event = Event {
             id: String::new(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -2653,7 +2911,7 @@ impl App {
         (!model.starts_with("codex-auto-")).then(|| Self::reasoning_label(reasoning_effort))
     }
 
-    pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
+    pub(crate) fn token_usage(&self) -> codex_protocol::protocol::TokenUsage {
         self.chat_widget.token_usage()
     }
 
@@ -2667,6 +2925,29 @@ impl App {
     fn on_update_personality(&mut self, personality: Personality) {
         self.config.personality = Some(personality);
         self.chat_widget.set_personality(personality);
+    }
+
+    fn sync_tui_theme_selection(&mut self, name: String) {
+        self.config.tui_theme = Some(name.clone());
+        self.chat_widget.set_tui_theme(Some(name));
+    }
+
+    fn restore_runtime_theme_from_config(&self) {
+        if let Some(name) = self.config.tui_theme.as_deref()
+            && let Some(theme) =
+                crate::render::highlight::resolve_theme_by_name(name, Some(&self.config.codex_home))
+        {
+            crate::render::highlight::set_syntax_theme(theme);
+            return;
+        }
+
+        let auto_theme_name = crate::render::highlight::adaptive_default_theme_name();
+        if let Some(theme) = crate::render::highlight::resolve_theme_by_name(
+            auto_theme_name,
+            Some(&self.config.codex_home),
+        ) {
+            crate::render::highlight::set_syntax_theme(theme);
+        }
     }
 
     fn personality_label(personality: Personality) -> &'static str {
@@ -2825,7 +3106,7 @@ impl App {
         cwd: PathBuf,
         env_map: std::collections::HashMap<String, String>,
         logs_base_dir: PathBuf,
-        sandbox_policy: codex_core::protocol::SandboxPolicy,
+        sandbox_policy: codex_protocol::protocol::SandboxPolicy,
         tx: AppEventSender,
     ) {
         tokio::task::spawn_blocking(move || {
@@ -2864,16 +3145,16 @@ mod tests {
     use codex_core::CodexAuth;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
-    use codex_core::protocol::AskForApproval;
-    use codex_core::protocol::Event;
-    use codex_core::protocol::EventMsg;
-    use codex_core::protocol::SandboxPolicy;
-    use codex_core::protocol::SessionConfiguredEvent;
-    use codex_core::protocol::SessionSource;
-    use codex_core::protocol::ThreadRolledBackEvent;
-    use codex_core::protocol::UserMessageEvent;
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
+    use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::Event;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::SandboxPolicy;
+    use codex_protocol::protocol::SessionConfiguredEvent;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::ThreadRolledBackEvent;
+    use codex_protocol::protocol::UserMessageEvent;
     use codex_protocol::user_input::TextElement;
     use codex_protocol::user_input::UserInput;
     use crossterm::event::KeyModifiers;
@@ -2903,6 +3184,76 @@ mod tests {
             vec![base_cwd.join("rel")]
         );
         Ok(())
+    }
+
+    #[test]
+    fn startup_waiting_gate_is_only_for_fresh_or_exit_session_selection() {
+        assert_eq!(
+            App::should_wait_for_initial_session(&SessionSelection::StartFresh),
+            true
+        );
+        assert_eq!(
+            App::should_wait_for_initial_session(&SessionSelection::Exit),
+            true
+        );
+        assert_eq!(
+            App::should_wait_for_initial_session(&SessionSelection::Resume(PathBuf::from(
+                "/tmp/restore"
+            ))),
+            false
+        );
+        assert_eq!(
+            App::should_wait_for_initial_session(&SessionSelection::Fork(PathBuf::from(
+                "/tmp/fork"
+            ))),
+            false
+        );
+    }
+
+    #[test]
+    fn startup_waiting_gate_holds_active_thread_events_until_primary_thread_configured() {
+        let mut wait_for_initial_session =
+            App::should_wait_for_initial_session(&SessionSelection::StartFresh);
+        assert_eq!(wait_for_initial_session, true);
+        assert_eq!(
+            App::should_handle_active_thread_events(wait_for_initial_session, true),
+            false
+        );
+
+        assert_eq!(
+            App::should_stop_waiting_for_initial_session(wait_for_initial_session, None),
+            false
+        );
+        if App::should_stop_waiting_for_initial_session(
+            wait_for_initial_session,
+            Some(ThreadId::new()),
+        ) {
+            wait_for_initial_session = false;
+        }
+        assert_eq!(wait_for_initial_session, false);
+
+        assert_eq!(
+            App::should_handle_active_thread_events(wait_for_initial_session, true),
+            true
+        );
+    }
+
+    #[test]
+    fn startup_waiting_gate_not_applied_for_resume_or_fork_session_selection() {
+        let wait_for_resume = App::should_wait_for_initial_session(&SessionSelection::Resume(
+            PathBuf::from("/tmp/restore"),
+        ));
+        assert_eq!(
+            App::should_handle_active_thread_events(wait_for_resume, true),
+            true
+        );
+        let wait_for_fork = App::should_wait_for_initial_session(&SessionSelection::Fork(
+            PathBuf::from("/tmp/fork"),
+        ));
+        assert_eq!(
+            App::should_handle_active_thread_events(wait_for_fork, true),
+            true
+        );
     }
 
     #[tokio::test]
@@ -2947,7 +3298,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn open_agent_picker_prunes_missing_threads() -> Result<()> {
+    async fn open_agent_picker_keeps_missing_threads_for_replay() -> Result<()> {
         let mut app = make_test_app().await;
         let thread_id = ThreadId::new();
         app.thread_event_channels
@@ -2955,8 +3306,80 @@ mod tests {
 
         app.open_agent_picker().await;
 
-        assert_eq!(app.thread_event_channels.contains_key(&thread_id), false);
+        assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
+        assert_eq!(
+            app.agent_picker_threads.get(&thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: None,
+                agent_role: None,
+                is_closed: true,
+            })
+        );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn open_agent_picker_keeps_cached_closed_threads() -> Result<()> {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.thread_event_channels
+            .insert(thread_id, ThreadEventChannel::new(1));
+        app.agent_picker_threads.insert(
+            thread_id,
+            AgentPickerThreadEntry {
+                agent_nickname: Some("Robie".to_string()),
+                agent_role: Some("explorer".to_string()),
+                is_closed: false,
+            },
+        );
+
+        app.open_agent_picker().await;
+
+        assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
+        assert_eq!(
+            app.agent_picker_threads.get(&thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: Some("Robie".to_string()),
+                agent_role: Some("explorer".to_string()),
+                is_closed: true,
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn agent_picker_item_name_snapshot() {
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread id");
+        let snapshot = [
+            format!(
+                "{} | {}",
+                format_agent_picker_item_name(Some("Robie"), Some("explorer"), true),
+                thread_id
+            ),
+            format!(
+                "{} | {}",
+                format_agent_picker_item_name(Some("Robie"), Some("explorer"), false),
+                thread_id
+            ),
+            format!(
+                "{} | {}",
+                format_agent_picker_item_name(Some("Robie"), None, false),
+                thread_id
+            ),
+            format!(
+                "{} | {}",
+                format_agent_picker_item_name(None, Some("explorer"), false),
+                thread_id
+            ),
+            format!(
+                "{} | {}",
+                format_agent_picker_item_name(None, None, false),
+                thread_id
+            ),
+        ]
+        .join("\n");
+        assert_snapshot!("agent_picker_item_name", snapshot);
     }
 
     #[tokio::test]
@@ -3038,6 +3461,116 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn clear_ui_after_long_transcript_snapshots_fresh_header_only() {
+        let mut app = make_test_app().await;
+        app.config.cwd = PathBuf::from("/tmp/project");
+        app.chat_widget.set_model("gpt-test");
+        app.chat_widget
+            .set_reasoning_effort(Some(ReasoningEffortConfig::High));
+        let story_part_one = "In the cliffside town of Bracken Ferry, the lighthouse had been dark for \
+            nineteen years, and the children were told it was because the sea no longer wanted a \
+            guide. Mara, who repaired clocks for a living, found that hard to believe. Every dawn she \
+            heard the gulls circling the empty tower, and every dusk she watched ships hesitate at the \
+            mouth of the bay as if listening for a signal that never came. When an old brass key fell \
+            out of a cracked parcel in her workshop, tagged only with the words 'for the lamp room,' \
+            she decided to climb the hill and see what the town had forgotten.";
+        let story_part_two = "Inside the lighthouse she found gears wrapped in oilcloth, logbooks filled \
+            with weather notes, and a lens shrouded beneath salt-stiff canvas. The mechanism was not \
+            broken, only unfinished. Someone had removed the governor spring and hidden it in a false \
+            drawer, along with a letter from the last keeper admitting he had darkened the light on \
+            purpose after smugglers threatened his family. Mara spent the night rebuilding the clockwork \
+            from spare watch parts, her fingers blackened with soot and grease, while a storm gathered \
+            over the water and the harbor bells began to ring.";
+        let story_part_three = "At midnight the first squall hit, and the fishing boats returned early, \
+            blind in sheets of rain. Mara wound the mechanism, set the teeth by hand, and watched the \
+            great lens begin to turn in slow, certain arcs. The beam swept across the bay, caught the \
+            whitecaps, and reached the boats just as they were drifting toward the rocks below the \
+            eastern cliffs. In the morning the town square was crowded with wet sailors, angry elders, \
+            and wide-eyed children, but when the oldest captain placed the keeper's log on the fountain \
+            and thanked Mara for relighting the coast, nobody argued. By sunset, Bracken Ferry had a \
+            lighthouse again, and Mara had more clocks to mend than ever because everyone wanted \
+            something in town to keep better time.";
+
+        let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
+            Arc::new(UserHistoryCell {
+                message: text.to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
+            }) as Arc<dyn HistoryCell>
+        };
+        let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from(text.to_string())],
+                true,
+            )) as Arc<dyn HistoryCell>
+        };
+        let make_header = |is_first| -> Arc<dyn HistoryCell> {
+            let event = SessionConfiguredEvent {
+                session_id: ThreadId::new(),
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: Some(ReasoningEffortConfig::High),
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            };
+            Arc::new(new_session_info(
+                app.chat_widget.config_ref(),
+                app.chat_widget.current_model(),
+                event,
+                is_first,
+                None,
+                None,
+            )) as Arc<dyn HistoryCell>
+        };
+
+        app.transcript_cells = vec![
+            make_header(true),
+            Arc::new(crate::history_cell::new_info_event(
+                "startup tip that used to replay".to_string(),
+                None,
+            )) as Arc<dyn HistoryCell>,
+            user_cell("Tell me a long story about a town with a dark lighthouse."),
+            agent_cell(story_part_one),
+            user_cell("Continue the story and reveal why the light went out."),
+            agent_cell(story_part_two),
+            user_cell("Finish the story with a storm and a resolution."),
+            agent_cell(story_part_three),
+        ];
+        app.has_emitted_history_lines = true;
+
+        let rendered = app
+            .clear_ui_header_lines_with_version(80, "<VERSION>")
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            !rendered.contains("startup tip that used to replay"),
+            "clear header should not replay startup notices"
+        );
+        assert!(
+            !rendered.contains("Bracken Ferry"),
+            "clear header should not replay prior conversation turns"
+        );
+        assert_snapshot!("clear_ui_after_long_transcript_fresh_header_only", rendered);
+    }
+
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
@@ -3082,6 +3615,7 @@ mod tests {
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
+            agent_picker_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -3139,6 +3673,7 @@ mod tests {
                 pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),
                 thread_event_channels: HashMap::new(),
+                agent_picker_threads: HashMap::new(),
                 active_thread_id: None,
                 active_thread_rx: None,
                 primary_thread_id: None,
@@ -3410,6 +3945,19 @@ mod tests {
             Some(false)
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn sync_tui_theme_selection_updates_chat_widget_config_copy() {
+        let mut app = make_test_app().await;
+
+        app.sync_tui_theme_selection("dracula".to_string());
+
+        assert_eq!(app.config.tui_theme.as_deref(), Some("dracula"));
+        assert_eq!(
+            app.chat_widget.config_ref().tui_theme.as_deref(),
+            Some("dracula")
+        );
     }
 
     #[tokio::test]

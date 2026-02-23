@@ -209,7 +209,7 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
 
     mcp.send_response(
         request_id,
-        serde_json::json!({ "decision": codex_core::protocol::ReviewDecision::Approved }),
+        serde_json::json!({ "decision": codex_protocol::protocol::ReviewDecision::Approved }),
     )
     .await?;
     timeout(
@@ -437,7 +437,6 @@ sandbox_mode = "read-only"
 model_provider = "mock_provider"
 
 [features]
-remote_models = false
 shell_snapshot = false
 
 [model_providers.mock_provider]

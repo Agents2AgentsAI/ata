@@ -1,14 +1,10 @@
 use codex_core::CodexAuth;
-use codex_core::ContentItem;
-use codex_core::LocalShellAction;
-use codex_core::LocalShellExecAction;
-use codex_core::LocalShellStatus;
 use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
 use codex_core::NewThread;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
-use codex_core::ResponseItem;
+use codex_core::ResponsesWebsocketVersion;
 use codex_core::ThreadManager;
 use codex_core::WireApi;
 use codex_core::auth::AuthCredentialsStoreMode;
@@ -16,9 +12,6 @@ use codex_core::built_in_model_providers;
 use codex_core::default_client::originator;
 use codex_core::error::CodexErr;
 use codex_core::features::Feature;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SessionSource;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -27,12 +20,20 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::LocalShellAction;
+use codex_protocol::models::LocalShellExecAction;
+use codex_protocol::models::LocalShellStatus;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::load_default_config_for_test;
@@ -53,6 +54,7 @@ use core_test_support::wait_for_event;
 use dunce::canonicalize as normalize_path;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
+use regex_lite::escape as regex_escape;
 use serde_json::json;
 use std::io::Write;
 use std::sync::Arc;
@@ -158,6 +160,32 @@ fn write_auth_json(
     .unwrap();
 
     fake_jwt
+}
+
+#[expect(clippy::panic)]
+fn resolve_existing_env_var_for_api_key() -> (String, String) {
+    for key in [
+        "OPENAI_API_KEY",
+        "USERNAME",
+        "USER",
+        "LOGNAME",
+        "HOME",
+        "PATH",
+        "TEMP",
+        "TMP",
+    ] {
+        if let Ok(value) = std::env::var(key)
+            && !value.trim().is_empty()
+        {
+            return (key.to_string(), value);
+        }
+    }
+
+    if let Some((key, value)) = std::env::vars().find(|(_, value)| !value.trim().is_empty()) {
+        return (key, value);
+    }
+
+    panic!("expected at least one non-empty environment variable");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -582,6 +610,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         codex_home.path().to_path_buf(),
         auth_manager,
         SessionSource::Exec,
+        config.model_catalog.clone(),
     );
     let NewThread { thread: codex, .. } = thread_manager
         .start_thread(config)
@@ -1352,8 +1381,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         provider.clone(),
         SessionSource::Exec,
         config.model_verbosity,
-        false,
-        false,
+        None::<ResponsesWebsocketVersion>,
         false,
         false,
         None,
@@ -1860,7 +1888,9 @@ async fn incomplete_response_emits_content_filter_error_message() -> anyhow::Res
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn azure_overrides_assign_properties_used_for_responses_url() {
     skip_if_no_network!();
-    let existing_env_var_with_random_value = if cfg!(windows) { "USERNAME" } else { "USER" };
+    let (existing_env_var_with_random_value, existing_env_var_value) =
+        resolve_existing_env_var_for_api_key();
+    let expected_auth_header = format!(r"^Bearer {}$", regex_escape(&existing_env_var_value));
 
     // Mock server
     let server = MockServer::start().await;
@@ -1878,14 +1908,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         .and(path("/openai/responses"))
         .and(query_param("api-version", "2025-04-01-preview"))
         .and(header_regex("Custom-Header", "Value"))
-        .and(header_regex(
-            "Authorization",
-            format!(
-                "Bearer {}",
-                std::env::var(existing_env_var_with_random_value).unwrap()
-            )
-            .as_str(),
-        ))
+        .and(header_regex("Authorization", expected_auth_header.as_str()))
         .respond_with(first)
         .expect(1)
         .mount(&server)
@@ -1895,7 +1918,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         name: "custom".to_string(),
         base_url: Some(format!("{}/openai", server.uri())),
         // Reuse the existing environment variable to avoid using unsafe code
-        env_key: Some(existing_env_var_with_random_value.to_string()),
+        env_key: Some(existing_env_var_with_random_value),
         experimental_bearer_token: None,
         query_params: Some(std::collections::HashMap::from([(
             "api-version".to_string(),
@@ -1944,7 +1967,9 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn env_var_overrides_loaded_auth() {
     skip_if_no_network!();
-    let existing_env_var_with_random_value = if cfg!(windows) { "USERNAME" } else { "USER" };
+    let (existing_env_var_with_random_value, existing_env_var_value) =
+        resolve_existing_env_var_for_api_key();
+    let expected_auth_header = format!(r"^Bearer {}$", regex_escape(&existing_env_var_value));
 
     // Mock server
     let server = MockServer::start().await;
@@ -1962,14 +1987,7 @@ async fn env_var_overrides_loaded_auth() {
         .and(path("/openai/responses"))
         .and(query_param("api-version", "2025-04-01-preview"))
         .and(header_regex("Custom-Header", "Value"))
-        .and(header_regex(
-            "Authorization",
-            format!(
-                "Bearer {}",
-                std::env::var(existing_env_var_with_random_value).unwrap()
-            )
-            .as_str(),
-        ))
+        .and(header_regex("Authorization", expected_auth_header.as_str()))
         .respond_with(first)
         .expect(1)
         .mount(&server)
@@ -1979,7 +1997,7 @@ async fn env_var_overrides_loaded_auth() {
         name: "custom".to_string(),
         base_url: Some(format!("{}/openai", server.uri())),
         // Reuse the existing environment variable to avoid using unsafe code
-        env_key: Some(existing_env_var_with_random_value.to_string()),
+        env_key: Some(existing_env_var_with_random_value),
         query_params: Some(std::collections::HashMap::from([(
             "api-version".to_string(),
             "2025-04-01-preview".to_string(),

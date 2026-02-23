@@ -1,9 +1,9 @@
-use crate::config::CONFIG_TOML_FILE;
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
 use crate::path_utils::resolve_symlink_write_paths;
 use crate::path_utils::write_atomically;
 use anyhow::Context;
+use codex_config::CONFIG_TOML_FILE;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -56,13 +56,15 @@ pub enum ConfigEdit {
     ClearPath { segments: Vec<String> },
 }
 
-pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
-    if items.is_empty() {
-        return ConfigEdit::ClearPath {
-            segments: vec!["tui".to_string(), "status_line".to_string()],
-        };
+/// Produces a config edit that sets `[tui] theme = "<name>"`.
+pub fn syntax_theme_edit(name: &str) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec!["tui".to_string(), "theme".to_string()],
+        value: value(name.to_string()),
     }
+}
 
+pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
     let mut array = toml_edit::Array::new();
     for item in items {
         array.push(item.clone());
@@ -665,9 +667,9 @@ fn normalize_skill_config_path(path: &Path) -> String {
 /// for unknown providers (which clears the model to use remote default).
 pub fn default_model_for_provider(provider_id: &str) -> Option<&'static str> {
     match provider_id {
-        "openai" => Some("gpt-5.2-codex"),
-        "anthropic" => Some("claude-sonnet-4-5"),
-        "gemini" => Some("gemini-3-flash-preview"),
+        "openai" => Some("gpt-5.3-codex"),
+        "anthropic" => Some("claude-sonnet-4-6"),
+        "gemini" => Some("gemini-3.1-pro-preview"),
         _ => None, // Unknown provider, clear model
     }
 }

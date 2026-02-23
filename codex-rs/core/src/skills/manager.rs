@@ -19,6 +19,7 @@ use crate::skills::SkillLoadOutcome;
 use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
 use crate::skills::loader::skill_roots_from_layer_stack_with_agents;
+use crate::skills::system::install_research_skills;
 use crate::skills::system::install_system_skills;
 
 pub struct SkillsManager {
@@ -32,12 +33,8 @@ impl SkillsManager {
             tracing::error!("failed to install system skills: {err}");
         }
 
-        #[cfg(feature = "research")]
-        {
-            use crate::skills::system::install_research_skills;
-            if let Err(err) = install_research_skills(&codex_home) {
-                tracing::error!("failed to install research skills: {err}");
-            }
+        if let Err(err) = install_research_skills(&codex_home) {
+            tracing::error!("failed to install research skills: {err}");
         }
 
         #[cfg(feature = "visual-reports")]

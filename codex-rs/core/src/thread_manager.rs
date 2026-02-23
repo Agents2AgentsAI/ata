@@ -9,29 +9,28 @@ use crate::codex_thread::CodexThread;
 use crate::config::Config;
 #[cfg(feature = "data")]
 use crate::data::SharedDataToolkit;
-#[cfg(any(feature = "research", feature = "data"))]
 use crate::default_client::build_reqwest_client_with_timeouts;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
+use crate::features::Features;
 use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
-#[cfg(feature = "research")]
 use crate::research::SharedResearchToolkit;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::skills::SkillsManager;
 #[cfg(feature = "data")]
 use crate::tools::handlers::data::build_data_config;
-#[cfg(feature = "research")]
 use crate::tools::handlers::research::build_research_config;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
@@ -43,7 +42,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use tokio::runtime::Handle;
-#[cfg(any(feature = "research", feature = "data"))]
 use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
@@ -140,7 +138,6 @@ pub(crate) struct ThreadManagerState {
     thread_created_tx: broadcast::Sender<ThreadId>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
-    #[cfg(feature = "research")]
     research_toolkit: OnceCell<Arc<SharedResearchToolkit>>,
     #[cfg(feature = "data")]
     data_toolkit: OnceCell<Arc<SharedDataToolkit>>,
@@ -156,6 +153,7 @@ impl ThreadManager {
         codex_home: PathBuf,
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
+        model_catalog: Option<ModelsResponse>,
     ) -> Self {
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let skills_manager = Arc::new(SkillsManager::new(codex_home.clone()));
@@ -164,8 +162,11 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: Arc::new(ModelsManager::new(codex_home, auth_manager.clone())),
-                #[cfg(feature = "research")]
+                models_manager: Arc::new(ModelsManager::new(
+                    codex_home,
+                    auth_manager.clone(),
+                    model_catalog,
+                )),
                 research_toolkit: OnceCell::new(),
                 #[cfg(feature = "data")]
                 data_toolkit: OnceCell::new(),
@@ -220,7 +221,6 @@ impl ThreadManager {
                     auth_manager.clone(),
                     provider,
                 )),
-                #[cfg(feature = "research")]
                 research_toolkit: OnceCell::new(),
                 #[cfg(feature = "data")]
                 data_toolkit: OnceCell::new(),
@@ -253,12 +253,11 @@ impl ThreadManager {
 
     pub async fn list_models(
         &self,
-        config: &Config,
         refresh_strategy: crate::models_manager::manager::RefreshStrategy,
     ) -> Vec<ModelPreset> {
         self.state
             .models_manager
-            .list_models(config, refresh_strategy)
+            .list_models(refresh_strategy)
             .await
     }
 
@@ -515,37 +514,27 @@ impl ThreadManagerState {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
-        self.file_watcher.register_config(&config);
-        let research_toolkit = if config.features.enabled(Feature::Research) {
-            #[cfg(feature = "research")]
-            {
-                Some(
-                    self.research_toolkit
-                        .get_or_init(|| async {
-                            let research_config = build_research_config(
-                                config.research.as_ref(),
-                                config.codex_home.as_path(),
-                                config.cwd.as_path(),
-                            );
-                            Arc::new(codex_research_tools::ResearchToolkit::new(
-                                build_reqwest_client_with_timeouts(
-                                    Some(research_config.connect_timeout),
-                                    Some(research_config.request_timeout),
-                                ),
-                                research_config,
-                            ))
-                        })
-                        .await
-                        .clone(),
-                )
-            }
-            #[cfg(not(feature = "research"))]
-            {
-                warn!(
-                    "research feature flag is enabled in config, but codex-core was built without `--features research`"
-                );
-                None
-            }
+        let watch_registration = self.file_watcher.register_config(&config);
+        let research_toolkit = if any_research_feature_enabled(&config.features) {
+            Some(
+                self.research_toolkit
+                    .get_or_init(|| async {
+                        let research_config = build_research_config(
+                            config.research.as_ref(),
+                            config.codex_home.as_path(),
+                            config.cwd.as_path(),
+                        );
+                        Arc::new(codex_research_tools::ResearchToolkit::new(
+                            build_reqwest_client_with_timeouts(
+                                Some(research_config.connect_timeout),
+                                Some(research_config.request_timeout),
+                            ),
+                            research_config,
+                        ))
+                    })
+                    .await
+                    .clone(),
+            )
         } else {
             None
         };
@@ -599,13 +588,15 @@ impl ThreadManagerState {
             persist_extended_history,
         )
         .await?;
-        self.finalize_thread_spawn(codex, thread_id).await
+        self.finalize_thread_spawn(codex, thread_id, watch_registration)
+            .await
     }
 
     async fn finalize_thread_spawn(
         &self,
         codex: Codex,
         thread_id: ThreadId,
+        watch_registration: crate::file_watcher::WatchRegistration,
     ) -> CodexResult<NewThread> {
         let event = codex.next_event().await?;
         let session_configured = match event {
@@ -621,6 +612,7 @@ impl ThreadManagerState {
         let thread = Arc::new(CodexThread::new(
             codex,
             session_configured.rollout_path.clone(),
+            watch_registration,
         ));
         let mut threads = self.threads.write().await;
         threads.insert(thread_id, thread.clone());
@@ -648,6 +640,17 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
     } else {
         InitialHistory::Forked(rolled)
     }
+}
+
+/// Returns `true` when the master `Research` toggle or any per-category research
+/// feature is enabled, so the research toolkit should be initialised.
+fn any_research_feature_enabled(f: &Features) -> bool {
+    f.enabled(Feature::Research)
+        || f.enabled(Feature::ResearchPaperSearch)
+        || f.enabled(Feature::ResearchZotero)
+        || f.enabled(Feature::ResearchHackerNews)
+        || f.enabled(Feature::ResearchPatents)
+        || f.enabled(Feature::ResearchRepoAnalysis)
 }
 
 #[cfg(test)]

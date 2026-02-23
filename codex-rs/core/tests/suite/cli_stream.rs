@@ -1,7 +1,7 @@
 use assert_cmd::Command as AssertCommand;
 use codex_core::auth::CODEX_API_KEY_ENV_VAR;
-use codex_core::protocol::GitInfo;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::protocol::GitInfo;
 use codex_utils_cargo_bin::find_resource;
 use core_test_support::fs_wait;
 use core_test_support::responses;

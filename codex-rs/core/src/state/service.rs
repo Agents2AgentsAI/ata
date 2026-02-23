@@ -17,6 +17,7 @@ use crate::state_db::StateDbHandle;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
+use crate::zsh_exec_bridge::ZshExecBridge;
 use codex_api::file_support::FileReferenceCache;
 use codex_hooks::Hooks;
 use codex_otel::OtelManager;
@@ -31,6 +32,7 @@ pub(crate) struct SessionServices {
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     pub(crate) file_reference_cache: Mutex<FileReferenceCache>,
     pub(crate) file_upload_http_client: reqwest::Client,
+    pub(crate) zsh_exec_bridge: ZshExecBridge,
     pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) hooks: Hooks,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,

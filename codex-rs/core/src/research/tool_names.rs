@@ -2,12 +2,9 @@ use std::path::Path;
 
 use crate::config::ResearchToolsToml;
 
-#[cfg(feature = "research")]
 use rmcp::model::Tool;
-#[cfg(feature = "research")]
 use std::collections::BTreeMap;
 
-#[cfg(feature = "research")]
 macro_rules! set_tool_name_for_id {
     ($self:ident, $id:ident, $resolved_name:ident) => {
         match $id {
@@ -140,18 +137,10 @@ impl Default for ResearchToolNames {
 impl ResearchToolNames {
     #[must_use]
     pub fn from_available_native() -> Self {
-        #[cfg(feature = "research")]
-        {
-            let defs = codex_research_tools::tool_specs::all_tool_defs();
-            Self::from_native(&defs)
-        }
-        #[cfg(not(feature = "research"))]
-        {
-            Self::default()
-        }
+        let defs = codex_research_tools::tool_specs::all_tool_defs();
+        Self::from_native(&defs)
     }
 
-    #[cfg(feature = "research")]
     pub fn from_native(defs: &[codex_research_tools::tool_specs::ToolDef]) -> Self {
         let mut names = Self::default();
         for def in defs {
@@ -160,7 +149,6 @@ impl ResearchToolNames {
         names
     }
 
-    #[cfg(feature = "research")]
     pub fn from_mcp_tools(
         defs: &[codex_research_tools::tool_specs::ToolDef],
         mcp_tools: &BTreeMap<String, Tool>,
@@ -182,7 +170,6 @@ impl ResearchToolNames {
         names
     }
 
-    #[cfg(feature = "research")]
     fn set_name_for_id(&mut self, id: &str, resolved_name: String) {
         set_tool_name_for_id!(self, id, resolved_name);
     }
@@ -190,23 +177,16 @@ impl ResearchToolNames {
 
 #[must_use]
 pub fn native_tool_availability() -> ResearchToolAvailability {
-    #[cfg(feature = "research")]
-    {
-        let defs = codex_research_tools::tool_specs::all_tool_defs();
-        let has_paper_search = defs.iter().any(|def| def.id == "paper_search");
-        let has_zotero = defs.iter().any(|def| def.id == "zotero_search");
-        let has_repo_analysis = defs.iter().any(|def| def.id == "repo_find_entrypoints");
-        let has_hackernews = defs.iter().any(|def| def.id == "hn_search");
-        ResearchToolAvailability {
-            has_paper_search,
-            has_zotero,
-            has_repo_analysis,
-            has_hackernews,
-        }
-    }
-    #[cfg(not(feature = "research"))]
-    {
-        ResearchToolAvailability::default()
+    let defs = codex_research_tools::tool_specs::all_tool_defs();
+    let has_paper_search = defs.iter().any(|def| def.id == "paper_search");
+    let has_zotero = defs.iter().any(|def| def.id == "zotero_search");
+    let has_repo_analysis = defs.iter().any(|def| def.id == "repo_find_entrypoints");
+    let has_hackernews = defs.iter().any(|def| def.id == "hn_search");
+    ResearchToolAvailability {
+        has_paper_search,
+        has_zotero,
+        has_repo_analysis,
+        has_hackernews,
     }
 }
 
@@ -216,50 +196,36 @@ pub fn configured_native_tool_context(
     codex_home: &Path,
     cwd: &Path,
 ) -> ResearchToolContext {
-    #[cfg(feature = "research")]
-    {
-        let defs = codex_research_tools::tool_specs::all_tool_defs();
-        let research_config =
-            crate::tools::handlers::research::build_research_config(research_toml, codex_home, cwd);
-        let toolkit =
-            codex_research_tools::ResearchToolkit::new(reqwest::Client::new(), research_config);
+    let defs = codex_research_tools::tool_specs::all_tool_defs();
+    let research_config =
+        crate::tools::handlers::research::build_research_config(research_toml, codex_home, cwd);
+    let toolkit =
+        codex_research_tools::ResearchToolkit::new(reqwest::Client::new(), research_config);
 
-        let mut names = ResearchToolNames::default();
-        let mut availability = ResearchToolAvailability::default();
+    let mut names = ResearchToolNames::default();
+    let mut availability = ResearchToolAvailability::default();
 
-        for def in defs {
-            if !toolkit.is_tool_configured(def.id) {
-                continue;
-            }
-
-            names.set_name_for_id(def.id, def.native_name.to_string());
-            match def.id {
-                "paper_search" => availability.has_paper_search = true,
-                "zotero_search" => availability.has_zotero = true,
-                "repo_find_entrypoints" => availability.has_repo_analysis = true,
-                "hn_search" => availability.has_hackernews = true,
-                _ => {}
-            }
+    for def in defs {
+        if !toolkit.is_tool_configured(def.id) {
+            continue;
         }
 
-        ResearchToolContext {
-            names,
-            availability,
+        names.set_name_for_id(def.id, def.native_name.to_string());
+        match def.id {
+            "paper_search" => availability.has_paper_search = true,
+            "zotero_search" => availability.has_zotero = true,
+            "repo_find_entrypoints" => availability.has_repo_analysis = true,
+            "hn_search" => availability.has_hackernews = true,
+            _ => {}
         }
     }
-    #[cfg(not(feature = "research"))]
-    {
-        let _ = research_toml;
-        let _ = codex_home;
-        let _ = cwd;
-        ResearchToolContext {
-            names: ResearchToolNames::from_available_native(),
-            availability: native_tool_availability(),
-        }
+
+    ResearchToolContext {
+        names,
+        availability,
     }
 }
 
-#[cfg(feature = "research")]
 pub(crate) fn find_mcp_tool_matches(
     mcp_name: &str,
     mcp_tools: &BTreeMap<String, Tool>,
@@ -271,7 +237,7 @@ pub(crate) fn find_mcp_tool_matches(
         .collect()
 }
 
-#[cfg(all(test, feature = "research"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use codex_research_tools::tool_specs::all_tool_defs;
@@ -348,14 +314,7 @@ mod always_tests {
     #[test]
     fn native_tool_availability_matches_build_features() {
         let availability = native_tool_availability();
-        #[cfg(feature = "research")]
-        {
-            assert!(availability.has_paper_search);
-            assert!(availability.has_zotero);
-        }
-        #[cfg(not(feature = "research"))]
-        {
-            assert_eq!(availability, ResearchToolAvailability::default());
-        }
+        assert!(availability.has_paper_search);
+        assert!(availability.has_zotero);
     }
 }
