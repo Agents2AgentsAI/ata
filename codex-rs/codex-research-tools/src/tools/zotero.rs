@@ -69,6 +69,8 @@ mod content_collector;
 mod core;
 #[path = "zotero/document_resolution.rs"]
 mod document_resolution;
+#[path = "zotero/ensure_running.rs"]
+pub(crate) mod ensure_running;
 #[path = "zotero/grep.rs"]
 mod grep;
 #[path = "zotero/item_endpoints.rs"]

@@ -9,6 +9,25 @@ metadata:
 
 This skill orchestrates paper synthesis. The actual synthesis work is done by subagents running the `$paper-synthesizer` skill.
 
+## CRITICAL: No Exploration
+
+**Do NOT do any of these before spawning the subagent:**
+- Do NOT read any SKILL.md files (you already have the instructions)
+- Do NOT run `rg --version`, `ls`, or any diagnostic commands
+- Do NOT read `research-context.md`
+- Do NOT read KB cards to "check" them — a single `rg` search is enough
+- Do NOT call `paper_search` when you already have a URL or arXiv ID
+
+**The optimal single-paper flow is exactly 6 tool calls:**
+1. `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` (KB check — 1 call)
+2. `spawn_agent` (1 call)
+3. `wait` (1 call)
+4. `exec_command: cat staging_file` (1 call)
+5. `present_reading_view` (1 call)
+6. `update_document_section` × N (fill sections)
+
+Then 2 more for KB persistence. That's it. Any additional tool calls are waste.
+
 ## Rules
 
 1. **Always use subagents** — one per paper, parallel for multi-paper. Never synthesize in the main agent context.
@@ -16,14 +35,19 @@ This skill orchestrates paper synthesis. The actual synthesis work is done by su
 3. **Subagent prompts must include `$paper-synthesizer`** to trigger the subagent skill. Do not write custom synthesis instructions.
 4. **No KB references in prose.** Never say "as summarized in your KB." Present explanations as your own understanding.
 5. **No re-researching.** After the subagent returns, do NOT call `web.run`, `web_search`, `attach_url_files`, or open any URLs. The subagent already fetched and read the paper. Use the subagent's output as your source material.
+6. **NEVER re-resolve known papers.** If you already have a URL, arXiv ID, or DOI for a paper (from paper discovery, user-provided links, or any prior step), pass it directly to the subagent. Do NOT call `paper_search` to "verify", "look up", or "confirm" papers that already have identifiers. This wastes time and API quota. `paper_search` is ONLY for papers where you have nothing but a title or author name.
 
-## Pre-Synthesis: Resolve the Paper
+## Pre-Synthesis: Check What You Already Have
 
-Choose **one** path based on user input:
+**Most papers arrive with identifiers already resolved** (from paper discovery, user-provided links, or prior conversation). For these, skip straight to subagent spawning — do NOT call `paper_search`.
 
-- **URL, arXiv ID, or DOI** → convert arXiv `/abs/` to `/pdf/` → pass URL to subagent
-- **Paper title or author names** → `paper_search` to find arXiv ID or DOI → pass URL to subagent
-- **Zotero / "my library"** → `zotero_search` → `zotero_get_item(include_attachments=true, include_fulltext_resolution=true)` → extract `preferred_url` or `local_path` → pass to subagent
+**Decision per paper:**
+
+1. **URL, arXiv ID, or DOI already available** → convert arXiv `/abs/` to `/pdf/` → go directly to Subagent Execution. **Do not call `paper_search`.** This is the common case.
+2. **Only a title or author names, no URL/ID** → this is the ONLY case where `paper_search` is needed. Call it to find an arXiv ID or DOI, then pass the URL to the subagent.
+3. **Zotero / "my library"** → `zotero_search` → `zotero_get_item(include_attachments=true, include_fulltext_resolution=true)` → extract `preferred_url` or `local_path` → pass to subagent.
+
+**For multi-paper batches:** Most papers will already have URLs. Only call `paper_search` for the subset that lack identifiers. Run any needed `paper_search` calls in a single parallel batch — never one at a time.
 
 ## Subagent Execution
 
@@ -32,76 +56,103 @@ Choose **one** path based on user input:
 > $paper-synthesizer
 >
 > Paper: [paper URL — convert arXiv abs/ to pdf/ first]
-> [For Zotero papers: item key, PDF path, and any notes already retrieved]
-> [If research-context.md exists: User priorities: … Emphasize: … User project: …]
 
-The subagent extracts information, writes it to a staging file, and returns the file path. All KB operations (card creation, journal writes) are done by a background KB subagent.
+That's all the subagent needs. Do NOT read `research-context.md` to add context — it wastes a tool call. The subagent extracts information, writes it to a staging file, and returns the file path.
 
 ### Single-Paper Path
 1. Resolve identifier via Pre-Synthesis.
-2. **Quick KB check** — search for an existing card with this paper's ID per `$kb`. If a card with a Deep Dive exists → read it → `present_reading_view` → done. Do not explore the KB beyond this one search. If no match, continue.
+2. **Quick KB check (1 tool call max)** — run `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` where PAPER_ID is the arXiv ID, DOI, or identifier. If it finds a match, read that one card and check for a Deep Dive section. If a Deep Dive exists → `present_reading_view` → done. If no match or no Deep Dive → continue to step 3. Do NOT read the KB skill docs. Do NOT list the KB directory. Do NOT read multiple cards.
 3. Spawn one subagent via `spawn_agent`. Then call `wait` for the subagent to complete — it returns a staging file path.
-4. **Read the staging file** via `exec_command` (e.g., `cat ~/.ata/staging/paper-1706.03762.md`).
-5. **Present the result immediately** (see Presentation below). Do NOT write to KB before presenting.
-6. **Spawn a KB subagent** (fire-and-forget, do NOT call `wait`) to persist the card in the background:
+4. **Read the staging file** via `exec_command` (e.g., `cat ~/.ata/knowledge-base/staging/paper-1706.03762.md`).
+5. **Present the result immediately** — your VERY NEXT tool call after reading the staging file MUST be `present_reading_view`. Do NOT write to KB before presenting. Do NOT output text before presenting. Do NOT plan all sections in your reasoning first — call the tool NOW with just the section headings, then fill each section one at a time.
+6. **Persist to KB directly** — after presenting, write the KB card yourself using `exec_command` with a heredoc. Do NOT spawn a KB subagent for single papers — fire-and-forget subagents are unreliable due to rate limits. Instead, do it in one call:
 
-> $kb
->
-> Process staged paper card.
-> Card ID: [kebab-case slug, e.g. paper-attention-is-all-you-need]
-> Tags: [relevant tags from the paper content]
-> Staging file: ~/.ata/staging/paper-[identifier].md
-> User signals: [1-2 sentences about what the user asked for and any interests/preferences revealed, e.g. "User asked for a detailed explanation of the Transformer with tables. Interested in attention mechanisms and NLP architectures."]
->
-> 1. Read the staging file. Create a KB card in ~/.ata/knowledge-base/cards/ with proper frontmatter (id, title, tags, capsule, source, status: current, date_added, contributed_by: research-agent). Update index.json with any new tags.
-> 2. Append to research-journal.md (prepend newest first): "## [date] — Synthesized: [title]\n- Card: `[card-id]` | Source: [URL]"
-> 3. Update research-context.md with any new interests or preferences from the user signals. Read the file first (create if missing with sections: Project, Priorities, Not Interested In, Key Decisions Made). Merge — don't overwrite existing content.
-> 4. Delete the staging file.
+```
+exec_command: cat <<'CARD_EOF' > ~/.ata/knowledge-base/cards/paper-[slug].md
+---
+id: paper-[slug]
+title: "[title]"
+tags: [tags]
+capsule: "[one-line summary]"
+source:
+  type: paper
+  refs:
+    - "[arXiv ID or DOI]"
+status: current
+date_added: [YYYY-MM-DD]
+contributed_by: research-agent
+---
+[staging file body content]
+CARD_EOF
+```
+
+Then in a second `exec_command`, append to `research-journal.md` and delete the staging file. This is 2 tool calls total — fast and reliable.
 
 ### Multi-Paper Path
-1. Resolve identifiers for all papers.
-2. **Quick KB check** — search for existing cards per `$kb` for each paper. Skip papers that already have cards.
-3. Spawn one subagent per missing paper, in parallel.
-4. Wait for all subagents — each returns a staging file path.
-5. **Read all staging files** via `exec_command` (e.g., `cat ~/.ata/staging/paper-*.md`).
+1. **Collect identifiers** — gather all URLs, DOIs, and arXiv IDs you already have. Only call `paper_search` for papers where you have nothing but a title, and run those searches in one parallel batch.
+2. **Quick KB check** — run `exec_command: rg "ID1\|ID2\|ID3" ~/.ata/knowledge-base/cards/` to check all papers in one call. Skip papers that already have cards.
+3. **Spawn ALL subagents at once** — one per missing paper, all in a single parallel batch. Do not spawn sequentially or in multiple rounds.
+4. **Single wait** — call `wait` once for all subagents. Each returns a staging file path.
+5. **Read all staging files** via `exec_command` (e.g., `cat ~/.ata/knowledge-base/staging/paper-*.md`).
 6. Present results to the user.
-7. **Spawn one KB subagent** (fire-and-forget) listing all staging files:
+7. **Persist to KB** — for multi-paper, spawn a KB subagent (fire-and-forget) with ALL card contents embedded in the prompt so it can write immediately without disk reads:
 
 > $kb
 >
-> Process staged paper cards.
-> Cards: [list of card IDs and their staging file paths]
-> Tags: [tags per card]
-> User signals: [interests/preferences revealed by the multi-paper request]
->
-> For each staging file: read it, create a KB card with proper frontmatter, update index.json. Append each to research-journal.md (prepend newest first). Update research-context.md with new interests from user signals (read first, merge, don't overwrite). Delete staging files when done.
+> Persist these paper cards. Write each card with a heredoc — do not read staging files.
+> [For each card: card ID, tags, capsule, source, full card content with frontmatter]
+> After writing all cards: append to research-journal.md, delete staging files, update index.json.
 
-6. If the user wants comparison, suggest `$cross-paper-report` as a follow-up.
+8. If the user wants comparison, suggest `$cross-paper-report` as a follow-up.
 
 ## KB Card Persistence
 
-KB writes happen in the **background** via a fire-and-forget `$kb` subagent, AFTER the reading view is presented. The main agent never writes KB cards directly.
+**Single paper:** The main agent writes the KB card directly via `exec_command` after presenting — this is fast (2 tool calls) and reliable. No subagent needed.
 
-**How it works:** The paper-synthesizer subagent writes its analysis to `~/.ata/staging/paper-<identifier>.md` (with YAML frontmatter containing metadata) and returns only the file path. The main agent reads the file for presentation. After the reading view is presented, it spawns a `$kb` subagent with just the card ID, tags, and staging file path. The KB subagent reads from disk, formats the card, and handles all KB operations.
+**Multi-paper:** A fire-and-forget `$kb` subagent handles batch persistence. The spawn prompt must include full card contents (not staging file paths) so the subagent can write immediately without disk reads.
 
 Card ID convention: kebab-case slug from the paper title, prefixed with `paper-` (e.g., `paper-latent-diffusion`, `paper-cosmos-policy`).
 
-**Personalization.** If `research-context.md` exists, use it to adjust emphasis in the reading view. The KB subagent automatically updates research-context.md and research-journal.md in the background — include a "User signals" line in the spawn prompt describing what the user asked for and any preferences revealed.
+**Personalization.** If you already know the user's research priorities from the conversation context, adjust emphasis in the reading view accordingly. Do NOT read `research-context.md` for this — use only what's already in conversation context.
 
 **Follow-up persistence.** When the user exits the reading view, check if Q&A produced insights not in the KB card. If so, offer to persist using the update protocol in `$kb`.
 
+## CRITICAL: You MUST Present Content
+
+**ANTI-PATTERN — do NOT do any of these:**
+- Do NOT plan all section content in your reasoning before making tool calls.
+- Do NOT output a "what next?" message without first calling `present_reading_view`.
+- Do NOT skip the `present_reading_view` call — the user cannot see your thinking.
+- Do NOT end your turn without delivering synthesis content to the user.
+
+**MANDATORY:** After reading the staging file, your VERY NEXT action MUST be a `present_reading_view` tool call. Do NOT plan all section content in your reasoning first — call the tool immediately with just section headings. Then fill sections one at a time via `update_document_section`. Each tool result tells you the next section to fill.
+
+**Fallback:** If `present_reading_view` is not available or fails, output the full synthesis as formatted markdown text directly. NEVER end your turn without delivering the synthesis content to the user.
+
 ## Presentation
 
-The subagent returns raw extracted information from the paper. You decide how to present it based on what the user asked and the nature of the content.
+**Format choice:**
 
-**Choose the format:**
-- **Full synthesis / deep dive / explain** → use `present_reading_view` (two-phase, below)
+- **Full synthesis / deep dive / explain** → `present_reading_view` (two-phase, below)
 - **Quick question** ("what's the main idea?", "how does X work?") → answer directly in chat
 - **Brief summary** → chat for short responses, reading view for longer ones
 
-**Phase 1 (Outline):** IMMEDIATELY call `present_reading_view` with `document_id` set to a unique slug, `title` to the report title, and `content` containing ONLY the `## ` section headings with empty bodies. Example content: `"## Introduction\n\n## Core Method\n\n## Experiments\n\n## Discussion"`. This opens the reading view instantly with "Generating..." placeholders.
+**Section structure:** Use **4-5 sections** for a standard paper synthesis. Each section should be **15-30 lines** (one screen in a terminal). Do not create more than 6 sections — thin sections (< 8 lines) should be merged with adjacent ones.
+
+Recommended sections:
+
+- **Overview** — problem, motivation, core idea (what and why)
+- **Method** — how it works, architecture, key mechanisms
+- **Results** — specific numbers, baselines, key findings, ablations
+- **Discussion** — limitations, connections to related work, takeaways
+
+Add a 5th section only if the paper has a genuinely distinct component (e.g., a separate training pipeline, a novel dataset, a theoretical analysis) that doesn't fit naturally into the 4 above.
+
+**Phase 1 (Outline):** Call `present_reading_view` with `document_id` set to a unique slug, `title` to the report title, and `content` containing ONLY the `## ` section headings with empty bodies. Example: `"## Overview\n\n## Method\n\n## Results\n\n## Discussion"`. This opens the reading view instantly with "Generating..." placeholders.
 
 **Phase 2 (Fill):** The tool result will tell you to fill section 0. Immediately call `update_document_section(document_id, section_index=0, content="...")` with the FULL content for that section — do not output any text, just make the tool call. Each tool result tells you the next section to fill. Continue calling `update_document_section` for each subsequent section until all are filled.
+
+**Section length:** Each section should be 15-30 lines of content. Use bullet points and bold terms for scannability — avoid long unbroken paragraphs (max 4-5 sentences per paragraph). If a section is growing past 30 lines, cut to the most important points.
 
 **Markdown formatting:** Always put a blank line before numbered list items (`1.`, `2.`, etc.) and before bullet list items (`-`, `*`). Without a blank line, the markdown parser treats `2.`, `3.`, etc. as plain text instead of list items, so they lose their formatting. This also applies to content after paragraphs, blockquotes, and code blocks.
 
@@ -114,3 +165,6 @@ When the user asks follow-up questions — whether about a specific section or a
 - **PDF download fails**: Synthesize from abstract and user context. Note the limitation.
 - **User provides only a title**: Search with available tools. If not found, ask for a URL or arXiv ID.
 - **No Zotero tools**: Tell the user Zotero requires API key config; fall back to URL path.
+- **Never present a placeholder document.** If some subagents failed but others succeeded, present findings from the successful ones immediately. A partial synthesis from real data is always better than a "Pending" skeleton.
+- **Don't block on failed subagents.** If a subagent hit a sandbox error, permission issue, or API failure, skip it and proceed with whatever data you already have. Do not ask the user for staging-directory permissions or PDF access as a prerequisite — just work with what succeeded.
+- **One mention of failures, max.** If some papers could not be synthesized, note it briefly at the end of the presentation (e.g., "Could not retrieve: [paper title] — API timeout"). Do not repeatedly surface the same failure across multiple turns or ask the user to fix it.

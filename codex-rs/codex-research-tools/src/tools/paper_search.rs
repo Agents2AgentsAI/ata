@@ -18,6 +18,7 @@ use crate::clients::semantic_scholar::SemanticScholarSearchRequest;
 use crate::error::ResearchError;
 use crate::error::Result;
 use crate::paper_id::PaperId;
+use crate::rate_limiter::ResearchApi;
 use crate::tools::cache_helpers::get_or_fetch_typed;
 use crate::tools::cache_helpers::hash_cache_payload;
 use crate::types::CitationResult;
@@ -92,9 +93,18 @@ pub(crate) async fn paper_search(
     let (source_fetch_params, pagination_warning) =
         source_fetch_params(&normalized, selected_sources);
 
+    let per_source_timeout = toolkit.config().per_source_timeout;
+
     let semantic_future = async {
         if selected_sources.semantic_scholar {
-            Some(search_semantic_scholar(toolkit, &source_fetch_params).await)
+            Some(
+                with_source_timeout(
+                    per_source_timeout,
+                    ResearchApi::SemanticScholar,
+                    search_semantic_scholar(toolkit, &source_fetch_params),
+                )
+                .await,
+            )
         } else {
             None
         }
@@ -102,7 +112,14 @@ pub(crate) async fn paper_search(
 
     let arxiv_future = async {
         if selected_sources.arxiv {
-            Some(search_arxiv(toolkit, &source_fetch_params).await)
+            Some(
+                with_source_timeout(
+                    per_source_timeout,
+                    ResearchApi::Arxiv,
+                    search_arxiv(toolkit, &source_fetch_params),
+                )
+                .await,
+            )
         } else {
             None
         }
@@ -110,7 +127,14 @@ pub(crate) async fn paper_search(
 
     let openalex_future = async {
         if selected_sources.openalex {
-            Some(search_openalex(toolkit, &source_fetch_params).await)
+            Some(
+                with_source_timeout(
+                    per_source_timeout,
+                    ResearchApi::OpenAlex,
+                    search_openalex(toolkit, &source_fetch_params),
+                )
+                .await,
+            )
         } else {
             None
         }
@@ -366,7 +390,7 @@ fn normalize_sort_by(sort_by: Option<String>) -> Result<PaperSortBy> {
     let normalized = raw.trim().to_ascii_lowercase();
     match normalized.as_str() {
         "" | "relevance" => Ok(PaperSortBy::Relevance),
-        "citation_count" | "citations" => Ok(PaperSortBy::CitationCount),
+        "citation_count" | "citationcount" | "citations" => Ok(PaperSortBy::CitationCount),
         "year" | "publication_year" | "newest" => Ok(PaperSortBy::Year),
         other => Err(ResearchError::InvalidInput(format!(
             "unsupported sort_by '{other}' (expected one of: relevance, citation_count, year)"
@@ -570,6 +594,20 @@ fn to_semantic_scholar_id(id: &str) -> Result<String> {
     };
 
     Ok(lookup)
+}
+
+async fn with_source_timeout(
+    timeout: std::time::Duration,
+    api: ResearchApi,
+    fut: impl Future<Output = Result<SearchPage>>,
+) -> Result<SearchPage> {
+    match tokio::time::timeout(timeout, fut).await {
+        Ok(result) => result,
+        Err(_) => Err(ResearchError::Timeout {
+            api,
+            timeout_ms: u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
+        }),
+    }
 }
 
 async fn search_semantic_scholar(

@@ -39,8 +39,8 @@ pub(super) fn render_section(
 
         // macOS Terminal.app renders ANSI italic (SGR 3) as reverse video,
         // producing white-bg/black-text on dark terminals.  Replace italic
-        // with dim in the reading view to avoid this.
-        replace_italic_with_dim(&mut lines);
+        // with underline in the reading view to avoid this.
+        replace_italic_with_underline(&mut lines);
     }
 
     if lines.is_empty() {
@@ -61,7 +61,7 @@ pub(super) fn rendered_body_line_count(content: &str, width: u16) -> usize {
     let wrap_width = width.saturating_sub(2).max(1) as usize;
     let mut lines: Vec<Line<'static>> = Vec::new();
     append_markdown(&clean, Some(wrap_width), &mut lines);
-    replace_italic_with_dim(&mut lines);
+    replace_italic_with_underline(&mut lines);
     lines.len()
 }
 
@@ -188,12 +188,12 @@ pub(super) fn hints_line(
 ) -> Line<'static> {
     let hints: Vec<Span<'static>> = if pending_quit {
         vec![
-            "Close reading view? ".dim(),
-            "q/y".dim().bold(),
-            ": yes".dim(),
-            " | ".dim(),
-            "any other key".dim().bold(),
-            ": cancel".dim(),
+            "Close reading view? ".magenta(),
+            "q/y".magenta().bold(),
+            ": yes".magenta(),
+            " | ".magenta(),
+            "any other key".magenta().bold(),
+            ": cancel".magenta(),
         ]
     } else if search_focused {
         vec![
@@ -668,6 +668,18 @@ pub(super) fn apply_folds(
             continue;
         }
 
+        // Check if an expanded fold starts at this line — emit a header.
+        if let Some(lf) = line_folds
+            .iter()
+            .find(|f| !f.collapsed && f.start_line == i)
+        {
+            out.push(Line::from(vec![
+                "┊ ".dim().cyan(),
+                "[-] ".dim().cyan(),
+                lf.summary.clone().dim().cyan(),
+            ]));
+        }
+
         // Check if this line is inside any expanded fold.
         let in_fold = line_folds
             .iter()
@@ -731,7 +743,7 @@ pub(super) fn adjust_line_for_folds(
     pre_fold_line.saturating_sub(adjustment)
 }
 
-fn replace_italic_with_dim(lines: &mut [Line<'static>]) {
+fn replace_italic_with_underline(lines: &mut [Line<'static>]) {
     fn fix_modifiers(add: &mut Modifier, sub: &mut Modifier) {
         if add.contains(Modifier::ITALIC) {
             *add = add.difference(Modifier::ITALIC).union(Modifier::UNDERLINED);

@@ -31,6 +31,9 @@ pub struct ResearchConfig {
     pub connect_timeout: Duration,
     pub request_timeout: Duration,
     pub tool_timeout: Duration,
+    /// Maximum time to wait for a single source in multi-source searches.
+    /// If a source exceeds this, partial results from other sources are returned.
+    pub per_source_timeout: Duration,
 
     pub cache_max_entries: usize,
     pub cache_ttls: CacheTtls,
@@ -86,9 +89,9 @@ impl Default for CacheTtls {
 impl Default for RetryConfig {
     fn default() -> Self {
         Self {
-            max_retries: 3,
-            base_delay: Duration::from_secs(1),
-            max_delay: Duration::from_secs(30),
+            max_retries: 2,
+            base_delay: Duration::from_millis(500),
+            max_delay: Duration::from_secs(8),
         }
     }
 }
@@ -114,8 +117,9 @@ impl Default for ResearchConfig {
             hn_base_url: "https://hn.algolia.com/api/v1".to_string(),
             patents_base_url: "https://ops.epo.org/3.2".to_string(),
             connect_timeout: Duration::from_secs(10),
-            request_timeout: Duration::from_secs(30),
-            tool_timeout: Duration::from_secs(60),
+            request_timeout: Duration::from_secs(15),
+            tool_timeout: Duration::from_secs(30),
+            per_source_timeout: Duration::from_secs(12),
             cache_max_entries: 10_000,
             cache_ttls: CacheTtls::default(),
             retry: RetryConfig::default(),
@@ -191,18 +195,21 @@ impl ResearchConfig {
     #[must_use]
     pub fn rate_limits(&self) -> HashMap<ResearchApi, ApiRateLimit> {
         let mut limits = HashMap::from([
+            // Semantic Scholar: /paper/search is always 1 RPS even with an API
+            // key (older keys allow 10 RPS on non-search endpoints, but search is
+            // capped at 1 RPS). Use 1 concurrent to avoid queuing behind the limiter.
             (
                 ResearchApi::SemanticScholar,
-                if self.semantic_scholar_api_key.is_some() {
-                    ApiRateLimit::new(10, Duration::from_secs(1), 3)
-                } else {
-                    ApiRateLimit::new(1, Duration::from_secs(1), 3)
-                },
+                ApiRateLimit::new(1, Duration::from_secs(1), 1),
             ),
+            // arXiv: official guideline is 1 request per 3 seconds, single connection.
             (
                 ResearchApi::Arxiv,
                 ApiRateLimit::new(1, Duration::from_secs(3), 1),
             ),
+            // OpenAlex: 100 req/sec hard cap, credit-based system (search costs 100
+            // credits, free tier has 100k credits/day ≈ 1000 searches/day). 10 req/sec
+            // with 5 concurrent is well within limits.
             (
                 ResearchApi::OpenAlex,
                 ApiRateLimit::new(10, Duration::from_secs(1), 5),
@@ -279,6 +286,7 @@ impl fmt::Debug for ResearchConfig {
             .field("connect_timeout", &self.connect_timeout)
             .field("request_timeout", &self.request_timeout)
             .field("tool_timeout", &self.tool_timeout)
+            .field("per_source_timeout", &self.per_source_timeout)
             .field("cache_max_entries", &self.cache_max_entries)
             .field("cache_ttls", &self.cache_ttls)
             .field("retry", &self.retry)

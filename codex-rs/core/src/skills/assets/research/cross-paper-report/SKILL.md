@@ -32,7 +32,7 @@ Unless the user requests a different format, write in a teaching-first style tha
 - **Never reference the KB in explanations.** Do not say "as summarized in your KB" or "your KB card says." The KB is infrastructure — present content as if you understand the papers directly.
 - **No figure-reference sections.** The reading view is text-only — images and figures cannot be displayed. Never include sections like "Figure Pointers", "How to view figures", or "Key Figures" that tell the user to look at specific figures by number. Instead, describe what each important figure shows inline in the narrative (e.g., "The architecture diagram in the paper shows three stages connected by…"). This applies to `present_reading_view` content and chat explanations alike.
 - **Use concrete worked examples with specific numbers** to build intuition (e.g., "8 possible values × 4 positions = 4,096 latent actions"). Specificity builds intuition faster than abstraction. However, keep model variant names, exact tensor shapes, hyperparameter values, and architecture identifiers out of the narrative paragraphs — collect them in the Details block (see next rule).
-- **Details block at the end of each subsection.** After the narrative paragraphs of each subsection (each Stage, each major section), add a **Details:** line that collects reference specifics: model names and variants, exact dimensions and tensor shapes, hyperparameter values, tokenizer identifiers, layer counts, hidden dims, optimizer settings, etc. The narrative should be fully understandable without reading the Details block — it is a reference appendix for precision, not part of the conceptual flow. Example:
+- **Details block at the end of each subsection.** After the narrative paragraphs of each subsection (each Stage, each major section), add a **Details:** line that collects reference specifics: model names and variants, exact dimensions and tensor shapes, hyperparameter values, tokenizer identifiers, layer counts, hidden dims, optimizer settings, etc. The narrative should be fully understandable without reading the Details block — it is a reference appendix for precision, not part of the conceptual flow. **Keep Details blocks to 1-3 sentences max** — they are compact reference lines, not narrative paragraphs. Example:
   > **Details:** Base model: Cosmos-Predict2-2B Video2World. Tokenizer: Wan2.1. Input: (1+T)×H×W×3 → (1+T')×H'×W'×16 (T'=T/4, H'=H/8, W'=W/8). Text encoder: T5-XXL.
 - **Explain concepts completely in place.** When a concept is non-obvious, explain it right where it appears rather than deferring. If a training stage uses a VQ-VAE, explain VQ-VAE right there.
 
@@ -74,7 +74,7 @@ After reading the requested cards but before writing explanations, check whether
    > "Your KB also has cards for [list] which are related to this topic. Want me to include any of them? Adding them would strengthen the comparison by covering [specific dimension, e.g., 'alternative action representations' or 'data augmentation methods']."
 4. If the user approves additions, include them in the card set for Phases 1–2. Re-check Scale Detection with the updated count.
 
-This step prevents narrow reports that miss important context available in the KB. Skip only if the user explicitly says "only these cards."
+This step prevents narrow reports that miss important context available in the KB. Skip the user confirmation and silently include related cards if: (1) the user used trigger phrases like "full survey", "explain them all", "detailed explanations" — just include related cards without asking, (2) the card set was already curated by a preceding `$paper-discovery` pipeline, or (3) the request is part of an auto-continue flow. Only ask for confirmation when the user's request is narrow (e.g., "compare just these two") and you found potentially relevant additional cards. Skip Phase 0 entirely if the user says "only these cards."
 
 **Subagent context:** Skip Phase 0 entirely when running as a cluster subagent in the Large-Set Synthesis workflow. Cluster subagents work only on their assigned cards — discovering additional cards would cause cross-contamination between clusters. Phase 0 runs only in the main agent before clustering.
 
@@ -96,7 +96,7 @@ When the card set is moderate (5–12 cards), assign each card to a depth tier:
 
 - **Supporting cards** (the remaining papers): Substantive 400–600 word treatment covering: the problem (2–3 sentences), core idea and what makes it different (1 paragraph), key mechanism with enough detail to understand what it does and why (1–2 paragraphs), key results with interpretation (1 paragraph), and how it connects to the focal cards (2–3 sentences). This is shorter than a focal walkthrough but far more than a one-sentence summary.
 
-**Tier assignment criteria:** Assign to focal tier based on: (1) novelty of the method, (2) complexity requiring detailed explanation, (3) centrality to the user's question, (4) architectural uniqueness vs. being a variant of another card. Present the tier assignment to the user before writing.
+**Tier assignment criteria:** Assign to focal tier based on: (1) novelty of the method, (2) complexity requiring detailed explanation, (3) centrality to the user's question, (4) architectural uniqueness vs. being a variant of another card. When the user explicitly confirmed what they want (e.g., "full survey", "explain them all") or when triggered as part of an automatic pipeline from `$paper-discovery`, proceed directly with the tier assignment — do not stop to ask for confirmation. Only pause for user confirmation when the request is ambiguous about scope or depth.
 
 **Subagent context:** When running as a cluster subagent, treat all cards as focal (no tiering) and skip user confirmation. Clusters are already sized (4–8 cards) for full-depth treatment.
 
@@ -108,7 +108,7 @@ When the card set is moderate (5–12 cards), assign each card to a depth tier:
 
 **Focal cards — hard depth floor: 800 words minimum.** Architecture-heavy papers should reach 1500–2500 words. If your focal card explanation is under 800 words, you have not explained the method — you have summarized it.
 
-**Supporting cards — hard depth floor: 400 words minimum.** If your supporting card explanation is under 400 words, you have not covered the method — you have name-dropped it.
+**Supporting cards — hard depth floor: 400 words minimum.** If your supporting card explanation is under 400 words, you have not covered the method — you have name-dropped it. A proper supporting card section has 4-6 paragraphs: problem + core idea (1 paragraph), key mechanism with enough detail to understand what and why (2 paragraphs), key results with interpretation (1 paragraph), and connection to focal cards (1 paragraph). Count your paragraphs — if you only have 2-3, you're too shallow.
 
 **Per-section depth rule (focal cards):** Every stage in a stage-by-stage walkthrough must be **at least 2–3 full paragraphs** — not a single sentence. A one-sentence stage description (e.g., "The Stage 1 encoder pseudo-labels actionless videos with latent tokens; a 7B VLM predicts those tokens from image + language") is a summary, not an explanation. Each stage must explain what happens, why it works, what would fail without it, and use concrete numbers/dimensions.
 
@@ -132,21 +132,37 @@ The following are the elements that a focal card walkthrough should cover. The a
 
 - **Limitations woven in.** Weave limitations and failure modes into the narrative at the points where they arise from specific design choices, not in a separate section at the end.
 
+**Paragraph structure:** Every focal card sub-section (Problem, Method, Results) must have **multiple paragraphs separated by blank lines**. A "Problem & Core Idea" section should have 2-3 paragraphs. A "Method" section should have 3-5 paragraphs (one per stage or component). A "Results & Analysis" section should have 2-3 paragraphs. No paragraph may exceed 5 sentences. If a paragraph is growing past 5 sentences, split it at the natural topic transition.
+
 **Quality checks before moving to the next card:**
 - The walkthrough reads as a coherent self-contained narrative, not an encyclopedic dump of facts.
 - The reader can understand the mechanism from plain-language explanation before encountering equations.
 - Equations, diagrams, and analogies are integrated throughout — nothing is deferred to a "collected at the end" section.
+- Every section has multiple paragraphs with blank lines between them — no monolithic text blocks.
 
 ### Structure per Supporting Card
 
-Supporting cards use a condensed but substantive format (400–600 words):
+Supporting cards use a condensed but substantive format (420–600 words). **Each supporting section MUST have exactly 5 separate paragraphs** — never fewer, never write as one monolithic block. Use blank lines between paragraphs.
 
-1. **The problem and core idea** (1 paragraph): What gap this paper addresses and what it does differently from prior work. Frame relative to focal cards where possible.
-2. **Key mechanism** (1–2 paragraphs): The central technical contribution explained with enough detail that the reader understands what it does and why. Include at least one concrete number or worked example.
-3. **Key results** (2–4 sentences): Specific headline numbers with interpretation of what they mean.
-4. **Connection to focal cards** (2–3 sentences): How this paper relates to the focal papers — shared techniques, complementary approaches, or contrasting design choices.
+**Each paragraph should be 5 sentences** (the maximum). Writing only 3-4 sentences per paragraph produces content that falls below 400 words total — which violates the word floor. Always write 5 full sentences per paragraph for supporting cards.
+
+Structure (each numbered item = one paragraph separated by a blank line):
+
+1. **The problem and core idea** (1 paragraph, 5 sentences): What gap this paper addresses and what it does differently from prior work. Frame relative to focal cards where possible.
+
+2. **How the method works** (1 paragraph, 5 sentences): The core approach — what it does at a high level, the key architectural or algorithmic choice, and why that choice was made. Include at least one concrete number.
+
+3. **Key technical detail** (1 paragraph, 5 sentences): The most important mechanism in more depth — what makes it work, what would fail without it, a concrete example or worked-out number. This paragraph is where the reader should feel like they understand the method, not just its name.
+
+4. **Key results** (1 paragraph, 5 sentences): Specific headline numbers with baselines and interpretation. Don't just list numbers — explain what they mean (e.g., "this 2x improvement shows that…").
+
+5. **Connection to focal cards** (1 paragraph, 5 sentences): How this paper relates to the focal papers — shared techniques, complementary approaches, or contrasting design choices.
+
+**Formatting rule:** A single paragraph must NEVER exceed 5 sentences. If you're writing more than 5 sentences without a blank line, split into two paragraphs.
 
 Supporting cards do NOT need: full stage-by-stage walkthroughs, Details blocks, key equations sections, or analogies. Those are reserved for focal cards. But the reader must still understand the method well enough to follow the cross-card comparison.
+
+**Survey papers as supporting cards:** If a supporting card is a survey/review paper (no single method), adapt the structure: replace "Key mechanism" with "Key taxonomy/framework" (2 paragraphs describing how the survey organizes the field, its main categories, and what gaps it identifies). The 400-word floor still applies.
 
 ## Phase 2: Cross-Card Comparative Synthesis
 
@@ -154,14 +170,14 @@ Supporting cards do NOT need: full stage-by-stage walkthroughs, Details blocks, 
 
 Produce this phase when 2 or more cards are involved. Skip for single-card requests.
 
-Compare along specific technical dimensions with traced lineage between ideas. **Each dimension below must be at least one full paragraph** — not a two-sentence summary. Cite concrete details from each card (specific numbers, architectural choices, data scales):
+Compare along specific technical dimensions with traced lineage between ideas. **Each dimension must have 2-4 paragraphs** (not a single dense block). The 5-sentence-per-paragraph rule applies here too. Cite concrete details from each card (specific numbers, architectural choices, data scales):
 
-- **Starting points / core questions** — What different question does each work ask? Where LAPA asks "how do I pretrain without action labels?", GR00T N1 asks "how do I combine every data source into a single model?"
-- **Shared ideas and divergences** — When two papers use the same technique (e.g. VQ-VAE latent actions), explain exactly how their implementations differ. Example: "X uses discrete codebook indices for next-token prediction; Y extracts continuous pre-quantized embeddings for flow matching."
-- **Architecture comparison** — Compare backbone choices (ViT vs. DiT vs. U-Net), model scale (parameters, layers, hidden dim), input tokenization strategies, output representation (continuous vs. discrete, chunk sizes), and any novel modules. Explain what each architectural choice buys and what it costs.
-- **Training pipeline comparison** — Compare training stages (single-stage vs. multi-stage), data strategies (internet video vs. simulation vs. teleoperation, scale), loss functions, optimization recipes, and how each system handles cross-embodiment or cross-domain generalization. Trace how differences in training produce different model capabilities.
-- **Other technical dimensions** — Compare along additional concrete axes relevant to the cards: action representation, inference pipeline, planning capability, real-time performance, cross-embodiment support, etc. Not all axes apply to every set of cards — choose the ones where real differences exist.
-- **Field trajectory** — Close with what the collective body of work suggests about the direction of the field.
+- **Starting points / core questions** — What different question does each work ask? One paragraph framing the questions, one paragraph tracing how they lead to different architectures.
+- **Shared ideas and divergences** — When two papers use the same technique, explain exactly how their implementations differ with concrete details. Split into 2-3 paragraphs by theme (e.g., one for shared techniques, one for divergences).
+- **Architecture comparison** — Compare backbone choices, model scale, tokenization strategies, output representation. Use 2-3 paragraphs organized by comparison axis.
+- **Training pipeline comparison** — Compare training stages, data strategies, loss functions. Use 2-3 paragraphs (e.g., one for data, one for optimization, one for generalization).
+- **Other technical dimensions** — Compare along additional concrete axes relevant to the cards. Not all axes apply — choose the ones where real differences exist.
+- **Field trajectory** — 3 paragraphs minimum (250+ words): one tracing the chronological evolution of approaches, one on practical implications for practitioners, one on open problems and what's missing. This section should feel like a substantive conclusion, not a throwaway closing paragraph.
 
 Then add a final prose section titled **How the Papers Relate** that integrates the comparison into one coherent storyline (not bullet-only, not table-only).
 
@@ -183,13 +199,33 @@ Before finalizing, verify depth mechanically:
 
 If depth is insufficient at any checkpoint, expand before finalizing.
 
+5. **Readability check (CRITICAL).** Scan every section for paragraph breaks. Each paragraph must be ≤5 sentences. If ANY section is a single monolithic block of text with 6+ sentences and no blank lines, STOP and split it immediately. This is the #1 readability failure mode. Focal card sub-sections need 2-4 paragraphs each. Supporting cards need 4-5 paragraphs. The "How the Papers Relate" section needs headed subsections with paragraph breaks within each.
+
 ## Presentation (Main Agent Only)
 
 **This section applies to the main agent only.** Cluster subagents in the Large-Set workflow return their content as text to the main agent — they never call `present_reading_view` because the user is interacting with the main agent.
 
-**Phase 1 (Outline):** IMMEDIATELY call `present_reading_view` with `document_id` set to a unique slug, `title` to the report title, and `content` containing ONLY the `## ` section headings with empty bodies. Example content: `"## Introduction\n\n## Core Method\n\n## Experiments\n\n## Discussion"`. This opens the reading view instantly with "Generating..." placeholders.
+**MANDATORY STRUCTURE — no shortcuts.** The layout rules below are non-negotiable regardless of how this skill was triggered (direct invocation, auto-continue from `$paper-discovery`, or any other pipeline). Do NOT compress the report into fewer sections to save tokens. Do NOT group multiple supporting papers into a single section. Do NOT skip the focal paper sub-section split. Every paper must get its own dedicated section(s).
 
-**Phase 2 (Fill):** The tool result will tell you to fill section 0. Immediately call `update_document_section(document_id, section_index=0, content="...")` with the FULL content for that section — do not output any text, just make the tool call. Each tool result tells you the next section to fill. Continue calling `update_document_section` for each subsequent section until all are filled.
+**Section length for reading view:** Each section should be **≤ 40 lines** of readable, well-formatted content. Never pack long paragraphs into few lines to game this limit — that produces unreadable walls of text.
+
+**Focal paper layout:** Because focal papers need 800+ words (which exceeds 40 lines), split each focal paper into **2-3 `## ` sub-sections**:
+- `## [Paper Title] — Problem & Core Idea` (15-25 lines: problem statement, motivation, what's new)
+- `## [Paper Title] — Method` (25-40 lines: architecture, training pipeline, key mechanisms, equations with intuitions)
+- `## [Paper Title] — Results & Analysis` (15-25 lines: key numbers, ablations, limitations, connections)
+
+This gives each focal paper 55-90 lines total across 2-3 navigable sections — enough for 800-1500 words of well-formatted, readable content with proper paragraph breaks.
+
+**Supporting paper layout:** Each supporting paper gets a **single `## ` section** (25-40 lines, targeting 400-600 words). Use proper paragraph breaks — a supporting section should have 4-6 paragraphs, not 1-2 giant blocks.
+
+**Comparison sections:** `## How the Papers Relate` and other cross-card synthesis sections: ≤ 40 lines each. If the comparison is long, split into `## Shared Ideas & Divergences` and `## Field Trajectory`.
+
+**Phase 1 (Outline):** IMMEDIATELY call `present_reading_view` with `document_id` set to a unique slug, `title` to the report title, and `content` containing ONLY the `## ` section headings with empty bodies. Use the focal/supporting layout:
+- Each **focal paper** gets 2-3 `## ` headings (e.g., `## [Title] — Problem & Core Idea`, `## [Title] — Method`, `## [Title] — Results & Analysis`)
+- Each **supporting paper** gets 1 `## ` heading (e.g., `## [Title]`)
+- Add comparison sections at the end (e.g., `## How the Papers Relate`)
+
+**Phase 2 (Fill):** The tool result will tell you to fill section 0. Immediately call `update_document_section(document_id, section_index=0, content="...")` with the FULL content for that section — do not output any text, just make the tool call. Each tool result tells you the next section to fill. Continue calling `update_document_section` for each subsequent section until all are filled. Focal paper sub-sections are each ≤40 lines.
 
 **Markdown formatting:** Always put a blank line before numbered list items (`1.`, `2.`, etc.) and before bullet list items (`-`, `*`). Without a blank line, the markdown parser treats `2.`, `3.`, etc. as plain text instead of list items, so they lose their formatting. This also applies to content after paragraphs, blockquotes, and code blocks.
 
@@ -244,6 +280,9 @@ Every item below is a failure. If you catch yourself doing any of these, stop an
 - NEVER parrot card titles and tags as if they were an explanation. Restating "LAPA: Latent Action Pretraining" without walking through the mechanism is not an explanation.
 - NEVER cover only the explicitly requested cards when the KB has closely related cards. Failing to check for related cards (Phase 0) produces a report with blind spots.
 - NEVER drop cards to save depth budget. Covering 3 of 10 relevant papers deeply is worse than covering all 10 at mixed depth. Use Tiered Depth or Large-Set Synthesis instead of cutting cards.
+- NEVER write a supporting card section as a single monolithic paragraph. Every supporting card must have 4-5 separate paragraphs with blank lines between them. A single 18-sentence block is unreadable regardless of content quality.
+- NEVER write more than 5 sentences in a row without a paragraph break. This applies to ALL sections — focal, supporting, and comparison alike.
+- NEVER group multiple supporting papers into a single `## ` section (e.g., "Supporting: Foundations & Sampling" covering 2 papers). Each paper gets its own `## ` section. Grouping makes individual paper depth unverifiable and produces unnavigable sections.
 
 ---
 

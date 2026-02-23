@@ -88,6 +88,8 @@ pub struct ResearchToolkit {
     config: ResearchConfig,
     #[cfg(feature = "patents")]
     epo_auth: Option<clients::epo_auth::EpoAuthManager>,
+    #[cfg(feature = "zotero")]
+    zotero_started: tokio::sync::OnceCell<()>,
 }
 
 impl ResearchToolkit {
@@ -119,6 +121,8 @@ impl ResearchToolkit {
             config,
             #[cfg(feature = "patents")]
             epo_auth,
+            #[cfg(feature = "zotero")]
+            zotero_started: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -146,6 +150,14 @@ impl ResearchToolkit {
     #[must_use]
     pub(crate) fn epo_auth(&self) -> Option<&clients::epo_auth::EpoAuthManager> {
         self.epo_auth.as_ref()
+    }
+
+    #[cfg(feature = "zotero")]
+    pub(crate) async fn ensure_zotero_running(&self) -> error::Result<()> {
+        self.zotero_started
+            .get_or_try_init(|| tools::zotero::ensure_running::ensure_zotero_running_impl(self))
+            .await
+            .map(|_| ())
     }
 
     #[must_use]

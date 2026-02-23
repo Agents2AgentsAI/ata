@@ -4,6 +4,7 @@ pub(crate) async fn zotero_get_item(
     toolkit: &ResearchToolkit,
     params: ZoteroItemParams,
 ) -> Result<ZoteroItemDetail> {
+    toolkit.ensure_zotero_running().await?;
     let normalized = normalize_item_params(toolkit, params, "zotero_get_item").await?;
     let key = CacheKey {
         tool_name: "zotero_get_item",
@@ -94,6 +95,7 @@ pub(crate) async fn zotero_get_item_citation(
     toolkit: &ResearchToolkit,
     params: ZoteroCitationParams,
 ) -> Result<ZoteroCitationResult> {
+    toolkit.ensure_zotero_running().await?;
     let normalized = normalize_citation_params(toolkit, params).await?;
     let key = CacheKey {
         tool_name: "zotero_get_item_citation",
@@ -129,6 +131,7 @@ pub(crate) async fn zotero_get_fulltext(
     toolkit: &ResearchToolkit,
     params: ZoteroItemParams,
 ) -> Result<ZoteroFullTextResult> {
+    toolkit.ensure_zotero_running().await?;
     let normalized = normalize_item_params(toolkit, params, "zotero_get_fulltext").await?;
     let key = CacheKey {
         tool_name: "zotero_get_fulltext",
@@ -271,6 +274,7 @@ pub(crate) async fn zotero_get_notes(
     toolkit: &ResearchToolkit,
     params: ZoteroItemParams,
 ) -> Result<ZoteroNotesResult> {
+    toolkit.ensure_zotero_running().await?;
     let normalized = normalize_item_params(toolkit, params, "zotero_get_notes").await?;
     let key = CacheKey {
         tool_name: "zotero_get_notes",
@@ -319,6 +323,7 @@ pub(crate) async fn zotero_get_annotations(
     toolkit: &ResearchToolkit,
     params: ZoteroAnnotationsParams,
 ) -> Result<ZoteroAnnotationsResult> {
+    toolkit.ensure_zotero_running().await?;
     let normalized = normalize_annotations_params(toolkit, params)?;
     let key = CacheKey {
         tool_name: "zotero_get_annotations",
@@ -447,6 +452,7 @@ pub(crate) async fn zotero_get_attachments(
     toolkit: &ResearchToolkit,
     params: ZoteroItemParams,
 ) -> Result<ZoteroAttachmentsResult> {
+    toolkit.ensure_zotero_running().await?;
     let normalized = normalize_item_params(toolkit, params, "zotero_get_attachments").await?;
     let key = CacheKey {
         tool_name: "zotero_get_attachments",
