@@ -256,11 +256,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Remove debug symbols and intermediate build artifacts to free space.
-          find codex-rs/target -name '*.d' -o -name '*.rlib' -o -name '*.rmeta' | xargs rm -f 2>/dev/null || true
-          find codex-rs/target -path '*/deps/*' -name '*.o' | xargs rm -f 2>/dev/null || true
-          # Remove incremental compilation data.
-          find codex-rs/target -type d -name incremental -exec rm -rf {} + 2>/dev/null || true
+          target="${{ matrix.target }}"
+          release_dir="codex-rs/target/${target}/release"
+
+          # Preserve only the final release binaries we need for the DMG.
+          mkdir -p /tmp/ata-binaries
+          cp "${release_dir}/ata" /tmp/ata-binaries/ 2>/dev/null || true
+          cp "${release_dir}/ata-responses-api-proxy" /tmp/ata-binaries/ 2>/dev/null || true
+          cp "${release_dir}/ata-windows-sandbox-setup" /tmp/ata-binaries/ 2>/dev/null || true
+          cp "${release_dir}/ata-command-runner" /tmp/ata-binaries/ 2>/dev/null || true
+          # Preserve any sigstore bundles.
+          cp "${release_dir}"/*.sigstore /tmp/ata-binaries/ 2>/dev/null || true
+
+          # Wipe the entire target directory to reclaim space.
+          rm -rf codex-rs/target
+
+          # Restore binaries into the expected release directory.
+          mkdir -p "${release_dir}"
+          cp /tmp/ata-binaries/* "${release_dir}/"
+          rm -rf /tmp/ata-binaries
+
           echo "Disk usage after cleanup:"
           df -h .
 
