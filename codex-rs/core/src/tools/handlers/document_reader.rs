@@ -249,8 +249,10 @@ pub static UPDATE_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "update_document_section".to_string(),
-        description: "Update a specific section of a document currently being read by the user. \
-                       Use this when the user asks a follow-up question about a section. \
+        description: "Replace the entire content of a section in a document being read by the user. \
+                       Use this to fill an empty section, or when the user explicitly asks to \
+                       rewrite/restructure/simplify the whole section. Prefer patch_document_section \
+                       for targeted edits. \
                        Content style: write straight prose that continues the section\u{2019}s \
                        voice. Do NOT prefix with bold/italic topic lines like \
                        '**On the efficiency gains:**' or '*Regarding caching:*' \u{2014} \
@@ -306,7 +308,7 @@ pub static APPEND_TO_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         "summary".to_string(),
         JsonSchema::String {
             description: Some(
-                "Short summary shown when collapsed. Falls back to first line of content."
+                "Short descriptive label for this content (5-10 words). Always provide this. Used as fold title when collapsed."
                     .to_string(),
             ),
         },
@@ -373,7 +375,7 @@ pub static PATCH_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         "summary".to_string(),
         JsonSchema::String {
             description: Some(
-                "Short summary shown when collapsed. Falls back to first line of content."
+                "Short descriptive label for this content (5-10 words). Always provide this. Used as fold title when collapsed."
                     .to_string(),
             ),
         },

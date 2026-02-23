@@ -2,13 +2,13 @@ use std::fs;
 use std::path::Path;
 
 fn main() {
-    let samples_dir = Path::new("src/skills/assets/samples");
-    if !samples_dir.exists() {
-        return;
+    for dir_path in ["src/skills/assets/samples", "src/skills/assets/research"] {
+        let dir = Path::new(dir_path);
+        if dir.exists() {
+            println!("cargo:rerun-if-changed={}", dir.display());
+            visit_dir(dir);
+        }
     }
-
-    println!("cargo:rerun-if-changed={}", samples_dir.display());
-    visit_dir(samples_dir);
 }
 
 fn visit_dir(dir: &Path) {

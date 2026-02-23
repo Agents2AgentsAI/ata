@@ -9,43 +9,58 @@ metadata:
 
 **Output format**: Always present final reports using `present_reading_view` (not as regular text). See the Presentation section below.
 
-Two modes of operation:
+## CRITICAL: No Exploration
 
-1. **Explore mode** (`explore:<question or topic>`) -- You have a research question or want to learn about a topic. Get a structured landscape briefing: main approaches, best papers for each, state of the art, and a reading plan.
-2. **Discovery mode** (default / `topic:` / `authors` / `recent`) -- You already have a research base. Find papers adjacent to what you already know using citation graphs, recommendations, trends, and author tracking.
+**Do NOT do any of these before starting the search:**
+- Do NOT read any SKILL.md files (you already have the instructions)
+- Do NOT run `rg --version`, `ls`, or any diagnostic commands
+- Do NOT read `research-context.md` — use conversation context instead
+- Do NOT read individual KB cards one by one — a single `rg` search is enough
+- Do NOT open arXiv URLs for ANY reason — not to verify existence, not to read abstracts, not to confirm metadata. `paper_search` and `paper_citations` already return titles, authors, years, and abstracts.
+- Do NOT use `web.run`, `web_search`, or any web browsing to look up papers — the paper API tools are your only source.
+- Do NOT include `citeturn*view*` or similar citation markers in reading view content — these are internal artifacts that appear as garbage to the user. Write citations as Author (Year) only.
 
-## Invocation Modes
+**Speed matters.** The user should see results within 30 seconds of their request. Every tool call you make before `paper_search` or `paper_citations` is delay the user feels. The paper API returns all metadata you need — never supplement with web browsing.
 
-- `$paper-discovery explore: how do people train RL for robotic grasping` -- explore a question or topic from scratch
-- `$paper-discovery explore: best methods for sim-to-real transfer in manipulation` -- practical "how to" questions work too
-- `$paper-discovery` -- discovery mode: full KB scan, all 4 strategies
-- `$paper-discovery topic:<topic>` -- discovery mode: focused on a specific topic tag
-- `$paper-discovery authors` -- discovery mode: author-tracking only
-- `$paper-discovery recent` -- discovery mode: trend scanning only
+## Modes
 
-**Mode detection**: If the user's input is a question or describes something they want to learn about (even without the `explore:` prefix), use explore mode. If the user just invokes `$paper-discovery` with no arguments, use discovery mode.
+Three modes:
+
+1. **Citation-focused** — user references a specific paper and asks for related/recent/citing work. Use `paper_citations` + 1-2 keyword searches. **This is the most common mode when the user just read a paper.**
+2. **Explore** — user has a research question or topic to learn about. Use faceted keyword search + citation expansion.
+3. **Discovery** — user already has a research base, wants adjacent papers. Use KB seeds + citation/recommendation APIs.
+
+**Mode detection:**
+- User just read/synthesized a paper and asks "find more like this", "recent work in this area", "what cites this", "what's new in this field" → **citation-focused** (use the paper they just read as seed)
+- User asks a question or describes a topic to learn about → **explore**
+- User invokes `$paper-discovery` with no arguments → **discovery**
 
 
-## Mandatory Pipeline Contract
+## Auto-Continue Detection (CRITICAL)
 
-This skill is discovery-first. After discovery, the user has three paths:
+**Before doing ANY search work**, classify the user's request:
 
-1. **Quick orientation** — `$research-briefing` gives a 2-4 page overview with core ideas per paper (recommended first step)
-2. **Full deep analysis** — `$paper-synthesis` to create deep per-paper cards, then `$cross-paper-report` for the integrated narrative + PDF
-3. **Interactive exploration** — Chat about specific papers, ask follow-ups, then `$conversation-report` when ready to capture what was discussed
+- **Survey / full analysis / explain these** → The user wants the FULL pipeline. After presenting the discovery reading view, you MUST automatically continue: invoke `$paper-synthesis` for all reading-plan papers (multi-paper path, parallel subagents), wait for results, then invoke `$cross-paper-report` to produce the integrated explained report. Do NOT stop at the reading plan. Do NOT present `$paper-synthesis` commands for the user to click.
+- **Explore / discover / find papers** → Discovery only. Present the reading view with the reading plan and stop. The user decides what to do next.
 
-For multi-paper requests that ask for a final explained report, enforce the full pipeline: `paper-discovery` → `paper-synthesis` → `cross-paper-report`. Do not mark the request complete until step 3 is done.
+**Trigger phrases for auto-continue** (non-exhaustive): "full survey", "survey", "explain these", "explain them", "I want a report", "deep dive on all", "synthesize all", "walk me through these", "I want to understand all of them", "give me a full analysis".
+
+**When auto-continuing**, the reading plan section should say "Proceeding to synthesize [N] papers..." instead of showing `$paper-synthesis` commands. After the discovery reading view is shown, immediately proceed to synthesis without waiting for user input.
+
+## Pipeline Paths
+
+After discovery, three paths exist:
+
+1. **Quick orientation** — `$research-briefing` gives a 2-4 page overview with core ideas per paper
+2. **Full deep analysis** — `$paper-synthesis` (multi-paper) → `$cross-paper-report` for the integrated narrative
+3. **Interactive exploration** — Chat about specific papers, ask follow-ups
+
+For auto-continue requests (see above), enforce path 2 automatically. Do not mark the request complete until cross-paper-report is done.
 
 ### Scale-Aware Pipeline Branching
 
-The pipeline adapts based on the number of shortlisted papers:
-
-- **≤ 12 papers**: Standard pipeline. `cross-paper-report` runs Phases 1–3 in a single pass with full 800+ words per card.
-- **> 12 papers**: `cross-paper-report` automatically activates **large-set mode** — it clusters papers into groups of 4–8, launches parallel subagents for per-cluster deep reports, then produces a meta-synthesis connecting the clusters. No manual intervention is needed; scale detection is built into the `cross-paper-report` skill.
-
-When presenting the reading plan in explore mode, note the expected pipeline mode:
-- "This set of [N] papers will use **standard synthesis** (deep per-card walkthroughs in one report)."
-- "This set of [N] papers will use **large-set synthesis** (clustered sub-reports with cross-cluster meta-synthesis) for depth at scale."
+- **≤ 12 papers**: Standard pipeline. `cross-paper-report` runs Phases 1–3 in a single pass.
+- **> 12 papers**: `cross-paper-report` automatically activates **large-set mode** (clustered sub-reports with meta-synthesis).
 
 ---
 
@@ -53,106 +68,78 @@ When presenting the reading plan in explore mode, note the expected pipeline mod
 
 Explore mode answers research questions by mapping the landscape of approaches and surfacing the most important papers to read. No existing KB or Zotero library is required -- but if available, they enrich the results.
 
-### Explore Phase 0: Check Existing Knowledge (Optional)
+### Explore Phase 0: Check Existing Knowledge (1 tool call max)
 
-Before searching externally, check if the user already has relevant material:
+**This is optional and must be fast — 1 tool call maximum.**
 
-1. If KB is available, list all cards per `$kb`. Filter cards whose tags or titles relate to the user's question.
-2. **Read research context**: If `<kb_path>/research-context.md` exists, use it to bias discovery:
-   - **Priorities**: Weight ranking toward papers relevant to the user's priorities (e.g., if they care about inference latency, rank latency-focused papers higher)
-   - **Not Interested In**: De-prioritize papers in areas the user has dismissed
-   - **Recent journal entries**: Optionally read `research-journal.md` to check what the user has explored recently — avoid re-discovering papers from recent sessions
-3. If Zotero is available, call `zotero_search` with a short keyword from the question (limit 10).
-4. Collect any matching paper IDs -- these become **boost seeds**:
-   - Use them as additional positive examples in Strategy C (recommendations)
-   - Use them as additional roots in Strategy B (citation expansion)
-   - Mark them as "already in KB/Zotero" in the final output so the user knows what they already have vs. what's new
-4. If the user already has extensive coverage (10+ matching cards), note this in the briefing: "You already have strong coverage of X. Here's what's new or what you might be missing."
+Run `rg "tag1\|tag2\|tag3" ~/.ata/knowledge-base/cards/` with 2-3 relevant tags. This tells you which papers the user already has.
 
-This step is best-effort. If KB or Zotero aren't configured, skip it and proceed with external search only.
+Do NOT:
+- Do NOT list the entire KB directory
+- Do NOT read individual KB cards
+- Do NOT read `research-context.md` — use conversation context for user priorities
+- Do NOT read `research-journal.md`
+- Do NOT call `$kb` — a single `rg` command is faster
+
+If KB or Zotero aren't configured, skip this entirely and proceed with search.
 
 ### Explore Phase 1: Decompose the Question
 
-Parse the user's question into 3-5 search facets. Each facet targets a different angle of the problem.
+Parse the user's question into 3-5 search facets. Each facet targets a different angle of the problem using different terminology and framing.
 
-**Example**: "how do people train RL for robotic grasping"
-- Facet 1: `"reinforcement learning robotic grasping"` (direct match)
-- Facet 2: `"sim-to-real transfer grasping"` (common training paradigm)
-- Facet 3: `"dexterous manipulation policy learning"` (broader framing)
-- Facet 4: `"grasp planning deep learning"` (alternative terminology)
+#### Facet Design Principles
 
-**Example**: "best methods for sim-to-real transfer in manipulation"
-- Facet 1: `"sim-to-real transfer robot manipulation"`
-- Facet 2: `"domain randomization manipulation policy"`
-- Facet 3: `"real-world robot learning from simulation"`
-- Facet 4: `"domain adaptation robotic control"`
+1. **Encode the relationship, not just keywords.** If the user asks "how is X used to do Y," your facets must capture the directionality. A query like `"X Y"` is ambiguous — it matches papers *about* X and papers *using* X for Y equally. Instead, phrase facets that make the relationship explicit (e.g., `"X as supervision for Y"`, `"X-guided Y training"`, `"using X to improve Y"`).
 
-### Explore Phase 2: Multi-Angle Search (Hierarchical, Parallel Subagents)
+2. **Disambiguate overloaded terms.** Many research terms are ambiguous. Before generating facets, identify terms that could mean multiple things and pick the reading that matches the user's intent. For example, if the user asks about "using human attention to train models," `"attention supervision"` is ambiguous (it matches both human eye-tracking work AND transformer attention mechanism papers). Prefer specific phrases like `"eye tracking weak supervision"` or `"human gaze training signal"`.
 
-The search strategies are **hierarchical, not equal-weight**. Citation graph expansion is the primary engine — keyword search supplements it.
+3. **Vary the abstraction level.** Include at least one narrow/specific facet (exact method name or technique), one broader facet (the general research area), and one using alternative terminology (how a different community might describe the same idea).
 
-Launch 2-3 subagents in parallel:
+4. **Use field-specific vocabulary.** Think about what terms researchers in this area actually use in paper titles and abstracts. Avoid overly casual or generic phrasing.
 
-#### Seed Selection (Before Launching Subagents)
+5. **Test each facet mentally.** Before using a facet, ask: "If I search this exact string, could most of the top results be about something unrelated to what the user wants?" If yes, add qualifying words to narrow it.
 
-Determine seed papers for citation expansion:
+### Explore Phase 2: Search (Fast, Then Deep)
 
-1. **Best case — KB cards exist**: Use cards from Phase 0 as seeds (they have paper IDs ready)
-2. **User mentions specific papers**: Use those as seeds
-3. **Neither available**: Do a quick keyword bootstrap — run 2-3 facets from Phase 1 through `paper_search` with `limit=5, sort_by=citation_count` to find 3-5 highly-cited papers. These become the seeds. Then proceed to citation expansion.
+**Speed matters.** The user should see initial results quickly. Do NOT launch large-scale citation expansion before showing anything.
 
-Never do pure keyword discovery without citation expansion. If you have no seeds at all, ask the user: "Can you name 2-3 papers you already know in this area? That helps me map the field much faster via citation graphs."
+#### Citation-Focused Path (MOST COMMON — user just read a paper)
 
-#### Primary Strategy: Seed-Based Citation Expansion
+Use this path when the user references a specific paper (from a previous synthesis, URL, or conversation context) and asks for related/recent/citing work. This includes: "find more like this", "recent work in this area", "what cites this", "what's new in this field", "find the most recent work".
 
-This is the core discovery engine. "You have a paper, you see what cites it, you have the field."
+**This is 3 tool calls before presenting results:**
+1. **`paper_citations(known_paper_id, limit=30)`** — what builds on this paper? This is the primary data source.
+2. **`paper_search(topic_keywords, year_from=current_year-1, limit=10, sort_by=citation_count)`** — recent papers in the same area.
+3. **`paper_search(alternative_keywords, limit=10, sort_by=citation_count)`** — broader coverage.
 
-**2-hop expansion:**
+Then immediately present results. Do NOT do facet decomposition, KB exploration, or research-context reading.
 
-- **Hop 1**: For each seed paper (up to 10 seeds):
-  - Call `paper_references` (limit 30) — what do these papers build on?
-  - Call `paper_citations` (limit 30) — what builds on them?
-  - This produces the immediate citation neighborhood
+**KB check (optional, 1 call max):** If KB is available, run `rg "relevant_tag" ~/.ata/knowledge-base/cards/` to mark which found papers are already in KB. Do NOT read individual cards.
 
-- **Hop 2**: From hop 1 results, select the top 10 most-cited papers that are NOT already seeds:
-  - Call `paper_citations` for each (limit 15) — what builds on the next layer?
-  - This extends reach to the broader field
+#### General Explore Path (topic/question-based)
 
-**Bridge detection**: Papers appearing in 3+ citation neighborhoods are "bridge papers" — these connect subfields and are almost always important. Flag them prominently in results.
+**Step 1 — Keyword Search (do this first, directly, no subagents):**
+Run 2-3 facets from Phase 1 through `paper_search` in parallel:
 
-**Recency filter**: Within citation results, separately track papers from the last 2 years. These are the cutting edge — they cite the established work but push beyond it.
+- Per facet: `paper_search(query, limit=10, sort_by=citation_count)`
+- Per facet (recent): `paper_search(query, year_from=current_year-1, limit=5)`
 
-Tag each result with `discovery_source: "citation_graph"` and include provenance: "Found via citation graph (cited by N of your seed papers)" or "Bridge paper (appears in N citation neighborhoods)".
+This gives you 15-30 papers in a few seconds. **Present these immediately** in the reading view (Phase 4) — don't wait for citation expansion.
 
-#### Secondary Strategy: Targeted Keyword Search
+**Step 2 — Citation Expansion (1-hop only, after initial results are shown):**
+Pick the top 3-5 most-cited papers from Step 1 as seeds. For each:
 
-Supplements citation expansion to catch papers too new to have citation connections yet.
+- `paper_citations(seed_id, limit=15)`
+- `paper_references(seed_id, limit=15)`
 
-For 2-3 facets (not 4-5 — keep it narrow):
-1. Call `paper_search` with the facet query, `limit=10`, `sort_by=citation_count`
-2. Call `paper_search` with the facet query, `year_from` = current year - 1, `limit=10`, `sort_by=citation_count` (very recent only)
-3. Merge and deduplicate across facets
+This is **1-hop only** — no 2nd hop. Merge with Step 1 results, deduplicate, and update the reading view sections with any important new finds.
 
-This is explicitly framed as "supplement to citation graph, not replacement." Its purpose is to catch papers that are too new to have citation connections yet.
+**Step 3 — Recommendations (optional, skip if slow):**
+If `paper_recommendations` is available, call it once with the top 3 seed IDs. `limit=10`. Merge any truly new papers into results.
 
-Tag each result with `discovery_source: "keyword_search"`.
+**Total API budget:** Aim for ≤ 20 paper API calls total. Do NOT do 2-hop expansion, author tracking, or multi-batch recommendations — these are slow and produce diminishing returns for an initial exploration.
 
-#### Supplementary Strategy: Recommendations + Author Tracking
-
-Lighter weight — fills gaps that citation and keyword search might miss:
-
-**Embedding recommendations** (if `paper_recommendations` is available):
-- From the top 5 seed papers, call `paper_recommendations` with `limit=15`
-- This catches conceptually related papers that use different terminology
-
-**Author tracking**:
-- From the top 10 papers found across all strategies, identify authors appearing on 2+ papers
-- For each, call `paper_search` with `"author:<name>"`, `year_from` = current year - 1, `limit=5`
-- This catches very recent work from key researchers
-
-Tag results with `discovery_source: "recommendation"` or `discovery_source: "author_track"` respectively.
-
-Skip embedding recommendations if `paper_recommendations` is not available.
+**Do NOT use web browsing for paper metadata.** Never open arXiv URLs, run web searches to "confirm" paper metadata, read abstracts from arXiv pages, or attempt to access any paper pages. The `paper_search` and `paper_citations` APIs already return titles, authors, years, abstracts, and valid IDs. Web browsing for paper metadata wastes minutes and often gets blocked by the sandbox. Use ONLY the paper API tools.
 
 ### Explore Phase 3: Analyze and Organize
 
@@ -165,19 +152,23 @@ Same dedup logic as discovery mode (DOI → arXiv ID → S2 ID → title fuzzy m
 If Phase 0 found KB or Zotero matches, cross-reference against the merged paper pool. Mark matching papers as "already in KB" or "already in Zotero" -- do NOT remove them (they're still valuable for the landscape map), but annotate them in the output so the user knows which ones are new vs. already in their library.
 
 #### Step 1c: Annotate Discovery Provenance
-For each paper, record how it was found:
-- "Found via citation graph (cited by N of your seed papers)" — papers discovered through citation expansion
-- "Bridge paper (appears in N citation neighborhoods)" — papers connecting multiple subfields
-- "Found via keyword search (no citation connection yet)" — papers found through keyword search without citation links to seeds
-- "Found via recommendation (embedding similarity to [seed paper])" — papers found through S2 recommendations
-- "Found via author tracking ([author name]'s recent work)" — papers found through author expansion
+For each paper, record how it was found. **Provenance should be meaningful to the reader** — it tells them how well-connected a paper is to the field, not which API call found it.
 
-This provenance helps the user understand which papers are well-connected to their existing knowledge vs. isolated finds.
+Good provenance (tells the user something useful):
+- "Cited by 4 seed papers" — well-connected, likely foundational
+- "Bridge paper — connects [subfield A] and [subfield B]" — interdisciplinary importance
+- "Recent (2025), not yet cited by established work" — cutting edge, less vetted
+- "[Author]'s latest work" — continuity from a key researcher
+
+Bad provenance (do NOT use — the user doesn't care about your search mechanics):
+- "Found via keyword search (query string)" — meaningless to the reader
+- "Found via citation graph" — too generic, says nothing about the paper
+- "Found via recommendation" — internal plumbing, not insight
 
 #### Step 2: Identify Approaches
 Cluster the papers into 3-6 **distinct approaches or method families**. For each cluster, identify:
-- The approach name (e.g., "Sim-to-Real with Domain Randomization", "Direct Real-World RL", "Offline RL from Demonstrations")
-- 2-4 representative papers
+- The approach name (a clear, descriptive label for the method family)
+- 2-3 representative papers
 - The key idea in 1-2 sentences
 - Strengths and limitations
 
@@ -195,8 +186,8 @@ Organize papers into tiers:
 
 **Keep DOIs, arXiv IDs, and long URLs out of prose paragraphs.** They break reading flow and add no value inline.
 
-- **In narrative sections** (The Landscape, Approaches, recommendations): cite as **Author (Year)** only. Example: "Domain randomization (Tobin et al., 2017) is the canonical sim-to-real lever." Never: "Domain randomization (Tobin et al., 2017; arXiv 1703.06907; DOI 10.xxx)."
-- **In the Reading Plan**: include IDs on their own line as a synthesis command: `→ $paper-synthesis 1703.06907`. This is where IDs belong — actionable, not decorative.
+- **In narrative sections** (The Landscape, Approaches, recommendations): cite as **Author (Year)** only. Example: "This approach was introduced by Smith et al. (2020)." Never: "This approach was introduced by Smith et al. (2020; arXiv 2003.XXXXX; DOI 10.xxx)."
+- **In the Reading Plan**: include IDs on their own line as a synthesis command: `→ $paper-synthesis [arXiv ID or DOI]`. This is where IDs belong — actionable, not decorative.
 - **In a References section at the end**: list full citations with IDs. This is the one place DOIs and arXiv IDs appear in full.
 - **For web sources**: cite as `(source name)` in prose; collect full URLs in References.
 
@@ -204,257 +195,87 @@ The same rule applies to both explore mode and discovery mode output.
 
 ### Explore Phase 4: Present the Briefing
 
+#### Section Length Rules
+
+**Hard rule: no section may exceed 40 lines.** The reading view is a terminal — each section should fit on one screen.
+
+- **The Landscape**: 2-3 short paragraphs max (~15 lines). Orientation, not literature review.
+- **Approaches**: 4-6 lines per approach cluster. Max 5 clusters. Total section ≤ 35 lines.
+- **Reading Plan**: **Top 10 papers only**, each 2 lines (title + synthesis command). If you found more than 10, list only the top 10 by relevance/citations. Mention the total count ("Found 19 papers; showing the top 10"). Total section ≤ 30 lines.
+- **Open Questions**: 2-3 bullet points, one sentence each.
+
+When in doubt, err on the side of brevity. The reading view is for orientation — deep analysis belongs in `$paper-synthesis`.
+
+Use **4 sections** in the reading view:
+
 ```
-## Research Briefing: [question/topic]
-### [Date]
+## The Landscape
 
-### The Landscape
+[2-3 short paragraphs. What is this field about? Main challenges and paradigms.
+Cite as Author (Year) — no IDs inline.]
 
-[2-3 paragraph overview: What is this field about? What are the main challenges?
-What are the dominant paradigms? Where is the field heading?
-Cite papers as Author (Year) only — no IDs inline.]
-
-### Approaches
+## Approaches
 
 #### 1. [Approach Name]
 **Key idea**: [1-2 sentences]
-**Representative papers**:
-- [Paper] ([Year]) -- [why it matters, 1 sentence] [discovery provenance]
-- [Paper] ([Year]) -- [why it matters] [discovery provenance]
-**Strengths**: [1 sentence]
-**Limitations**: [1 sentence]
+**Papers**: [Paper] ([Year]), [Paper] ([Year])
+**Tradeoff**: [1 sentence]
 
 #### 2. [Approach Name]
 ...
 
-### Reading Plan
+## Reading Plan (Top 10)
 
-#### Start Here
-1. **[Title]** -- [Authors] ([Year])
-   [Why to read this first -- 1 sentence]
-   Discovery: [provenance, e.g., "Bridge paper — cited by 4 seed papers"]
-   → `$paper-synthesis [arXiv ID or DOI]`
+[If auto-continue: list papers without $paper-synthesis commands, end with "Proceeding to synthesize..."]
+[If manual: list papers with synthesis commands]
 
-#### Core Methods
-2. **[Title]** -- [Authors] ([Year])
-   Approach: [which approach cluster]
-   [What you'll learn -- 1 sentence]
-   Discovery: [provenance]
-   → `$paper-synthesis [arXiv ID or DOI]`
+1. **[Title]** — [Authors] ([Year])
+2. **[Title]** — [Authors] ([Year])
 ...
 
-#### Cutting Edge
-...
+## Open Questions
 
-### Open Questions
-[2-3 bullet points: What's unsolved? Where is the field going?
-What should someone entering this area pay attention to?]
-
-### Next Steps
-- `$research-briefing` — Quick 2-3 page orientation of the discovered papers (recommended first step)
-- `$paper-synthesis [ID]` → `$cross-paper-report` — Full deep analysis pipeline
-- Chat interactively about specific papers, then `$conversation-report` when ready
-
-### References
-[Full citations with IDs — the one place DOIs and arXiv IDs appear:]
-- Tobin et al., "Domain Randomization for Transferring Deep Neural Networks from Simulation to the Real World," 2017. arXiv:1703.06907
-- Mahler et al., "Dex-Net 2.0," RSS 2017. DOI:10.15607/rss.2017.xiii.058
-- ...
+- [question 1]
+- [question 2]
 ```
 
 ### Explore Mode Graceful Degradation
 
-- **No S2 API key**: Skip Strategy C (recommendations); the other 3 strategies still cover the landscape well
-- **No `paper_recommendations` tool**: Skip Strategy C
-- **Sparse results for a facet**: The multi-facet design ensures other angles compensate
-- **Very broad topic**: Focus on the highest-citation papers and note that the user should narrow their question for deeper coverage
-- **Very narrow topic**: Broaden facets and rely more on citation expansion (Strategy B) to find related work
-- **No KB configured**: Present the briefing in chat only
+- **No S2 API key / no `paper_recommendations`**: Skip recommendations; keyword + citations cover the landscape
+- **Sparse results**: Broaden facets or add a 4th facet
+- **Very broad topic**: Focus on highest-citation papers, suggest narrowing
+- **No KB configured**: Skip Phase 0, proceed with search
 
 ---
 
 ## DISCOVERY MODE
 
-Discovery mode is for users who already have a research base (KB cards or Zotero library) and want to find what they're missing.
+Discovery mode finds papers adjacent to what you already know. Uses KB cards (or Zotero) as seeds.
 
-### Execution: Use Subagents
+### Discovery Phase 1: Gather Seeds
 
-**Always launch discovery sub-agents in parallel.** This is mandatory for performance:
+1. List KB cards per `$kb`. Extract paper IDs from `source.refs` and topics from `tags`.
+2. If `topic:<topic>` specified, filter to matching cards.
+3. If no KB: try `zotero_get_recent(limit=50)`. If neither: ask user for 3-5 seed paper IDs.
 
-1. The main agent gathers seed data (Phase 1 below)
-2. The main agent launches 2-4 sub-agents in parallel (one per active discovery strategy)
-3. The main agent merges, deduplicates, and ranks results (Phase 3 below)
-4. The main agent presents the final discovery report
+### Discovery Phase 2: Search
 
-#### Subagent Prompt Construction
+From the top 5 seed papers:
 
-Each subagent prompt should include:
-- The specific strategy to execute (citation explorer, recommendation engine, trend scanner, or author tracker)
-- The seed data relevant to that strategy (paper IDs, topic tags, or author names)
-- Instructions to return structured JSON-like results with paper metadata
+1. `paper_citations(seed_id, limit=15)` for each — what builds on them?
+2. `paper_references(seed_id, limit=15)` for each — what do they build on?
+3. `paper_search(topic_tag, year_from=current_year-1, limit=10)` for each unique topic — recent trends
+4. (Optional) `paper_recommendations(seed_ids, limit=10)` if available
 
-#### What Subagents Return
+**Budget: ≤ 25 API calls total.** Do not use author tracking or 2-hop expansion.
 
-Each subagent returns a list of discovered papers with:
-- Title, authors, year, venue, citation count
-- Paper IDs (DOI, arXiv ID, S2 ID) for deduplication
-- Discovery source tag (e.g., "citation_graph", "s2_recommendation", "trend_scan", "author_track")
-- Brief rationale (e.g., "cited by 3 of your KB papers", "recent work by frequent author X")
+### Discovery Phase 3: Merge, Deduplicate, Rank
 
-### Discovery Phase 1: Gather Seed Data
+Deduplicate by DOI → arXiv → title fuzzy match. Filter out papers already in KB. Rank by citation count + recency + overlap with KB papers.
 
-#### Step 1: Read KB State
+### Discovery Phase 4: Present
 
-1. Determine `<kb_path>` per the `$kb` skill and verify KB exists.
-2. List all cards per `$kb`.
-3. Extract from cards:
-   - **Paper IDs**: DOI, arXiv ID, or S2 ID from card `refs` fields
-   - **Topics**: from card `tags` fields
-   - **Authors**: from card metadata (author fields in card body)
-
-#### Step 2: Topic Filtering (if topic-focused mode)
-
-If the user specified `topic:<topic>`:
-- Filter seed cards to those with matching tags
-- Narrow paper IDs, topics, and authors to the filtered set
-- If no cards match the topic, fall back to using the topic as a keyword search query
-
-#### Step 3: Fallback to Zotero (if no KB)
-
-If the KB has no cards or is not configured:
-1. Call `zotero_get_recent` with `limit=50` to get recent library items
-2. Call `zotero_get_tags` to get topic tags
-3. Extract paper IDs from Zotero items (DOI field)
-4. Use Zotero tags as topic seeds
-
-If neither KB nor Zotero is available, ask the user to provide seed paper IDs or topics manually.
-
-### Discovery Phase 2: Discovery Strategies (Parallel Subagents)
-
-Launch the applicable strategies as parallel subagents. Each strategy operates independently.
-
-#### Strategy 1: Citation Graph Explorer
-
-For the top 5-10 seed papers (by citation count or recency):
-
-1. Call `paper_citations` for each seed paper (limit 20 per paper)
-2. Call `paper_references` for each seed paper (limit 20 per paper)
-3. Track frequency: papers appearing in 2+ citation neighborhoods are "bridge papers"
-4. Return deduplicated list with overlap counts and discovery rationale
-
-Tag each result with `discovery_source: "citation_graph"`.
-
-#### Strategy 2: S2 Recommendation Engine
-
-Uses the `paper_recommendations` tool for embedding-based similarity:
-
-1. Group seed paper IDs into batches of up to 5 (S2 API accepts multiple positive examples)
-2. Call `paper_recommendations` for each batch with `limit=20`
-3. Merge results across batches
-4. Return ranked list
-
-Tag each result with `discovery_source: "s2_recommendation"`.
-
-**Graceful degradation**: If `paper_recommendations` is not available or the S2 API key is missing, skip this strategy entirely. The other 3 strategies still provide valuable discovery.
-
-#### Strategy 3: Trend Scanner
-
-For each unique topic tag from seed data:
-
-1. Call `paper_search` with the topic as query, `year_from` = current year - 1, `sort_by=citation_count`
-2. Take top 10 results per topic (high-impact recent papers)
-3. Return papers with topic association
-
-Tag each result with `discovery_source: "trend_scan"`.
-
-#### Strategy 4: Author Tracker
-
-1. Extract unique first and last authors from seed papers
-2. Identify the top 5-10 most-represented authors (appear on multiple seed papers)
-3. For each author, call `paper_search` with `"author:<name>"` query, `year_from` = current year - 1
-4. Return latest publications per tracked author
-
-Tag each result with `discovery_source: "author_track"`.
-
-### Discovery Phase 3: Merge, Deduplicate, and Rank
-
-#### Step 1: Merge
-
-Collect all papers from all completed strategies into a single pool.
-
-#### Step 2: Deduplicate
-
-Match papers by (in priority order):
-1. DOI (exact match)
-2. arXiv ID (exact match)
-3. S2 paper ID (exact match)
-4. Title (case-insensitive fuzzy match -- papers with near-identical titles are likely duplicates)
-
-When merging duplicates, combine discovery sources and rationales.
-
-#### Step 3: Filter Already-Known Papers
-
-Remove papers that are already in the user's knowledge base:
-- Match against KB card source refs (DOI, arXiv ID)
-- Match against card titles (fuzzy)
-
-Optionally, if Zotero is configured:
-- Call `zotero_search` by DOI for candidate papers to check if already in library
-- Mark Zotero-present papers as "already in Zotero" rather than removing them (the user may want to synthesize them)
-
-#### Step 4: Rank
-
-Score each paper by composite ranking:
-
-| Signal | Points |
-|--------|--------|
-| Citation overlap with KB (paper cites or is cited by a KB paper) | +3 per connection |
-| Convergence (found by N different strategies) | +2 per strategy |
-| Recency bonus (published within last 12 months) | +1 |
-| Citation count (log-scaled) | +log10(citations + 1) |
-
-Sort by composite score descending.
-
-### Discovery Phase 4: Present Results
-
-#### Discovery Report
-
-Present the top 15-20 papers as a numbered list. Follow the Citation Formatting Rules above — IDs appear only in the per-paper metadata line and the References section, never in prose.
-
-```
-## Paper Discovery Report
-### [Date] | Mode: [full-kb / topic:X / authors / recent]
-
-Found N new papers across M discovery strategies.
-
-#### Top Discoveries
-
-1. **[Title]** -- [Authors] ([Year], [Venue])
-   Citations: [N] | Score: [composite]
-   Discovery: [rationale, e.g., "Cited by 3 KB papers + recommended by S2 based on your VLA papers"]
-   Abstract: [first 200 chars]...
-   → `$paper-synthesis [arXiv ID or DOI]`
-
-2. ...
-
-### References
-[Full citations with IDs collected here]
-```
-
-#### Group by Topic
-
-After the ranked list, group papers by topic area with brief rationale for each group.
-
-### Discovery Mode Graceful Degradation
-
-- **No KB configured**: Fall back to Zotero library scan for seeds (Step 3 in Phase 1)
-- **No Zotero configured**: Skip Zotero dedup filter; rely on KB-only seeds
-- **No KB and no Zotero**: Ask the user to provide 3-5 seed paper IDs or topics manually, then run strategies 2-4
-- **No S2 API key**: Skip Strategy 2 (recommendation engine); still run citation graph + keyword search + author tracking
-- **No `paper_recommendations` tool**: Skip Strategy 2; proceed with remaining strategies
-- **Strategy failure**: If any single strategy fails (API error, timeout), log a warning and continue with results from other strategies
-- **No KB configured**: Present the report in chat only
-- **Few seed papers (< 3)**: Reduce citation graph exploration but increase trend scanner and author tracker scope
+Use the same 4-section reading view format as explore mode: Landscape, Approaches, Reading Plan (top 10), Open Questions. Same section length rules apply.
 
 ## Post-Discovery Housekeeping
 
@@ -481,19 +302,11 @@ After presenting the discovery report, do these:
 
 **2. Research context detection** — If the user's discovery request or follow-up questions reveal priorities (e.g., "focus on methods that work in real-time", "I'm not interested in simulation-only results"), offer to note it in `research-context.md`.
 
-## Presentation (Main Agent Only)
+## Presentation
 
-**This section applies to the main agent only.** Subagents (e.g., citation explorer, recommendation engine, trend scanner) return their results as structured text to the main agent — they never call `present_reading_view` because the user is interacting with the main agent, not the subagent.
+Use the same outline → fill pattern described in Explore Phase 4. Use 4 sections: `"## The Landscape\n\n## Approaches\n\n## Reading Plan (Top 10)\n\n## Open Questions"`.
 
-**Phase 1 (Outline):** IMMEDIATELY call `present_reading_view` with `document_id` set to a unique slug, `title` to the report title, and `content` containing ONLY the `## ` section headings with empty bodies. Example content: `"## The Landscape\n\n## Approaches\n\n## Reading Plan\n\n## Open Questions"`. This opens the reading view instantly with "Generating..." placeholders.
+**Phase 1 (Outline):** IMMEDIATELY call `present_reading_view` with headings-only content.
+**Phase 2 (Fill):** Fill sections sequentially via `update_document_section`.
 
-**Phase 2 (Fill):** The tool result will tell you to fill section 0. Immediately call `update_document_section(document_id, section_index=0, content="...")` with the FULL content for that section — do not output any text, just make the tool call. Each tool result tells you the next section to fill. Continue calling `update_document_section` for each subsequent section until all are filled.
-
-**Markdown formatting:** Always put a blank line before numbered list items (`1.`, `2.`, etc.) and before bullet list items (`-`, `*`). Without a blank line, the markdown parser treats `2.`, `3.`, etc. as plain text instead of list items, so they lose their formatting. This also applies to content after paragraphs, blockquotes, and code blocks.
-
-When the user asks follow-up questions about a specific section, use the most efficient update tool:
-- `append_to_section` — to add new information at the end of a section (most common for follow-up questions)
-- `patch_document_section` — to change specific text within a section (for corrections or targeted edits)
-- `update_document_section` — to fully rewrite a section (only when the entire section needs to change)
-
-Write follow-up answers as straight content — no editorial labels like "(clearer explanation)" or "(expanded)" in headings or topic lines.
+**Markdown:** Always put a blank line before list items. Follow-ups use `append_to_section`, `patch_document_section`, or `update_document_section`.

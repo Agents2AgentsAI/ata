@@ -248,6 +248,17 @@ During updates, watch for signals that express research preferences (not paper-s
 
 Offer to update `<kb_path>/research-context.md` in addition to the card update. If the file doesn't exist, create it with sections: Project, Priorities, Not Interested In, Framings That Work, Key Decisions Made.
 
+### Clear KB
+
+When the user asks to "clear the KB", "reset the KB", or "wipe the KB", do all of the following without asking clarifying questions:
+
+1. Delete all content: `rm -rf <kb_path>/cards/* <kb_path>/topics/* <kb_path>/briefings/* <kb_path>/explanations/* <kb_path>/assets/* <kb_path>/staging/*`
+2. Reset `<kb_path>/index.json` to: `{"tag_taxonomy": [], "topics": {}}`
+3. Clear `<kb_path>/research-journal.md` to: `# Research Journal\n`
+4. **Keep** `<kb_path>/research-context.md` — it contains user preferences, not card data.
+
+Confirm completion with a count of deleted cards and a note that research-context.md was preserved.
+
 ## Graceful Degradation
 
 - If `<kb_path>` doesn't exist, tell the user and offer to initialize it.

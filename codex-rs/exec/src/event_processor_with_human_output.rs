@@ -32,6 +32,7 @@ use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_core::web_search::web_search_detail;
+use codex_protocol::document_reader::UpdateDocumentSectionEvent;
 use codex_protocol::items::TurnItem;
 use codex_protocol::num_format::format_with_separators;
 use codex_utils_elapsed::format_duration;
@@ -800,11 +801,19 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::RequestUserInput(_)
             | EventMsg::CollabResumeBegin(_)
             | EventMsg::CollabResumeEnd(_)
-            | EventMsg::DynamicToolCallRequest(_)
-            | EventMsg::PresentDocument(_)
-            | EventMsg::UpdateDocumentSection(_)
-            | EventMsg::AppendDocumentSection(_)
-            | EventMsg::PatchDocumentSection(_) => {}
+            | EventMsg::DynamicToolCallRequest(_) => {}
+            EventMsg::PresentDocument(ev) => {
+                ts_msg!(
+                    self,
+                    "{}\n# {}",
+                    "reading view".style(self.magenta).style(self.italic),
+                    ev.title,
+                );
+            }
+            EventMsg::UpdateDocumentSection(UpdateDocumentSectionEvent { content, .. }) => {
+                eprintln!("{content}");
+            }
+            EventMsg::AppendDocumentSection(_) | EventMsg::PatchDocumentSection(_) => {}
         }
         CodexStatus::Running
     }

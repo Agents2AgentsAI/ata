@@ -682,19 +682,16 @@ impl DocumentReaderView {
         // Formatting guidance shared by both selection and no-selection paths.
         // The goal: answers must be self-contained when re-read later without
         // remembering the original question.  A short italic lead-in line
-        // (*On …:*) gives context without a clunky "Q: / A:" format and
-        // without rewriting surrounding text.
         let formatting_guidance = "\
-            IMPORTANT — standalone readability: the reader will revisit this document later \
-            without remembering what question they asked. Your answer MUST open with a short \
-            italic contextual lead-in that summarises the topic, e.g.:\n\
-            *On the role of dropout in preventing overfitting:* Dropout randomly …\n\
-            *[Clarification: batch size vs. learning rate]* The batch size …\n\
-            Keep the lead-in to one short phrase. Do NOT repeat the full question. \
-            Do NOT use a Q:/A: format. The annotation should read like an editorial note \
-            that makes the paragraph self-explanatory.\n\n\
+            Write your answer as straight prose that continues the section's voice. \
+            Do NOT use a Q:/A: format. If the answer would be unclear without context, \
+            a short italic lead-in is fine (e.g. *On dropout:* …), but skip it when \
+            the meaning is obvious from placement. Don't overuse it.\n\n\
+            SUMMARY (required): Always set the `summary` parameter to a short descriptive \
+            label of your answer (5-10 words), e.g. summary=\"Role of attention heads in GPT\". \
+            This is used as a section label regardless of foldable.\n\n\
             FOLDABLE CONTENT: For supplementary content (explanations, examples, deep dives), \
-            set foldable=true and provide a short summary. Direct answers, corrections, \
+            set foldable=true. Direct answers, corrections, \
             and rewrites should NOT be foldable (foldable=false, the default).";
 
         // Extract a few rendered lines around the cursor and the word under
@@ -760,11 +757,17 @@ impl DocumentReaderView {
             format!(
                 "The user selected specific text from the section (shown below) and is asking about it.\n\
                  [Selected text:]\n{sel}\n\n\
-                 Reply by calling: patch_section(document_id=\"{doc_id}\", section_index={idx}, \
+                 DEFAULT — insert your answer after the selection:\n\
+                 patch_section(document_id=\"{doc_id}\", section_index={idx}, \
                  old_text=\"<the selected text exactly>\", \
                  new_text=\"<the selected text>\\n\\n<your answer>\")\n\
                  This inserts your answer right after the selected passage. \
                  Reproduce the selected text verbatim as old_text so the patch matches.\n\n\
+                 REWRITE — if the user asks to rewrite, simplify, or rephrase the selection:\n\
+                 patch_section(document_id=\"{doc_id}\", section_index={idx}, \
+                 old_text=\"<the selected text exactly>\", \
+                 new_text=\"<the rewritten version that replaces it>\")\n\
+                 The new_text must NOT contain the old_text — it fully replaces it.\n\n\
                  {formatting_guidance}",
                 doc_id = self.document_id,
                 idx = self.current_section,
@@ -797,6 +800,21 @@ impl DocumentReaderView {
                  Find the most relevant passage (paragraph, bullet list, or sentence) \
                  and insert your answer right after it so it reads naturally in context. \
                  Copy old_text verbatim from the section content above.\n\n\
+                 REWRITE — use patch_section to REPLACE content (not insert after) when \
+                 the user explicitly asks to rewrite, simplify, restructure, or rephrase:\n\
+                 patch_section(document_id=\"{doc_id}\", section_index={idx}, \
+                 old_text=\"<the passage to rewrite>\", \
+                 new_text=\"<the rewritten version that replaces it>\")\n\
+                 The new_text must NOT contain the old_text — it fully replaces it. \
+                 Target the specific passage the user wants rewritten; \
+                 do not rewrite the whole section unless the user asks for it.\n\n\
+                 FULL SECTION REWRITE — use update_document_section ONLY when the user \
+                 explicitly asks to rewrite, restructure, or simplify the entire section:\n\
+                 update_document_section(document_id=\"{doc_id}\", section_index={idx}, \
+                 content=\"<the complete rewritten section>\")\n\
+                 This replaces all section content. Use sparingly — it removes any \
+                 previous inline annotations. Only use when the user clearly wants \
+                 the whole section replaced.\n\n\
                  FALLBACK — use append ONLY when the question is about the section as a whole \
                  and no specific passage is relevant:\n\
                  append_to_section(document_id=\"{doc_id}\", section_index={idx}, content=\"...\")\n\n\
@@ -810,7 +828,8 @@ impl DocumentReaderView {
             "[The user is reading \"{title}\" and asked about the section titled \"{heading}\"]\n\n\
              {text}\n\n\
              {tool_instructions}\n\
-             Do NOT rewrite the entire section. Do NOT output plain text; only tool calls are visible to the user.",
+             Do NOT rewrite the entire section unless the user explicitly asks for a rewrite. \
+             Do NOT output plain text; only tool calls are visible to the user.",
             title = self.title,
             heading = heading,
         );
@@ -835,7 +854,7 @@ impl DocumentReaderView {
     }
 
     fn handle_content_key(&mut self, key_event: KeyEvent) {
-        // Ctrl+d / Ctrl+u: half-page cursor jump (like vim).
+        // Ctrl+d / Ctrl+u: half-page, Ctrl+f / Ctrl+b: full-page cursor jump.
         if key_event.modifiers.contains(KeyModifiers::CONTROL) {
             self.pending_g = false;
             self.pending_z = false;
@@ -849,6 +868,18 @@ impl DocumentReaderView {
                 KeyCode::Char('u') => {
                     let half = (self.last_content_height.get() / 2).max(1) as usize;
                     self.cursor_line = self.cursor_line.saturating_sub(half);
+                    self.clamp_and_scroll();
+                    return;
+                }
+                KeyCode::Char('f') => {
+                    let page = self.last_content_height.get().max(1) as usize;
+                    self.cursor_line = self.cursor_line.saturating_add(page);
+                    self.clamp_and_scroll();
+                    return;
+                }
+                KeyCode::Char('b') => {
+                    let page = self.last_content_height.get().max(1) as usize;
+                    self.cursor_line = self.cursor_line.saturating_sub(page);
                     self.clamp_and_scroll();
                     return;
                 }
@@ -915,6 +946,28 @@ impl DocumentReaderView {
         self.pending_z = false;
 
         // --- Keys shared between normal and visual modes ---
+
+        // Full-page scroll (Ctrl-f / Ctrl-b).
+        if key_event.modifiers.contains(KeyModifiers::CONTROL) {
+            match key_event.code {
+                KeyCode::Char('f') => {
+                    let page = self.last_content_height.get() as usize;
+                    self.cursor_line = self.cursor_line.saturating_add(page);
+                    self.cursor_col = 0;
+                    self.clamp_and_scroll();
+                    return;
+                }
+                KeyCode::Char('b') => {
+                    let page = self.last_content_height.get() as usize;
+                    self.cursor_line = self.cursor_line.saturating_sub(page);
+                    self.cursor_col = 0;
+                    self.clamp_and_scroll();
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         match key_event.code {
             KeyCode::Char('j') | KeyCode::Down => {
                 self.cursor_line = self.cursor_line.saturating_add(1);
@@ -964,6 +1017,47 @@ impl DocumentReaderView {
             }
             KeyCode::Char('$') => {
                 self.cursor_col = usize::MAX; // clamp_and_scroll caps it
+                self.clamp_and_scroll();
+                return;
+            }
+            // Paragraph navigation: jump to next/prev blank line.
+            KeyCode::Char('}') => {
+                self.jump_paragraph_down();
+                return;
+            }
+            KeyCode::Char('{') => {
+                self.jump_paragraph_up();
+                return;
+            }
+            // Word navigation.
+            KeyCode::Char('w') | KeyCode::Char('e') => {
+                self.jump_word_forward();
+                return;
+            }
+            KeyCode::Char('b') => {
+                self.jump_word_backward();
+                return;
+            }
+            // Viewport positioning.
+            KeyCode::Char('H') => {
+                self.cursor_line = self.scroll_offset.get() as usize;
+                self.cursor_col = 0;
+                self.clamp_and_scroll();
+                return;
+            }
+            KeyCode::Char('M') => {
+                let offset = self.scroll_offset.get() as usize;
+                let height = self.last_content_height.get() as usize;
+                self.cursor_line = offset + height / 2;
+                self.cursor_col = 0;
+                self.clamp_and_scroll();
+                return;
+            }
+            KeyCode::Char('L') => {
+                let offset = self.scroll_offset.get() as usize;
+                let height = self.last_content_height.get() as usize;
+                self.cursor_line = offset + height.saturating_sub(1);
+                self.cursor_col = 0;
                 self.clamp_and_scroll();
                 return;
             }
@@ -1137,6 +1231,153 @@ impl DocumentReaderView {
                     .map(|l| l.spans.iter().map(|sp| sp.content.len()).sum::<usize>())
             })
             .unwrap_or(0)
+    }
+
+    /// Get the plain text of a rendered line by index.
+    fn rendered_line_text(&self, line_idx: usize) -> Option<String> {
+        let inner_w = self.last_inner_width.get();
+        self.sections.get(self.current_section).and_then(|s| {
+            s.rendered_lines(inner_w).get(line_idx).map(|l| {
+                l.spans
+                    .iter()
+                    .map(|sp| sp.content.as_ref())
+                    .collect::<String>()
+            })
+        })
+    }
+
+    /// Total rendered line count for the current section.
+    fn current_section_line_count(&self) -> usize {
+        let inner_w = self.last_inner_width.get();
+        self.sections
+            .get(self.current_section)
+            .map(|s| s.rendered_lines(inner_w).len())
+            .unwrap_or(0)
+    }
+
+    /// Jump cursor to the next blank line (vim `}`).
+    fn jump_paragraph_down(&mut self) {
+        let total = self.current_section_line_count();
+        let mut line = self.cursor_line + 1;
+        // Skip current non-blank lines.
+        while line < total {
+            if self
+                .rendered_line_text(line)
+                .is_some_and(|t| t.trim().is_empty())
+            {
+                break;
+            }
+            line += 1;
+        }
+        // Skip consecutive blank lines.
+        while line < total {
+            if self
+                .rendered_line_text(line)
+                .is_some_and(|t| !t.trim().is_empty())
+            {
+                break;
+            }
+            line += 1;
+        }
+        self.cursor_line = line;
+        self.cursor_col = 0;
+        self.clamp_and_scroll();
+    }
+
+    /// Jump cursor to the previous blank line (vim `{`).
+    fn jump_paragraph_up(&mut self) {
+        let mut line = self.cursor_line.saturating_sub(1);
+        // Skip current non-blank lines.
+        loop {
+            if self
+                .rendered_line_text(line)
+                .is_some_and(|t| t.trim().is_empty())
+            {
+                break;
+            }
+            if line == 0 {
+                self.cursor_line = 0;
+                self.cursor_col = 0;
+                self.clamp_and_scroll();
+                return;
+            }
+            line -= 1;
+        }
+        // Skip consecutive blank lines.
+        loop {
+            if self
+                .rendered_line_text(line)
+                .is_some_and(|t| !t.trim().is_empty())
+            {
+                line += 1; // land on the blank line
+                break;
+            }
+            if line == 0 {
+                break;
+            }
+            line -= 1;
+        }
+        self.cursor_line = line;
+        self.cursor_col = 0;
+        self.clamp_and_scroll();
+    }
+
+    /// Jump cursor to the start of the next word (vim `w`).
+    fn jump_word_forward(&mut self) {
+        let text = self
+            .rendered_line_text(self.cursor_line)
+            .unwrap_or_default();
+        let bytes = text.as_bytes();
+        let col = self.cursor_col;
+
+        // Skip current word chars.
+        let mut pos = col;
+        while pos < bytes.len() && !bytes[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+        // Skip whitespace.
+        while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+
+        if pos < bytes.len() {
+            self.cursor_col = pos;
+        } else {
+            // Wrap to next line.
+            self.cursor_line += 1;
+            self.cursor_col = 0;
+        }
+        self.clamp_and_scroll();
+    }
+
+    /// Jump cursor to the start of the previous word (vim `b`).
+    fn jump_word_backward(&mut self) {
+        let text = self
+            .rendered_line_text(self.cursor_line)
+            .unwrap_or_default();
+        let bytes = text.as_bytes();
+
+        if self.cursor_col == 0 {
+            // Wrap to end of previous line.
+            if self.cursor_line > 0 {
+                self.cursor_line -= 1;
+                self.cursor_col = usize::MAX;
+                self.clamp_and_scroll();
+            }
+            return;
+        }
+
+        let mut pos = self.cursor_col.min(bytes.len()).saturating_sub(1);
+        // Skip whitespace backwards.
+        while pos > 0 && bytes[pos].is_ascii_whitespace() {
+            pos -= 1;
+        }
+        // Skip word chars backwards.
+        while pos > 0 && !bytes[pos - 1].is_ascii_whitespace() {
+            pos -= 1;
+        }
+        self.cursor_col = pos;
+        self.clamp_and_scroll();
     }
 
     /// Clamp cursor to valid bounds and adjust scroll_offset so that
