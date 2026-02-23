@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'shell-tool-mcp/**'
-      - '.github/workflows/shell-tool-mcp-ci.yml'
+      - "shell-tool-mcp/**"
+      - ".github/workflows/shell-tool-mcp-ci.yml"
   push:
     branches: [main]
     paths:
-      - 'shell-tool-mcp/**'
-      - '.github/workflows/shell-tool-mcp-ci.yml'
+      - "shell-tool-mcp/**"
+      - ".github/workflows/shell-tool-mcp-ci.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}

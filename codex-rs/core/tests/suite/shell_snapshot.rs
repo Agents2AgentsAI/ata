@@ -408,29 +408,28 @@ async fn shell_command_snapshot_preserves_shell_environment_policy_set() -> Resu
     )
     .await?;
     let snapshot_path = wait_for_snapshot(&codex_home).await?;
-    let snapshot_content = wait_for_file_contents(&snapshot_path).await?;
-    assert_posix_snapshot_sections(&snapshot_content);
-
+    // Allow the async snapshot task to finish validation and publish
+    // via the watch channel, so the next turn's command handler sees it.
+    sleep(Duration::from_millis(250)).await;
     fs::write(&snapshot_path, snapshot_override_content_for_policy_test()).await?;
+
+    let command = command_asserting_policy_after_snapshot();
     let end = run_tool_turn_on_harness(
         &harness,
         "verify shell policy after snapshot",
         "shell-snapshot-policy-assert",
         "shell_command",
         json!({
-            "command": command_asserting_policy_after_snapshot(),
+            "command": command,
             "timeout_ms": 1_000,
         }),
     )
     .await?;
 
-    let stdout = normalize_newlines(&end.stdout).trim().to_string();
-    if stdout != POLICY_SUCCESS_OUTPUT {
-        assert!(
-            stdout.contains(POLICY_PATH_FOR_TEST),
-            "expected PATH to preserve policy-set entry; stdout={stdout:?}"
-        );
-    }
+    assert_eq!(
+        normalize_newlines(&end.stdout).trim(),
+        POLICY_SUCCESS_OUTPUT
+    );
     assert_eq!(end.exit_code, 0);
     assert!(snapshot_path.starts_with(codex_home));
 
@@ -460,29 +459,28 @@ async fn linux_unified_exec_snapshot_preserves_shell_environment_policy_set() ->
     )
     .await?;
     let snapshot_path = wait_for_snapshot(&codex_home).await?;
-    let snapshot_content = wait_for_file_contents(&snapshot_path).await?;
-    assert_posix_snapshot_sections(&snapshot_content);
-
+    // Allow the async snapshot task to finish validation and publish
+    // via the watch channel, so the next turn's command handler sees it.
+    sleep(Duration::from_millis(250)).await;
     fs::write(&snapshot_path, snapshot_override_content_for_policy_test()).await?;
+
+    let command = command_asserting_policy_after_snapshot();
     let end = run_tool_turn_on_harness(
         &harness,
         "verify unified exec policy after snapshot",
         "shell-snapshot-policy-assert-exec",
         "exec_command",
         json!({
-            "cmd": command_asserting_policy_after_snapshot(),
+            "cmd": command,
             "yield_time_ms": 1_000,
         }),
     )
     .await?;
 
-    let stdout = normalize_newlines(&end.stdout).trim().to_string();
-    if stdout != POLICY_SUCCESS_OUTPUT {
-        assert!(
-            stdout.contains(POLICY_PATH_FOR_TEST),
-            "expected PATH to preserve policy-set entry; stdout={stdout:?}"
-        );
-    }
+    assert_eq!(
+        normalize_newlines(&end.stdout).trim(),
+        POLICY_SUCCESS_OUTPUT
+    );
     assert_eq!(end.exit_code, 0);
     assert!(snapshot_path.starts_with(codex_home));
 
@@ -543,16 +541,16 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
         })
         .await?;
 
+    let snapshot_path = wait_for_snapshot(&codex_home).await?;
+    let snapshot_content = fs::read_to_string(&snapshot_path).await?;
+    assert_posix_snapshot_sections(&snapshot_content);
+
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     assert_eq!(
         wait_for_file_contents(&target).await?,
         "hello from snapshot\n"
     );
-
-    let snapshot_path = wait_for_snapshot(&codex_home).await?;
-    let snapshot_content = fs::read_to_string(&snapshot_path).await?;
-    assert_posix_snapshot_sections(&snapshot_content);
 
     Ok(())
 }

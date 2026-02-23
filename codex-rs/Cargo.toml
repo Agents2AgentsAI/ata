@@ -27,6 +27,7 @@ members = [
     "keyring-store",
     "file-search",
     "linux-sandbox",
+    "windows-sandbox-rs",
     "lmstudio",
     "login",
     "mcp-server",
@@ -50,6 +51,68 @@ members = [
     "utils/pty",
     "utils/readiness",
     "utils/string",
+    "codex-client",
+    "codex-api",
+    "codex-research-tools",
+    "state",
+    "codex-experimental-api-macros",
+]
+default-members = [
+    "backend-client",
+    "ansi-escape",
+    "async-utils",
+    "app-server",
+    "app-server-protocol",
+    "app-server-test-client",
+    "debug-client",
+    "apply-patch",
+    "arg0",
+    "feedback",
+    "codex-backend-openapi-models",
+    "cloud-requirements",
+    "cloud-tasks",
+    "cloud-tasks-client",
+    "cli",
+    "core",
+    "exec",
+    "exec-server",
+    "execpolicy",
+    "execpolicy-legacy",
+    "keyring-store",
+    "file-search",
+    "linux-sandbox",
+    "windows-sandbox-rs",
+    "lmstudio",
+    "login",
+    "mcp-server",
+    "network-proxy",
+    "ollama",
+    "process-hardening",
+    "protocol",
+    "rmcp-client",
+    "responses-api-proxy",
+    "stdio-to-uds",
+    "otel",
+    "tui",
+    "utils/absolute-path",
+    "utils/cargo-bin",
+    "utils/git",
+    "utils/cache",
+    "utils/image",
+    "utils/file",
+    "utils/json-to-toml",
+    "utils/home-dir",
+    "utils/pty",
+    "utils/readiness",
+    "utils/rustls-provider",
+    "utils/string",
+    "utils/cli",
+    "utils/elapsed",
+    "utils/sandbox-summary",
+    "utils/sleep-inhibitor",
+    "utils/approval-presets",
+    "utils/oss",
+    "utils/fuzzy-match",
     "codex-client",
     "codex-api",
     "state",
@@ -101,6 +164,7 @@ codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
+codex-research-tools = { path = "codex-research-tools" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-secrets = { path = "secrets" }
@@ -124,7 +188,6 @@ codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }
 codex-utils-sandbox-summary = { path = "utils/sandbox-summary" }
-codex-utils-sanitizer = { path = "utils/sanitizer" }
 codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
 codex-utils-string = { path = "utils/string" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
@@ -138,7 +201,6 @@ allocative = "0.3.3"
 ansi-to-tui = "7.0.0"
 anyhow = "1"
 arboard = { version = "3", features = ["wayland-data-control"] }
-askama = "0.15.4"
 assert_cmd = "2"
 assert_matches = "1.5.0"
 async-channel = "2.3.1"
@@ -163,7 +225,7 @@ dotenvy = "0.15.7"
 dunce = "1.0.4"
 encoding_rs = "0.8.35"
 env-flags = "0.1.1"
-env_logger = "0.11.5"
+env_logger = "0.11.9"
 eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
 globset = "0.4"
@@ -335,8 +397,6 @@ unwrap_used = "deny"
 ignored = [
     "icu_provider",
     "openssl-sys",
-    "codex-utils-readiness",
-    "codex-secrets",
 ]
 
 [profile.dev]

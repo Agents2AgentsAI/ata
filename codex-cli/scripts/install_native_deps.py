@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import zipfile
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -396,12 +397,21 @@ def _fetch_single_rg(
     return dest
 
 
-def _download_file(url: str, dest: Path) -> None:
+def _download_file(url: str, dest: Path, *, max_retries: int = 3) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.unlink(missing_ok=True)
 
-    with urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECS) as response, open(dest, "wb") as out:
-        shutil.copyfileobj(response, out)
+    for attempt in range(1, max_retries + 1):
+        dest.unlink(missing_ok=True)
+        try:
+            with urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECS) as response, open(dest, "wb") as out:
+                shutil.copyfileobj(response, out)
+            return
+        except Exception:
+            if attempt == max_retries:
+                raise
+            delay = 2 ** attempt
+            print(f"  download attempt {attempt}/{max_retries} failed, retrying in {delay}s...", flush=True)
+            time.sleep(delay)
 
 
 def extract_archive(

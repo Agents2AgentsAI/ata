@@ -50,10 +50,10 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
 
     let expected_models = vec![
         Model {
-            id: "gpt-5.2-codex".to_string(),
-            model: "gpt-5.2-codex".to_string(),
+            id: "gpt-5.3-codex".to_string(),
+            model: "gpt-5.3-codex".to_string(),
             upgrade: None,
-            display_name: "gpt-5.2-codex".to_string(),
+            display_name: "gpt-5.3-codex".to_string(),
             description: "Latest frontier agentic coding model.".to_string(),
             hidden: false,
             supported_reasoning_efforts: vec![
@@ -81,9 +81,40 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             is_default: true,
         },
         Model {
+            id: "gpt-5.2-codex".to_string(),
+            model: "gpt-5.2-codex".to_string(),
+            upgrade: Some("gpt-5.3-codex".to_string()),
+            display_name: "gpt-5.2-codex".to_string(),
+            description: "Frontier agentic coding model.".to_string(),
+            hidden: false,
+            supported_reasoning_efforts: vec![
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Low,
+                    description: "Fast responses with lighter reasoning".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Medium,
+                    description: "Balances speed and reasoning depth for everyday tasks"
+                        .to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::High,
+                    description: "Greater reasoning depth for complex problems".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::XHigh,
+                    description: "Extra high reasoning depth for complex problems".to_string(),
+                },
+            ],
+            default_reasoning_effort: ReasoningEffort::Medium,
+            input_modalities: vec![InputModality::Text, InputModality::Image],
+            supports_personality: false,
+            is_default: false,
+        },
+        Model {
             id: "gpt-5.1-codex-max".to_string(),
             model: "gpt-5.1-codex-max".to_string(),
-            upgrade: Some("gpt-5.2-codex".to_string()),
+            upgrade: Some("gpt-5.3-codex".to_string()),
             display_name: "gpt-5.1-codex-max".to_string(),
             description: "Ata-optimized flagship for deep and fast reasoning.".to_string(),
             hidden: false,
@@ -114,7 +145,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
         Model {
             id: "gpt-5.1-codex-mini".to_string(),
             model: "gpt-5.1-codex-mini".to_string(),
-            upgrade: Some("gpt-5.2-codex".to_string()),
+            upgrade: Some("gpt-5.3-codex".to_string()),
             display_name: "gpt-5.1-codex-mini".to_string(),
             description: "Optimized for codex. Cheaper, faster, but less capable.".to_string(),
             hidden: false,
@@ -137,7 +168,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
         Model {
             id: "gpt-5.2".to_string(),
             model: "gpt-5.2".to_string(),
-            upgrade: Some("gpt-5.2-codex".to_string()),
+            upgrade: Some("gpt-5.3-codex".to_string()),
             display_name: "gpt-5.2".to_string(),
             description:
                 "Latest frontier model with improvements across knowledge, reasoning and coding"
@@ -173,10 +204,10 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
         },
         // Anthropic Claude models
         Model {
-            id: "claude-sonnet-4-5".to_string(),
-            model: "claude-sonnet-4-5".to_string(),
+            id: "claude-sonnet-4-6".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
             upgrade: None,
-            display_name: "Claude Sonnet 4-5".to_string(),
+            display_name: "Claude Sonnet 4-6".to_string(),
             description: "Anthropic's balanced model for coding tasks.".to_string(),
             hidden: false,
             supported_reasoning_efforts: vec![
@@ -241,6 +272,32 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::Low,
                     description: "Fast responses with lighter reasoning".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::High,
+                    description: "Deep reasoning for complex problems".to_string(),
+                },
+            ],
+            default_reasoning_effort: ReasoningEffort::Medium,
+            input_modalities: vec![InputModality::Text, InputModality::Image],
+            supports_personality: false,
+            is_default: false,
+        },
+        Model {
+            id: "gemini-3.1-pro-preview".to_string(),
+            model: "gemini-3.1-pro-preview".to_string(),
+            upgrade: None,
+            display_name: "Gemini 3.1 Pro".to_string(),
+            description: "Google's advanced model for complex tasks.".to_string(),
+            hidden: false,
+            supported_reasoning_efforts: vec![
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Low,
+                    description: "Fast responses with lighter reasoning".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Medium,
+                    description: "Balanced reasoning for everyday tasks".to_string(),
                 },
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::High,
@@ -349,7 +406,7 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(first_response)?;
 
     assert_eq!(first_items.len(), 1);
-    assert_eq!(first_items[0].id, "gpt-5.2-codex");
+    assert_eq!(first_items[0].id, "gpt-5.3-codex");
     let next_cursor = first_cursor.ok_or_else(|| anyhow!("cursor for second page"))?;
 
     let second_request = mcp
@@ -372,7 +429,7 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(second_response)?;
 
     assert_eq!(second_items.len(), 1);
-    assert_eq!(second_items[0].id, "gpt-5.1-codex-max");
+    assert_eq!(second_items[0].id, "gpt-5.2-codex");
     let third_cursor = second_cursor.ok_or_else(|| anyhow!("cursor for third page"))?;
 
     let third_request = mcp
@@ -395,7 +452,7 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(third_response)?;
 
     assert_eq!(third_items.len(), 1);
-    assert_eq!(third_items[0].id, "gpt-5.1-codex-mini");
+    assert_eq!(third_items[0].id, "gpt-5.1-codex-max");
     let fourth_cursor = third_cursor.ok_or_else(|| anyhow!("cursor for fourth page"))?;
 
     let fourth_request = mcp
@@ -418,10 +475,10 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(fourth_response)?;
 
     assert_eq!(fourth_items.len(), 1);
-    assert_eq!(fourth_items[0].id, "gpt-5.2");
+    assert_eq!(fourth_items[0].id, "gpt-5.1-codex-mini");
     let fifth_cursor = fourth_cursor.ok_or_else(|| anyhow!("cursor for fifth page"))?;
 
-    // Fifth page: claude-sonnet-4-5
+    // Fifth page: gpt-5.2
     let fifth_request = mcp
         .send_list_models_request(ModelListParams {
             limit: Some(1),
@@ -442,10 +499,10 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(fifth_response)?;
 
     assert_eq!(fifth_items.len(), 1);
-    assert_eq!(fifth_items[0].id, "claude-sonnet-4-5");
+    assert_eq!(fifth_items[0].id, "gpt-5.2");
     let sixth_cursor = fifth_cursor.ok_or_else(|| anyhow!("cursor for sixth page"))?;
 
-    // Sixth page: claude-opus-4-6
+    // Sixth page: claude-sonnet-4-6
     let sixth_request = mcp
         .send_list_models_request(ModelListParams {
             limit: Some(1),
@@ -466,10 +523,10 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(sixth_response)?;
 
     assert_eq!(sixth_items.len(), 1);
-    assert_eq!(sixth_items[0].id, "claude-opus-4-6");
+    assert_eq!(sixth_items[0].id, "claude-sonnet-4-6");
     let seventh_cursor = sixth_cursor.ok_or_else(|| anyhow!("cursor for seventh page"))?;
 
-    // Seventh page: gemini-3-pro-preview
+    // Seventh page: claude-opus-4-6
     let seventh_request = mcp
         .send_list_models_request(ModelListParams {
             limit: Some(1),
@@ -490,10 +547,10 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(seventh_response)?;
 
     assert_eq!(seventh_items.len(), 1);
-    assert_eq!(seventh_items[0].id, "gemini-3-pro-preview");
+    assert_eq!(seventh_items[0].id, "claude-opus-4-6");
     let eighth_cursor = seventh_cursor.ok_or_else(|| anyhow!("cursor for eighth page"))?;
 
-    // Eighth page: gemini-3-flash-preview (last)
+    // Eighth page: gemini-3-pro-preview
     let eighth_request = mcp
         .send_list_models_request(ModelListParams {
             limit: Some(1),
@@ -514,8 +571,56 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(eighth_response)?;
 
     assert_eq!(eighth_items.len(), 1);
-    assert_eq!(eighth_items[0].id, "gemini-3-flash-preview");
-    assert!(eighth_cursor.is_none());
+    assert_eq!(eighth_items[0].id, "gemini-3-pro-preview");
+    let ninth_cursor = eighth_cursor.ok_or_else(|| anyhow!("cursor for ninth page"))?;
+
+    // Ninth page: gemini-3.1-pro-preview
+    let ninth_request = mcp
+        .send_list_models_request(ModelListParams {
+            limit: Some(1),
+            cursor: Some(ninth_cursor.clone()),
+            include_hidden: None,
+        })
+        .await?;
+
+    let ninth_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(ninth_request)),
+    )
+    .await??;
+
+    let ModelListResponse {
+        data: ninth_items,
+        next_cursor: ninth_cursor,
+    } = to_response::<ModelListResponse>(ninth_response)?;
+
+    assert_eq!(ninth_items.len(), 1);
+    assert_eq!(ninth_items[0].id, "gemini-3.1-pro-preview");
+    let tenth_cursor = ninth_cursor.ok_or_else(|| anyhow!("cursor for tenth page"))?;
+
+    // Tenth page: gemini-3-flash-preview (last)
+    let tenth_request = mcp
+        .send_list_models_request(ModelListParams {
+            limit: Some(1),
+            cursor: Some(tenth_cursor.clone()),
+            include_hidden: None,
+        })
+        .await?;
+
+    let tenth_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(tenth_request)),
+    )
+    .await??;
+
+    let ModelListResponse {
+        data: tenth_items,
+        next_cursor: tenth_cursor,
+    } = to_response::<ModelListResponse>(tenth_response)?;
+
+    assert_eq!(tenth_items.len(), 1);
+    assert_eq!(tenth_items[0].id, "gemini-3-flash-preview");
+    assert!(tenth_cursor.is_none());
     Ok(())
 }
 

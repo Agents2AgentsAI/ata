@@ -3,7 +3,6 @@
 <p align="center">
   <img src="https://github.com/Agents2AgentsAI/ata/blob/main/.github/cli-splash.png" alt="Ata CLI splash" width="80%" />
 
-
 ---
 
 ## Quickstart
@@ -13,11 +12,13 @@
 Install globally with your preferred package manager:
 
 Install using npm
+
 ```shell
 npm install -g @a2a-ai/ata
 ```
 
 Install using curl (macOS/Linux)
+
 ```shell
 curl -fsSL https://agents2agents.ai/ata/install.sh | sh
 ```
@@ -47,5 +48,6 @@ You can use `ata` with ChatGPT plan or OpenAI, Anthropic, or Gemini API key. All
 
 - **Coming soon** - consult [Ata docs](https://github.com/Agents2AgentsAI/ata/tree/main/docs) for now
 - [**Installing & building**](./docs/install.md)
+- [**Setting up Zotero**](./docs/zotero-setup.md)
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).

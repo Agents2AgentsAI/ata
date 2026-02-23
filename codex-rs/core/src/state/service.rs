@@ -10,11 +10,13 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::file_watcher::FileWatcher;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
+use crate::research::SharedResearchToolkit;
 use crate::skills::SkillsManager;
 use crate::state_db::StateDbHandle;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
+use crate::zsh_exec_bridge::ZshExecBridge;
 use codex_api::file_support::FileReferenceCache;
 use codex_hooks::Hooks;
 use codex_otel::OtelManager;
@@ -29,6 +31,7 @@ pub(crate) struct SessionServices {
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     pub(crate) file_reference_cache: Mutex<FileReferenceCache>,
     pub(crate) file_upload_http_client: reqwest::Client,
+    pub(crate) zsh_exec_bridge: ZshExecBridge,
     pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) hooks: Hooks,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,
@@ -38,6 +41,7 @@ pub(crate) struct SessionServices {
     pub(crate) exec_policy: ExecPolicyManager,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
+    pub(crate) research_toolkit: Option<Arc<SharedResearchToolkit>>,
     pub(crate) otel_manager: OtelManager,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
     pub(crate) skills_manager: Arc<SkillsManager>,

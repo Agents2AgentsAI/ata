@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use codex_protocol::ThreadId;
-use codex_utils_sanitizer::redact_secrets;
+use codex_secrets::redact_secrets;
 use rand::Rng;
 use tracing::debug;
 use tracing::error;

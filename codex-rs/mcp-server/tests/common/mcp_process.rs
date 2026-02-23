@@ -149,7 +149,7 @@ impl McpProcess {
 
         let initialized = self.read_jsonrpc_message().await?;
         let os_info = os_info::get();
-        let build_version = env!("CARGO_PKG_VERSION");
+        let build_version = codex_core::models_manager::OPENAI_MODELS_CLIENT_VERSION;
         let originator = codex_core::default_client::originator().value;
         let user_agent = format!(
             "{originator}/{build_version} ({} {}; {}) {} (elicitation test; 0.0.0)",

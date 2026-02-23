@@ -241,6 +241,7 @@ fn map_code_assist_model(model: &str) -> &str {
         // Code Assist currently does not accept Gemini 3 preview aliases.
         "gemini-3-flash-preview" | "gemini-3-flash" => "gemini-2.5-flash",
         "gemini-3-pro-preview" | "gemini-3-pro" => "gemini-2.5-pro",
+        "gemini-3.1-pro-preview" | "gemini-3.1-pro" => "gemini-2.5-pro",
         _ => model,
     }
 }
@@ -499,6 +500,10 @@ mod tests {
         );
         assert_eq!(
             map_code_assist_model("gemini-3-pro-preview"),
+            "gemini-2.5-pro"
+        );
+        assert_eq!(
+            map_code_assist_model("gemini-3.1-pro-preview"),
             "gemini-2.5-pro"
         );
     }

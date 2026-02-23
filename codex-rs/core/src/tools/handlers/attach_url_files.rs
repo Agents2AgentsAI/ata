@@ -796,12 +796,15 @@ mod tests {
             shell_type: codex_protocol::openai_models::ConfigShellToolType::Disabled,
             apply_patch_tool_type: None,
             web_search_mode: None,
+            agent_roles: BTreeMap::new(),
             search_tool: false,
             collab_tools: false,
             collaboration_modes_tools: false,
             js_repl_enabled: false,
             js_repl_tools_only: false,
             experimental_supported_tools: Vec::new(),
+            allow_login_shell: false,
+            features: crate::features::Features::with_defaults(),
         }
     }
 }

@@ -4,7 +4,7 @@
   "description": "TypeScript SDK for Ata APIs.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Agents2AgentsAI/codex.git",
+    "url": "git+https://github.com/Agents2AgentsAI/ata.git",
     "directory": "sdk/typescript"
   },
   "keywords": [

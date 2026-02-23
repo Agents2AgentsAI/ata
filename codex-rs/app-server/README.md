@@ -1,6 +1,6 @@
 # codex-app-server
 
-`codex app-server` is the interface Codex uses to power rich interfaces such as the [Ata VS Code extension](https://marketplace.visualstudio.com/items?itemName=a2a-ai.ata).
+`codex app-server` is the interface Ata uses to power rich interfaces such as the [Ata VS Code extension](https://marketplace.visualstudio.com/items?itemName=a2a-ai.ata).
 
 ## Table of Contents
 
@@ -28,6 +28,11 @@ Supported transports:
 
 Websocket transport is currently experimental and unsupported. Do not rely on it for production workloads.
 
+Tracing/log output:
+
+- `RUST_LOG` controls log filtering/verbosity.
+- Set `LOG_FORMAT=json` to emit app-server tracing logs to `stderr` as JSON (one event per line).
+
 Backpressure behavior:
 
 - The server uses bounded queues between transport ingress, request processing, and outbound writes.
@@ -36,7 +41,7 @@ Backpressure behavior:
 
 ## Message Schema
 
-Currently, you can dump a TypeScript version of the schema using `codex app-server generate-ts`, or a JSON Schema bundle via `codex app-server generate-json-schema`. Each output is specific to the version of Codex you used to run the command, so the generated artifacts are guaranteed to match that version.
+Currently, you can dump a TypeScript version of the schema using `codex app-server generate-ts`, or a JSON Schema bundle via `codex app-server generate-json-schema`. Each output is specific to the version of Ata you used to run the command, so the generated artifacts are guaranteed to match that version.
 
 ```
 codex app-server generate-ts --out DIR
@@ -45,9 +50,9 @@ codex app-server generate-json-schema --out DIR
 
 ## Core Primitives
 
-The API exposes three top level primitives representing an interaction between a user and Codex:
+The API exposes three top level primitives representing an interaction between a user and Ata:
 
-- **Thread**: A conversation between a user and the Codex agent. Each thread contains multiple turns.
+- **Thread**: A conversation between a user and the Ata agent. Each thread contains multiple turns.
 - **Turn**: One turn of the conversation, typically starting with a user message and finishing with an agent message. Each turn contains multiple items.
 - **Item**: Represents user inputs and agent outputs as part of the turn, persisted and used as the context for future conversations. Example items include user message, agent reasoning, agent message, shell command, file edit, etc.
 
@@ -56,9 +61,9 @@ Use the thread APIs to create, list, or archive conversations. Drive a conversat
 ## Lifecycle Overview
 
 - Initialize once per connection: Immediately after opening a transport connection, send an `initialize` request with your client metadata, then emit an `initialized` notification. Any other request on that connection before this handshake gets rejected.
-- Start (or resume) a thread: Call `thread/start` to open a fresh conversation. The response returns the thread object and you’ll also get a `thread/started` notification. If you’re continuing an existing conversation, call `thread/resume` with its ID instead. If you want to branch from an existing conversation, call `thread/fork` to create a new thread id with copied history.
+- Start (or resume) a thread: Call `thread/start` to open a fresh conversation. The response returns the thread object and you'll also get a `thread/started` notification. If you're continuing an existing conversation, call `thread/resume` with its ID instead. If you want to branch from an existing conversation, call `thread/fork` to create a new thread id with copied history.
 - Begin a turn: To send user input, call `turn/start` with the target `threadId` and the user's input. Optional fields let you override model, cwd, sandbox policy, etc. This immediately returns the new turn object and triggers a `turn/started` notification.
-- Stream events: After `turn/start`, keep reading JSON-RPC notifications on stdout. You’ll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning notes).
+- Stream events: After `turn/start`, keep reading JSON-RPC notifications on stdout. You'll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning notes).
 - Finish the turn: When the model is done (or the turn is interrupted via making the `turn/interrupt` call), the server sends `turn/completed` with the final turn state and token usage.
 
 ## Initialization
@@ -117,33 +122,35 @@ Example with notification opt-out:
 - `thread/start` — create a new thread; emits `thread/started` and auto-subscribes you to turn/item events for that thread.
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it.
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; emits `thread/started` and auto-subscribes you to turn/item events for the new thread.
-- `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, and `cwd` filters.
+- `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, and `cwd` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
-- `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`.
-- `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
-- `thread/name/set` — set or update a thread’s user-facing name; returns `{}` on success. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
-- `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success.
+- `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
+- `thread/status/changed` — notification emitted when a loaded thread's status changes (`threadId` + new `status`).
+- `thread/archive` — move a thread's rollout file into the archived directory; returns `{}` on success and emits `thread/archived`.
+- `thread/name/set` — set or update a thread's user-facing name; returns `{}` on success. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
+- `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
-- `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
-- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
+- `thread/rollback` — drop the last N turns from the agent's in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
+- `turn/start` — add user input to a thread and begin Ata generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 - `turn/steer` — add user input to an already in-flight turn without starting a new turn; returns the active `turnId` that accepted the input.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
-- `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
+- `review/start` — kick off Ata's automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with reasoning effort options and optional `upgrade` model ids.
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination).
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
-- `skills/remote/read` — list public remote skills (**under development; do not call from production clients yet**).
-- `skills/remote/write` — download a public remote skill by `hazelnutId`; `isPreload=true` writes to `.ata/vendor_imports/skills` under `codex_home` (**under development; do not call from production clients yet**).
+- `skills/remote/list` — list public remote skills (**under development; do not call from production clients yet**).
+- `skills/remote/export` — download a remote skill by `hazelnutId` into `skills` under `codex_home` (**under development; do not call from production clients yet**).
 - `app/list` — list available apps.
 - `skills/config/write` — write user-level skill config by path.
 - `mcpServer/oauth/login` — start an OAuth login for a configured MCP server; returns an `authorization_url` and later emits `mcpServer/oauthLogin/completed` once the browser flow finishes.
 - `tool/requestUserInput` — prompt the user with 1–3 short questions for a tool call and return their answers (experimental).
 - `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools, resources, resource templates, and auth status; supports cursor+limit pagination.
-- `feedback/upload` — submit a feedback report (classification + optional reason/logs and conversation_id); requires `[feedback].enabled = true` and returns the tracking thread id.
+- `windowsSandbox/setupStart` — start Windows sandbox setup for the selected mode (`elevated` or `unelevated`); returns `{ started: true }` immediately and later emits `windowsSandbox/setupCompleted`.
+- `feedback/upload` — submit a feedback report (classification + optional reason/logs, conversation_id, and optional `extraLogFiles` attachments array); requires `[feedback].enabled = true` and returns the tracking thread id.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `config/read` — fetch the effective config on disk after resolving config layering.
 - `config/value/write` — write a single config key/value to the user's config.toml on disk.
@@ -152,7 +159,7 @@ Example with notification opt-out:
 
 ### Example: Start or resume a thread
 
-Start a fresh thread when you need a new Codex conversation.
+Start a fresh thread when you need a new Ata conversation.
 
 ```json
 { "method": "thread/start", "id": 10, "params": {
@@ -222,6 +229,7 @@ Experimental API: `thread/start`, `thread/resume`, and `thread/fork` accept `per
 - `sourceKinds` — restrict results to specific sources; omit or pass `[]` for interactive sessions only (`cli`, `vscode`).
 - `archived` — when `true`, list archived threads only. When `false` or `null`, list non-archived threads (default).
 - `cwd` — restrict results to threads whose session cwd exactly matches this path.
+- Responses include `agentNickname` and `agentRole` for AgentControl-spawned thread sub-agents when available.
 
 Example:
 
@@ -233,14 +241,14 @@ Example:
 } }
 { "id": 20, "result": {
     "data": [
-        { "id": "thr_a", "preview": "Create a TUI", "modelProvider": "openai", "createdAt": 1730831111, "updatedAt": 1730831111 },
-        { "id": "thr_b", "preview": "Fix tests", "modelProvider": "openai", "createdAt": 1730750000, "updatedAt": 1730750000 }
+        { "id": "thr_a", "preview": "Create a TUI", "modelProvider": "openai", "createdAt": 1730831111, "updatedAt": 1730831111, "status": { "type": "notLoaded" }, "agentNickname": "Atlas", "agentRole": "explorer" },
+        { "id": "thr_b", "preview": "Fix tests", "modelProvider": "openai", "createdAt": 1730750000, "updatedAt": 1730750000, "status": { "type": "notLoaded" } }
     ],
     "nextCursor": "opaque-token-or-null"
 } }
 ```
 
-When `nextCursor` is `null`, you’ve reached the final page.
+When `nextCursor` is `null`, you've reached the final page.
 
 ### Example: List loaded threads
 
@@ -253,18 +261,36 @@ When `nextCursor` is `null`, you’ve reached the final page.
 } }
 ```
 
+### Example: Track thread status changes
+
+`thread/status/changed` is emitted whenever a loaded thread's status changes:
+
+- Includes `threadId` and the new `status`.
+- Status can be `notLoaded`, `idle`, `systemError`, or `active` (with `activeFlags`; `active` implies running).
+
+```json
+{ "method": "thread/status/changed", "params": {
+    "threadId": "thr_123",
+    "status": { "type": "active", "activeFlags": [] }
+} }
+```
+
 ### Example: Read a thread
 
-Use `thread/read` to fetch a stored thread by id without resuming it. Pass `includeTurns` when you want the rollout history loaded into `thread.turns`.
+Use `thread/read` to fetch a stored thread by id without resuming it. Pass `includeTurns` when you want the rollout history loaded into `thread.turns`. The returned thread includes `agentNickname` and `agentRole` for AgentControl-spawned thread sub-agents when available.
 
 ```json
 { "method": "thread/read", "id": 22, "params": { "threadId": "thr_123" } }
-{ "id": 22, "result": { "thread": { "id": "thr_123", "turns": [] } } }
+{ "id": 22, "result": {
+    "thread": { "id": "thr_123", "status": { "type": "notLoaded" }, "turns": [] }
+} }
 ```
 
 ```json
 { "method": "thread/read", "id": 23, "params": { "threadId": "thr_123", "includeTurns": true } }
-{ "id": 23, "result": { "thread": { "id": "thr_123", "turns": [ ... ] } } }
+{ "id": 23, "result": {
+    "thread": { "id": "thr_123", "status": { "type": "notLoaded" }, "turns": [ ... ] }
+} }
 ```
 
 ### Example: Archive a thread
@@ -274,6 +300,7 @@ Use `thread/archive` to move the persisted rollout (stored as a JSONL file on di
 ```json
 { "method": "thread/archive", "id": 21, "params": { "threadId": "thr_b" } }
 { "id": 21, "result": {} }
+{ "method": "thread/archived", "params": { "threadId": "thr_b" } }
 ```
 
 An archived thread will not appear in `thread/list` unless `archived` is set to `true`.
@@ -285,6 +312,7 @@ Use `thread/unarchive` to move an archived rollout back into the sessions direct
 ```json
 { "method": "thread/unarchive", "id": 24, "params": { "threadId": "thr_b" } }
 { "id": 24, "result": { "thread": { "id": "thr_b" } } }
+{ "method": "thread/unarchived", "params": { "threadId": "thr_b" } }
 ```
 
 ### Example: Trigger thread compaction
@@ -305,7 +333,7 @@ While compaction is running, the thread is effectively in a turn so clients shou
 
 ### Example: Start a turn (send user input)
 
-Turns attach user input (text or images) to a thread and trigger Codex generation. The `input` field is a list of discriminated unions:
+Turns attach user input (text or images) to a thread and trigger Ata generation. The `input` field is a list of discriminated unions:
 
 - `{"type":"text","text":"Explain this diff"}`
 - `{"type":"image","url":"https://…png"}`
@@ -397,7 +425,7 @@ You can cancel a running Turn with `turn/interrupt`.
 { "id": 31, "result": {} }
 ```
 
-The server requests cancellations for running subprocesses, then emits a `turn/completed` event with `status: "interrupted"`. Rely on the `turn/completed` to know when Codex-side cleanup is done.
+The server requests cancellations for running subprocesses, then emits a `turn/completed` event with `status: "interrupted"`. Rely on the `turn/completed` to know when Ata-side cleanup is done.
 
 ### Example: Clean background terminals
 
@@ -428,15 +456,15 @@ Use `turn/steer` to append additional user input to the currently active turn. T
 
 ### Example: Request a code review
 
-Use `review/start` to run Codex’s reviewer on the currently checked-out project. The request takes the thread id plus a `target` describing what should be reviewed:
+Use `review/start` to run Ata's reviewer on the currently checked-out project. The request takes the thread id plus a `target` describing what should be reviewed:
 
 - `{"type":"uncommittedChanges"}` — staged, unstaged, and untracked files.
-- `{"type":"baseBranch","branch":"main"}` — diff against the provided branch’s upstream (see prompt for the exact `git merge-base`/`git diff` instructions Codex will run).
+- `{"type":"baseBranch","branch":"main"}` — diff against the provided branch's upstream (see prompt for the exact `git merge-base`/`git diff` instructions Ata will run).
 - `{"type":"commit","sha":"abc1234","title":"Optional subject"}` — review a specific commit.
 - `{"type":"custom","instructions":"Free-form reviewer instructions"}` — fallback prompt equivalent to the legacy manual review request.
 - `delivery` (`"inline"` or `"detached"`, default `"inline"`) — where the review runs:
-  - `"inline"`: run the review as a new turn on the existing thread. The response’s `reviewThreadId` equals the original `threadId`, and no new `thread/started` notification is emitted.
-  - `"detached"`: fork a new review thread from the parent conversation and run the review there. The response’s `reviewThreadId` is the id of this new review thread, and the server emits a `thread/started` notification for it before streaming review items.
+  - `"inline"`: run the review as a new turn on the existing thread. The response's `reviewThreadId` equals the original `threadId`, and no new `thread/started` notification is emitted.
+  - `"detached"`: fork a new review thread from the parent conversation and run the review there. The response's `reviewThreadId` is the id of this new review thread, and the server emits a `thread/started` notification for it before streaming review items.
 
 Example request/response:
 
@@ -461,7 +489,7 @@ Example request/response:
 
 For a detached review, use `"delivery": "detached"`. The response is the same shape, but `reviewThreadId` will be the id of the new review thread (different from the original `threadId`). The server also emits a `thread/started` notification for that new thread before streaming the review turn.
 
-Codex streams the usual `turn/started` notification followed by an `item/started`
+Ata streams the usual `turn/started` notification followed by an `item/started`
 with an `enteredReviewMode` item so clients can show progress:
 
 ```json
@@ -497,7 +525,7 @@ The `review` string is plain text that already bundles the overall explanation p
 
 ### Example: One-off command execution
 
-Run a standalone command (argv vector) in the server’s sandbox without creating a thread or turn:
+Run a standalone command (argv vector) in the server's sandbox without creating a thread or turn:
 
 ```json
 { "method": "command/exec", "id": 32, "params": {
@@ -509,7 +537,7 @@ Run a standalone command (argv vector) in the server’s sandbox without creatin
 { "id": 32, "result": { "exitCode": 0, "stdout": "...", "stderr": "" } }
 ```
 
-- For clients that are already sandboxed externally, set `sandboxPolicy` to `{"type":"externalSandbox","networkAccess":"enabled"}` (or omit `networkAccess` to keep it restricted). Codex will not enforce its own sandbox in this mode; it tells the model it has full file-system access and passes the `networkAccess` state through `environment_context`.
+- For clients that are already sandboxed externally, set `sandboxPolicy` to `{"type":"externalSandbox","networkAccess":"enabled"}` (or omit `networkAccess` to keep it restricted). Ata will not enforce its own sandbox in this mode; it tells the model it has full file-system access and passes the `networkAccess` state through `environment_context`.
 
 Notes:
 
@@ -519,7 +547,7 @@ Notes:
 
 ## Events
 
-Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `turn/*`, and `item/*` notifications.
+Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `thread/archived`, `thread/unarchived`, `turn/*`, and `item/*` notifications.
 
 ### Notification opt-out
 
@@ -542,6 +570,10 @@ The fuzzy file search session API emits per-query notifications:
 - `fuzzyFileSearch/sessionUpdated` — `{ sessionId, query, files }` with the current matching files for the active query.
 - `fuzzyFileSearch/sessionCompleted` — `{ sessionId, query }` once indexing/matching for that query has completed.
 
+### Windows sandbox setup events
+
+- `windowsSandbox/setupCompleted` — `{ mode, success, error }` after a `windowsSandbox/setupStart` request finishes.
+
 ### Turn events
 
 The app-server streams JSON-RPC notifications while a turn is running. Each turn starts with `turn/started` (initial `turn`) and ends with `turn/completed` (final `turn` status). Token usage events stream separately via `thread/tokenUsage/updated`. Clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
@@ -550,6 +582,7 @@ The app-server streams JSON-RPC notifications while a turn is running. Each turn
 - `turn/completed` — `{ turn }` where `turn.status` is `completed`, `interrupted`, or `failed`; failures carry `{ error: { message, codexErrorInfo?, additionalDetails? } }`.
 - `turn/diff/updated` — `{ threadId, turnId, diff }` represents the up-to-date snapshot of the turn-level unified diff, emitted after every FileChange item. `diff` is the latest aggregated unified diff across every file change in the turn. UIs can render this to show the full "what changed" view without stitching individual `fileChange` items.
 - `turn/plan/updated` — `{ turnId, explanation?, plan }` whenever the agent shares or changes its plan; each `plan` entry is `{ step, status }` with `status` in `pending`, `inProgress`, or `completed`.
+- `model/rerouted` — `{ threadId, turnId, fromModel, toModel, reason }` when the backend reroutes a request to a different model (for example, due to high-risk cyber safety checks).
 
 Today both notifications carry an empty `items` array even when item events were streamed; rely on `item/*` notifications for the canonical item list until this is fixed.
 
@@ -557,7 +590,7 @@ Today both notifications carry an empty `items` array even when item events were
 
 `ThreadItem` is the tagged union carried in turn responses and `item/*` notifications. Currently we support events for the following items:
 
-- `userMessage` — `{id, content}` where `content` is a list of user inputs (`text`, `image`, or `localImage`). Cyber model-routing warnings are surfaced as synthetic `userMessage` items with `text` prefixed by `Warning:`.
+- `userMessage` — `{id, content}` where `content` is a list of user inputs (`text`, `image`, or `localImage`).
 - `agentMessage` — `{id, text}` containing the accumulated agent reply.
 - `plan` — `{id, text}` emitted for plan-mode turns; plan text can stream via `item/plan/delta` (experimental).
 - `reasoning` — `{id, summary, content}` where `summary` holds streamed reasoning summaries (applicable for most OpenAI models) and `content` holds raw reasoning blocks (applicable for e.g. open source models).
@@ -569,8 +602,8 @@ Today both notifications carry an empty `items` array even when item events were
 - `imageView` — `{id, path}` emitted when the agent invokes the image viewer tool.
 - `enteredReviewMode` — `{id, review}` sent when the reviewer starts; `review` is a short user-facing label such as `"current changes"` or the requested target description.
 - `exitedReviewMode` — `{id, review}` emitted when the reviewer finishes; `review` is the full plain-text review (usually, overall notes plus bullet point findings).
-- `contextCompaction` — `{id}` emitted when codex compacts the conversation history. This can happen automatically.
-- `compacted` - `{threadId, turnId}` when codex compacts the conversation history. This can happen automatically. **Deprecated:** Use `contextCompaction` instead.
+- `contextCompaction` — `{id}` emitted when Ata compacts the conversation history. This can happen automatically.
+- `compacted` - `{threadId, turnId}` when Ata compacts the conversation history. This can happen automatically. **Deprecated:** Use `contextCompaction` instead.
 
 All items emit two shared lifecycle events:
 
@@ -624,7 +657,7 @@ When an upstream HTTP status is available (for example, from the Responses API o
 
 ## Approvals
 
-Certain actions (shell commands or modifying files) may require explicit user approval depending on the user's config. When `turn/start` is used, the app-server drives an approval flow by sending a server-initiated JSON-RPC request to the client. The client must respond to tell Codex whether to proceed. UIs should present these requests inline with the active turn so users can review the proposed command or diff before choosing.
+Certain actions (shell commands or modifying files) may require explicit user approval depending on the user's config. When `turn/start` is used, the app-server drives an approval flow by sending a server-initiated JSON-RPC request to the client. The client must respond to tell Ata whether to proceed. UIs should present these requests inline with the active turn so users can review the proposed command or diff before choosing.
 
 - Requests include `threadId` and `turnId`—use them to scope UI state to the active conversation.
 - Respond with a single `{ "decision": "accept" | "decline" }` payload (plus optional `acceptSettings` on command executions). The server resumes or declines the work and ends the item with `item/completed`.
@@ -634,7 +667,7 @@ Certain actions (shell commands or modifying files) may require explicit user ap
 Order of messages:
 
 1. `item/started` — shows the pending `commandExecution` item with `command`, `cwd`, and other fields so you can render the proposed action.
-2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `reason`, plus `command`, `cwd`, and `commandActions` for friendly display.
+2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `approvalId` (for subcommand callbacks), and `reason`. For normal command approvals, it also includes `command`, `cwd`, and `commandActions` for friendly display. For network-only approvals, those command fields may be omitted and `networkApprovalContext` is provided instead.
 3. Client response — `{ "decision": "accept", "acceptSettings": { "forSession": false } }` or `{ "decision": "decline" }`.
 4. `item/completed` — final `commandExecution` item with `status: "completed" | "failed" | "declined"` and execution output. Render this as the authoritative result.
 
@@ -739,11 +772,11 @@ Entries whose `cwd` is not present in `cwds` are ignored.
         "skills": [
             {
               "name": "skill-creator",
-              "description": "Create or update a Codex skill",
+              "description": "Create or update an Ata skill",
               "enabled": true,
               "interface": {
                 "displayName": "Skill Creator",
-                "shortDescription": "Create or update a Codex skill",
+                "shortDescription": "Create or update an Ata skill",
                 "iconSmall": "icon.svg",
                 "iconLarge": "icon-large.svg",
                 "brandColor": "#111111",
@@ -771,7 +804,7 @@ To enable or disable a skill by path:
 
 ## Apps
 
-Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, whether it is currently accessible, and whether it is enabled in config.
+Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, `branding`, `appMetadata`, `labels`, whether it is currently accessible, and whether it is enabled in config.
 
 ```json
 { "method": "app/list", "id": 50, "params": {
@@ -789,6 +822,9 @@ Use `app/list` to fetch available apps (connectors). Each entry includes metadat
             "logoUrl": "https://example.com/demo-app.png",
             "logoUrlDark": null,
             "distributionChannel": null,
+            "branding": null,
+            "appMetadata": null,
+            "labels": null,
             "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
             "isAccessible": true,
             "isEnabled": true
@@ -816,6 +852,9 @@ The server also emits `app/list/updated` notifications whenever either source (a
         "logoUrl": "https://example.com/demo-app.png",
         "logoUrlDark": null,
         "distributionChannel": null,
+        "branding": null,
+        "appMetadata": null,
+        "labels": null,
         "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
         "isAccessible": true,
         "isEnabled": true
@@ -856,11 +895,11 @@ The JSON-RPC auth/account surface exposes request/response methods plus server-i
 
 ### Authentication modes
 
-Codex supports these authentication modes. The current mode is surfaced in `account/updated` (`authMode`) and can be inferred from `account/read`.
+Ata supports these authentication modes. The current mode is surfaced in `account/updated` (`authMode`) and can be inferred from `account/read`.
 
 - **API key (`apiKey`)**: Caller supplies an OpenAI API key via `account/login/start` with `type: "apiKey"`. The API key is saved and used for API requests.
-- **ChatGPT managed (`chatgpt`)** (recommended): Codex owns the ChatGPT OAuth flow and refresh tokens. Start via `account/login/start` with `type: "chatgpt"`; Codex persists tokens to disk and refreshes them automatically.
-- **Gemini managed (`gemini`)**: Codex owns the Google OAuth flow for Gemini Code Assist. Start via `account/login/start` with `type: "gemini"`; Codex persists provider OAuth credentials to disk.
+- **ChatGPT managed (`chatgpt`)** (recommended): Ata owns the ChatGPT OAuth flow and refresh tokens. Start via `account/login/start` with `type: "chatgpt"`; Ata persists tokens to disk and refreshes them automatically.
+- **Gemini managed (`gemini`)**: Ata owns the Google OAuth flow for Gemini Code Assist. Start via `account/login/start` with `type: "gemini"`; Ata persists provider OAuth credentials to disk.
 
 ### API Overview
 
@@ -895,7 +934,7 @@ Response examples:
 Field notes:
 
 - `refreshToken` (bool): set `true` to force a token refresh.
-- `requiresOpenaiAuth` reflects the active provider; when `false`, Codex can run without OpenAI credentials.
+- `requiresOpenaiAuth` reflects the active provider; when `false`, Ata can run without OpenAI credentials.
 - `requiresGeminiAuth` is `true` when the active provider is Gemini and no Gemini credentials are configured.
 
 ### 2) Log in with an API key
