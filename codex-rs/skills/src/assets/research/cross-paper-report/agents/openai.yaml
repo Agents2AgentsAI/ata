@@ -1,0 +1,7 @@
+interface:
+  display_name: "Cross-Paper Report"
+  short_description: "Integrated cross-paper explanations with markdown and PDF output"
+  default_prompt: "Use $cross-paper-report to explain selected KB cards in depth and produce markdown + PDF"
+
+policy:
+  allow_implicit_invocation: true

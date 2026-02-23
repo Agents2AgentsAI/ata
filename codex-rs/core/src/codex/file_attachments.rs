@@ -680,7 +680,7 @@ pub(super) async fn refresh_uploaded_file_references(
         let mut state = sess.state.lock().await;
         let mut items = state.history.raw_items().to_vec();
         rewrite_uploaded_file_ids(&mut items, &updated_file_ids);
-        state.replace_history(items);
+        state.replace_history(items, None);
     }
 
     {
@@ -1212,18 +1212,21 @@ mod tests {
         let old_file_id = "file-old";
         {
             let mut state = sess.state.lock().await;
-            state.replace_history(vec![ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputFile {
-                    file_data: None,
-                    file_id: Some(old_file_id.to_string()),
-                    mime_type: Some("application/pdf".to_string()),
-                    filename: Some("report.pdf".to_string()),
+            state.replace_history(
+                vec![ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputFile {
+                        file_data: None,
+                        file_id: Some(old_file_id.to_string()),
+                        mime_type: Some("application/pdf".to_string()),
+                        filename: Some("report.pdf".to_string()),
+                    }],
+                    end_turn: None,
+                    phase: None,
                 }],
-                end_turn: None,
-                phase: None,
-            }]);
+                None,
+            );
         }
         {
             let mut cache = sess.services.file_reference_cache.lock().await;
