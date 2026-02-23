@@ -1,6 +1,6 @@
 use codex_core::MCP_SANDBOX_STATE_METHOD;
 use codex_core::SandboxState;
-use codex_core::protocol::SandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_cargo_bin::find_resource;
 use rmcp::ClientHandler;
 use rmcp::ErrorData as McpError;
@@ -37,9 +37,15 @@ where
 {
     // `bash` is a test resource rather than a binary target, so we must use
     // `find_resource!` to locate it instead of `cargo_bin()`.
-    let bash = find_resource!("../suite/bash")?;
+    let bash_dotslash = find_resource!("../suite/bash")?;
 
-    create_transport_with_shell_path(codex_home, dotslash_cache, bash).await
+    // Pre-resolve the DotSlash file to the actual binary path. The MCP server
+    // will execute this shell inside a seatbelt sandbox, so it must be a real
+    // binary — not a DotSlash wrapper that needs to create cache directories.
+    let resolved_bash =
+        core_test_support::fetch_dotslash_file(&bash_dotslash, Some(dotslash_cache.as_ref()))?;
+
+    create_transport_with_shell_path(codex_home, dotslash_cache, resolved_bash).await
 }
 
 pub async fn prefetch_dotslash_bash_artifact<P>(dotslash_cache: P) -> anyhow::Result<()>
