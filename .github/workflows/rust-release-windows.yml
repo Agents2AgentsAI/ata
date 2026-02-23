@@ -32,6 +32,8 @@ jobs:
         working-directory: codex-rs
     env:
       CARGO_PROFILE_RELEASE_LTO: ${{ inputs.release-lto }}
+      # Cap parallelism to avoid rustc-LLVM OOM with fat LTO + codegen-units=1.
+      CARGO_BUILD_JOBS: 8
 
     strategy:
       fail-fast: false
