@@ -135,21 +135,11 @@ fn build_runtime() -> anyhow::Result<tokio::runtime::Runtime> {
 
 const ILLEGAL_ENV_VAR_PREFIX: &str = "CODEX_";
 
-/// Load env vars from `.env` files.
-///
-/// Load order (later files override earlier ones):
-/// 1. CWD `.env` (or nearest parent) — project-specific keys
-/// 2. `~/.ata/.env` (codex home) — user-wide keys
+/// Load env vars from ~/.ata/.env.
 ///
 /// Security: Do not allow `.env` files to create or modify any variables
 /// with names starting with `CODEX_`.
 fn load_dotenv() {
-    // 1. CWD / ancestor .env (project-level).
-    if let Ok(iter) = dotenvy::dotenv_iter() {
-        set_filtered(iter);
-    }
-
-    // 2. Codex-home .env (user-level, wins on conflict).
     if let Ok(codex_home) = find_codex_home()
         && let Ok(iter) = dotenvy::from_path_iter(codex_home.join(".env"))
     {
