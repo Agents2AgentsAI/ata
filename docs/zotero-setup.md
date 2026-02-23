@@ -55,6 +55,52 @@ A Web API key lets you (or external tools) access your Zotero library over the i
 7. Copy the generated key and store it securely
 
 
+### Finding Your User ID
+
+Your Zotero user ID is required when using the Web API. To find it:
+
+1. Log in to [zotero.org](https://www.zotero.org)
+2. Go to [https://www.zotero.org/settings/keys](https://www.zotero.org/settings/keys)
+3. Your user ID is displayed at the top of the page (a numeric value)
+
+## Configuring Ata
+
+Ata supports two modes for connecting to Zotero: **local** (default) and **remote** (via Web API).
+
+### Local Mode (Default)
+
+If Zotero is running on your machine with the local API enabled, Ata connects automatically — no configuration needed.
+
+### Remote Mode (Web API)
+
+To access your Zotero library remotely, set the following environment variables:
+
+| Variable | Required | Description |
+|---|---|---|
+| `ZOTERO_API_KEY` | Yes | Your Web API key (created above) |
+| `ZOTERO_USER_ID` | Yes | Your Zotero user ID |
+| `ZOTERO_LIBRARY_TYPE` | No | Set to `user` or `group` to restrict to a single library. If omitted, Ata searches your personal library and all group libraries automatically. |
+| `ZOTERO_GROUP_ID` | No | Required if `ZOTERO_LIBRARY_TYPE` is `group` |
+
+For example:
+
+```shell
+export ZOTERO_API_KEY="your-api-key-here"
+export ZOTERO_USER_ID="12345678"
+```
+
+When `ZOTERO_API_KEY` is set, Ata automatically switches from the local API to the remote Zotero Web API (`https://api.zotero.org`).
+
+### Config File (Optional)
+
+Non-secret settings like `zotero_user_id`, `zotero_library_type`, and `zotero_group_id` can also be set in your `config.toml` under the `[research]` section:
+
+```toml
+[research]
+zotero_user_id = "12345678"
+zotero_library_type = "user"
+```
+
 ## Usage with Ata
 
-Once the local API is enabled, Ata can communicate with your Zotero library to search, retrieve, and work with your references directly from the command line.
+Once configured, Ata can communicate with your Zotero library to search, retrieve, and work with your references directly from the command line.
