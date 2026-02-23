@@ -271,6 +271,11 @@ jobs:
           # Wipe the entire target directory to reclaim space.
           rm -rf target
 
+          # Remove build tools no longer needed after compilation.
+          rm -rf ~/.rustup ~/.cargo
+          brew cleanup --prune=all 2>/dev/null || true
+          rm -rf ~/Library/Caches/Homebrew 2>/dev/null || true
+
           # Restore binaries into the expected release directory.
           mkdir -p "${release_dir}"
           cp /tmp/ata-binaries/* "${release_dir}/"
