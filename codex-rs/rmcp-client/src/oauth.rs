@@ -78,10 +78,10 @@ pub struct StoredOAuthTokens {
 pub enum OAuthCredentialsStoreMode {
     /// `Keyring` when available; otherwise, `File`.
     /// Credentials stored in the keyring will only be readable by Codex unless the user explicitly grants access via OS-level keyring access.
+    #[default]
     Auto,
     /// CODEX_HOME/.credentials.json
     /// This file will be readable to Codex and other applications running as the same user.
-    #[default]
     File,
     /// Keyring when available, otherwise fail.
     Keyring,
@@ -974,10 +974,10 @@ mod tests {
     }
 
     fn clear_oauth_keyring_cache(server_name: &str, url: &str) {
-        if let Ok(key) = super::compute_store_key(server_name, url) {
-            if let Ok(mut guard) = OAUTH_KEYRING_CACHE.lock() {
-                guard.remove(&key);
-            }
+        if let Ok(key) = super::compute_store_key(server_name, url)
+            && let Ok(mut guard) = OAUTH_KEYRING_CACHE.lock()
+        {
+            guard.remove(&key);
         }
     }
 

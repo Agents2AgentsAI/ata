@@ -36,7 +36,6 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
         .with_model(model)
         // Keep tool expectations stable when the default web_search mode changes.
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config
                 .web_search_mode
                 .set(WebSearchMode::Cached)
@@ -76,7 +75,7 @@ async fn model_selects_expected_tools() {
             "shell_command",
             &[
                 "update_plan",
-                "present_document",
+                "present_reading_view",
                 "update_document_section",
                 "append_to_section",
                 "patch_document_section",
@@ -97,7 +96,7 @@ async fn model_selects_expected_tools() {
             "shell_command",
             &[
                 "update_plan",
-                "present_document",
+                "present_reading_view",
                 "update_document_section",
                 "append_to_section",
                 "patch_document_section",
@@ -118,7 +117,7 @@ async fn model_selects_expected_tools() {
             "shell_command",
             &[
                 "update_plan",
-                "present_document",
+                "present_reading_view",
                 "update_document_section",
                 "append_to_section",
                 "patch_document_section",
@@ -139,7 +138,7 @@ async fn model_selects_expected_tools() {
             "shell",
             &[
                 "update_plan",
-                "present_document",
+                "present_reading_view",
                 "update_document_section",
                 "append_to_section",
                 "patch_document_section",
@@ -159,7 +158,7 @@ async fn model_selects_expected_tools() {
             "shell_command",
             &[
                 "update_plan",
-                "present_document",
+                "present_reading_view",
                 "update_document_section",
                 "append_to_section",
                 "patch_document_section",

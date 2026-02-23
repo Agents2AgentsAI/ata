@@ -1,0 +1,52 @@
+name: keyword-scan
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
+
+jobs:
+  scan:
+    name: Scan for prohibited keywords
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Scan for prohibited patterns
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed=false
+
+          patterns=(
+            'sentry\.io/[0-9]+'
+            'statsig\.com'
+            'STATSIG_'
+            'chatgpt\.com/backend'
+            'CODEX_OPENAI_API_KEY'
+          )
+
+          for pattern in "${patterns[@]}"; do
+            if grep -rEn "$pattern" --include='*.yml' --include='*.yaml' --include='*.py' --include='*.sh' --include='*.json' --include='*.ts' --include='*.js' . \
+              | grep -v '.github/workflows/keyword-scan.yml'; then
+              echo "::error::Found prohibited pattern: $pattern"
+              failed=true
+            fi
+          done
+
+          # Check for old repo references in workflow files specifically
+          if grep -rn 'openai/codex' .github/ | grep -v '.github/workflows/keyword-scan.yml'; then
+            echo "::error::Found old repo reference: openai/codex"
+            failed=true
+          fi
+
+          if [[ "$failed" == "true" ]]; then
+            echo "Keyword scan failed. Please remove the prohibited patterns above."
+            exit 1
+          fi
+
+          echo "Keyword scan passed."

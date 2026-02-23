@@ -735,10 +735,7 @@ async fn extract_raster_images(
     )
     .await;
 
-    let ok = match output {
-        Ok(Ok(o)) if o.status.success() => true,
-        _ => false,
-    };
+    let ok = matches!(output, Ok(Ok(o)) if o.status.success());
     if !ok {
         return (Vec::new(), vec!["pdfimages extraction failed".to_string()]);
     }

@@ -3326,7 +3326,7 @@ impl ChatComposer {
                     insert_text: format!("${skill_name}"),
                     search_terms,
                     path: Some(skill.path.to_string_lossy().into_owned()),
-                    category_tag: (skill.scope == codex_core::protocol::SkillScope::Repo)
+                    category_tag: (skill.scope == codex_protocol::protocol::SkillScope::Repo)
                         .then(|| "[Repo]".to_string()),
                 });
             }
@@ -4670,6 +4670,9 @@ mod tests {
             logo_url: None,
             logo_url_dark: None,
             distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
             install_url: Some("https://example.test/notion".to_string()),
             is_accessible: true,
             is_enabled: true,
@@ -4707,6 +4710,9 @@ mod tests {
             logo_url: None,
             logo_url_dark: None,
             distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
             install_url: Some("https://example.test/notion".to_string()),
             is_accessible: true,
             is_enabled: false,
@@ -5554,7 +5560,7 @@ mod tests {
             .draw(|f| composer.render(f.area(), f.buffer_mut()))
             .expect("draw composer");
 
-        // Snapshot should show /resume as the first entry for /res.
+        // Snapshot should show /research as the first entry for /res.
         insta::assert_snapshot!("slash_popup_res", terminal.backend());
     }
 
@@ -5575,7 +5581,7 @@ mod tests {
         match &composer.active_popup {
             ActivePopup::Command(popup) => match popup.selected_item() {
                 Some(CommandItem::Builtin(cmd)) => {
-                    assert_eq!(cmd.command(), "resume")
+                    assert_eq!(cmd.command(), "research")
                 }
                 Some(CommandItem::UserPrompt(_)) => {
                     panic!("unexpected prompt selected for '/res'")

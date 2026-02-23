@@ -18,6 +18,7 @@ use codex_protocol::document_reader::UpdateDocumentSectionArgs;
 use codex_protocol::document_reader::UpdateDocumentSectionEvent;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::SessionSource;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -421,6 +422,8 @@ impl ToolHandler for DocumentReaderHandler {
             ..
         } = invocation;
 
+        let is_subagent = matches!(turn.session_source, SessionSource::SubAgent(_));
+
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
             _ => {
@@ -481,42 +484,50 @@ impl ToolHandler for DocumentReaderHandler {
                 };
 
                 let doc_id = args.document_id;
-                session
-                    .send_event(
-                        turn.as_ref(),
-                        EventMsg::PresentDocument(PresentDocumentEvent {
-                            call_id,
-                            turn_id: turn.sub_id.clone(),
-                            document_id: doc_id.clone(),
-                            title,
-                            content: doc_content,
-                        }),
-                    )
-                    .await;
-                if is_outline_only {
-                    format!(
-                        "Document outline is now visible to the user with {section_count} \
-                         empty sections. NOW fill section 0 by calling \
-                         update_document_section(document_id=\"{doc_id}\", section_index=0, \
-                         content=\"<full section content>\"). Do not output text \u{2014} \
-                         make the tool call immediately.",
-                    )
+                if is_subagent {
+                    // In a subagent context the TUI never receives the event
+                    // (it only processes events from the active thread).
+                    // Return the full document content inline so the parent
+                    // agent receives it through the normal wait() path.
+                    format!("# {title}\n\n{doc_content}")
                 } else {
-                    "Document displayed in reading mode. The user can now navigate sections \
-                     and ask follow-up questions. For ANY follow-up about this topic \u{2014} \
-                     whether about a specific section or a broad request like 'explain more \
-                     intuitively' or 'simplify this' \u{2014} use the reading view tools: \
-                     `update_document_section` to rewrite a section with the answer woven in \
-                     at the relevant location (preferred \u{2014} keeps explanations inline \
-                     where the concept appears), `patch_document_section` to insert content \
-                     right after a specific passage, or `append_to_section` only when adding \
-                     genuinely new content that belongs at the end of a section. \
-                     Do NOT output plain text responses \u{2014} always \
-                     use reading view tools for follow-ups on this topic. \
-                     Content style: write straight prose that continues the section\u{2019}s \
-                     voice. Never prefix with bold/italic topic lines like \
-                     '**On the efficiency gains:**' \u{2014} just write the content directly."
-                        .to_string()
+                    session
+                        .send_event(
+                            turn.as_ref(),
+                            EventMsg::PresentDocument(PresentDocumentEvent {
+                                call_id,
+                                turn_id: turn.sub_id.clone(),
+                                document_id: doc_id.clone(),
+                                title,
+                                content: doc_content,
+                            }),
+                        )
+                        .await;
+                    if is_outline_only {
+                        format!(
+                            "Document outline is now visible to the user with {section_count} \
+                             empty sections. NOW fill section 0 by calling \
+                             update_document_section(document_id=\"{doc_id}\", section_index=0, \
+                             content=\"<full section content>\"). Do not output text \u{2014} \
+                             make the tool call immediately.",
+                        )
+                    } else {
+                        "Document displayed in reading mode. The user can now navigate sections \
+                         and ask follow-up questions. For ANY follow-up about this topic \u{2014} \
+                         whether about a specific section or a broad request like 'explain more \
+                         intuitively' or 'simplify this' \u{2014} use the reading view tools: \
+                         `update_document_section` to rewrite a section with the answer woven in \
+                         at the relevant location (preferred \u{2014} keeps explanations inline \
+                         where the concept appears), `patch_document_section` to insert content \
+                         right after a specific passage, or `append_to_section` only when adding \
+                         genuinely new content that belongs at the end of a section. \
+                         Do NOT output plain text responses \u{2014} always \
+                         use reading view tools for follow-ups on this topic. \
+                         Content style: write straight prose that continues the section\u{2019}s \
+                         voice. Never prefix with bold/italic topic lines like \
+                         '**On the efficiency gains:**' \u{2014} just write the content directly."
+                            .to_string()
+                    }
                 }
             }
             "update_document_section" => {
@@ -602,18 +613,20 @@ impl ToolHandler for DocumentReaderHandler {
                         .await;
                 }
 
-                session
-                    .send_event(
-                        turn.as_ref(),
-                        EventMsg::UpdateDocumentSection(UpdateDocumentSectionEvent {
-                            call_id,
-                            turn_id: turn.sub_id.clone(),
-                            document_id: args.document_id,
-                            section_index: args.section_index,
-                            content: args.content,
-                        }),
-                    )
-                    .await;
+                if !is_subagent {
+                    session
+                        .send_event(
+                            turn.as_ref(),
+                            EventMsg::UpdateDocumentSection(UpdateDocumentSectionEvent {
+                                call_id,
+                                turn_id: turn.sub_id.clone(),
+                                document_id: args.document_id,
+                                section_index: args.section_index,
+                                content: args.content,
+                            }),
+                        )
+                        .await;
+                }
                 streaming_msg.unwrap_or_else(|| {
                     "Section updated. The user can see the change immediately.".to_string()
                 })
@@ -677,20 +690,22 @@ impl ToolHandler for DocumentReaderHandler {
                         .await;
                 }
 
-                session
-                    .send_event(
-                        turn.as_ref(),
-                        EventMsg::AppendDocumentSection(AppendDocumentSectionEvent {
-                            call_id,
-                            turn_id: turn.sub_id.clone(),
-                            document_id: args.document_id,
-                            section_index: args.section_index,
-                            content: args.content,
-                            foldable,
-                            summary,
-                        }),
-                    )
-                    .await;
+                if !is_subagent {
+                    session
+                        .send_event(
+                            turn.as_ref(),
+                            EventMsg::AppendDocumentSection(AppendDocumentSectionEvent {
+                                call_id,
+                                turn_id: turn.sub_id.clone(),
+                                document_id: args.document_id,
+                                section_index: args.section_index,
+                                content: args.content,
+                                foldable,
+                                summary,
+                            }),
+                        )
+                        .await;
+                }
                 format!(
                     "Content appended to section. The user can see the change immediately.\
                      {streaming_reminder}"
@@ -756,21 +771,23 @@ impl ToolHandler for DocumentReaderHandler {
                         .await;
                 }
 
-                session
-                    .send_event(
-                        turn.as_ref(),
-                        EventMsg::PatchDocumentSection(PatchDocumentSectionEvent {
-                            call_id,
-                            turn_id: turn.sub_id.clone(),
-                            document_id: args.document_id,
-                            section_index: args.section_index,
-                            old_text: args.old_text,
-                            new_text: args.new_text,
-                            foldable,
-                            summary,
-                        }),
-                    )
-                    .await;
+                if !is_subagent {
+                    session
+                        .send_event(
+                            turn.as_ref(),
+                            EventMsg::PatchDocumentSection(PatchDocumentSectionEvent {
+                                call_id,
+                                turn_id: turn.sub_id.clone(),
+                                document_id: args.document_id,
+                                section_index: args.section_index,
+                                old_text: args.old_text,
+                                new_text: args.new_text,
+                                foldable,
+                                summary,
+                            }),
+                        )
+                        .await;
+                }
                 format!(
                     "Section patched. The user can see the change immediately.\
                      {streaming_reminder}"

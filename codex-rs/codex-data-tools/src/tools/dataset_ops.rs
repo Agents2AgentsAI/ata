@@ -512,11 +512,13 @@ mod tests {
     use wiremock::matchers::path;
 
     async fn create_test_setup(mock_server: &MockServer) -> (HttpClient, DataConfig) {
-        let mut config = DataConfig::default();
-        config.huggingface_base_url = mock_server.uri();
-        config.kaggle_base_url = mock_server.uri();
-        config.kaggle_username = Some("test_user".to_string());
-        config.kaggle_key = Some("test_key".to_string());
+        let config = DataConfig {
+            huggingface_base_url: mock_server.uri(),
+            kaggle_base_url: mock_server.uri(),
+            kaggle_username: Some("test_user".to_string()),
+            kaggle_key: Some("test_key".to_string()),
+            ..Default::default()
+        };
 
         let reqwest_client = reqwest::Client::new();
         let rate_limiter = Arc::new(RateLimiter::new(config.rate_limits()));

@@ -1,6 +1,6 @@
 use codex_core::MCP_SANDBOX_STATE_METHOD;
 use codex_core::SandboxState;
-use codex_core::protocol::SandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_cargo_bin::find_resource;
 use rmcp::ClientHandler;
 use rmcp::ErrorData as McpError;
@@ -24,7 +24,9 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 use tokio::process::Command;
+use tokio::time::timeout;
 
 pub async fn create_transport<P>(
     codex_home: P,
@@ -35,20 +37,41 @@ where
 {
     // `bash` is a test resource rather than a binary target, so we must use
     // `find_resource!` to locate it instead of `cargo_bin()`.
+    let bash_dotslash = find_resource!("../suite/bash")?;
+
+    // Pre-resolve the DotSlash file to the actual binary path. The MCP server
+    // will execute this shell inside a seatbelt sandbox, so it must be a real
+    // binary — not a DotSlash wrapper that needs to create cache directories.
+    let resolved_bash =
+        core_test_support::fetch_dotslash_file(&bash_dotslash, Some(dotslash_cache.as_ref()))?;
+
+    create_transport_with_shell_path(codex_home, dotslash_cache, resolved_bash).await
+}
+
+pub async fn prefetch_dotslash_bash_artifact<P>(dotslash_cache: P) -> anyhow::Result<()>
+where
+    P: AsRef<Path>,
+{
+    // `bash` is a test resource rather than a binary target, so we must use
+    // `find_resource!` to locate it instead of `cargo_bin()`.
     let bash = find_resource!("../suite/bash")?;
 
-    // Need to ensure the artifact associated with the bash DotSlash file is
-    // available before it is run in a read-only sandbox.
-    let status = Command::new("dotslash")
-        .arg("--")
-        .arg("fetch")
-        .arg(bash.clone())
-        .env("DOTSLASH_CACHE", dotslash_cache.as_ref())
-        .status()
-        .await?;
-    assert!(status.success(), "dotslash fetch failed: {status:?}");
+    // Keep this short so tests fail fast instead of hitting the harness timeout
+    // when the sandbox blocks outbound network access.
+    let status = timeout(
+        Duration::from_secs(10),
+        Command::new("dotslash")
+            .arg("--")
+            .arg("fetch")
+            .arg(bash)
+            .env("DOTSLASH_CACHE", dotslash_cache.as_ref())
+            .status(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("dotslash fetch timed out after 10s"))??;
+    anyhow::ensure!(status.success(), "dotslash fetch failed: {status:?}");
 
-    create_transport_with_shell_path(codex_home, dotslash_cache, bash).await
+    Ok(())
 }
 
 pub async fn create_transport_with_shell_path<P, Q, R>(

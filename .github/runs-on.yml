@@ -1,0 +1,53 @@
+images:
+  windows25-vstoolchain-x64:
+    platform: "windows"
+    arch: "x64"
+    owner: "self"
+    name: "runs-on-windows25-vstoolchain-x64-*"
+
+runners:
+  # --- CI (smaller, spot, cost-optimized) ---
+  ci-linux-x64:
+    image: ubuntu24-full-x64
+    family: ["c7i-flex", "m7i-flex"]
+    cpu: [4, 8]
+    ram: [16, 32]
+    spot: price-capacity-optimized
+    retry: when-interrupted
+
+  ci-linux-arm64:
+    image: ubuntu24-full-arm64
+    family: ["c7g", "m7g"]
+    cpu: [4, 8]
+    ram: [16, 32]
+    spot: false
+
+  ci-windows-x64:
+    image: windows25-vstoolchain-x64
+    family: ["c7i-flex", "m7i-flex"]
+    cpu: [4, 8]
+    ram: [16, 32]
+    spot: price-capacity-optimized
+    retry: when-interrupted
+
+  # --- Release (bigger for LTO, on-demand for reliability) ---
+  release-linux-x64:
+    image: ubuntu24-full-x64
+    family: ["c7i", "c7a"]
+    cpu: [8, 16]
+    ram: [16, 32]
+    spot: false
+
+  release-linux-arm64:
+    image: ubuntu24-full-arm64
+    family: ["c7g", "m7g"]
+    cpu: [8, 16]
+    ram: [32, 64]
+    spot: false
+
+  release-windows-x64:
+    image: windows25-vstoolchain-x64
+    family: ["c7i", "m7i"]
+    cpu: [8, 16]
+    ram: [16, 32]
+    spot: false

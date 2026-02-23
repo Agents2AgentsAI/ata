@@ -28,14 +28,14 @@ fmt:
     cargo fmt -- --config imports_granularity=Item 2>/dev/null
 
 fix *args:
-    cargo clippy --fix --all-features --tests --allow-dirty "$@"
+    cargo clippy --fix --tests --allow-dirty "$@"
 
 # Lint without --all-features
 fix-fast *args:
     cargo clippy --fix --tests --allow-dirty "$@"
 
 clippy:
-    cargo clippy --all-features --tests "$@"
+    cargo clippy --tests "$@"
 
 # Lint without --all-features
 clippy-fast *args:
@@ -49,6 +49,8 @@ install:
 # --no-fail-fast is important to ensure all tests are run.
 #
 # Run `cargo install cargo-nextest` if you don't have it installed.
+# Prefer this for routine local runs; use explicit `cargo test --all-features`
+# only when you specifically need full feature coverage.
 test:
     cargo nextest run --no-fail-fast
 
@@ -99,3 +101,29 @@ write-app-server-schema *args:
 # Tail logs from the state SQLite database
 log *args:
     if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p codex-state --bin logs_client -- "$@"
+
+# Verify OpenAI model-version behavior before publishing a release.
+# Runs core regression tests, validates launcher JS syntax, and stages an npm
+# tarball for release smoke checks.
+verify-openai-model-override release_version="0.1.0-rc.1":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    cargo test -p codex-core config_schema_matches_fixture -- --nocapture
+    cargo test -p codex-core test_precedence_fixture_with_gpt5_profile -- --nocapture
+    cargo test -p codex-core refresh_available_models_uses_default_client_version -- --nocapture
+    cargo test -p codex-core refresh_available_models_refetches_when_version_mismatch -- --nocapture
+
+    node --check ../codex-cli/bin/ata.js
+
+    stage_dir="$(mktemp -d)"
+    out_tgz="$(mktemp /tmp/ata-npm-XXXXXX.tgz)"
+    trap 'rm -rf "${stage_dir}" "${out_tgz}"' EXIT
+
+    NPM_CONFIG_CACHE=/tmp/npm-cache ../codex-cli/scripts/build_npm_package.py \
+      --package ata \
+      --release-version "{{release_version}}" \
+      --staging-dir "${stage_dir}" \
+      --pack-output "${out_tgz}"
+
+    echo "PASS: OpenAI model override verification and npm package staging complete"

@@ -15,7 +15,7 @@ use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::render::renderable::Renderable;
-use codex_core::protocol::Op;
+use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -2637,7 +2637,7 @@ mod tests {
     use crate::app_event_sender::AppEventSender;
     use crate::history_cell::DocumentCell;
     use crate::render::renderable::Renderable;
-    use codex_core::protocol::Op;
+    use codex_protocol::protocol::Op;
     use crossterm::event::KeyModifiers;
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;

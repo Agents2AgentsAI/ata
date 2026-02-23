@@ -250,8 +250,8 @@ jobs:
         run: |
           set -euo pipefail
           if command -v apt-get >/dev/null 2>&1; then
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential bison autoconf gettext libncursesw5-dev
+            apt-get update -o Acquire::Retries=3
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -o Acquire::Retries=3 git build-essential bison autoconf gettext libncursesw5-dev
           elif command -v dnf >/dev/null 2>&1; then
             dnf install -y git gcc gcc-c++ make bison autoconf gettext ncurses-devel
           elif command -v yum >/dev/null 2>&1; then
@@ -390,8 +390,8 @@ jobs:
         run: |
           set -euo pipefail
           if command -v apt-get >/dev/null 2>&1; then
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential bison autoconf gettext libncursesw5-dev
+            apt-get update -o Acquire::Retries=3
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -o Acquire::Retries=3 git build-essential bison autoconf gettext libncursesw5-dev
           elif command -v dnf >/dev/null 2>&1; then
             dnf install -y git gcc gcc-c++ make bison autoconf gettext ncurses-devel
           elif command -v yum >/dev/null 2>&1; then
@@ -408,9 +408,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 https://git.code.sf.net/p/zsh/code /tmp/zsh
+          git clone https://git.code.sf.net/p/zsh/code /tmp/zsh
           cd /tmp/zsh
-          git fetch --depth 1 origin 77045ef899e53b9598bebc5a41db93a548a40ca6
           git checkout 77045ef899e53b9598bebc5a41db93a548a40ca6
           git apply "${GITHUB_WORKSPACE}/shell-tool-mcp/patches/zsh-exec-wrapper.patch"
           ./Util/preconfig
@@ -430,8 +429,8 @@ jobs:
           cat > "$tmpdir/exec-wrapper" <<'EOF'
           #!/usr/bin/env bash
           set -euo pipefail
-          : "${CODEX_WRAPPER_LOG:?missing CODEX_WRAPPER_LOG}"
-          printf '%s\n' "$@" > "$CODEX_WRAPPER_LOG"
+          : "${ATA_WRAPPER_LOG:?missing ATA_WRAPPER_LOG}"
+          printf '%s\n' "$@" > "$ATA_WRAPPER_LOG"
           file="$1"
           shift
           if [[ "$#" -eq 0 ]]; then
@@ -443,7 +442,7 @@ jobs:
           EOF
           chmod +x "$tmpdir/exec-wrapper"
 
-          CODEX_WRAPPER_LOG="$tmpdir/wrapper.log" \
+          ATA_WRAPPER_LOG="$tmpdir/wrapper.log" \
           EXEC_WRAPPER="$tmpdir/exec-wrapper" \
           /tmp/zsh/Src/zsh -fc '/bin/echo smoke-zsh' > "$tmpdir/stdout.txt"
 
@@ -487,9 +486,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 https://git.code.sf.net/p/zsh/code /tmp/zsh
+          git clone https://git.code.sf.net/p/zsh/code /tmp/zsh
           cd /tmp/zsh
-          git fetch --depth 1 origin 77045ef899e53b9598bebc5a41db93a548a40ca6
           git checkout 77045ef899e53b9598bebc5a41db93a548a40ca6
           git apply "${GITHUB_WORKSPACE}/shell-tool-mcp/patches/zsh-exec-wrapper.patch"
           ./Util/preconfig
@@ -509,8 +507,8 @@ jobs:
           cat > "$tmpdir/exec-wrapper" <<'EOF'
           #!/usr/bin/env bash
           set -euo pipefail
-          : "${CODEX_WRAPPER_LOG:?missing CODEX_WRAPPER_LOG}"
-          printf '%s\n' "$@" > "$CODEX_WRAPPER_LOG"
+          : "${ATA_WRAPPER_LOG:?missing ATA_WRAPPER_LOG}"
+          printf '%s\n' "$@" > "$ATA_WRAPPER_LOG"
           file="$1"
           shift
           if [[ "$#" -eq 0 ]]; then
@@ -522,7 +520,7 @@ jobs:
           EOF
           chmod +x "$tmpdir/exec-wrapper"
 
-          CODEX_WRAPPER_LOG="$tmpdir/wrapper.log" \
+          ATA_WRAPPER_LOG="$tmpdir/wrapper.log" \
           EXEC_WRAPPER="$tmpdir/exec-wrapper" \
           /tmp/zsh/Src/zsh -fc '/bin/echo smoke-zsh' > "$tmpdir/stdout.txt"
 
@@ -628,12 +626,12 @@ jobs:
           staging="${{ steps.staging.outputs.dir }}"
           pack_info=$(cd "$staging" && npm pack --ignore-scripts --json --pack-destination "${GITHUB_WORKSPACE}/dist/npm")
           filename=$(PACK_INFO="$pack_info" node -e 'const data = JSON.parse(process.env.PACK_INFO); console.log(data[0].filename);')
-          mv "dist/npm/${filename}" "dist/npm/codex-shell-tool-mcp-npm-${PACKAGE_VERSION}.tgz"
+          mv "dist/npm/${filename}" "dist/npm/ata-shell-tool-mcp-npm-${PACKAGE_VERSION}.tgz"
 
       - uses: actions/upload-artifact@v6
         with:
-          name: codex-shell-tool-mcp-npm
-          path: dist/npm/codex-shell-tool-mcp-npm-${{ env.PACKAGE_VERSION }}.tgz
+          name: ata-shell-tool-mcp-npm
+          path: dist/npm/ata-shell-tool-mcp-npm-${{ env.PACKAGE_VERSION }}.tgz
           if-no-files-found: error
 
   publish:
@@ -652,7 +650,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           registry-url: https://registry.npmjs.org
-          scope: "@openai"
+          scope: "@a2a-ai"
 
       # Trusted publishing requires npm CLI version 11.5.1 or later.
       - name: Update npm
@@ -661,7 +659,7 @@ jobs:
       - name: Download npm tarball
         uses: actions/download-artifact@v7
         with:
-          name: codex-shell-tool-mcp-npm
+          name: ata-shell-tool-mcp-npm
           path: dist/npm
 
       - name: Publish to npm
@@ -675,4 +673,19 @@ jobs:
           if [[ -n "${NPM_TAG}" ]]; then
             tag_args+=(--tag "${NPM_TAG}")
           fi
-          npm publish "dist/npm/codex-shell-tool-mcp-npm-${VERSION}.tgz" "${tag_args[@]}"
+          set +e
+          publish_output="$(npm publish "dist/npm/ata-shell-tool-mcp-npm-${VERSION}.tgz" "${tag_args[@]}" 2>&1)"
+          publish_status=$?
+          set -e
+
+          echo "${publish_output}"
+          if [[ ${publish_status} -eq 0 ]]; then
+            exit 0
+          fi
+
+          if grep -qiE "previously published|cannot publish over|version already exists" <<< "${publish_output}"; then
+            echo "Skipping already-published package version"
+            exit 0
+          fi
+
+          exit "${publish_status}"

@@ -13,12 +13,11 @@ pub(crate) mod multi_agents;
 mod plan;
 mod read_file;
 mod request_user_input;
-#[cfg(feature = "research")]
 pub(crate) mod research;
 mod search_tool_bm25;
 mod shell;
 mod test_sync;
-mod unified_exec;
+pub(crate) mod unified_exec;
 mod view_image;
 
 pub use document_reader::APPEND_TO_SECTION_TOOL;
@@ -46,7 +45,6 @@ pub use plan::PlanHandler;
 pub use read_file::ReadFileHandler;
 pub use request_user_input::RequestUserInputHandler;
 pub(crate) use request_user_input::request_user_input_tool_description;
-#[cfg(feature = "research")]
 pub(crate) use research::ResearchBridgeHandler;
 pub(crate) use search_tool_bm25::DEFAULT_LIMIT as SEARCH_TOOL_BM25_DEFAULT_LIMIT;
 pub(crate) use search_tool_bm25::SEARCH_TOOL_BM25_TOOL_NAME;

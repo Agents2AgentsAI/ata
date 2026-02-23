@@ -5,13 +5,13 @@
 //! booleans through multiple types, call sites consult a single `Features`
 //! container attached to `Config`.
 
-use crate::config::CONFIG_TOML_FILE;
 use crate::config::Config;
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::WarningEvent;
+use codex_config::CONFIG_TOML_FILE;
 use codex_otel::OtelManager;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -84,6 +84,8 @@ pub enum Feature {
     JsReplToolsOnly,
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
+    /// Route shell tool execution through the zsh exec bridge.
+    ShellZshFork,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
     /// Allow the model to request web searches that fetch live content.
@@ -101,10 +103,12 @@ pub enum Feature {
     WindowsSandbox,
     /// Use the elevated Windows sandbox pipeline (setup + runner).
     WindowsSandboxElevated,
-    /// Refresh remote models and emit AppReady once the list is available.
+    /// Legacy remote models flag kept for backward compatibility.
     RemoteModels,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Enable git commit attribution guidance via model instructions.
+    CodexGitCommit,
     /// Enable runtime metrics snapshots via a manual reader.
     RuntimeMetrics,
     /// Persist rollout metadata to a local SQLite database.
@@ -143,6 +147,16 @@ pub enum Feature {
     ResponsesWebsockets,
     /// Enable Responses API websocket v2 mode.
     ResponsesWebsocketsV2,
+    /// Enable research paper search tools (Semantic Scholar, arXiv, OpenAlex).
+    ResearchPaperSearch,
+    /// Enable Zotero library search, notes, annotations, citations.
+    ResearchZotero,
+    /// Enable Hacker News search and browsing tools.
+    ResearchHackerNews,
+    /// Enable USPTO patent search and retrieval tools.
+    ResearchPatents,
+    /// Enable repository cloning, summarization, and analysis tools.
+    ResearchRepoAnalysis,
 }
 
 impl Feature {
@@ -250,6 +264,9 @@ impl Features {
 
     pub fn emit_metrics(&self, otel: &OtelManager) {
         for feature in FEATURES {
+            if matches!(feature.stage, Stage::Removed) {
+                continue;
+            }
             if self.enabled(feature.id) != feature.default_enabled {
                 otel.counter(
                     "codex.feature.state",
@@ -360,7 +377,8 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
                 }
                 _ => alias,
             };
-            let summary = format!("`{label}` is deprecated. Use `web_search` instead.");
+            let summary =
+                format!("`{label}` is deprecated because web search is enabled by default.");
             (summary, Some(web_search_details().to_string()))
         }
         _ => {
@@ -378,7 +396,21 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
 }
 
 fn web_search_details() -> &'static str {
-    "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml."
+    "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml if you want to override it."
+}
+
+/// Research features are toggled via `/research` and should not trigger the
+/// under-development warning banner.
+fn is_research_feature(f: Feature) -> bool {
+    matches!(
+        f,
+        Feature::Research
+            | Feature::ResearchPaperSearch
+            | Feature::ResearchZotero
+            | Feature::ResearchHackerNews
+            | Feature::ResearchPatents
+            | Feature::ResearchRepoAnalysis
+    )
 }
 
 /// Keys accepted in `[features]` tables.
@@ -433,6 +465,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: !cfg!(windows),
     },
     FeatureSpec {
+        id: Feature::ShellZshFork,
+        key: "shell_zsh_fork",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ShellSnapshot,
         key: "shell_snapshot",
         stage: Stage::Stable,
@@ -479,6 +517,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     // Experimental program. Rendered in the `/experimental` menu for users.
+    FeatureSpec {
+        id: Feature::CodexGitCommit,
+        key: "codex_git_commit",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
     FeatureSpec {
         id: Feature::RuntimeMetrics,
         key: "runtime_metrics",
@@ -543,8 +587,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RemoteModels,
         key: "remote_models",
-        stage: Stage::Stable,
-        default_enabled: true,
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::PowershellUtf8,
@@ -568,9 +612,9 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::Collab,
         key: "multi_agent",
         stage: Stage::Experimental {
-            name: "Sub-agents",
+            name: "Multi-agents",
             menu_description: "Ask Ata to spawn multiple agents to parallelize the work and win in efficiency.",
-            announcement: "NEW: Sub-agents can now be spawned by Ata. Enable in /experimental and restart Ata!",
+            announcement: "NEW: Multi-agents can now be spawned by Ata. Enable in /experimental and restart Ata!",
         },
         default_enabled: false,
     },
@@ -587,11 +631,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Research,
         key: "research",
-        stage: Stage::Experimental {
-            name: "Research Tools",
-            menu_description: "Enable research tool integrations (paper search, Zotero, repo analysis). Use `ata research` for the guided multi-phase workflow.",
-            announcement: "Research tools are available as an experimental feature. Use `ata research` to launch the full research workflow.",
-        },
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
@@ -666,6 +706,36 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
+    FeatureSpec {
+        id: Feature::ResearchPaperSearch,
+        key: "research_paper_search",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResearchZotero,
+        key: "research_zotero",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResearchHackerNews,
+        key: "research_hacker_news",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResearchPatents,
+        key: "research_patents",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResearchRepoAnalysis,
+        key: "research_repo_analysis",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
 ];
 
 /// Push a warning event if any under-development features are enabled.
@@ -694,7 +764,7 @@ pub fn maybe_push_unstable_features_warning(
             if !config.features.enabled(spec.id) {
                 continue;
             }
-            if matches!(spec.stage, Stage::UnderDevelopment) {
+            if matches!(spec.stage, Stage::UnderDevelopment) && !is_research_feature(spec.id) {
                 under_development_feature_keys.push(spec.key.to_string());
             }
         }

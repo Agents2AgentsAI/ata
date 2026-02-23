@@ -580,7 +580,7 @@ mod tests {
                     "oid": "def456",
                     "lfs": {
                         "size": 512000,
-                        "sha256": "abc..."
+                        "oid": "abc123def456"
                     }
                 }
             ])))

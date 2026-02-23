@@ -334,9 +334,11 @@ mod tests {
             .mount(&hf_server)
             .await;
 
-        let mut config = DataConfig::default();
-        config.huggingface_base_url = hf_server.uri();
-        config.kaggle_base_url = kaggle_server.uri();
+        let config = DataConfig {
+            huggingface_base_url: hf_server.uri(),
+            kaggle_base_url: kaggle_server.uri(),
+            ..DataConfig::default()
+        };
 
         let handler = DataBridgeHandler::new(Arc::new(codex_data_tools::DataToolkit::new(
             build_reqwest_client(),

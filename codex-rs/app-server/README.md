@@ -1,6 +1,6 @@
 # codex-app-server
 
-`codex app-server` is the interface Codex uses to power rich interfaces such as the [Ata VS Code extension](https://marketplace.visualstudio.com/items?itemName=a2a-ai.ata).
+`codex app-server` is the interface Codex uses to power rich interfaces such as the [Codex VS Code extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt).
 
 ## Table of Contents
 
@@ -27,6 +27,11 @@ Supported transports:
 - websocket (`--listen ws://IP:PORT`): one JSON-RPC message per websocket text frame (**experimental / unsupported**)
 
 Websocket transport is currently experimental and unsupported. Do not rely on it for production workloads.
+
+Tracing/log output:
+
+- `RUST_LOG` controls log filtering/verbosity.
+- Set `LOG_FORMAT=json` to emit app-server tracing logs to `stderr` as JSON (one event per line).
 
 Backpressure behavior:
 
@@ -69,11 +74,11 @@ Clients must send a single `initialize` request per transport connection before 
 
 Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
 
-**Important**: `clientInfo.name` is used to identify the client for compliance logging. If
-you are developing a new Ata integration that is intended for enterprise use, please contact us to get it
-added to a known clients list.
+**Important**: `clientInfo.name` is used to identify the client for the OpenAI Compliance Logs Platform. If
+you are developing a new Codex integration that is intended for enterprise use, please contact us to get it
+added to a known clients list. For more context: https://chatgpt.com/admin/api-reference#tag/Logs:-Codex
 
-Example (from the official Ata VS Code extension):
+Example (from OpenAI's official VSCode extension):
 
 ```json
 {
@@ -117,12 +122,13 @@ Example with notification opt-out:
 - `thread/start` — create a new thread; emits `thread/started` and auto-subscribes you to turn/item events for that thread.
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it.
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; emits `thread/started` and auto-subscribes you to turn/item events for the new thread.
-- `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, and `cwd` filters.
+- `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, and `cwd` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
-- `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`.
-- `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
+- `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
+- `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
+- `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success and emits `thread/archived`.
 - `thread/name/set` — set or update a thread’s user-facing name; returns `{}` on success. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
-- `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success.
+- `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
@@ -135,15 +141,16 @@ Example with notification opt-out:
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination).
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
-- `skills/remote/read` — list public remote skills (**under development; do not call from production clients yet**).
-- `skills/remote/write` — download a public remote skill by `hazelnutId`; `isPreload=true` writes to `.ata/vendor_imports/skills` under `codex_home` (**under development; do not call from production clients yet**).
+- `skills/remote/list` — list public remote skills (**under development; do not call from production clients yet**).
+- `skills/remote/export` — download a remote skill by `hazelnutId` into `skills` under `codex_home` (**under development; do not call from production clients yet**).
 - `app/list` — list available apps.
 - `skills/config/write` — write user-level skill config by path.
 - `mcpServer/oauth/login` — start an OAuth login for a configured MCP server; returns an `authorization_url` and later emits `mcpServer/oauthLogin/completed` once the browser flow finishes.
 - `tool/requestUserInput` — prompt the user with 1–3 short questions for a tool call and return their answers (experimental).
 - `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools, resources, resource templates, and auth status; supports cursor+limit pagination.
-- `feedback/upload` — submit a feedback report (classification + optional reason/logs and conversation_id); requires `[feedback].enabled = true` and returns the tracking thread id.
+- `windowsSandbox/setupStart` — start Windows sandbox setup for the selected mode (`elevated` or `unelevated`); returns `{ started: true }` immediately and later emits `windowsSandbox/setupCompleted`.
+- `feedback/upload` — submit a feedback report (classification + optional reason/logs, conversation_id, and optional `extraLogFiles` attachments array); returns the tracking thread id.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `config/read` — fetch the effective config on disk after resolving config layering.
 - `config/value/write` — write a single config key/value to the user's config.toml on disk.
@@ -222,6 +229,7 @@ Experimental API: `thread/start`, `thread/resume`, and `thread/fork` accept `per
 - `sourceKinds` — restrict results to specific sources; omit or pass `[]` for interactive sessions only (`cli`, `vscode`).
 - `archived` — when `true`, list archived threads only. When `false` or `null`, list non-archived threads (default).
 - `cwd` — restrict results to threads whose session cwd exactly matches this path.
+- Responses include `agentNickname` and `agentRole` for AgentControl-spawned thread sub-agents when available.
 
 Example:
 
@@ -233,8 +241,8 @@ Example:
 } }
 { "id": 20, "result": {
     "data": [
-        { "id": "thr_a", "preview": "Create a TUI", "modelProvider": "openai", "createdAt": 1730831111, "updatedAt": 1730831111 },
-        { "id": "thr_b", "preview": "Fix tests", "modelProvider": "openai", "createdAt": 1730750000, "updatedAt": 1730750000 }
+        { "id": "thr_a", "preview": "Create a TUI", "modelProvider": "openai", "createdAt": 1730831111, "updatedAt": 1730831111, "status": { "type": "notLoaded" }, "agentNickname": "Atlas", "agentRole": "explorer" },
+        { "id": "thr_b", "preview": "Fix tests", "modelProvider": "openai", "createdAt": 1730750000, "updatedAt": 1730750000, "status": { "type": "notLoaded" } }
     ],
     "nextCursor": "opaque-token-or-null"
 } }
@@ -253,18 +261,36 @@ When `nextCursor` is `null`, you’ve reached the final page.
 } }
 ```
 
+### Example: Track thread status changes
+
+`thread/status/changed` is emitted whenever a loaded thread's status changes:
+
+- Includes `threadId` and the new `status`.
+- Status can be `notLoaded`, `idle`, `systemError`, or `active` (with `activeFlags`; `active` implies running).
+
+```json
+{ "method": "thread/status/changed", "params": {
+    "threadId": "thr_123",
+    "status": { "type": "active", "activeFlags": [] }
+} }
+```
+
 ### Example: Read a thread
 
-Use `thread/read` to fetch a stored thread by id without resuming it. Pass `includeTurns` when you want the rollout history loaded into `thread.turns`.
+Use `thread/read` to fetch a stored thread by id without resuming it. Pass `includeTurns` when you want the rollout history loaded into `thread.turns`. The returned thread includes `agentNickname` and `agentRole` for AgentControl-spawned thread sub-agents when available.
 
 ```json
 { "method": "thread/read", "id": 22, "params": { "threadId": "thr_123" } }
-{ "id": 22, "result": { "thread": { "id": "thr_123", "turns": [] } } }
+{ "id": 22, "result": {
+    "thread": { "id": "thr_123", "status": { "type": "notLoaded" }, "turns": [] }
+} }
 ```
 
 ```json
 { "method": "thread/read", "id": 23, "params": { "threadId": "thr_123", "includeTurns": true } }
-{ "id": 23, "result": { "thread": { "id": "thr_123", "turns": [ ... ] } } }
+{ "id": 23, "result": {
+    "thread": { "id": "thr_123", "status": { "type": "notLoaded" }, "turns": [ ... ] }
+} }
 ```
 
 ### Example: Archive a thread
@@ -274,6 +300,7 @@ Use `thread/archive` to move the persisted rollout (stored as a JSONL file on di
 ```json
 { "method": "thread/archive", "id": 21, "params": { "threadId": "thr_b" } }
 { "id": 21, "result": {} }
+{ "method": "thread/archived", "params": { "threadId": "thr_b" } }
 ```
 
 An archived thread will not appear in `thread/list` unless `archived` is set to `true`.
@@ -285,6 +312,7 @@ Use `thread/unarchive` to move an archived rollout back into the sessions direct
 ```json
 { "method": "thread/unarchive", "id": 24, "params": { "threadId": "thr_b" } }
 { "id": 24, "result": { "thread": { "id": "thr_b" } } }
+{ "method": "thread/unarchived", "params": { "threadId": "thr_b" } }
 ```
 
 ### Example: Trigger thread compaction
@@ -354,7 +382,7 @@ Invoke a skill explicitly by including `$<skill-name>` in the text input and add
     "threadId": "thr_123",
     "input": [
         { "type": "text", "text": "$skill-creator Add a new skill for triaging flaky CI and include step-by-step usage." },
-        { "type": "skill", "name": "skill-creator", "path": "/Users/me/.ata/skills/skill-creator/SKILL.md" }
+        { "type": "skill", "name": "skill-creator", "path": "/Users/me/.codex/skills/skill-creator/SKILL.md" }
     ]
 } }
 { "id": 33, "result": { "turn": {
@@ -519,7 +547,7 @@ Notes:
 
 ## Events
 
-Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `turn/*`, and `item/*` notifications.
+Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `thread/archived`, `thread/unarchived`, `turn/*`, and `item/*` notifications.
 
 ### Notification opt-out
 
@@ -542,6 +570,10 @@ The fuzzy file search session API emits per-query notifications:
 - `fuzzyFileSearch/sessionUpdated` — `{ sessionId, query, files }` with the current matching files for the active query.
 - `fuzzyFileSearch/sessionCompleted` — `{ sessionId, query }` once indexing/matching for that query has completed.
 
+### Windows sandbox setup events
+
+- `windowsSandbox/setupCompleted` — `{ mode, success, error }` after a `windowsSandbox/setupStart` request finishes.
+
 ### Turn events
 
 The app-server streams JSON-RPC notifications while a turn is running. Each turn starts with `turn/started` (initial `turn`) and ends with `turn/completed` (final `turn` status). Token usage events stream separately via `thread/tokenUsage/updated`. Clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
@@ -550,6 +582,7 @@ The app-server streams JSON-RPC notifications while a turn is running. Each turn
 - `turn/completed` — `{ turn }` where `turn.status` is `completed`, `interrupted`, or `failed`; failures carry `{ error: { message, codexErrorInfo?, additionalDetails? } }`.
 - `turn/diff/updated` — `{ threadId, turnId, diff }` represents the up-to-date snapshot of the turn-level unified diff, emitted after every FileChange item. `diff` is the latest aggregated unified diff across every file change in the turn. UIs can render this to show the full "what changed" view without stitching individual `fileChange` items.
 - `turn/plan/updated` — `{ turnId, explanation?, plan }` whenever the agent shares or changes its plan; each `plan` entry is `{ step, status }` with `status` in `pending`, `inProgress`, or `completed`.
+- `model/rerouted` — `{ threadId, turnId, fromModel, toModel, reason }` when the backend reroutes a request to a different model (for example, due to high-risk cyber safety checks).
 
 Today both notifications carry an empty `items` array even when item events were streamed; rely on `item/*` notifications for the canonical item list until this is fixed.
 
@@ -557,7 +590,7 @@ Today both notifications carry an empty `items` array even when item events were
 
 `ThreadItem` is the tagged union carried in turn responses and `item/*` notifications. Currently we support events for the following items:
 
-- `userMessage` — `{id, content}` where `content` is a list of user inputs (`text`, `image`, or `localImage`). Cyber model-routing warnings are surfaced as synthetic `userMessage` items with `text` prefixed by `Warning:`.
+- `userMessage` — `{id, content}` where `content` is a list of user inputs (`text`, `image`, or `localImage`).
 - `agentMessage` — `{id, text}` containing the accumulated agent reply.
 - `plan` — `{id, text}` emitted for plan-mode turns; plan text can stream via `item/plan/delta` (experimental).
 - `reasoning` — `{id, summary, content}` where `summary` holds streamed reasoning summaries (applicable for most OpenAI models) and `content` holds raw reasoning blocks (applicable for e.g. open source models).
@@ -634,7 +667,7 @@ Certain actions (shell commands or modifying files) may require explicit user ap
 Order of messages:
 
 1. `item/started` — shows the pending `commandExecution` item with `command`, `cwd`, and other fields so you can render the proposed action.
-2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `reason`, plus `command`, `cwd`, and `commandActions` for friendly display.
+2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `approvalId` (for subcommand callbacks), and `reason`. For normal command approvals, it also includes `command`, `cwd`, and `commandActions` for friendly display. For network-only approvals, those command fields may be omitted and `networkApprovalContext` is provided instead.
 3. Client response — `{ "decision": "accept", "acceptSettings": { "forSession": false } }` or `{ "decision": "decline" }`.
 4. `item/completed` — final `commandExecution` item with `status: "completed" | "failed" | "declined"` and execution output. Render this as the authoritative result.
 
@@ -702,7 +735,7 @@ Invoke a skill by including `$<skill-name>` in the text input. Add a `skill` inp
       {
         "type": "skill",
         "name": "skill-creator",
-        "path": "/Users/me/.ata/skills/skill-creator/SKILL.md"
+        "path": "/Users/me/.codex/skills/skill-creator/SKILL.md"
       }
     ]
   }
@@ -763,7 +796,7 @@ To enable or disable a skill by path:
   "method": "skills/config/write",
   "id": 26,
   "params": {
-    "path": "/Users/me/.ata/skills/skill-creator/SKILL.md",
+    "path": "/Users/me/.codex/skills/skill-creator/SKILL.md",
     "enabled": false
   }
 }
@@ -771,7 +804,7 @@ To enable or disable a skill by path:
 
 ## Apps
 
-Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, whether it is currently accessible, and whether it is enabled in config.
+Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, `branding`, `appMetadata`, `labels`, whether it is currently accessible, and whether it is enabled in config.
 
 ```json
 { "method": "app/list", "id": 50, "params": {
@@ -789,6 +822,9 @@ Use `app/list` to fetch available apps (connectors). Each entry includes metadat
             "logoUrl": "https://example.com/demo-app.png",
             "logoUrlDark": null,
             "distributionChannel": null,
+            "branding": null,
+            "appMetadata": null,
+            "labels": null,
             "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
             "isAccessible": true,
             "isEnabled": true
@@ -816,6 +852,9 @@ The server also emits `app/list/updated` notifications whenever either source (a
         "logoUrl": "https://example.com/demo-app.png",
         "logoUrlDark": null,
         "distributionChannel": null,
+        "branding": null,
+        "appMetadata": null,
+        "labels": null,
         "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
         "isAccessible": true,
         "isEnabled": true
@@ -860,14 +899,13 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 
 - **API key (`apiKey`)**: Caller supplies an OpenAI API key via `account/login/start` with `type: "apiKey"`. The API key is saved and used for API requests.
 - **ChatGPT managed (`chatgpt`)** (recommended): Codex owns the ChatGPT OAuth flow and refresh tokens. Start via `account/login/start` with `type: "chatgpt"`; Codex persists tokens to disk and refreshes them automatically.
-- **Gemini managed (`gemini`)**: Codex owns the Google OAuth flow for Gemini Code Assist. Start via `account/login/start` with `type: "gemini"`; Codex persists provider OAuth credentials to disk.
 
 ### API Overview
 
 - `account/read` — fetch current account info; optionally refresh tokens.
-- `account/login/start` — begin login (`apiKey`, `chatgpt`, `gemini`).
+- `account/login/start` — begin login (`apiKey`, `chatgpt`).
 - `account/login/completed` (notify) — emitted when a login attempt finishes (success or error).
-- `account/login/cancel` — cancel a pending login flow by `loginId`.
+- `account/login/cancel` — cancel a pending ChatGPT login by `loginId`.
 - `account/logout` — sign out; triggers `account/updated`.
 - `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, or `null`).
 - `account/rateLimits/read` — fetch ChatGPT rate limits; updates arrive via `account/rateLimits/updated` (notify).
@@ -885,18 +923,16 @@ Request:
 Response examples:
 
 ```json
-{ "id": 1, "result": { "account": null, "requiresOpenaiAuth": false, "requiresGeminiAuth": false } } // No OpenAI auth needed (e.g., OSS/local models)
-{ "id": 1, "result": { "account": null, "requiresOpenaiAuth": true, "requiresGeminiAuth": false } }  // OpenAI auth required (typical for OpenAI-hosted models)
-{ "id": 1, "result": { "account": { "type": "apiKey" }, "requiresOpenaiAuth": true, "requiresGeminiAuth": false } }
-{ "id": 1, "result": { "account": { "type": "chatgpt", "email": "user@example.com", "planType": "pro" }, "requiresOpenaiAuth": true, "requiresGeminiAuth": false } }
-{ "id": 1, "result": { "account": { "type": "gemini", "email": "user@example.com" }, "requiresOpenaiAuth": false, "requiresGeminiAuth": false } }
+{ "id": 1, "result": { "account": null, "requiresOpenaiAuth": false } } // No OpenAI auth needed (e.g., OSS/local models)
+{ "id": 1, "result": { "account": null, "requiresOpenaiAuth": true } }  // OpenAI auth required (typical for OpenAI-hosted models)
+{ "id": 1, "result": { "account": { "type": "apiKey" }, "requiresOpenaiAuth": true } }
+{ "id": 1, "result": { "account": { "type": "chatgpt", "email": "user@example.com", "planType": "pro" }, "requiresOpenaiAuth": true } }
 ```
 
 Field notes:
 
 - `refreshToken` (bool): set `true` to force a token refresh.
 - `requiresOpenaiAuth` reflects the active provider; when `false`, Codex can run without OpenAI credentials.
-- `requiresGeminiAuth` is `true` when the active provider is Gemini and no Gemini credentials are configured.
 
 ### 2) Log in with an API key
 
@@ -932,36 +968,22 @@ Field notes:
    { "method": "account/updated", "params": { "authMode": "chatgpt" } }
    ```
 
-### 4) Cancel a pending login
+### 4) Cancel a ChatGPT login
 
 ```json
 { "method": "account/login/cancel", "id": 4, "params": { "loginId": "<uuid>" } }
 { "method": "account/login/completed", "params": { "loginId": "<uuid>", "success": false, "error": "…" } }
 ```
 
-### 5) Log in with Gemini (browser flow)
+### 5) Logout
 
 ```json
-{ "method": "account/login/start", "id": 5, "params": { "type": "gemini" } }
-{ "id": 5, "result": { "type": "gemini", "loginId": "<uuid>", "authUrl": "https://accounts.google.com/…" } }
-```
-
-Wait for notifications:
-
-```json
-{ "method": "account/login/completed", "params": { "loginId": "<uuid>", "success": true, "error": null } }
+{ "method": "account/logout", "id": 5 }
+{ "id": 5, "result": {} }
 { "method": "account/updated", "params": { "authMode": null } }
 ```
 
-### 6) Logout
-
-```json
-{ "method": "account/logout", "id": 6 }
-{ "id": 6, "result": {} }
-{ "method": "account/updated", "params": { "authMode": null } }
-```
-
-### 7) Rate limits (ChatGPT)
+### 6) Rate limits (ChatGPT)
 
 ```json
 { "method": "account/rateLimits/read", "id": 6 }

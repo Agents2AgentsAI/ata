@@ -7,18 +7,14 @@ use async_trait::async_trait;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_research_tools::config::ResearchConfig;
 use codex_research_tools::error::ResearchError;
-#[cfg(feature = "research-hackernews")]
 use codex_research_tools::types::HnGetThreadParams;
-#[cfg(feature = "research-hackernews")]
 use codex_research_tools::types::HnSearchParams;
 #[cfg(feature = "research-latex")]
 use codex_research_tools::types::LatexCompileParams;
 use codex_research_tools::types::PaginationParams;
 use codex_research_tools::types::PaperRecommendationParams;
 use codex_research_tools::types::PaperSearchParams;
-#[cfg(feature = "research-patents")]
 use codex_research_tools::types::PatentGetParams;
-#[cfg(feature = "research-patents")]
 use codex_research_tools::types::PatentSearchParams;
 #[cfg(feature = "research-pdf-images")]
 use codex_research_tools::types::PdfExtractFiguresParams;
@@ -191,21 +187,17 @@ impl ResearchBridgeHandler {
             "latex_compile" => dispatch_with_params!(LatexCompileParams, |params| self
                 .toolkit
                 .latex_compile(params)),
-            #[cfg(feature = "research-hackernews")]
             "hn_search" => {
                 dispatch_with_params!(HnSearchParams, |params| self.toolkit.hn_search(params))
             }
-            #[cfg(feature = "research-hackernews")]
             "hn_get_thread" => dispatch_with_params!(HnGetThreadParams, |params| self
                 .toolkit
                 .hn_get_thread(params)),
-            #[cfg(feature = "research-patents")]
             "patent_search" => {
                 dispatch_with_params!(PatentSearchParams, |params| self
                     .toolkit
                     .patent_search(params))
             }
-            #[cfg(feature = "research-patents")]
             "patent_get" => {
                 dispatch_with_params!(PatentGetParams, |params| self.toolkit.patent_get(params))
             }
@@ -215,25 +207,20 @@ impl ResearchBridgeHandler {
                     .toolkit
                     .pdf_extract_figures(params))
             }
-            #[cfg(feature = "research-repo")]
             "repo_clone_and_summarize" => dispatch_with_params!(RepoCloneArgs, |params| self
                 .toolkit
                 .repo_clone_and_summarize(params.repo_url.as_str(), params.branch.as_deref())),
-            #[cfg(feature = "research-repo")]
             "repo_find_models" => dispatch_with_params!(RepoFindModelsArgs, |params| self
                 .toolkit
                 .repo_find_models(params.repo_url.as_str(), params.framework.as_deref())),
-            #[cfg(feature = "research-repo")]
             "repo_extract_requirements" => dispatch_with_params!(RepoUrlArgs, |params| self
                 .toolkit
                 .repo_extract_requirements(params.repo_url.as_str())),
-            #[cfg(feature = "research-repo")]
             "repo_find_entrypoints" => {
                 dispatch_with_params!(RepoFindEntrypointsArgs, |params| self
                     .toolkit
                     .repo_find_entrypoints(params.repo_url.as_str(), params.task_hint.as_deref()))
             }
-            #[cfg(feature = "research-repo")]
             "repo_extract_io_shapes" => {
                 dispatch_with_params!(RepoExtractIoShapesArgs, |params| self
                     .toolkit
@@ -242,19 +229,15 @@ impl ResearchBridgeHandler {
                         params.model_class.as_deref()
                     ))
             }
-            #[cfg(feature = "research-repo")]
             "repo_get_health" => dispatch_with_params!(RepoUrlArgs, |params| self
                 .toolkit
                 .repo_get_health(params.repo_url.as_str())),
-            #[cfg(feature = "research-repo")]
             "repo_find_export_paths" => dispatch_with_params!(RepoUrlArgs, |params| self
                 .toolkit
                 .repo_find_export_paths(params.repo_url.as_str())),
-            #[cfg(feature = "research-repo")]
             "repo_extract_config_schema" => dispatch_with_params!(RepoUrlArgs, |params| self
                 .toolkit
                 .repo_extract_config_schema(params.repo_url.as_str())),
-            #[cfg(feature = "research-repo")]
             "repo_diff_requirements" => {
                 dispatch_with_params!(RepoDiffRequirementsArgs, |params| self
                     .toolkit
@@ -431,41 +414,35 @@ struct PaperPaginationArgs {
     max_chars_per_item: Option<u32>,
 }
 
-#[cfg(feature = "research-repo")]
 #[derive(Deserialize)]
 struct RepoUrlArgs {
     repo_url: String,
 }
 
-#[cfg(feature = "research-repo")]
 #[derive(Deserialize)]
 struct RepoCloneArgs {
     repo_url: String,
     branch: Option<String>,
 }
 
-#[cfg(feature = "research-repo")]
 #[derive(Deserialize)]
 struct RepoFindModelsArgs {
     repo_url: String,
     framework: Option<String>,
 }
 
-#[cfg(feature = "research-repo")]
 #[derive(Deserialize)]
 struct RepoFindEntrypointsArgs {
     repo_url: String,
     task_hint: Option<String>,
 }
 
-#[cfg(feature = "research-repo")]
 #[derive(Deserialize)]
 struct RepoExtractIoShapesArgs {
     repo_url: String,
     model_class: Option<String>,
 }
 
-#[cfg(feature = "research-repo")]
 #[derive(Deserialize)]
 struct RepoDiffRequirementsArgs {
     repo_url: String,

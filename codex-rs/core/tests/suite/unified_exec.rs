@@ -6,12 +6,12 @@ use std::sync::OnceLock;
 use anyhow::Context;
 use anyhow::Result;
 use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecCommandSource;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::process::process_is_alive;
@@ -2570,6 +2570,7 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
 
     let python = match which::which("python").or_else(|_| which::which("python3")) {
         Ok(path) => path,

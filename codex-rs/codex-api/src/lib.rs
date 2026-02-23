@@ -34,6 +34,9 @@ pub use crate::endpoint::aggregate::AggregateStreamExt;
 pub use crate::endpoint::compact::CompactClient;
 pub use crate::endpoint::memories::MemoriesClient;
 pub use crate::endpoint::models::ModelsClient;
+pub use crate::endpoint::realtime_websocket::RealtimeSessionConfig;
+pub use crate::endpoint::realtime_websocket::RealtimeWebsocketClient;
+pub use crate::endpoint::realtime_websocket::RealtimeWebsocketConnection;
 pub use crate::endpoint::responses::ResponsesClient;
 pub use crate::endpoint::responses::ResponsesOptions;
 pub use crate::endpoint::responses_websocket::ResponsesWebsocketClient;
@@ -44,6 +47,8 @@ pub use crate::provider::is_azure_responses_wire_base_url;
 pub use crate::sse::stream_from_fixture;
 pub use crate::telemetry::SseTelemetry;
 pub use crate::telemetry::WebsocketTelemetry;
+pub use codex_protocol::protocol::RealtimeAudioFrame;
+pub use codex_protocol::protocol::RealtimeEvent;
 
 // Multi-provider support
 pub use crate::provider_adapter::ProviderAdapter;
