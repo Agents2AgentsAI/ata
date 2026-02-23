@@ -35,6 +35,8 @@ const USE_LOGIN_SHELL: bool = false;
 /// command should be run privileged outside the sandbox.
 #[tokio::test(flavor = "current_thread")]
 async fn accept_elicitation_for_prompt_rule() -> Result<()> {
+    core_test_support::skip_if_sandbox!(Ok(()));
+
     // Configure a stdio transport that will launch the MCP server using
     // $CODEX_HOME with an execpolicy that prompts for `git init` commands.
     let codex_home = TempDir::new()?;
@@ -64,6 +66,8 @@ prefix_rule(
 /// The suite resolves `tests/suite/zsh` via DotSlash on first use.
 #[tokio::test(flavor = "current_thread")]
 async fn accept_elicitation_for_prompt_rule_with_zsh() -> Result<()> {
+    core_test_support::skip_if_sandbox!(Ok(()));
+
     let codex_home = TempDir::new()?;
     write_default_execpolicy(
         r#"
@@ -194,24 +198,24 @@ async fn resolve_test_zsh_path(dotslash_cache: &std::path::Path) -> Result<PathB
 }
 
 fn ensure_codex_cli() -> Result<PathBuf> {
-    let codex_cli = codex_utils_cargo_bin::cargo_bin("codex")?;
+    let codex_cli = codex_utils_cargo_bin::cargo_bin("ata")?;
 
     let metadata = codex_cli.metadata().with_context(|| {
         format!(
-            "failed to read metadata for codex binary at {}",
+            "failed to read metadata for ata binary at {}",
             codex_cli.display()
         )
     })?;
     ensure!(
         metadata.is_file(),
-        "expected codex binary at {} to be a file; run `cargo build -p codex-cli --bin codex` before this test",
+        "expected ata binary at {} to be a file; run `cargo build -p codex-cli --bin ata` before this test",
         codex_cli.display()
     );
 
     let mode = metadata.permissions().mode();
     ensure!(
         mode & 0o111 != 0,
-        "codex binary at {} is not executable (mode {mode:o}); run `cargo build -p codex-cli --bin codex` before this test",
+        "ata binary at {} is not executable (mode {mode:o}); run `cargo build -p codex-cli --bin ata` before this test",
         codex_cli.display()
     );
 

@@ -2266,18 +2266,6 @@ impl Session {
             .await
     }
 
-    pub(crate) fn is_model_switch_developer_message(item: &ResponseItem) -> bool {
-        let ResponseItem::Message { role, content, .. } = item else {
-            return false;
-        };
-        role == "developer"
-            && content.iter().any(|content_item| {
-                matches!(
-                    content_item,
-                    ContentItem::InputText { text } if text.starts_with("<model_switch>")
-                )
-            })
-    }
     fn build_settings_update_items(
         &self,
         reference_context_item: Option<&TurnContextItem>,
