@@ -198,24 +198,24 @@ async fn resolve_test_zsh_path(dotslash_cache: &std::path::Path) -> Result<PathB
 }
 
 fn ensure_codex_cli() -> Result<PathBuf> {
-    let codex_cli = codex_utils_cargo_bin::cargo_bin("codex")?;
+    let codex_cli = codex_utils_cargo_bin::cargo_bin("ata")?;
 
     let metadata = codex_cli.metadata().with_context(|| {
         format!(
-            "failed to read metadata for codex binary at {}",
+            "failed to read metadata for ata binary at {}",
             codex_cli.display()
         )
     })?;
     ensure!(
         metadata.is_file(),
-        "expected codex binary at {} to be a file; run `cargo build -p codex-cli --bin codex` before this test",
+        "expected ata binary at {} to be a file; run `cargo build -p codex-cli --bin ata` before this test",
         codex_cli.display()
     );
 
     let mode = metadata.permissions().mode();
     ensure!(
         mode & 0o111 != 0,
-        "codex binary at {} is not executable (mode {mode:o}); run `cargo build -p codex-cli --bin codex` before this test",
+        "ata binary at {} is not executable (mode {mode:o}); run `cargo build -p codex-cli --bin ata` before this test",
         codex_cli.display()
     );
 
