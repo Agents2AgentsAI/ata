@@ -35,6 +35,8 @@ const USE_LOGIN_SHELL: bool = false;
 /// command should be run privileged outside the sandbox.
 #[tokio::test(flavor = "current_thread")]
 async fn accept_elicitation_for_prompt_rule() -> Result<()> {
+    core_test_support::skip_if_sandbox!(Ok(()));
+
     // Configure a stdio transport that will launch the MCP server using
     // $CODEX_HOME with an execpolicy that prompts for `git init` commands.
     let codex_home = TempDir::new()?;
@@ -64,6 +66,8 @@ prefix_rule(
 /// The suite resolves `tests/suite/zsh` via DotSlash on first use.
 #[tokio::test(flavor = "current_thread")]
 async fn accept_elicitation_for_prompt_rule_with_zsh() -> Result<()> {
+    core_test_support::skip_if_sandbox!(Ok(()));
+
     let codex_home = TempDir::new()?;
     write_default_execpolicy(
         r#"
