@@ -1,4 +1,10 @@
-# Setting Up Zotero with the Local API
+# Setting Up Zotero with Ata
+
+## Why Ata + Zotero?
+
+Ata brings AI-powered research assistance directly into your terminal — and when paired with Zotero, it becomes a powerhouse for academic and professional research. Search your entire reference library, summarize papers, pull citations, and organize findings without ever leaving the command line. No more context-switching between your PDF reader, browser, and reference manager. Just ask Ata, and your Zotero library is at your fingertips.
+
+## Local API Setup
 
 Zotero exposes a local HTTP API that allows other applications on your computer to interact with your Zotero library. This guide walks you through enabling it.
 
