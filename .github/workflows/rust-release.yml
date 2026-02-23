@@ -58,9 +58,7 @@ jobs:
         working-directory: codex-rs
     env:
       CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
-      # TODO: Re-enable once Apple signing is configured.
-      HAS_APPLE_SIGNING: "false"
-      # HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
+      HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
 
     strategy:
       fail-fast: false
@@ -256,11 +254,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Remove debug symbols and intermediate build artifacts to free space.
-          find codex-rs/target -name '*.d' -o -name '*.rlib' -o -name '*.rmeta' | xargs rm -f 2>/dev/null || true
-          find codex-rs/target -path '*/deps/*' -name '*.o' | xargs rm -f 2>/dev/null || true
-          # Remove incremental compilation data.
-          find codex-rs/target -type d -name incremental -exec rm -rf {} + 2>/dev/null || true
+          target="${{ matrix.target }}"
+          release_dir="target/${target}/release"
+
+          # Preserve only the final release binaries, then purge everything
+          # else under target/ to reclaim space for DMG creation. This is
+          # necessary because APFS copy-on-write may not immediately free
+          # space from prior build/signing steps.
+          staging="$(mktemp -d)"
+          for bin in ata ata-responses-api-proxy; do
+            cp "${release_dir}/${bin}" "${staging}/${bin}"
+          done
+
+          rm -rf target
+          mkdir -p "${release_dir}"
+
+          for bin in ata ata-responses-api-proxy; do
+            mv "${staging}/${bin}" "${release_dir}/${bin}"
+          done
+          rm -rf "${staging}"
+
+          # Also clean Cargo registry source cache.
+          rm -rf "${CARGO_HOME:-$HOME/.cargo}"/registry/src 2>/dev/null || true
+
           echo "Disk usage after cleanup:"
           df -h .
 
