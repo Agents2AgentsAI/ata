@@ -120,7 +120,7 @@ pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
 }
 
 pub fn get_codex_user_agent() -> String {
-    let build_version = env!("CARGO_PKG_VERSION");
+    let build_version = crate::models_manager::OPENAI_MODELS_CLIENT_VERSION;
     let os_info = os_info::get();
     let originator = originator();
     let prefix = format!(
