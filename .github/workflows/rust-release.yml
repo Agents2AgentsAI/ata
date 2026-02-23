@@ -257,7 +257,7 @@ jobs:
         run: |
           set -euo pipefail
           target="${{ matrix.target }}"
-          release_dir="codex-rs/target/${target}/release"
+          release_dir="target/${target}/release"
 
           # Preserve only the final release binaries we need for the DMG.
           mkdir -p /tmp/ata-binaries
@@ -269,7 +269,7 @@ jobs:
           cp "${release_dir}"/*.sigstore /tmp/ata-binaries/ 2>/dev/null || true
 
           # Wipe the entire target directory to reclaim space.
-          rm -rf codex-rs/target
+          rm -rf target
 
           # Restore binaries into the expected release directory.
           mkdir -p "${release_dir}"
