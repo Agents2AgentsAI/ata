@@ -856,6 +856,12 @@ impl DocumentReaderView {
     }
 
     fn handle_content_key(&mut self, key_event: KeyEvent) {
+        // Cancel pending quit confirmation on any key except q/y.
+        if self.pending_quit && !matches!(key_event.code, KeyCode::Char('q') | KeyCode::Char('y')) {
+            self.pending_quit = false;
+            return;
+        }
+
         // Ctrl+d / Ctrl+u: half-page, Ctrl+f / Ctrl+b: full-page cursor jump.
         if key_event.modifiers.contains(KeyModifiers::CONTROL) {
             self.pending_g = false;
