@@ -1,4 +1,3 @@
-use crate::config::find_codex_home;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
@@ -20,7 +19,6 @@ use crate::unified_exec::UnifiedExecResponse;
 use crate::unified_exec::WriteStdinRequest;
 use async_trait::async_trait;
 use codex_protocol::models::FunctionCallOutputBody;
-use codex_shell_command::bash::parse_shell_lc_plain_commands;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -96,17 +94,15 @@ impl ToolHandler for UnifiedExecHandler {
         let Ok(params) = serde_json::from_str::<ExecCommandArgs>(arguments) else {
             return true;
         };
-        let command = get_command(&params, invocation.session.user_shell());
-        if is_known_safe_command(&command) {
-            return false;
-        }
-        // The agent manages its own internal storage (KB, skills, sessions)
-        // under the codex home directory. Destructive commands that only
-        // target paths inside that directory don't need user approval.
-        if all_commands_target_only_codex_home(&command) {
-            return false;
-        }
-        true
+        let command = match get_command(
+            &params,
+            invocation.session.user_shell(),
+            invocation.turn.tools_config.allow_login_shell,
+        ) {
+            Ok(command) => command,
+            Err(_) => return true,
+        };
+        !is_known_safe_command(&command)
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
@@ -136,7 +132,12 @@ impl ToolHandler for UnifiedExecHandler {
             "exec_command" => {
                 let args: ExecCommandArgs = parse_arguments(&arguments)?;
                 let process_id = manager.allocate_process_id().await;
-                let command = get_command(&args, session.user_shell());
+                let command = get_command(
+                    &args,
+                    session.user_shell(),
+                    turn.tools_config.allow_login_shell,
+                )
+                .map_err(FunctionCallError::RespondToModel)?;
 
                 let ExecCommandArgs {
                     workdir,
@@ -245,79 +246,11 @@ impl ToolHandler for UnifiedExecHandler {
     }
 }
 
-/// Returns `true` when every sub-command in `command` only operates on paths
-/// inside the codex home directory (`~/.ata/`). This lets the agent manage its
-/// own internal storage (knowledge-base, skills, sessions, etc.) without
-/// requiring user approval for destructive operations like `rm -rf`.
-fn all_commands_target_only_codex_home(command: &[String]) -> bool {
-    let Ok(home) = find_codex_home() else {
-        return false;
-    };
-    let home_str = home.to_string_lossy();
-
-    // Collect all individual commands, handling `bash -lc "cmd1 && cmd2"`.
-    let sub_commands = if let Some(parsed) = parse_shell_lc_plain_commands(command) {
-        parsed
-    } else {
-        vec![command.to_vec()]
-    };
-
-    for cmd in &sub_commands {
-        let Some(cmd0) = cmd.first().map(String::as_str) else {
-            continue;
-        };
-        let bin = std::path::Path::new(cmd0)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or(cmd0);
-
-        match bin {
-            // For rm, every path argument must be under codex home.
-            "rm" => {
-                let paths: Vec<&str> = cmd
-                    .iter()
-                    .skip(1)
-                    .map(String::as_str)
-                    .filter(|a| !a.starts_with('-'))
-                    .collect();
-                if paths.is_empty() {
-                    return false;
-                }
-                if !paths.iter().all(|p| p.starts_with(home_str.as_ref())) {
-                    return false;
-                }
-            }
-            // For other commands (echo, cat, mv, cp, python, etc.) that appear
-            // alongside the rm in a compound command, check if they only write
-            // to codex home paths. Be conservative: only allow commands that
-            // are already known-safe, or whose output targets codex home.
-            _ => {
-                if !codex_shell_command::is_safe_command::is_known_safe_command(cmd) {
-                    // Not a known-safe command — check if all path-like args
-                    // are under codex home. This handles `echo ... > ~/.ata/...`
-                    // style commands that appear in compound expressions.
-                    let has_path_args = cmd.iter().skip(1).any(|a| a.starts_with('/'));
-                    if has_path_args {
-                        let all_internal = cmd
-                            .iter()
-                            .skip(1)
-                            .filter(|a| a.starts_with('/'))
-                            .all(|p| p.starts_with(home_str.as_ref()));
-                        if !all_internal {
-                            return false;
-                        }
-                    } else {
-                        return false;
-                    }
-                }
-            }
-        }
-    }
-
-    true
-}
-
-pub(crate) fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String> {
+pub(crate) fn get_command(
+    args: &ExecCommandArgs,
+    session_shell: Arc<Shell>,
+    allow_login_shell: bool,
+) -> Result<Vec<String>, String> {
     let model_shell = args.shell.as_ref().map(|shell_str| {
         let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
         shell.shell_snapshot = crate::shell::empty_shell_snapshot_receiver();
@@ -325,9 +258,17 @@ pub(crate) fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> 
     });
 
     let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
-    let use_login_shell = args.login.unwrap_or(false);
+    let use_login_shell = match args.login {
+        Some(true) if !allow_login_shell => {
+            return Err(
+                "login shell is disabled by config; omit `login` or set it to false.".to_string(),
+            );
+        }
+        Some(use_login_shell) => use_login_shell,
+        None => allow_login_shell,
+    };
 
-    shell.derive_exec_args(&args.cmd, use_login_shell)
+    Ok(shell.derive_exec_args(&args.cmd, use_login_shell))
 }
 
 fn format_response(response: &UnifiedExecResponse) -> String {
@@ -374,7 +315,8 @@ mod tests {
 
         assert!(args.shell.is_none());
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command =
+            get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
 
         assert_eq!(command.len(), 3);
         assert_eq!(command[2], "echo hello");
@@ -389,7 +331,8 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("/bin/bash"));
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command =
+            get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
 
         assert_eq!(command.last(), Some(&"echo hello".to_string()));
         if command
@@ -409,7 +352,8 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("powershell"));
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command =
+            get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
 
         assert_eq!(command[2], "echo hello");
         Ok(())
@@ -423,43 +367,25 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("cmd"));
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command =
+            get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
 
         assert_eq!(command[2], "echo hello");
         Ok(())
     }
 
     #[test]
-    fn rm_under_codex_home_is_allowed() {
-        let home = find_codex_home().expect("codex home should resolve");
-        let kb_path = format!("{}/knowledge-base/cards/*", home.display());
-        let command = vec![
-            "bash".to_string(),
-            "-lc".to_string(),
-            format!("rm -rf {kb_path}"),
-        ];
-        assert!(all_commands_target_only_codex_home(&command));
-    }
+    fn test_get_command_rejects_explicit_login_when_disallowed() -> anyhow::Result<()> {
+        let json = r#"{"cmd": "echo hello", "login": true}"#;
 
-    #[test]
-    fn rm_outside_codex_home_is_blocked() {
-        let command = vec![
-            "bash".to_string(),
-            "-lc".to_string(),
-            "rm -rf /etc/passwd".to_string(),
-        ];
-        assert!(!all_commands_target_only_codex_home(&command));
-    }
+        let args: ExecCommandArgs = parse_arguments(json)?;
+        let err = get_command(&args, Arc::new(default_user_shell()), false)
+            .expect_err("explicit login should be rejected");
 
-    #[test]
-    fn rm_mixed_paths_is_blocked() {
-        let home = find_codex_home().expect("codex home should resolve");
-        let kb_path = format!("{}/knowledge-base/cards/*", home.display());
-        let command = vec![
-            "bash".to_string(),
-            "-lc".to_string(),
-            format!("rm -rf {kb_path} /etc/passwd"),
-        ];
-        assert!(!all_commands_target_only_codex_home(&command));
+        assert!(
+            err.contains("login shell is disabled by config"),
+            "unexpected error: {err}"
+        );
+        Ok(())
     }
 }
