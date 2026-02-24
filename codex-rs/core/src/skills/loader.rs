@@ -16,6 +16,7 @@ use crate::skills::permissions::SkillManifestPermissions;
 use crate::skills::permissions::compile_permission_profile;
 use crate::skills::system::research_cache_root_dir;
 use crate::skills::system::system_cache_root_dir;
+use crate::skills::system::visual_reports_cache_root_dir;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::protocol::SkillScope;
 use dirs::home_dir;
@@ -239,6 +240,13 @@ fn skill_roots_from_layer_stack_inner(
                 // immediately because the path doesn't exist on disk.
                 roots.push(SkillRoot {
                     path: research_cache_root_dir(config_folder.as_path()),
+                    scope: SkillScope::System,
+                });
+
+                // Visual-reports skills are cached under
+                // `$CODEX_HOME/skills/.system-visual-reports`.
+                roots.push(SkillRoot {
+                    path: visual_reports_cache_root_dir(config_folder.as_path()),
                     scope: SkillScope::System,
                 });
             }
@@ -955,6 +963,10 @@ mod tests {
                     SkillScope::System,
                     user_folder.join("skills").join(".system-research")
                 ),
+                (
+                    SkillScope::System,
+                    user_folder.join("skills").join(".system-visual-reports")
+                ),
                 (SkillScope::Admin, system_folder.join("skills")),
             ]
         );
@@ -1017,6 +1029,10 @@ mod tests {
                 (
                     SkillScope::System,
                     user_folder.join("skills").join(".system-research")
+                ),
+                (
+                    SkillScope::System,
+                    user_folder.join("skills").join(".system-visual-reports")
                 ),
             ]
         );
@@ -2621,7 +2637,12 @@ permissions:
             .into_iter()
             .map(|root| root.scope)
             .collect();
-        let mut expected = vec![SkillScope::User, SkillScope::System, SkillScope::System];
+        let mut expected = vec![
+            SkillScope::User,
+            SkillScope::System,
+            SkillScope::System,
+            SkillScope::System,
+        ];
         if home_dir().is_some() {
             expected.insert(1, SkillScope::User);
         }

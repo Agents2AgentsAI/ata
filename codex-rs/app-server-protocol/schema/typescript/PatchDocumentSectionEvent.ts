@@ -5,4 +5,12 @@
 /**
  * Event emitted when the agent calls `patch_document_section`.
  */
-export type PatchDocumentSectionEvent = { call_id: string, turn_id: string, document_id: string, section_index: number, old_text: string, new_text: string, };
+export type PatchDocumentSectionEvent = { call_id: string, turn_id: string, document_id: string, section_index: number, old_text: string, new_text: string, 
+/**
+ * Whether the patched content should be collapsible.
+ */
+foldable: boolean, 
+/**
+ * Short summary shown when the fold is collapsed.
+ */
+summary: string | null, };

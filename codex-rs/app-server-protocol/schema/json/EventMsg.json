@@ -2492,10 +2492,23 @@
             "document_id": {
               "type": "string"
             },
+            "foldable": {
+              "default": false,
+              "description": "Whether the appended content should be collapsible.",
+              "type": "boolean"
+            },
             "section_index": {
               "format": "uint",
               "minimum": 0.0,
               "type": "integer"
+            },
+            "summary": {
+              "default": null,
+              "description": "Short summary shown when the fold is collapsed.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "turn_id": {
               "type": "string"
@@ -2528,6 +2541,11 @@
             "document_id": {
               "type": "string"
             },
+            "foldable": {
+              "default": false,
+              "description": "Whether the patched content should be collapsible.",
+              "type": "boolean"
+            },
             "new_text": {
               "type": "string"
             },
@@ -2538,6 +2556,14 @@
               "format": "uint",
               "minimum": 0.0,
               "type": "integer"
+            },
+            "summary": {
+              "default": null,
+              "description": "Short summary shown when the fold is collapsed.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "turn_id": {
               "type": "string"
@@ -7957,10 +7983,23 @@
         "document_id": {
           "type": "string"
         },
+        "foldable": {
+          "default": false,
+          "description": "Whether the appended content should be collapsible.",
+          "type": "boolean"
+        },
         "section_index": {
           "format": "uint",
           "minimum": 0.0,
           "type": "integer"
+        },
+        "summary": {
+          "default": null,
+          "description": "Short summary shown when the fold is collapsed.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "turn_id": {
           "type": "string"
@@ -7993,6 +8032,11 @@
         "document_id": {
           "type": "string"
         },
+        "foldable": {
+          "default": false,
+          "description": "Whether the patched content should be collapsible.",
+          "type": "boolean"
+        },
         "new_text": {
           "type": "string"
         },
@@ -8003,6 +8047,14 @@
           "format": "uint",
           "minimum": 0.0,
           "type": "integer"
+        },
+        "summary": {
+          "default": null,
+          "description": "Short summary shown when the fold is collapsed.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "turn_id": {
           "type": "string"

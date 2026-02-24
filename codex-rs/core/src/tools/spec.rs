@@ -8,9 +8,6 @@ use crate::data::SharedDataToolkit;
 use crate::data::tool_names::find_mcp_tool_matches as find_mcp_data_tool_matches;
 use crate::features::Feature;
 use crate::features::Features;
-use crate::kb::SharedKbToolkit;
-#[cfg(feature = "kb")]
-use crate::kb::tool_names::find_mcp_tool_matches as find_mcp_kb_tool_matches;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::research::SharedResearchToolkit;
 use crate::research::tool_names::find_mcp_tool_matches;
@@ -1373,19 +1370,6 @@ fn data_tool_to_openai_tool(
     })
 }
 
-#[cfg(feature = "kb")]
-fn kb_tool_to_openai_tool(
-    tool: &codex_kb::tool_specs::ToolDef,
-) -> Result<ResponsesApiTool, serde_json::Error> {
-    let input_schema = parse_tool_input_schema(&tool.input_schema)?;
-    Ok(ResponsesApiTool {
-        name: tool.native_name.to_string(),
-        description: tool.description.to_string(),
-        strict: false,
-        parameters: input_schema,
-    })
-}
-
 /// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
 /// JsonSchema enum. This function:
 /// - Ensures every schema object has a "type". If missing, infers it from
@@ -1504,15 +1488,7 @@ pub(crate) fn build_specs(
     app_tools: Option<HashMap<String, ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
-    build_specs_with_toolkits(
-        config,
-        mcp_tools,
-        app_tools,
-        dynamic_tools,
-        None,
-        None,
-        None,
-    )
+    build_specs_with_toolkits(config, mcp_tools, app_tools, dynamic_tools, None, None)
 }
 
 pub(crate) fn build_specs_with_research(
@@ -1529,7 +1505,6 @@ pub(crate) fn build_specs_with_research(
         dynamic_tools,
         research_toolkit,
         None,
-        None,
     )
 }
 
@@ -1540,12 +1515,9 @@ pub(crate) fn build_specs_with_toolkits(
     dynamic_tools: &[DynamicToolSpec],
     research_toolkit: Option<&Arc<SharedResearchToolkit>>,
     data_toolkit: Option<&Arc<SharedDataToolkit>>,
-    kb_toolkit: Option<&Arc<SharedKbToolkit>>,
 ) -> ToolRegistryBuilder {
     #[cfg(not(feature = "data"))]
     let _ = data_toolkit;
-    #[cfg(not(feature = "kb"))]
-    let _ = kb_toolkit;
 
     use crate::tools::handlers::ApplyPatchHandler;
     #[cfg(feature = "data")]
@@ -1555,8 +1527,6 @@ pub(crate) fn build_specs_with_toolkits(
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
     use crate::tools::handlers::JsReplResetHandler;
-    #[cfg(feature = "kb")]
-    use crate::tools::handlers::KbBridgeHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
@@ -1822,40 +1792,6 @@ pub(crate) fn build_specs_with_toolkits(
         }
     }
 
-    #[cfg(feature = "kb")]
-    let mut suppressed_mcp_kb_tool_names: BTreeSet<String> = BTreeSet::new();
-
-    #[cfg(feature = "kb")]
-    if let Some(toolkit) = kb_toolkit {
-        let kb_handler = Arc::new(KbBridgeHandler::new(Arc::clone(toolkit)));
-        let discovered_mcp_tools: BTreeMap<String, rmcp::model::Tool> = mcp_tools
-            .as_ref()
-            .map(|tools| {
-                tools
-                    .iter()
-                    .map(|(name, tool)| (name.clone(), tool.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        for def in codex_kb::tool_specs::all_tool_defs() {
-            let matching_mcp_tools = find_mcp_kb_tool_matches(def.mcp_name, &discovered_mcp_tools);
-            match kb_tool_to_openai_tool(&def) {
-                Ok(converted_tool) => {
-                    builder.push_spec(ToolSpec::Function(converted_tool));
-                    builder.register_handler(def.native_name, kb_handler.clone());
-                    suppressed_mcp_kb_tool_names.extend(matching_mcp_tools);
-                }
-                Err(err) => {
-                    tracing::error!(
-                        tool_name = def.native_name,
-                        "failed to convert native kb tool schema: {err}"
-                    );
-                }
-            }
-        }
-    }
-
     if let Some(mcp_tools) = mcp_tools {
         let mut entries: Vec<(String, rmcp::model::Tool)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1866,10 +1802,6 @@ pub(crate) fn build_specs_with_toolkits(
             }
             #[cfg(feature = "data")]
             if suppressed_mcp_data_tool_names.contains(&name) {
-                continue;
-            }
-            #[cfg(feature = "kb")]
-            if suppressed_mcp_kb_tool_names.contains(&name) {
                 continue;
             }
             match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {

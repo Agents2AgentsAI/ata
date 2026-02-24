@@ -1254,9 +1254,7 @@ impl ChatWidget {
     }
 
     fn on_agent_message(&mut self, message: String) {
-        // While the document reader is active, suppress chat history output —
-        // the agent's response goes through update_document_section instead.
-        if self.bottom_pane.is_document_reader_active() {
+        if self.is_suppressing_streaming_for_reader() {
             return;
         }
         // If we have a stream_controller, then the final agent message is redundant and will be a
@@ -1270,10 +1268,7 @@ impl ChatWidget {
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
-        // While the document reader is active, suppress streaming into the
-        // chat history — the agent's response should arrive via
-        // `update_document_section` into the card instead.
-        if self.bottom_pane.is_document_reader_active() {
+        if self.is_suppressing_streaming_for_reader() {
             return;
         }
         self.handle_streaming_delta(delta);
@@ -1344,7 +1339,7 @@ impl ChatWidget {
         // (between **/**) as the chunk header. Show this header as status.
         self.reasoning_buffer.push_str(&delta);
 
-        if self.bottom_pane.is_document_reader_active() {
+        if self.is_suppressing_streaming_for_reader() {
             return;
         }
 
@@ -1366,7 +1361,7 @@ impl ChatWidget {
     fn on_agent_reasoning_final(&mut self) {
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
-        if !self.full_reasoning_buffer.is_empty() && !self.bottom_pane.is_document_reader_active() {
+        if !self.full_reasoning_buffer.is_empty() && !self.is_suppressing_streaming_for_reader() {
             let cell =
                 history_cell::new_reasoning_summary_block(self.full_reasoning_buffer.clone());
             self.add_boxed_history(cell);
@@ -1907,31 +1902,8 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_plan_update(update));
     }
 
-    fn on_present_document(&mut self, ev: codex_protocol::document_reader::PresentDocumentEvent) {
-        self.flush_active_cell();
-        self.bottom_pane.show_document_reader(ev);
-    }
-
-    fn on_update_document_section(
-        &mut self,
-        ev: codex_protocol::document_reader::UpdateDocumentSectionEvent,
-    ) {
-        self.bottom_pane.update_document_section(&ev);
-    }
-
-    fn on_append_document_section(
-        &mut self,
-        ev: codex_protocol::document_reader::AppendDocumentSectionEvent,
-    ) {
-        self.bottom_pane.append_document_section(&ev);
-    }
-
-    fn on_patch_document_section(
-        &mut self,
-        ev: codex_protocol::document_reader::PatchDocumentSectionEvent,
-    ) {
-        self.bottom_pane.patch_document_section(&ev);
-    }
+    // Document reader event handlers are in chatwidget_document_reader.rs
+    // (included at module level below) to reduce merge conflicts with upstream.
 
     fn on_exec_approval_request(&mut self, _id: String, ev: ExecApprovalRequestEvent) {
         let ev2 = ev.clone();
@@ -7952,6 +7924,10 @@ pub(crate) fn show_review_commit_picker_with_entries(
         ..Default::default()
     });
 }
+
+// Document reader integration (fork-specific, kept in a separate file to reduce
+// merge conflicts with upstream).
+include!("chatwidget_document_reader.rs");
 
 #[cfg(test)]
 pub(crate) mod tests;

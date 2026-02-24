@@ -131,8 +131,6 @@ pub enum Feature {
     Research,
     /// Enable data tools for dataset discovery and management.
     Data,
-    /// Enable knowledge base tools for card-based knowledge management.
-    Kb,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Prompt for missing skill env var dependencies.
@@ -643,16 +641,6 @@ pub const FEATURES: &[FeatureSpec] = &[
             name: "Data Tools",
             menu_description: "Dataset discovery and management tools for HuggingFace, Kaggle, and more.",
             announcement: "Data tools for dataset discovery are available as an experimental feature.",
-        },
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::Kb,
-        key: "kb",
-        stage: Stage::Experimental {
-            name: "Knowledge Base",
-            menu_description: "Card-based knowledge management for organizing research notes, papers, and insights.",
-            announcement: "Knowledge base tools are available as an experimental feature.",
         },
         default_enabled: false,
     },

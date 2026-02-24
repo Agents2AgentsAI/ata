@@ -306,6 +306,7 @@ fn map_paper(paper: SemanticScholarPaper, api_url: &str, source: &str) -> Paper 
 
 #[derive(Debug, Deserialize)]
 struct SemanticScholarSearchResponse {
+    #[serde(default)]
     data: Vec<SemanticScholarPaper>,
     total: Option<u64>,
     next: Option<u32>,
@@ -313,6 +314,7 @@ struct SemanticScholarSearchResponse {
 
 #[derive(Debug, Deserialize)]
 struct SemanticScholarRelationResponse {
+    #[serde(default)]
     data: Vec<SemanticScholarRelationItem>,
     total: Option<u64>,
     next: Option<u32>,

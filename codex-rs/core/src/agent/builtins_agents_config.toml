@@ -24,3 +24,9 @@ Rules:
 - Run explorers in parallel when useful.
 - Reuse existing explorers for related questions."""
 config_file = "explorer.toml"
+
+[agents.synthesizer]
+description = """Use `synthesizer` for writing-heavy synthesis and summarization tasks.
+Synthesizers use low reasoning effort and a fast model for quick output generation.
+Use when the task is primarily content generation, summarization, or narrative writing rather than complex reasoning."""
+config_file = "synthesizer.toml"

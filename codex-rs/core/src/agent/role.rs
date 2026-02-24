@@ -187,6 +187,15 @@ Rules:
                     }
                 ),
                 (
+                    "synthesizer".to_string(),
+                    AgentRoleConfig {
+                        description: Some("Use `synthesizer` for paper synthesis subagents. \
+Synthesizers use a smaller, faster model to download and extract paper content. \
+They write results to a staging file and return the path.".to_string()),
+                        config_file: Some("synthesizer.toml".to_string().parse().unwrap_or_default()),
+                    }
+                ),
+                (
                     "awaiter".to_string(),
                     AgentRoleConfig {
                         description: Some(r#"Use an `awaiter` agent EVERY TIME you must run a command that might take some time.
@@ -207,9 +216,11 @@ When YOU wait for the `awaiter` agent to be done, use the largest possible timeo
     /// Resolves a built-in role `config_file` path to embedded content.
     pub(super) fn config_file_contents(path: &Path) -> Option<&'static str> {
         const EXPLORER: &str = include_str!("builtins/explorer.toml");
+        const SYNTHESIZER: &str = include_str!("builtins/synthesizer.toml");
         const AWAITER: &str = include_str!("builtins/awaiter.toml");
         match path.to_str()? {
             "explorer.toml" => Some(EXPLORER),
+            "synthesizer.toml" => Some(SYNTHESIZER),
             "awaiter.toml" => Some(AWAITER),
             _ => None,
         }

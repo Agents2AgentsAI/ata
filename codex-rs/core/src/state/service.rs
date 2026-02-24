@@ -9,7 +9,6 @@ use crate::config::StartedNetworkProxy;
 use crate::data::SharedDataToolkit;
 use crate::exec_policy::ExecPolicyManager;
 use crate::file_watcher::FileWatcher;
-use crate::kb::SharedKbToolkit;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
 use crate::research::SharedResearchToolkit;
@@ -45,7 +44,6 @@ pub(crate) struct SessionServices {
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) research_toolkit: Option<Arc<SharedResearchToolkit>>,
     pub(crate) data_toolkit: Option<Arc<SharedDataToolkit>>,
-    pub(crate) kb_toolkit: Option<Arc<SharedKbToolkit>>,
     pub(crate) otel_manager: OtelManager,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
     pub(crate) skills_manager: Arc<SkillsManager>,

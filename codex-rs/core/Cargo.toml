@@ -43,8 +43,7 @@ codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-data-tools = { workspace = true, optional = true }
-codex-kb = { workspace = true, optional = true }
-codex-research-tools = { workspace = true, features = ["paper_search", "zotero", "hackernews", "patents", "repo_analysis"] }
+codex-research-tools = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-state = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
@@ -62,6 +61,7 @@ env-flags = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
+include_dir = { workspace = true, optional = true }
 indexmap = { workspace = true }
 indoc = { workspace = true }
 keyring = { workspace = true, features = ["crypto-rust"] }
@@ -119,9 +119,13 @@ zip = { workspace = true }
 [features]
 deterministic_process_ids = []
 data = ["dep:codex-data-tools"]
-kb = ["dep:codex-kb"]
-research-latex = ["codex-research-tools/latex"]
-research-pdf-images = ["codex-research-tools/pdf_images"]
+research = []
+research-hackernews = ["research", "codex-research-tools/hackernews"]
+research-latex = ["research", "codex-research-tools/latex"]
+research-pdf-images = ["research", "codex-research-tools/pdf_images"]
+research-patents = ["research", "codex-research-tools/patents"]
+research-repo = ["research", "codex-research-tools/repo_analysis"]
+visual-reports = ["research", "dep:include_dir"]
 test-support = []
 
 

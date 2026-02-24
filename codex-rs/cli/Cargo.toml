@@ -59,9 +59,13 @@ codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-
 
 [features]
 data = ["codex-core/data"]
-kb = ["codex-core/kb"]
-research-latex = ["codex-core/research-latex", "codex-research-tools/latex"]
-research-pdf-images = ["codex-core/research-pdf-images", "codex-research-tools/pdf_images"]
+research-hackernews = ["codex-core/research-hackernews"]
+research-latex = ["codex-core/research-latex"]
+research-pdf-images = ["codex-core/research-pdf-images"]
+research-patents = ["codex-core/research-patents"]
+research-repo = ["codex-core/research-repo"]
+visual-reports = ["codex-core/visual-reports"]
+research-all = ["data", "research-hackernews", "research-latex", "research-patents", "research-pdf-images", "research-repo", "codex-research-tools/latex", "codex-research-tools/pdf_images"]
 
 [dev-dependencies]
 assert_cmd = { workspace = true }

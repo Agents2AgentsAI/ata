@@ -98,7 +98,6 @@ pub use auth::AuthManager;
 pub use auth::CodexAuth;
 pub mod data;
 pub mod default_client;
-pub mod kb;
 pub mod project_doc;
 pub mod research;
 mod rollout;
