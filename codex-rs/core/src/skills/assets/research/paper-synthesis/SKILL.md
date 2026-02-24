@@ -7,35 +7,31 @@ metadata:
 
 # Paper Synthesis (Main Agent)
 
-This skill orchestrates paper synthesis. The actual synthesis work is done by subagents running the `$paper-synthesizer` skill.
+You are the ORCHESTRATOR. You do NOT read papers. You do NOT call `attach_url_files`. You spawn subagents and present their output.
 
-## CRITICAL: No Exploration
+## HARD RULES — violating any of these is a bug
 
-**Do NOT do any of these before spawning the subagent:**
-- Do NOT read any SKILL.md files (you already have the instructions)
-- Do NOT run `rg --version`, `ls`, or any diagnostic commands
-- Do NOT read `research-context.md`
-- Do NOT read KB cards to "check" them — a single `rg` search is enough
-- Do NOT call `paper_search` when you already have a URL or arXiv ID
+1. **NEVER call `attach_url_files` in this agent.** The subagent fetches the paper. You only orchestrate.
+2. **NEVER synthesize paper content yourself.** You did not read the paper. You cannot summarize what you haven't read. Spawn a subagent.
+3. **NEVER read SKILL.md files** — you already have these instructions loaded. Reading them wastes a tool call.
+4. **NEVER run `ls`, `rg --version`, or diagnostic commands.** Your first tool call must be the KB check or `spawn_agent`.
+5. **Use `agent_type: "synthesizer"`** when spawning — this uses a fast, cheap model. If you synthesize in the main agent, you waste expensive tokens.
 
-**The optimal single-paper flow is exactly 6 tool calls:**
-1. `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` (KB check — 1 call)
-2. `spawn_agent` (1 call)
-3. `wait` (1 call)
-4. `exec_command: cat staging_file` (1 call)
-5. `present_reading_view` (1 call)
-6. `update_document_section` × N (fill sections)
+## Single-Paper Flow (exactly 6 tool calls)
+
+1. `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` (KB check)
+2. `spawn_agent` with `agent_type: "synthesizer"`
+3. `wait`
+4. `exec_command: cat staging_file`
+5. `present_reading_view` (outline only)
+6. `update_document_section` × N (fill sections from staging file content)
 
 Then 2 more for KB persistence. That's it. Any additional tool calls are waste.
 
-## Rules
-
-1. **Always use subagents** — one per paper, parallel for multi-paper. Never synthesize in the main agent context.
-2. **Use `agent_type: "synthesizer"`** when spawning subagents for fast output.
-3. **Subagent prompts must include `$paper-synthesizer`** to trigger the subagent skill. Do not write custom synthesis instructions.
-4. **No KB references in prose.** Never say "as summarized in your KB." Present explanations as your own understanding.
-5. **No re-researching.** After the subagent returns, do NOT call `web.run`, `web_search`, `attach_url_files`, or open any URLs. The subagent already fetched and read the paper. Use the subagent's output as your source material.
-6. **NEVER re-resolve known papers.** If you already have a URL, arXiv ID, or DOI for a paper (from paper discovery, user-provided links, or any prior step), pass it directly to the subagent. Do NOT call `paper_search` to "verify", "look up", or "confirm" papers that already have identifiers. This wastes time and API quota. `paper_search` is ONLY for papers where you have nothing but a title or author name.
+**Additional rules:**
+- **No KB references in prose.** Never say "as summarized in your KB." Present explanations as your own understanding.
+- **No re-researching.** After the subagent returns, do NOT call `web.run`, `web_search`, `attach_url_files`, or open any URLs. The subagent already fetched and read the paper. Use the subagent's output as your source material.
+- **NEVER re-resolve known papers.** If you already have a URL, arXiv ID, or DOI, pass it directly to the subagent. Do NOT call `paper_search` to "verify" or "confirm" papers that already have identifiers. `paper_search` is ONLY for papers where you have nothing but a title or author name.
 
 ## Pre-Synthesis: Check What You Already Have
 

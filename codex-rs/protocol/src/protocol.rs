@@ -823,15 +823,12 @@ impl SandboxPolicy {
                 // can write KB assets. Only the knowledge-base subtree is
                 // made writable, not the entire codex home.
                 if let Ok(codex_home) = codex_utils_home_dir::find_codex_home() {
-                    let kb_dir = codex_home.join("knowledge-base");
-                    // Create the KB directory (and staging subdir) if they
-                    // don't exist so the sandbox can grant write access even
-                    // on first use.
-                    let staging_dir = kb_dir.join("staging");
-                    if !staging_dir.is_dir() {
-                        let _ = std::fs::create_dir_all(&staging_dir);
-                    }
-                    if kb_dir.is_dir() {
+                    // Grant write access to the KB directory if the codex
+                    // home exists. We don't require the knowledge-base
+                    // subdir itself to exist — sandboxed commands can create
+                    // it via `mkdir -p` on first use.
+                    if codex_home.is_dir() {
+                        let kb_dir = codex_home.join("knowledge-base");
                         match AbsolutePathBuf::from_absolute_path(&kb_dir) {
                             Ok(kb_path) => {
                                 if !roots.iter().any(|r| r == &kb_path) {
