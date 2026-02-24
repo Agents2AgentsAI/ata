@@ -2772,7 +2772,6 @@ mod tests {
         let mut buf = Buffer::empty(area);
         view.render(area, &mut buf);
         let snap = snapshot_buffer(&buf);
-        eprintln!("--- streaming outline snapshot ---\n{snap}\n---");
         assert!(
             snap.contains("Generating"),
             "loading indicator should show for unfilled streaming section"
