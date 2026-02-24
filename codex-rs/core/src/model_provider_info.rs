@@ -278,12 +278,9 @@ impl ModelProviderInfo {
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: Some(
-                [(
-                    "version".to_string(),
-                    crate::models_manager::OPENAI_MODELS_CLIENT_VERSION.to_string(),
-                )]
-                .into_iter()
-                .collect(),
+                [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
+                    .into_iter()
+                    .collect(),
             ),
             env_http_headers: Some(
                 [

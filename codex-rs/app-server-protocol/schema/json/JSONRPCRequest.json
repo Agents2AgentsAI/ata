@@ -1,19 +1,12 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "definitions": {
-    "RequestId": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "format": "int64",
-          "type": "integer"
-        }
-      ]
-    }
-  },
+  "title": "JSONRPCRequest",
   "description": "A request that expects a response.",
+  "type": "object",
+  "required": [
+    "id",
+    "method"
+  ],
   "properties": {
     "id": {
       "$ref": "#/definitions/RequestId"
@@ -23,10 +16,17 @@
     },
     "params": true
   },
-  "required": [
-    "id",
-    "method"
-  ],
-  "title": "JSONRPCRequest",
-  "type": "object"
+  "definitions": {
+    "RequestId": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer",
+          "format": "int64"
+        }
+      ]
+    }
+  }
 }

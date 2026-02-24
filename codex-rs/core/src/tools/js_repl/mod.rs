@@ -9,6 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_protocol::ThreadId;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseInputItem;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -1045,28 +1047,63 @@ impl JsReplManager {
 
         match router
             .dispatch_tool_call(
-                exec.session,
-                exec.turn,
-                exec.tracker,
+                Arc::clone(&exec.session),
+                Arc::clone(&exec.turn),
+                Arc::clone(&exec.tracker),
                 call,
                 crate::tools::router::ToolCallSource::JsRepl,
             )
             .await
         {
-            Ok(response) => match serde_json::to_value(response) {
-                Ok(value) => RunToolResult {
-                    id: req.id,
-                    ok: true,
-                    response: Some(value),
-                    error: None,
-                },
-                Err(err) => RunToolResult {
-                    id: req.id,
-                    ok: false,
-                    response: None,
-                    error: Some(format!("failed to serialize tool output: {err}")),
-                },
-            },
+            Ok(response) => {
+                if let ResponseInputItem::FunctionCallOutput { output, .. } = &response
+                    && let Some(content_items) = output.content_items()
+                {
+                    let content = content_items
+                        .iter()
+                        .map(|item| match item {
+                            codex_protocol::models::FunctionCallOutputContentItem::InputText {
+                                text,
+                            } => ContentItem::InputText { text: text.clone() },
+                            codex_protocol::models::FunctionCallOutputContentItem::InputImage {
+                                image_url,
+                            } => ContentItem::InputImage {
+                                image_url: image_url.clone(),
+                            },
+                        })
+                        .collect::<Vec<_>>();
+
+                    if content
+                        .iter()
+                        .any(|item| matches!(item, ContentItem::InputImage { .. }))
+                        && exec
+                            .session
+                            .inject_response_items(vec![ResponseInputItem::Message {
+                                role: "user".to_string(),
+                                content,
+                            }])
+                            .await
+                            .is_err()
+                    {
+                        warn!("failed to inject js_repl image tool output into active turn");
+                    }
+                }
+
+                match serde_json::to_value(response) {
+                    Ok(value) => RunToolResult {
+                        id: req.id,
+                        ok: true,
+                        response: Some(value),
+                        error: None,
+                    },
+                    Err(err) => RunToolResult {
+                        id: req.id,
+                        ok: false,
+                        response: None,
+                        error: Some(format!("failed to serialize tool output: {err}")),
+                    },
+                }
+            }
             Err(err) => RunToolResult {
                 id: req.id,
                 ok: false,
@@ -1800,8 +1837,12 @@ mod tests {
         }
 
         let (session, mut turn) = make_session_and_context().await;
-        turn.approval_policy = AskForApproval::Never;
-        turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        turn.approval_policy
+            .set(AskForApproval::Never)
+            .expect("test setup should allow updating approval policy");
+        turn.sandbox_policy
+            .set(SandboxPolicy::DangerFullAccess)
+            .expect("test setup should allow updating sandbox policy");
 
         let session = Arc::new(session);
         let turn = Arc::new(turn);
@@ -1843,8 +1884,12 @@ mod tests {
         }
 
         let (session, mut turn) = make_session_and_context().await;
-        turn.approval_policy = AskForApproval::Never;
-        turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        turn.approval_policy
+            .set(AskForApproval::Never)
+            .expect("test setup should allow updating approval policy");
+        turn.sandbox_policy
+            .set(SandboxPolicy::DangerFullAccess)
+            .expect("test setup should allow updating sandbox policy");
 
         let session = Arc::new(session);
         let turn = Arc::new(turn);
@@ -1891,8 +1936,12 @@ try {
         }
 
         let (session, mut turn) = make_session_and_context().await;
-        turn.approval_policy = AskForApproval::Never;
-        turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        turn.approval_policy
+            .set(AskForApproval::Never)
+            .expect("test setup should allow updating approval policy");
+        turn.sandbox_policy
+            .set(SandboxPolicy::DangerFullAccess)
+            .expect("test setup should allow updating sandbox policy");
 
         let session = Arc::new(session);
         let turn = Arc::new(turn);
@@ -1941,8 +1990,12 @@ console.log("cell-complete");
         {
             return Ok(());
         }
-        turn.approval_policy = AskForApproval::Never;
-        turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        turn.approval_policy
+            .set(AskForApproval::Never)
+            .expect("test setup should allow updating approval policy");
+        turn.sandbox_policy
+            .set(SandboxPolicy::DangerFullAccess)
+            .expect("test setup should allow updating sandbox policy");
 
         let session = Arc::new(session);
         let turn = Arc::new(turn);

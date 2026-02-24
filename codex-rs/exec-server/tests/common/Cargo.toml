@@ -10,7 +10,9 @@ path = "lib.rs"
 [dependencies]
 anyhow = { workspace = true }
 codex-core = { workspace = true }
+codex-protocol = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
+core_test_support = { path = "../../../core/tests/common" }
 rmcp = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

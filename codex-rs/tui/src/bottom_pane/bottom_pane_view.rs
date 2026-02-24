@@ -87,6 +87,8 @@ pub(crate) trait BottomPaneView: Renderable {
         _document_id: &str,
         _section_index: usize,
         _content: String,
+        _foldable: bool,
+        _summary: Option<String>,
     ) {
     }
 
@@ -97,6 +99,8 @@ pub(crate) trait BottomPaneView: Renderable {
         _section_index: usize,
         _old_text: &str,
         _new_text: &str,
+        _foldable: bool,
+        _summary: Option<String>,
     ) {
     }
 

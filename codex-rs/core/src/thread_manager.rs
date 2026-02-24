@@ -7,6 +7,8 @@ use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
+#[cfg(feature = "data")]
+use crate::data::SharedDataToolkit;
 use crate::default_client::build_reqwest_client_with_timeouts;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -22,6 +24,8 @@ use crate::research::SharedResearchToolkit;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::skills::SkillsManager;
+#[cfg(feature = "data")]
+use crate::tools::handlers::data::build_data_config;
 use crate::tools::handlers::research::build_research_config;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
@@ -135,6 +139,8 @@ pub(crate) struct ThreadManagerState {
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     research_toolkit: OnceCell<Arc<SharedResearchToolkit>>,
+    #[cfg(feature = "data")]
+    data_toolkit: OnceCell<Arc<SharedDataToolkit>>,
     skills_manager: Arc<SkillsManager>,
     file_watcher: Arc<FileWatcher>,
     session_source: SessionSource,
@@ -162,6 +168,8 @@ impl ThreadManager {
                     model_catalog,
                 )),
                 research_toolkit: OnceCell::new(),
+                #[cfg(feature = "data")]
+                data_toolkit: OnceCell::new(),
                 skills_manager,
                 file_watcher,
                 auth_manager,
@@ -214,6 +222,8 @@ impl ThreadManager {
                     provider,
                 )),
                 research_toolkit: OnceCell::new(),
+                #[cfg(feature = "data")]
+                data_toolkit: OnceCell::new(),
                 skills_manager,
                 file_watcher,
                 auth_manager,
@@ -528,6 +538,39 @@ impl ThreadManagerState {
         } else {
             None
         };
+        let data_toolkit = if config.features.enabled(Feature::Data) {
+            #[cfg(feature = "data")]
+            {
+                Some(
+                    self.data_toolkit
+                        .get_or_init(|| async {
+                            let data_config = build_data_config(
+                                config.data.as_ref(),
+                                config.codex_home.as_path(),
+                                config.cwd.as_path(),
+                            );
+                            Arc::new(codex_data_tools::DataToolkit::new(
+                                build_reqwest_client_with_timeouts(
+                                    Some(data_config.connect_timeout),
+                                    Some(data_config.request_timeout),
+                                ),
+                                data_config,
+                            ))
+                        })
+                        .await
+                        .clone(),
+                )
+            }
+            #[cfg(not(feature = "data"))]
+            {
+                warn!(
+                    "data feature flag is enabled in config, but codex-core was built without `--features data`"
+                );
+                None
+            }
+        } else {
+            None
+        };
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(
@@ -541,6 +584,7 @@ impl ThreadManagerState {
             agent_control,
             dynamic_tools,
             research_toolkit,
+            data_toolkit,
             persist_extended_history,
         )
         .await?;

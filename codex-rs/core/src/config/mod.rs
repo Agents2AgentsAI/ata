@@ -119,8 +119,6 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 
-pub const CONFIG_TOML_FILE: &str = "config.toml";
-
 #[cfg(test)]
 pub(crate) fn test_config() -> Config {
     let codex_home = tempdir().expect("create temp dir");
@@ -238,16 +236,16 @@ pub struct Config {
     /// appends one extra argument containing a JSON payload describing the
     /// event.
     ///
-    /// Example `~/.ata/config.toml` snippet:
+    /// Example `~/.codex/config.toml` snippet:
     ///
     /// ```toml
-    /// notify = ["notify-send", "Ata"]
+    /// notify = ["notify-send", "Codex"]
     /// ```
     ///
     /// which will be invoked as:
     ///
     /// ```shell
-    /// notify-send Ata '{"type":"agent-turn-complete","turn-id":"12345"}'
+    /// notify-send Codex '{"type":"agent-turn-complete","turn-id":"12345"}'
     /// ```
     ///
     /// If unset the feature is disabled.
@@ -282,6 +280,9 @@ pub struct Config {
     /// `current-dir`.
     pub tui_status_line: Option<Vec<String>>,
 
+    /// Syntax highlighting theme override (kebab-case name).
+    pub tui_theme: Option<String>,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -299,7 +300,7 @@ pub struct Config {
     /// Preferred store for MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
     ///          Credentials stored in the keyring will only be readable by Codex unless the user explicitly grants access via OS-level keyring access.
-    ///          https://github.com/Agents2AgentsAI/ata/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2
+    ///          https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2
     /// file: CODEX_HOME/.credentials.json
     ///       This file will be readable to Codex and other applications running as the same user.
     /// auto (default): keyring if available, otherwise file.
@@ -341,14 +342,14 @@ pub struct Config {
     /// Memories subsystem settings.
     pub memories: MemoriesConfig,
 
-    /// Directory containing all Codex state (defaults to `~/.ata` but can be
+    /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: PathBuf,
 
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
 
-    /// Settings that govern if and what will be written to `~/.ata/history.jsonl`.
+    /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
 
     /// When true, session is not persisted on disk. Default to `false`
@@ -378,6 +379,13 @@ pub struct Config {
     /// Value to use for `reasoning.effort` when making a request using the
     /// Responses API.
     pub model_reasoning_effort: Option<ReasoningEffort>,
+    /// Optional Plan-mode-specific reasoning effort override used by the TUI.
+    ///
+    /// When unset, Plan mode uses the built-in Plan preset default (currently
+    /// `medium`). When explicitly set (including `none`), this overrides the
+    /// Plan preset. The `none` value means "no reasoning" (not "inherit the
+    /// global default").
+    pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
 
     /// If not "none", the value to use for `reasoning.summary` when making a
     /// request using the Responses API.
@@ -396,6 +404,14 @@ pub struct Config {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
+    /// Experimental / do not use. Overrides only the realtime conversation
+    /// websocket transport base URL (the `Op::RealtimeConversation` `/ws`
+    /// connection) without changing normal provider HTTP requests.
+    pub experimental_realtime_ws_base_url: Option<String>,
+    /// Experimental / do not use. Overrides only the realtime conversation
+    /// websocket transport backend prompt (the `Op::RealtimeConversation`
+    /// `/ws` session.create backend_prompt) without changing normal prompts.
+    pub experimental_realtime_ws_backend_prompt: Option<String>,
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     pub forced_chatgpt_workspace_id: Option<String>,
 
@@ -410,9 +426,6 @@ pub struct Config {
     /// Explicit or feature-derived web search mode.
     pub web_search_mode: Constrained<WebSearchMode>,
 
-    /// Optional non-secret research tool settings from `[research]`.
-    pub research: Option<ResearchToolsToml>,
-
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
@@ -425,6 +438,15 @@ pub struct Config {
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: Features,
+
+    /// Research tools configuration (Zotero, OpenAlex, etc.).
+    pub research: Option<ResearchToolsToml>,
+
+    /// Optional non-secret data tool settings from `[data]`.
+    pub data: Option<DataToolsToml>,
+
+    /// Optional KB settings from `[kb]`.
+    pub kb: Option<KbToml>,
 
     /// When `true`, suppress warnings about unstable (under development) features.
     pub suppress_unstable_features_warning: bool,
@@ -442,8 +464,8 @@ pub struct Config {
     /// Collection of various notices we show the user
     pub notices: Notice,
 
-    /// When `true`, checks for Ata updates on startup and surfaces update prompts.
-    /// Set to `false` only if your Ata updates are centrally managed.
+    /// When `true`, checks for Codex updates on startup and surfaces update prompts.
+    /// Set to `false` only if your Codex updates are centrally managed.
     /// Defaults to `true`.
     pub check_for_update_on_startup: bool,
 
@@ -452,12 +474,12 @@ pub struct Config {
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: bool,
 
-    /// When `true`, enables analytics across Codex product surfaces in this machine.
-    /// Voluntarily left as Optional because explicit opt-in is required.
+    /// When `false`, disables analytics across Codex product surfaces in this machine.
+    /// Voluntarily left as Optional because the default value might depend on the client.
     pub analytics_enabled: Option<bool>,
 
-    /// When `true`, enables feedback upload across Codex product surfaces.
-    /// Defaults to `false`.
+    /// When `false`, disables feedback collection across Codex product surfaces.
+    /// Defaults to `true`.
     pub feedback_enabled: bool,
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
@@ -780,7 +802,7 @@ pub async fn load_global_mcp_servers(
     // result.
     let cli_overrides = Vec::<(String, TomlValue)>::new();
     // There is no cwd/project context for this query, so this will not include
-    // MCP servers defined in in-repo .ata/ folders.
+    // MCP servers defined in in-repo .codex/ folders.
     let cwd: Option<AbsolutePathBuf> = None;
     let config_layer_stack = load_config_layers_state(
         codex_home,
@@ -942,7 +964,7 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
         .map_err(|err| std::io::Error::other(format!("failed to persist config.toml: {err}")))
 }
 
-/// Base config deserialized from ~/.ata/config.toml.
+/// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ConfigToml {
@@ -1020,10 +1042,9 @@ pub struct ConfigToml {
     pub forced_login_method: Option<ForcedLoginMethod>,
 
     /// Preferred backend for storing CLI auth credentials.
-    /// file: Use a file in the Codex home directory with 0600 permissions.
+    /// file (default): Use a file in the Codex home directory.
     /// keyring: Use an OS-specific keyring service.
-    /// auto (default): Use keyring when available, fall back to file. If keyring access
-    ///                 fails, it remembers and uses file storage for the session.
+    /// auto: Use the keyring if available, otherwise use a file.
     #[serde(default)]
     pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
 
@@ -1035,7 +1056,7 @@ pub struct ConfigToml {
 
     /// Preferred backend for storing MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
-    ///          https://github.com/Agents2AgentsAI/ata/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2
+    ///          https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2
     /// file: Use a file in the Codex home directory.
     /// auto (default): Use the OS-specific keyring service if available, otherwise use a file.
     #[serde(default)]
@@ -1066,7 +1087,7 @@ pub struct ConfigToml {
 
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).
-    pub background_terminal_timeout: Option<u64>,
+    pub background_terminal_max_timeout: Option<u64>,
 
     /// Optional absolute path to the Node runtime used by `js_repl`.
     pub js_repl_node_path: Option<AbsolutePathBuf>,
@@ -1084,7 +1105,7 @@ pub struct ConfigToml {
     #[serde(default)]
     pub profiles: HashMap<String, ConfigProfile>,
 
-    /// Settings that govern if and what will be written to `~/.ata/history.jsonl`.
+    /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     #[serde(default)]
     pub history: Option<History>,
 
@@ -1108,6 +1129,7 @@ pub struct ConfigToml {
     pub show_raw_agent_reasoning: Option<bool>,
 
     pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
@@ -1125,6 +1147,14 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
+    /// Experimental / do not use. Overrides only the realtime conversation
+    /// websocket transport base URL (the `Op::RealtimeConversation` `/ws`
+    /// connection) without changing normal provider HTTP requests.
+    pub experimental_realtime_ws_base_url: Option<String>,
+    /// Experimental / do not use. Overrides only the realtime conversation
+    /// websocket transport backend prompt (the `Op::RealtimeConversation`
+    /// `/ws` session.create backend_prompt) without changing normal prompts.
+    pub experimental_realtime_ws_backend_prompt: Option<String>,
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// Controls the web search tool mode: disabled, cached, or live.
@@ -1133,12 +1163,19 @@ pub struct ConfigToml {
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
 
+    /// Research tools configuration (Zotero, OpenAlex, etc.).
+    pub research: Option<ResearchToolsToml>,
+
+    /// Optional non-secret data tool settings.
+    #[serde(default)]
+    pub data: Option<DataToolsToml>,
+
+    /// Optional KB settings.
+    #[serde(default)]
+    pub kb: Option<KbToml>,
+
     /// Agent-related settings (thread limits, etc.).
     pub agents: Option<AgentsToml>,
-
-    /// Optional non-secret research tool settings.
-    #[serde(default)]
-    pub research: Option<ResearchToolsToml>,
 
     /// Memories subsystem settings.
     pub memories: Option<MemoriesToml>,
@@ -1160,12 +1197,12 @@ pub struct ConfigToml {
     pub ghost_snapshot: Option<GhostSnapshotToml>,
 
     /// Markers used to detect the project root when searching parent
-    /// directories for `.ata` folders. Defaults to [".git"] when unset.
+    /// directories for `.codex` folders. Defaults to [".git"] when unset.
     #[serde(default)]
     pub project_root_markers: Option<Vec<String>>,
 
-    /// When `true`, checks for Ata updates on startup and surfaces update prompts.
-    /// Set to `false` only if your Ata updates are centrally managed.
+    /// When `true`, checks for Codex updates on startup and surfaces update prompts.
+    /// Set to `false` only if your Codex updates are centrally managed.
     /// Defaults to `true`.
     pub check_for_update_on_startup: Option<bool>,
 
@@ -1174,12 +1211,12 @@ pub struct ConfigToml {
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: Option<bool>,
 
-    /// When `true`, enables analytics across Codex product surfaces in this machine.
-    /// Defaults to disabled unless explicitly opted in.
+    /// When `false`, disables analytics across Codex product surfaces in this machine.
+    /// Defaults to `true`.
     pub analytics: Option<crate::config::types::AnalyticsConfigToml>,
 
-    /// When `true`, enables feedback upload across Codex product surfaces.
-    /// Defaults to disabled unless explicitly opted in.
+    /// When `false`, disables feedback collection across Codex product surfaces.
+    /// Defaults to `true`.
     pub feedback: Option<crate::config::types::FeedbackConfigToml>,
 
     /// Settings for app-specific controls.
@@ -1307,6 +1344,15 @@ pub struct AgentRoleToml {
     pub config_file: Option<AbsolutePathBuf>,
 }
 
+impl From<ToolsToml> for Tools {
+    fn from(tools_toml: ToolsToml) -> Self {
+        Self {
+            web_search: tools_toml.web_search,
+            view_image: tools_toml.view_image,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ResearchToolsToml {
@@ -1316,13 +1362,19 @@ pub struct ResearchToolsToml {
     pub zotero_group_id: Option<String>,
 }
 
-impl From<ToolsToml> for Tools {
-    fn from(tools_toml: ToolsToml) -> Self {
-        Self {
-            web_search: tools_toml.web_search,
-            view_image: tools_toml.view_image,
-        }
-    }
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct DataToolsToml {
+    pub huggingface_token: Option<String>,
+    pub kaggle_username: Option<String>,
+    pub kaggle_key: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct KbToml {
+    /// Path to the knowledge base directory. Defaults to `<codex_home>/knowledge-base`.
+    pub kb_path: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -1816,7 +1868,7 @@ impl Config {
             .transpose()?
             .unwrap_or_default();
         let background_terminal_max_timeout = cfg
-            .background_terminal_timeout
+            .background_terminal_max_timeout
             .unwrap_or(DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS)
             .max(MIN_EMPTY_YIELD_TIME_MS);
 
@@ -1931,7 +1983,12 @@ impl Config {
         let review_model = override_review_model.or(cfg.review_model);
 
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
-        let model_catalog = load_model_catalog(cfg.model_catalog_json.clone())?;
+        let model_catalog = load_model_catalog(
+            config_profile
+                .model_catalog_json
+                .clone()
+                .or(cfg.model_catalog_json.clone()),
+        )?;
 
         let log_dir = cfg
             .log_dir
@@ -2077,6 +2134,9 @@ impl Config {
             model_reasoning_effort: config_profile
                 .model_reasoning_effort
                 .or(cfg.model_reasoning_effort),
+            plan_mode_reasoning_effort: config_profile
+                .plan_mode_reasoning_effort
+                .or(cfg.plan_mode_reasoning_effort),
             model_reasoning_summary: config_profile
                 .model_reasoning_summary
                 .or(cfg.model_reasoning_summary)
@@ -2088,15 +2148,19 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
+            experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             web_search_mode: constrained_web_search_mode.value,
-            research: cfg.research.clone(),
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,
             features,
+            research: cfg.research,
+            data: cfg.data,
+            kb: cfg.kb,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
                 .unwrap_or(false),
@@ -2115,7 +2179,7 @@ impl Config {
                 .feedback
                 .as_ref()
                 .and_then(|feedback| feedback.enabled)
-                .unwrap_or(false),
+                .unwrap_or(true),
             tui_notifications: cfg
                 .tui
                 .as_ref()
@@ -2134,6 +2198,7 @@ impl Config {
                 .map(|t| t.alternate_screen)
                 .unwrap_or_default(),
             tui_status_line: cfg.tui.as_ref().and_then(|t| t.status_line.clone()),
+            tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -2142,7 +2207,7 @@ impl Config {
                     .unwrap_or(DEFAULT_OTEL_ENVIRONMENT.to_string());
                 let exporter = t.exporter.unwrap_or(OtelExporterKind::None);
                 let trace_exporter = t.trace_exporter.unwrap_or_else(|| exporter.clone());
-                let metrics_exporter = t.metrics_exporter.unwrap_or(OtelExporterKind::None);
+                let metrics_exporter = t.metrics_exporter.unwrap_or(OtelExporterKind::Statsig);
                 OtelConfig {
                     log_user_prompt,
                     environment,
@@ -2289,7 +2354,7 @@ fn toml_uses_deprecated_instructions_file(value: &TomlValue) -> bool {
 
 /// Returns the path to the Codex configuration directory, which can be
 /// specified by the `CODEX_HOME` environment variable. If not set, defaults to
-/// `~/.ata`.
+/// `~/.codex`.
 ///
 /// - If `CODEX_HOME` is set, the value must exist and be a directory. The
 ///   value will be canonicalized and this function will Err otherwise.
@@ -2319,6 +2384,7 @@ mod tests {
     use crate::config::types::Notifications;
     use crate::config_loader::RequirementSource;
     use crate::features::Feature;
+    use codex_config::CONFIG_TOML_FILE;
 
     use super::*;
     use core_test_support::test_absolute_path;
@@ -2532,6 +2598,30 @@ allowed_domains = ["openai.com"]
     }
 
     #[test]
+    fn tui_theme_deserializes_from_toml() {
+        let cfg = r#"
+[tui]
+theme = "dracula"
+"#;
+        let parsed =
+            toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+        assert_eq!(
+            parsed.tui.as_ref().and_then(|t| t.theme.as_deref()),
+            Some("dracula"),
+        );
+    }
+
+    #[test]
+    fn tui_theme_defaults_to_none() {
+        let cfg = r#"
+[tui]
+"#;
+        let parsed =
+            toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+        assert_eq!(parsed.tui.as_ref().and_then(|t| t.theme.as_deref()), None);
+    }
+
+    #[test]
     fn tui_config_missing_notifications_field_defaults_to_enabled() {
         let cfg = r#"
 [tui]
@@ -2550,6 +2640,7 @@ allowed_domains = ["openai.com"]
                 show_tooltips: true,
                 alternate_screen: AltScreenMode::Auto,
                 status_line: None,
+                theme: None,
             }
         );
     }
@@ -2858,7 +2949,7 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn config_defaults_to_auto_cli_auth_store_mode() -> std::io::Result<()> {
+    fn config_defaults_to_file_cli_auth_store_mode() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml::default();
 
@@ -2899,7 +2990,7 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn config_defaults_to_correct_oauth_store_mode() -> std::io::Result<()> {
+    fn config_defaults_to_auto_oauth_store_mode() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml::default();
 
@@ -2911,14 +3002,14 @@ trust_level = "trusted"
 
         assert_eq!(
             config.mcp_oauth_credentials_store_mode,
-            OAuthCredentialsStoreMode::File,
+            OAuthCredentialsStoreMode::Auto,
         );
 
         Ok(())
     }
 
     #[test]
-    fn feedback_enabled_defaults_to_false() -> std::io::Result<()> {
+    fn feedback_enabled_defaults_to_true() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml {
             feedback: Some(FeedbackConfigToml::default()),
@@ -2931,7 +3022,7 @@ trust_level = "trusted"
             codex_home.path().to_path_buf(),
         )?;
 
-        assert_eq!(config.feedback_enabled, false);
+        assert_eq!(config.feedback_enabled, true);
 
         Ok(())
     }
@@ -3236,16 +3327,9 @@ profile = "project"
                 ..Default::default()
             };
 
-            // Ensure the test is hermetic even if other providers are configured
-            // via environment variables on the developer machine.
-            let overrides = ConfigOverrides {
-                model_provider: Some(PROVIDER_OPENAI.to_string()),
-                ..ConfigOverrides::default()
-            };
-
             let config = Config::load_from_base_config_with_overrides(
                 cfg,
-                overrides,
+                ConfigOverrides::default(),
                 codex_home.path().to_path_buf(),
             )?;
 
@@ -4630,12 +4714,15 @@ model_verbosity = "high"
                 hide_agent_reasoning: false,
                 show_raw_agent_reasoning: false,
                 model_reasoning_effort: Some(ReasoningEffort::High),
+                plan_mode_reasoning_effort: None,
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_supports_reasoning_summaries: None,
                 model_catalog: None,
                 model_verbosity: None,
                 personality: Some(Personality::Pragmatic),
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+                experimental_realtime_ws_base_url: None,
+                experimental_realtime_ws_backend_prompt: None,
                 base_instructions: None,
                 developer_instructions: None,
                 compact_prompt: None,
@@ -4644,11 +4731,13 @@ model_verbosity = "high"
                 forced_login_method: None,
                 include_apply_patch_tool: false,
                 web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
-                research: None,
                 use_experimental_unified_exec_tool: !cfg!(windows),
                 background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
+                research: None,
+                data: None,
+                kb: None,
                 suppress_unstable_features_warning: false,
                 active_profile: Some("o3".to_string()),
                 active_project: ProjectConfig { trust_level: None },
@@ -4661,9 +4750,10 @@ model_verbosity = "high"
                 animations: true,
                 show_tooltips: true,
                 analytics_enabled: Some(true),
-                feedback_enabled: false,
+                feedback_enabled: true,
                 tui_alternate_screen: AltScreenMode::Auto,
                 tui_status_line: None,
+                tui_theme: None,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -4672,7 +4762,7 @@ model_verbosity = "high"
     }
 
     #[test]
-    fn metrics_exporter_defaults_to_none_when_missing() -> std::io::Result<()> {
+    fn metrics_exporter_defaults_to_statsig_when_missing() -> std::io::Result<()> {
         let fixture = create_test_fixture()?;
 
         let config = Config::load_from_base_config_with_overrides(
@@ -4684,7 +4774,7 @@ model_verbosity = "high"
             fixture.codex_home(),
         )?;
 
-        assert_eq!(config.otel.metrics_exporter, OtelExporterKind::None);
+        assert_eq!(config.otel.metrics_exporter, OtelExporterKind::Statsig);
         Ok(())
     }
 
@@ -4750,12 +4840,15 @@ model_verbosity = "high"
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
+            plan_mode_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_catalog: None,
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            experimental_realtime_ws_base_url: None,
+            experimental_realtime_ws_backend_prompt: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -4764,11 +4857,13 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
-            research: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
+            research: None,
+            data: None,
+            kb: None,
             suppress_unstable_features_warning: false,
             active_profile: Some("gpt3".to_string()),
             active_project: ProjectConfig { trust_level: None },
@@ -4781,9 +4876,10 @@ model_verbosity = "high"
             animations: true,
             show_tooltips: true,
             analytics_enabled: Some(true),
-            feedback_enabled: false,
+            feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            tui_theme: None,
             otel: OtelConfig::default(),
         };
 
@@ -4868,12 +4964,15 @@ model_verbosity = "high"
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
+            plan_mode_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_catalog: None,
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            experimental_realtime_ws_base_url: None,
+            experimental_realtime_ws_backend_prompt: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -4882,11 +4981,13 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
-            research: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
+            research: None,
+            data: None,
+            kb: None,
             suppress_unstable_features_warning: false,
             active_profile: Some("zdr".to_string()),
             active_project: ProjectConfig { trust_level: None },
@@ -4899,9 +5000,10 @@ model_verbosity = "high"
             animations: true,
             show_tooltips: true,
             analytics_enabled: Some(false),
-            feedback_enabled: false,
+            feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            tui_theme: None,
             otel: OtelConfig::default(),
         };
 
@@ -4972,12 +5074,15 @@ model_verbosity = "high"
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: Some(ReasoningEffort::High),
+            plan_mode_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::Detailed,
             model_supports_reasoning_summaries: None,
             model_catalog: None,
             model_verbosity: Some(Verbosity::High),
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            experimental_realtime_ws_base_url: None,
+            experimental_realtime_ws_backend_prompt: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -4986,11 +5091,13 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
-            research: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
+            research: None,
+            data: None,
+            kb: None,
             suppress_unstable_features_warning: false,
             active_profile: Some("gpt5".to_string()),
             active_project: ProjectConfig { trust_level: None },
@@ -5003,9 +5110,10 @@ model_verbosity = "high"
             animations: true,
             show_tooltips: true,
             analytics_enabled: Some(true),
-            feedback_enabled: false,
+            feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            tui_theme: None,
             otel: OtelConfig::default(),
         };
 
@@ -5762,6 +5870,61 @@ trust_level = "untrusted"
         assert_eq!(
             config.permissions.approval_policy.value(),
             AskForApproval::OnRequest
+        );
+        Ok(())
+    }
+    #[test]
+    fn experimental_realtime_ws_base_url_loads_from_config_toml() -> std::io::Result<()> {
+        let cfg: ConfigToml = toml::from_str(
+            r#"
+experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
+"#,
+        )
+        .expect("TOML deserialization should succeed");
+
+        assert_eq!(
+            cfg.experimental_realtime_ws_base_url.as_deref(),
+            Some("http://127.0.0.1:8011")
+        );
+
+        let codex_home = TempDir::new()?;
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.experimental_realtime_ws_base_url.as_deref(),
+            Some("http://127.0.0.1:8011")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn experimental_realtime_ws_backend_prompt_loads_from_config_toml() -> std::io::Result<()> {
+        let cfg: ConfigToml = toml::from_str(
+            r#"
+experimental_realtime_ws_backend_prompt = "prompt from config"
+"#,
+        )
+        .expect("TOML deserialization should succeed");
+
+        assert_eq!(
+            cfg.experimental_realtime_ws_backend_prompt.as_deref(),
+            Some("prompt from config")
+        );
+
+        let codex_home = TempDir::new()?;
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.experimental_realtime_ws_backend_prompt.as_deref(),
+            Some("prompt from config")
         );
         Ok(())
     }

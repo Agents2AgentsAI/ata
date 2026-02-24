@@ -6,6 +6,7 @@ use crate::agent::AgentControl;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::client::ModelClient;
 use crate::config::StartedNetworkProxy;
+use crate::data::SharedDataToolkit;
 use crate::exec_policy::ExecPolicyManager;
 use crate::file_watcher::FileWatcher;
 use crate::mcp_connection_manager::McpConnectionManager;
@@ -42,6 +43,7 @@ pub(crate) struct SessionServices {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) research_toolkit: Option<Arc<SharedResearchToolkit>>,
+    pub(crate) data_toolkit: Option<Arc<SharedDataToolkit>>,
     pub(crate) otel_manager: OtelManager,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
     pub(crate) skills_manager: Arc<SkillsManager>,

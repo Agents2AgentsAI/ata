@@ -680,7 +680,7 @@ pub(super) async fn refresh_uploaded_file_references(
         let mut state = sess.state.lock().await;
         let mut items = state.history.raw_items().to_vec();
         rewrite_uploaded_file_ids(&mut items, &updated_file_ids);
-        state.replace_history(items);
+        state.replace_history(items, None);
     }
 
     {
@@ -756,12 +756,15 @@ mod tests {
     use super::*;
 
     use crate::auth::AuthCredentialsStoreMode;
+    use crate::auth::OPENAI_API_KEY_ENV_VAR;
     use crate::auth::PROVIDER_OPENAI;
     use crate::auth::login_with_provider_api_key;
+    use crate::auth::test_utils::EnvVarGuard;
     use crate::codex::SteerInputError;
     use crate::config::ConfigBuilder;
 
     use pretty_assertions::assert_eq;
+    use serial_test::serial;
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
@@ -837,7 +840,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(codex_api_key)]
     async fn resolve_file_inputs_for_uploads_rewrites_to_uploaded_file() {
+        let _openai_guard = EnvVarGuard::set(OPENAI_API_KEY_ENV_VAR, "");
         let codex_home = tempfile::tempdir().expect("codex home");
         login_with_provider_api_key(
             codex_home.path(),
@@ -909,7 +914,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(codex_api_key)]
     async fn resolve_file_inputs_for_uploads_routes_multiple_files() {
+        let _openai_guard = EnvVarGuard::set(OPENAI_API_KEY_ENV_VAR, "");
         let codex_home = tempfile::tempdir().expect("codex home");
         login_with_provider_api_key(
             codex_home.path(),
@@ -1006,7 +1013,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(codex_api_key)]
     async fn resolve_file_inputs_for_uploads_cleans_up_orphaned_uploads_on_error() {
+        let _openai_guard = EnvVarGuard::set(OPENAI_API_KEY_ENV_VAR, "");
         let codex_home = tempfile::tempdir().expect("codex home");
         login_with_provider_api_key(
             codex_home.path(),
@@ -1090,7 +1099,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(codex_api_key)]
     async fn resolve_file_inputs_for_uploads_dedupes_orphan_cleanup_across_three_files() {
+        let _openai_guard = EnvVarGuard::set(OPENAI_API_KEY_ENV_VAR, "");
         let codex_home = tempfile::tempdir().expect("codex home");
         login_with_provider_api_key(
             codex_home.path(),
@@ -1177,7 +1188,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(codex_api_key)]
     async fn refresh_uploaded_file_references_reuploads_near_expiry_and_rewrites_history() {
+        let _openai_guard = EnvVarGuard::set(OPENAI_API_KEY_ENV_VAR, "");
         let (sess, mut turn_context) = crate::codex::make_session_and_context().await;
         login_with_provider_api_key(
             turn_context.config.codex_home.as_path(),
@@ -1212,18 +1225,21 @@ mod tests {
         let old_file_id = "file-old";
         {
             let mut state = sess.state.lock().await;
-            state.replace_history(vec![ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputFile {
-                    file_data: None,
-                    file_id: Some(old_file_id.to_string()),
-                    mime_type: Some("application/pdf".to_string()),
-                    filename: Some("report.pdf".to_string()),
+            state.replace_history(
+                vec![ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputFile {
+                        file_data: None,
+                        file_id: Some(old_file_id.to_string()),
+                        mime_type: Some("application/pdf".to_string()),
+                        filename: Some("report.pdf".to_string()),
+                    }],
+                    end_turn: None,
+                    phase: None,
                 }],
-                end_turn: None,
-                phase: None,
-            }]);
+                None,
+            );
         }
         {
             let mut cache = sess.services.file_reference_cache.lock().await;

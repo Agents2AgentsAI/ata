@@ -1,21 +1,45 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ConfigRequirementsReadResponse",
+  "type": "object",
+  "properties": {
+    "requirements": {
+      "description": "Null if no requirements are configured (e.g. no requirements.toml/MDM entries).",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ConfigRequirements"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
   "definitions": {
     "AskForApproval": {
       "oneOf": [
         {
+          "type": "string",
           "enum": [
             "untrusted",
             "on-failure",
             "on-request",
             "never"
-          ],
-          "type": "string"
+          ]
         },
         {
-          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "reject"
+          ],
           "properties": {
             "reject": {
+              "type": "object",
+              "required": [
+                "mcp_elicitations",
+                "rules",
+                "sandbox_approval"
+              ],
               "properties": {
                 "mcp_elicitations": {
                   "type": "boolean"
@@ -26,51 +50,43 @@
                 "sandbox_approval": {
                   "type": "boolean"
                 }
-              },
-              "required": [
-                "mcp_elicitations",
-                "rules",
-                "sandbox_approval"
-              ],
-              "type": "object"
+              }
             }
           },
-          "required": [
-            "reject"
-          ],
-          "title": "RejectAskForApproval",
-          "type": "object"
+          "additionalProperties": false,
+          "title": "RejectAskForApproval"
         }
       ]
     },
     "ConfigRequirements": {
+      "type": "object",
       "properties": {
         "allowedApprovalPolicies": {
+          "type": [
+            "array",
+            "null"
+          ],
           "items": {
             "$ref": "#/definitions/AskForApproval"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
+          }
         },
         "allowedSandboxModes": {
+          "type": [
+            "array",
+            "null"
+          ],
           "items": {
             "$ref": "#/definitions/SandboxMode"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
+          }
         },
         "allowedWebSearchModes": {
-          "items": {
-            "$ref": "#/definitions/WebSearchMode"
-          },
           "type": [
             "array",
             "null"
-          ]
+          ],
+          "items": {
+            "$ref": "#/definitions/WebSearchMode"
+          }
         },
         "enforceResidency": {
           "anyOf": [
@@ -82,10 +98,10 @@
             }
           ]
         }
-      },
-      "type": "object"
+      }
     },
     "NetworkRequirements": {
+      "type": "object",
       "properties": {
         "allowLocalBinding": {
           "type": [
@@ -94,13 +110,13 @@
           ]
         },
         "allowUnixSockets": {
-          "items": {
-            "type": "string"
-          },
           "type": [
             "array",
             "null"
-          ]
+          ],
+          "items": {
+            "type": "string"
+          }
         },
         "allowUpstreamProxy": {
           "type": [
@@ -109,13 +125,13 @@
           ]
         },
         "allowedDomains": {
-          "items": {
-            "type": "string"
-          },
           "type": [
             "array",
             "null"
-          ]
+          ],
+          "items": {
+            "type": "string"
+          }
         },
         "dangerouslyAllowAllUnixSockets": {
           "type": [
@@ -136,13 +152,13 @@
           ]
         },
         "deniedDomains": {
-          "items": {
-            "type": "string"
-          },
           "type": [
             "array",
             "null"
-          ]
+          ],
+          "items": {
+            "type": "string"
+          }
         },
         "enabled": {
           "type": [
@@ -151,60 +167,44 @@
           ]
         },
         "httpPort": {
-          "format": "uint16",
-          "minimum": 0.0,
           "type": [
             "integer",
             "null"
-          ]
+          ],
+          "format": "uint16",
+          "minimum": 0.0
         },
         "socksPort": {
-          "format": "uint16",
-          "minimum": 0.0,
           "type": [
             "integer",
             "null"
-          ]
+          ],
+          "format": "uint16",
+          "minimum": 0.0
         }
-      },
-      "type": "object"
+      }
     },
     "ResidencyRequirement": {
+      "type": "string",
       "enum": [
         "us"
-      ],
-      "type": "string"
+      ]
     },
     "SandboxMode": {
+      "type": "string",
       "enum": [
         "read-only",
         "workspace-write",
         "danger-full-access"
-      ],
-      "type": "string"
+      ]
     },
     "WebSearchMode": {
+      "type": "string",
       "enum": [
         "disabled",
         "cached",
         "live"
-      ],
-      "type": "string"
+      ]
     }
-  },
-  "properties": {
-    "requirements": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/ConfigRequirements"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Null if no requirements are configured (e.g. no requirements.toml/MDM entries)."
-    }
-  },
-  "title": "ConfigRequirementsReadResponse",
-  "type": "object"
+  }
 }

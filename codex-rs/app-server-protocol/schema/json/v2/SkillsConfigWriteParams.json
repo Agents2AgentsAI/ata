@@ -1,5 +1,11 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SkillsConfigWriteParams",
+  "type": "object",
+  "required": [
+    "enabled",
+    "path"
+  ],
   "properties": {
     "enabled": {
       "type": "boolean"
@@ -7,11 +13,5 @@
     "path": {
       "type": "string"
     }
-  },
-  "required": [
-    "enabled",
-    "path"
-  ],
-  "title": "SkillsConfigWriteParams",
-  "type": "object"
+  }
 }

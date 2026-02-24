@@ -17,6 +17,7 @@ members = [
     "cli",
     "config",
     "shell-command",
+    "skills",
     "core",
     "hooks",
     "secrets",
@@ -27,7 +28,6 @@ members = [
     "keyring-store",
     "file-search",
     "linux-sandbox",
-    "windows-sandbox-rs",
     "lmstudio",
     "login",
     "mcp-server",
@@ -54,6 +54,7 @@ members = [
     "codex-client",
     "codex-api",
     "codex-research-tools",
+    "codex-data-tools",
     "state",
     "codex-experimental-api-macros",
 ]
@@ -81,7 +82,6 @@ default-members = [
     "keyring-store",
     "file-search",
     "linux-sandbox",
-    "windows-sandbox-rs",
     "lmstudio",
     "login",
     "mcp-server",
@@ -115,13 +115,14 @@ default-members = [
     "utils/fuzzy-match",
     "codex-client",
     "codex-api",
+    "codex-data-tools",
     "state",
     "codex-experimental-api-macros",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.0.0"
+version = "0.3.0"
 # Track the edition for all workspace crates in one place. Individual
 # crates can still override this value, but keeping it here means new
 # crates created with `cargo new -w ...` automatically inherit the 2024
@@ -165,10 +166,12 @@ codex-otel = { path = "otel" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-research-tools = { path = "codex-research-tools" }
+codex-data-tools = { path = "codex-data-tools" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-secrets = { path = "secrets" }
 codex-shell-command = { path = "shell-command" }
+codex-skills = { path = "skills" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
@@ -332,7 +335,7 @@ tracing-subscriber = "0.3.22"
 tracing-test = "0.2.5"
 tree-sitter = "0.25.10"
 tree-sitter-bash = "0.25"
-tree-sitter-highlight = "0.25.10"
+syntect = "5"
 ts-rs = "11"
 tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
 uds_windows = "1.1.0"
@@ -397,6 +400,8 @@ unwrap_used = "deny"
 ignored = [
     "icu_provider",
     "openssl-sys",
+    "codex-utils-readiness",
+    "codex-secrets",
 ]
 
 [profile.dev]
