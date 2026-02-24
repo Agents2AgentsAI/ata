@@ -224,15 +224,15 @@ impl DocumentReaderView {
         // document.  Folds are matched by section index; byte ranges are only
         // applied when the section content length matches (content unchanged).
         if let Ok(mut guard) = SAVED_FOLD_STATE.lock() {
-            if let Some(saved) = guard.as_ref() {
-                if saved.document_id == document_id {
-                    for (i, saved_folds) in saved.section_folds.iter().enumerate() {
-                        if let Some(section) = sections.get_mut(i) {
-                            // Only restore if content hasn't changed (byte offsets still valid).
-                            let max_end = saved_folds.iter().map(|f| f.end).max().unwrap_or(0);
-                            if max_end <= section.content.len() {
-                                section.folds = saved_folds.clone();
-                            }
+            if let Some(saved) = guard.as_ref()
+                && saved.document_id == document_id
+            {
+                for (i, saved_folds) in saved.section_folds.iter().enumerate() {
+                    if let Some(section) = sections.get_mut(i) {
+                        // Only restore if content hasn't changed (byte offsets still valid).
+                        let max_end = saved_folds.iter().map(|f| f.end).max().unwrap_or(0);
+                        if max_end <= section.content.len() {
+                            section.folds = saved_folds.clone();
                         }
                     }
                 }
@@ -647,13 +647,13 @@ impl DocumentReaderView {
     fn save_fold_state(&self) {
         let folds: Vec<Vec<FoldRegion>> = self.sections.iter().map(|s| s.folds.clone()).collect();
         // Only save if there are any folds worth preserving.
-        if folds.iter().any(|f| !f.is_empty()) {
-            if let Ok(mut guard) = SAVED_FOLD_STATE.lock() {
-                *guard = Some(SavedFoldState {
-                    document_id: self.document_id.clone(),
-                    section_folds: folds,
-                });
-            }
+        if folds.iter().any(|f| !f.is_empty())
+            && let Ok(mut guard) = SAVED_FOLD_STATE.lock()
+        {
+            *guard = Some(SavedFoldState {
+                document_id: self.document_id.clone(),
+                section_folds: folds,
+            });
         }
     }
 
