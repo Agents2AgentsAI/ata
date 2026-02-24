@@ -360,6 +360,43 @@ impl Features {
     pub fn enabled_features(&self) -> Vec<Feature> {
         self.enabled.iter().copied().collect()
     }
+
+    /// Check whether a research tool is enabled based on per-category feature flags.
+    /// When the master `Research` toggle is on, all tools are enabled (backward compat).
+    pub fn is_research_tool_enabled(&self, tool_id: &str) -> bool {
+        if self.enabled(Feature::Research) {
+            return true;
+        }
+        match () {
+            _ if tool_id.starts_with("paper_") => self.enabled(Feature::ResearchPaperSearch),
+            _ if tool_id.starts_with("zotero_") => self.enabled(Feature::ResearchZotero),
+            _ if tool_id.starts_with("hn_") => self.enabled(Feature::ResearchHackerNews),
+            _ if tool_id.starts_with("patent_") => self.enabled(Feature::ResearchPatents),
+            _ if tool_id.starts_with("repo_") => self.enabled(Feature::ResearchRepoAnalysis),
+            _ => true,
+        }
+    }
+
+    /// Check whether a research skill is enabled based on per-category feature flags.
+    /// When the master `Research` toggle is on, all skills are enabled.
+    pub fn is_research_skill_enabled(&self, skill_name: &str) -> bool {
+        if self.enabled(Feature::Research) {
+            return true;
+        }
+        match skill_name {
+            "hn-synthesis" | "hn-discoverer" | "hn-synthesizer" => {
+                self.enabled(Feature::ResearchHackerNews)
+            }
+            "paper-synthesis" | "paper-synthesizer" | "paper-discovery" => {
+                self.enabled(Feature::ResearchPaperSearch)
+            }
+            "research-briefing" | "cross-paper-report" => {
+                self.enabled(Feature::ResearchPaperSearch)
+            }
+            "conversation-report" | "kb" => false,
+            _ => true,
+        }
+    }
 }
 
 fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>) {
