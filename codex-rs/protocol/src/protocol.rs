@@ -252,6 +252,11 @@ pub enum Op {
         /// Updated personality preference.
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
+
+        /// Updated feature flags (key → enabled). Applied on top of the
+        /// session's baseline features for all subsequent turns.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        feature_flags: Option<std::collections::BTreeMap<String, bool>>,
     },
 
     /// Approve a command execution

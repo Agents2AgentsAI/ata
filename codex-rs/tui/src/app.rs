@@ -2157,6 +2157,7 @@ impl App {
                                         summary: None,
                                         collaboration_mode: None,
                                         personality: None,
+                                        feature_flags: None,
                                     },
                                 ));
                                 self.app_event_tx.send(
@@ -2180,6 +2181,7 @@ impl App {
                                         summary: None,
                                         collaboration_mode: None,
                                         personality: None,
+                                        feature_flags: None,
                                     },
                                 ));
                                 self.app_event_tx
@@ -2362,7 +2364,7 @@ impl App {
                 if updates.is_empty() {
                     return Ok(AppRunControl::Continue);
                 }
-                let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
+                let _windows_sandbox_changed = updates.iter().any(|(feature, _)| {
                     matches!(
                         feature,
                         Feature::WindowsSandbox | Feature::WindowsSandboxElevated
@@ -2393,24 +2395,36 @@ impl App {
                         }
                     }
                 }
-                if windows_sandbox_changed {
+                // Notify core so changes take effect without restart.
+                {
+                    let feature_flags: BTreeMap<String, bool> = updates
+                        .iter()
+                        .map(|(feature, enabled)| (feature.key().to_string(), *enabled))
+                        .collect();
+
                     #[cfg(target_os = "windows")]
-                    {
-                        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
-                        self.app_event_tx
-                            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                                cwd: None,
-                                approval_policy: None,
-                                sandbox_policy: None,
-                                windows_sandbox_level: Some(windows_sandbox_level),
-                                model: None,
-                                model_provider: None,
-                                effort: None,
-                                summary: None,
-                                collaboration_mode: None,
-                                personality: None,
-                            }));
-                    }
+                    let windows_sandbox_level = if _windows_sandbox_changed {
+                        Some(WindowsSandboxLevel::from_config(&self.config))
+                    } else {
+                        None
+                    };
+                    #[cfg(not(target_os = "windows"))]
+                    let windows_sandbox_level = None;
+
+                    self.app_event_tx
+                        .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                            cwd: None,
+                            approval_policy: None,
+                            sandbox_policy: None,
+                            windows_sandbox_level,
+                            model: None,
+                            model_provider: None,
+                            effort: None,
+                            summary: None,
+                            collaboration_mode: None,
+                            personality: None,
+                            feature_flags: Some(feature_flags),
+                        }));
                 }
                 if let Err(err) = builder.apply().await {
                     tracing::error!(error = %err, "failed to persist feature flags");
