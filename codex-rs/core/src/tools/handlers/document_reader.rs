@@ -30,9 +30,13 @@ use std::sync::Mutex;
 /// sometimes injects into reading-view content. These are internal
 /// artifacts that appear as garbage to the user.
 fn strip_citation_markers(text: &str) -> String {
-    static RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\s*cite(?:turn\d+(?:view|search)\d+)+").expect("valid regex")
-    });
+    static RE: LazyLock<Regex> =
+        LazyLock::new(
+            || match Regex::new(r"\s*cite(?:turn\d+(?:view|search)\d+)+") {
+                Ok(re) => re,
+                Err(err) => panic!("invalid citation regex: {err}"),
+            },
+        );
     RE.replace_all(text, "").into_owned()
 }
 
