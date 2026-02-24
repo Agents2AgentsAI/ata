@@ -1,6 +1,7 @@
 //! Rendering helpers for the document reader view.
 
 use crate::markdown::append_markdown;
+use ratatui::style::Modifier;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -32,8 +33,14 @@ pub(super) fn render_section(
 
     // Section body rendered as markdown.
     if !content.is_empty() {
+        let clean = strip_citation_annotations(content);
         let wrap_width = width.saturating_sub(2).max(1) as usize;
-        append_markdown(content, Some(wrap_width), &mut lines);
+        append_markdown(&clean, Some(wrap_width), &mut lines);
+
+        // macOS Terminal.app renders ANSI italic (SGR 3) as reverse video,
+        // producing white-bg/black-text on dark terminals.  Replace italic
+        // with underline in the reading view to avoid this.
+        replace_italic_with_underline(&mut lines);
     }
 
     if lines.is_empty() {
@@ -43,33 +50,86 @@ pub(super) fn render_section(
     lines
 }
 
+/// Count the number of rendered body lines for a content string, accounting
+/// for markdown formatting and word wrapping.  Used to map raw content line
+/// indices to rendered line positions.
+pub(super) fn rendered_body_line_count(content: &str, width: u16) -> usize {
+    if content.is_empty() {
+        return 0;
+    }
+    let clean = strip_citation_annotations(content);
+    let wrap_width = width.saturating_sub(2).max(1) as usize;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    append_markdown(&clean, Some(wrap_width), &mut lines);
+    replace_italic_with_underline(&mut lines);
+    lines.len()
+}
+
+/// Render a placeholder for a section whose content is still being generated.
+///
+/// Shows the heading in cyan bold (same as normal) followed by a shimmer
+/// animation (when enabled) or a static "Generating..." indicator.
+pub(super) fn render_section_loading(
+    heading: &str,
+    animations_enabled: bool,
+) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    if !heading.is_empty() {
+        lines.push(Line::from(heading.to_string().cyan().bold()));
+        lines.push(Line::from(""));
+    }
+
+    let label = "  \u{25CB} Generating\u{2026}";
+    if animations_enabled {
+        let shimmer = crate::shimmer::shimmer_spans(label);
+        lines.push(Line::from(shimmer));
+    } else {
+        lines.push(Line::from(label.to_string().dim()));
+    }
+
+    lines
+}
+
 /// Build the header line with title left-aligned and section nav right-aligned.
+///
+/// When `streaming_status` is `Some("generating 3/8...")`, it is rendered dim
+/// italic after the title (replaces the "thinking..." position).
 pub(super) fn header_line(
     title: &str,
     section_num: usize,
     section_count: usize,
     waiting: bool,
+    streaming_status: Option<&str>,
     width: u16,
 ) -> Line<'static> {
     // Account for "│ " + " │" side borders (4 chars).
     let inner_width = (width as usize).saturating_sub(4);
 
-    let left = if waiting {
-        format!("{title}  thinking...")
+    let status_text = if waiting {
+        Some("thinking...")
+    } else {
+        streaming_status
+    };
+
+    let left = if let Some(st) = status_text {
+        format!("{title}  {st}")
     } else {
         title.to_string()
     };
     let right = format!("{section_num}/{section_count}");
+    let left_width = unicode_width::UnicodeWidthStr::width(left.as_str());
+    let right_width = unicode_width::UnicodeWidthStr::width(right.as_str());
     let padding = inner_width
-        .saturating_sub(left.len())
-        .saturating_sub(right.len());
+        .saturating_sub(left_width)
+        .saturating_sub(right_width);
 
     let mut spans: Vec<Span<'static>> = Vec::new();
     spans.push("│ ".dim());
-    if waiting {
+    if let Some(st) = status_text {
         let title_part = format!("{title}  ");
         spans.push(title_part.cyan().bold());
-        spans.push("thinking...".dim().italic());
+        spans.push(st.to_string().dim().italic());
     } else {
         spans.push(title.to_string().cyan().bold());
     }
@@ -101,11 +161,12 @@ pub(super) fn separator(width: u16) -> Line<'static> {
 /// Build a separator with a centered text indicator (e.g. " ▼ scroll for more ").
 pub(super) fn separator_with_indicator(width: u16, label: &str) -> Line<'static> {
     let inner = (width as usize).saturating_sub(2);
-    if inner <= label.len() {
+    let label_width = unicode_width::UnicodeWidthStr::width(label);
+    if inner <= label_width {
         // Not enough room for the label — fall back to a plain separator.
         return separator(width);
     }
-    let remaining = inner - label.len();
+    let remaining = inner - label_width;
     let left = remaining / 2;
     let right = remaining - left;
     Line::from(vec![
@@ -121,9 +182,20 @@ pub(super) fn hints_line(
     search_focused: bool,
     has_active_search: bool,
     visual_mode: bool,
+    has_folds: bool,
+    pending_quit: bool,
     width: u16,
 ) -> Line<'static> {
-    let hints: Vec<Span<'static>> = if search_focused {
+    let hints: Vec<Span<'static>> = if pending_quit {
+        vec![
+            "Close reading view? ".magenta(),
+            "q/y".magenta().bold(),
+            ": yes".magenta(),
+            " | ".magenta(),
+            "any other key".magenta().bold(),
+            ": cancel".magenta(),
+        ]
+    } else if search_focused {
         vec![
             "Enter".dim().bold(),
             ": search".dim(),
@@ -168,26 +240,45 @@ pub(super) fn hints_line(
             ": done".dim(),
         ]
     } else {
-        vec![
+        let mut h = vec![
             "hjkl".dim().bold(),
             ": move".dim(),
             " | ".dim(),
             "n/p".dim().bold(),
             ": section".dim(),
+        ];
+        if has_folds {
+            h.extend([
+                " | ".dim(),
+                "Space".dim().bold(),
+                ": collapse/expand".dim(),
+                " | ".dim(),
+                "[]".dim().bold(),
+                ": jump".dim(),
+            ]);
+        }
+        h.extend([
             " | ".dim(),
             "v".dim().bold(),
             ": select".dim(),
+            " | ".dim(),
+            "gx".dim().bold(),
+            ": open link".dim(),
             " | ".dim(),
             "Tab".dim().bold(),
             ": ask".dim(),
             " | ".dim(),
             "q".dim().bold(),
             ": done".dim(),
-        ]
+        ]);
+        h
     };
 
     // Wrap in side borders to match the card.
-    let hints_width: usize = hints.iter().map(|s| s.content.len()).sum();
+    let hints_width: usize = hints
+        .iter()
+        .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
     let pad = (width as usize)
         .saturating_sub(4) // "│ " + " │"
         .saturating_sub(hints_width);
@@ -342,8 +433,8 @@ pub(super) fn draw_side_borders(
 
 /// Highlight all occurrences of `query` in a rendered line (case-insensitive).
 ///
-/// Matched substrings are rendered with reversed style. The original spans are
-/// split at match boundaries so that only the matched characters get the
+/// Matched substrings are rendered with magenta bold style. The original spans
+/// are split at match boundaries so that only the matched characters get the
 /// highlight style.
 pub(super) fn apply_search_highlights(line: Line<'static>, query: &str) -> Line<'static> {
     if query.is_empty() {
@@ -407,7 +498,10 @@ pub(super) fn apply_search_highlights(line: Line<'static>, query: &str) -> Line<
             let local_match_end = m_end.saturating_sub(span_start).min(span_text.len());
             if local_match_start < local_match_end {
                 let matched = &span_text[local_match_start..local_match_end];
-                new_spans.push(Span::styled(matched.to_string(), base_style.reversed()));
+                new_spans.push(Span::styled(
+                    matched.to_string(),
+                    base_style.magenta().bold().underlined(),
+                ));
             }
 
             pos_in_span = local_match_end;
@@ -462,4 +556,207 @@ pub(super) fn pending_indicator_lines(question: &str, width: u16) -> Vec<Line<'s
     ]));
 
     lines
+}
+
+/// Replace `Modifier::ITALIC` with `Modifier::UNDERLINED` in all spans and
+/// line styles.  macOS Terminal.app renders ANSI italic (SGR 3) as reverse
+/// video which produces jarring white-bg/black-text on dark terminals.  This
+/// is scoped to the reading view only so the shared markdown renderer stays
+/// unchanged for upstream compatibility.
+/// Strip OpenAI Responses API citation annotations from content.
+///
+/// The model inserts inline citations delimited by private-use Unicode
+/// characters: U+E200 (start), U+E201 (end), U+E202 (separator).
+/// These render as boxes/rectangles in terminal fonts.  We strip the
+/// entire `\u{e200}...\u{e201}` span plus any surrounding whitespace
+/// that would otherwise leave double-spaces or trailing blanks.
+pub(super) fn strip_citation_annotations(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    let mut chars = content.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{e200}' {
+            // Skip everything up to and including the closing \u{e201}.
+            for inner in chars.by_ref() {
+                if inner == '\u{e201}' {
+                    break;
+                }
+            }
+            // Collapse double-space left behind by stripping a citation
+            // that was preceded and followed by spaces.
+            if out.ends_with(' ') && chars.peek() == Some(&' ') {
+                chars.next();
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Apply fold regions as a post-processing step on rendered lines.
+///
+/// - **Collapsed** folds replace their line range with a single summary line.
+/// - **Expanded** folds prepend a `┊ ` border to each contained line.
+///
+/// `heading_line_count` is the number of rendered lines consumed by the heading
+/// (typically 2: heading text + blank line), used to offset byte-range → line-range
+/// mapping since fold byte ranges are relative to the content, not the heading.
+pub(super) fn apply_folds(
+    lines: Vec<Line<'static>>,
+    content: &str,
+    heading_line_count: usize,
+    width: u16,
+    folds: &[super::FoldRegion],
+) -> Vec<Line<'static>> {
+    if folds.is_empty() {
+        return lines;
+    }
+
+    // Convert each fold's byte range to a rendered-line range.
+    // We render content prefixes through the markdown pipeline to account
+    // for word wrapping — a single source line can span multiple rendered
+    // lines, so simple newline counting would misalign fold borders.
+    struct LineFold {
+        start_line: usize,
+        end_line: usize, // exclusive
+        summary: String,
+        collapsed: bool,
+    }
+
+    let mut line_folds: Vec<LineFold> = Vec::new();
+    for fold in folds {
+        let start_rendered =
+            rendered_body_line_count(&content[..fold.start.min(content.len())], width);
+        let end_rendered = rendered_body_line_count(&content[..fold.end.min(content.len())], width);
+
+        let start_line = heading_line_count + start_rendered;
+        let end_line = (heading_line_count + end_rendered).min(lines.len());
+
+        if start_line < end_line {
+            line_folds.push(LineFold {
+                start_line,
+                end_line,
+                summary: fold.summary.clone(),
+                collapsed: fold.collapsed,
+            });
+        }
+    }
+
+    // Sort by start_line for deterministic processing.
+    line_folds.sort_by_key(|f| f.start_line);
+
+    // Build output lines.
+    let mut out: Vec<Line<'static>> = Vec::with_capacity(lines.len());
+    let mut skip_until: usize = 0;
+
+    for (i, line) in lines.into_iter().enumerate() {
+        if i < skip_until {
+            continue;
+        }
+
+        // Check if a fold starts at this line.
+        if let Some(lf) = line_folds.iter().find(|f| f.start_line == i)
+            && lf.collapsed
+        {
+            // Emit a single collapsed summary line.
+            out.push(Line::from(vec![
+                "┊ ".dim().cyan(),
+                "[+] ".dim().cyan(),
+                lf.summary.clone().dim().cyan(),
+            ]));
+            skip_until = lf.end_line;
+            continue;
+        }
+
+        // Check if an expanded fold starts at this line — emit a header.
+        if let Some(lf) = line_folds
+            .iter()
+            .find(|f| !f.collapsed && f.start_line == i)
+        {
+            out.push(Line::from(vec![
+                "┊ ".dim().cyan(),
+                "[-] ".dim().cyan(),
+                lf.summary.clone().dim().cyan(),
+            ]));
+        }
+
+        // Check if this line is inside any expanded fold.
+        let in_fold = line_folds
+            .iter()
+            .any(|f| !f.collapsed && i >= f.start_line && i < f.end_line);
+
+        if in_fold {
+            // Prepend fold border to the line.
+            let mut spans = vec![Span::from("┊ ").dim().cyan()];
+            spans.extend(line.spans);
+            out.push(Line::from(spans));
+        } else {
+            out.push(line);
+        }
+    }
+
+    out
+}
+
+/// Map a pre-fold rendered line index to the corresponding post-fold index.
+///
+/// Collapsed folds replace N lines with 1 summary line, shifting all
+/// subsequent lines up.  This function computes the adjusted index so
+/// that highlights (e.g. green "changed" borders) align with the actual
+/// post-fold lines returned by [`apply_folds`].
+pub(super) fn adjust_line_for_folds(
+    pre_fold_line: usize,
+    content: &str,
+    heading_line_count: usize,
+    width: u16,
+    folds: &[super::FoldRegion],
+) -> usize {
+    if folds.is_empty() {
+        return pre_fold_line;
+    }
+
+    // Build sorted (by start byte) list of collapsed fold line ranges.
+    let mut collapsed: Vec<(usize, usize)> = folds
+        .iter()
+        .filter(|f| f.collapsed)
+        .map(|f| {
+            let s = rendered_body_line_count(&content[..f.start.min(content.len())], width);
+            let e = rendered_body_line_count(&content[..f.end.min(content.len())], width);
+            (heading_line_count + s, heading_line_count + e)
+        })
+        .filter(|(s, e)| e > s)
+        .collect();
+    collapsed.sort_by_key(|(s, _)| *s);
+
+    let mut adjustment: usize = 0;
+    for (fold_start, fold_end) in &collapsed {
+        let removed = fold_end - fold_start - 1; // N lines → 1 summary = N-1 removed
+        if pre_fold_line > *fold_start {
+            if pre_fold_line >= *fold_end {
+                adjustment += removed;
+            } else {
+                // Target is inside the collapsed fold — map to summary line.
+                return fold_start.saturating_sub(adjustment);
+            }
+        }
+    }
+    pre_fold_line.saturating_sub(adjustment)
+}
+
+fn replace_italic_with_underline(lines: &mut [Line<'static>]) {
+    fn fix_modifiers(add: &mut Modifier, sub: &mut Modifier) {
+        if add.contains(Modifier::ITALIC) {
+            *add = add.difference(Modifier::ITALIC).union(Modifier::UNDERLINED);
+        }
+        // Also clear italic from sub_modifier so we don't accidentally
+        // remove the replacement that we just added.
+        *sub = sub.difference(Modifier::ITALIC);
+    }
+
+    for line in lines.iter_mut() {
+        fix_modifiers(&mut line.style.add_modifier, &mut line.style.sub_modifier);
+        for span in &mut line.spans {
+            fix_modifiers(&mut span.style.add_modifier, &mut span.style.sub_modifier);
+        }
+    }
 }

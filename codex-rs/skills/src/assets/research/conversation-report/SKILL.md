@@ -98,12 +98,12 @@ Check if insights from the conversation should be persisted to KB cards:
 
 1. For each KB card referenced in the conversation, check if the discussion produced insights not in the card.
 2. If yes, offer to update: "This conversation produced insights about [papers]. Want me to update the KB cards with these findings? This would add [brief description] to [card-ids]."
-3. If the user agrees, apply the `kb-update` protocol (read card, append Discussion Notes, write card).
+3. If the user agrees, apply the update protocol from `$kb` (read card, append Discussion Notes, write card).
 
-This connects conversation-report to kb-update — the report presents the conversation in chat, while kb-update persists paper-specific insights back to individual cards for future reference.
+This connects conversation-report to KB updates — the report presents the conversation in chat, while the KB update protocol persists paper-specific insights back to individual cards for future reference.
 
 ### 3. Research Journal Entry
-Append a structured entry to `research-journal.md` at the KB root via `kb_write_file`. If the file doesn't exist yet, create it. New entries are **prepended** (newest first) so the most recent session is at the top.
+Append a structured entry to `<kb_path>/research-journal.md`. If the file doesn't exist yet, create it. New entries are **prepended** (newest first) so the most recent session is at the top.
 
 The journal entry is much shorter than the full chat report — it's a structured summary for future reference, not a copy of the full narrative.
 
@@ -146,9 +146,9 @@ After generating the report and journal entry, check if the conversation reveale
 - Did the user make a key decision? (e.g., "I'm going with VQ-VAE tokenization")
 - Did the user respond well to a particular explanation style?
 
-If yes, offer to update `research-context.md` at the KB root:
+If yes, offer to update `<kb_path>/research-context.md`:
 - "This conversation revealed some preferences. Want me to update your research context? I'd add: [specific items]."
-- If the user agrees, read `research-context.md` (create if it doesn't exist), merge the new information into the appropriate section, and write it back.
+- If the user agrees, read `<kb_path>/research-context.md` (create if it doesn't exist), merge the new information into the appropriate section, and write it back.
 
 **Research context format** (create with these sections if new):
 
@@ -175,12 +175,18 @@ If yes, offer to update `research-context.md` at the KB root:
 
 **This section applies to the main agent only.** If this skill is loaded in a subagent, return results as text to the main agent — do NOT call `present_reading_view`.
 
-IMPORTANT: When the report is complete, the main agent MUST call `present_reading_view` to present it in sectioned reading mode instead of outputting text directly. Do NOT stream the report as regular text. Set `document_id` to a unique slug, `title` to the report title, and `content` to the full markdown with `## ` headings for sections. End your response immediately after calling this tool.
+**Phase 1 (Outline):** IMMEDIATELY call `present_reading_view` with `document_id` set to a unique slug, `title` to the report title, and `content` containing ONLY the `## ` section headings with empty bodies. Example content: `"## The Question\n\n## What We Found\n\n## Key Insights\n\n## Open Questions"`. This opens the reading view instantly with "Generating..." placeholders.
+
+**Phase 2 (Fill):** The tool result will tell you to fill section 0. Immediately call `update_document_section(document_id, section_index=0, content="...")` with the FULL content for that section — do not output any text, just make the tool call. Each tool result tells you the next section to fill. Continue calling `update_document_section` for each subsequent section until all are filled.
+
+**Markdown formatting:** Always put a blank line before numbered list items (`1.`, `2.`, etc.) and before bullet list items (`-`, `*`). Without a blank line, the markdown parser treats `2.`, `3.`, etc. as plain text instead of list items, so they lose their formatting. This also applies to content after paragraphs, blockquotes, and code blocks.
 
 When the user asks follow-up questions about a specific section, use the most efficient update tool:
 - `append_to_section` — to add new information at the end of a section (most common for follow-up questions)
 - `patch_document_section` — to change specific text within a section (for corrections or targeted edits)
 - `update_document_section` — to fully rewrite a section (only when the entire section needs to change)
+
+Write follow-up answers as straight content — no editorial labels like "(clearer explanation)" or "(expanded)" in headings or topic lines.
 
 ## Anti-Patterns
 
@@ -194,5 +200,5 @@ When the user asks follow-up questions about a specific section, use the most ef
 
 - **Short conversation (< 3 substantive exchanges)**: Still produce the chat report, but note that it's brief and suggest continuing the exploration to deepen it. Journal entry may be just 2-3 bullets.
 - **No KB cards referenced**: The conversation may have been about papers not yet in the KB. Still produce the report, but note which papers lack KB cards and suggest `$paper-synthesis` to create them. Skip KB card updates (step 2) but still write journal entry.
-- **No `kb_write_file`**: Present the report in chat only. Note that KB tools are needed for journal and context persistence.
+- **No KB configured**: Present the report in chat only. Note that a KB path is needed for journal and context persistence.
 - **Conversation was unfocused**: If the conversation covered many unrelated topics, organize into clearly separated sections rather than forcing a unified narrative. Journal entry should note the multiple topics explored.

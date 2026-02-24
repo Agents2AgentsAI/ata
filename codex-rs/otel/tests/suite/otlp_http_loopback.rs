@@ -134,34 +134,12 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     let addr = listener.local_addr().expect("local_addr");
     listener.set_nonblocking(true).expect("set_nonblocking");
 
-    let (tx, rx) = mpsc::channel::<Vec<CapturedRequest>>();
-    let server = thread::spawn(move || {
-        let mut captured = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(3);
-
-        while Instant::now() < deadline {
-            match listener.accept() {
-                Ok((mut stream, _)) => {
-                    let result = read_http_request(&mut stream);
-                    let _ = write_http_response(&mut stream, "202 Accepted");
-                    if let Ok((path, headers, body)) = result {
-                        captured.push(CapturedRequest {
-                            path,
-                            content_type: headers.get("content-type").cloned(),
-                            body,
-                        });
-                    }
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(_) => break,
-            }
-        }
-
-        let _ = tx.send(captured);
-    });
-
+    // Create the metrics client BEFORE spawning the server thread.
+    // MetricsClient::new() can be slow (OTEL SDK init, os_info discovery,
+    // etc.) and that time was eating into the server's accept deadline,
+    // causing flaky failures under load. The listener is already bound so
+    // the TCP connection made during export will queue in the kernel
+    // backlog until the server thread accepts it.
     let metrics = MetricsClient::new(MetricsConfig::otlp(
         "test",
         "codex-cli",
@@ -173,6 +151,38 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
             tls: None,
         },
     ))?;
+
+    let (tx, rx) = mpsc::channel::<Vec<CapturedRequest>>();
+    let server = thread::spawn(move || {
+        let mut captured = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let result = read_http_request(&mut stream);
+                    let _ = write_http_response(&mut stream, "202 Accepted");
+                    if let Ok((path, headers, body)) = result {
+                        let done = path == "/v1/metrics";
+                        captured.push(CapturedRequest {
+                            path,
+                            content_type: headers.get("content-type").cloned(),
+                            body,
+                        });
+                        if done {
+                            break;
+                        }
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
+
+        let _ = tx.send(captured);
+    });
 
     metrics.counter("codex.turns", 1, &[("source", "test")])?;
     metrics.shutdown()?;

@@ -15,7 +15,7 @@ repo_analysis = ["dep:regex", "dep:walkdir"]
 latex = ["dep:flate2"]
 pdf_images = []
 hackernews = []
-patents = []
+patents = ["dep:quick-xml"]
 all = ["paper_search", "zotero", "repo_analysis", "latex", "pdf_images", "hackernews", "patents"]
 
 [dependencies]

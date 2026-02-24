@@ -1,5 +1,6 @@
 use codex_core::config::Config;
 use codex_core::web_search::web_search_detail;
+use codex_protocol::document_reader::UpdateDocumentSectionEvent;
 use codex_protocol::items::TurnItem;
 use codex_protocol::num_format::format_with_separators;
 use codex_protocol::protocol::AgentMessageEvent;
@@ -811,11 +812,22 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::RealtimeConversationStarted(_)
             | EventMsg::RealtimeConversationRealtime(_)
             | EventMsg::RealtimeConversationClosed(_)
-            | EventMsg::DynamicToolCallRequest(_)
-            | EventMsg::PresentDocument(_)
-            | EventMsg::UpdateDocumentSection(_)
-            | EventMsg::AppendDocumentSection(_)
-            | EventMsg::PatchDocumentSection(_) => {}
+            | EventMsg::DynamicToolCallRequest(_) => {}
+            EventMsg::PresentDocument(ev) => {
+                ts_msg!(
+                    self,
+                    "{}\n# {}",
+                    "reading view".style(self.magenta).style(self.italic),
+                    ev.title,
+                );
+                if !ev.content.trim().is_empty() {
+                    eprintln!("{}", ev.content);
+                }
+            }
+            EventMsg::UpdateDocumentSection(UpdateDocumentSectionEvent { content, .. }) => {
+                eprintln!("{content}");
+            }
+            EventMsg::AppendDocumentSection(_) | EventMsg::PatchDocumentSection(_) => {}
         }
         CodexStatus::Running
     }

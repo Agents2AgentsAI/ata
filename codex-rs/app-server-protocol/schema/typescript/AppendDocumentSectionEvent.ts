@@ -5,4 +5,12 @@
 /**
  * Event emitted when the agent calls `append_to_section`.
  */
-export type AppendDocumentSectionEvent = { call_id: string, turn_id: string, document_id: string, section_index: number, content: string, };
+export type AppendDocumentSectionEvent = { call_id: string, turn_id: string, document_id: string, section_index: number, content: string, 
+/**
+ * Whether the appended content should be collapsible.
+ */
+foldable: boolean, 
+/**
+ * Short summary shown when the fold is collapsed.
+ */
+summary: string | null, };

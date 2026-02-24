@@ -1651,7 +1651,6 @@ dependencies = [
  "codex-file-search",
  "codex-git",
  "codex-hooks",
- "codex-kb",
  "codex-keyring-store",
  "codex-network-proxy",
  "codex-otel",
@@ -1681,6 +1680,7 @@ dependencies = [
  "futures",
  "http 1.4.0",
  "image",
+ "include_dir",
  "indexmap 2.13.0",
  "indoc",
  "insta",
@@ -1939,19 +1939,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "codex-kb"
-version = "0.0.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "thiserror 2.0.18",
  "tokio",
 ]
 

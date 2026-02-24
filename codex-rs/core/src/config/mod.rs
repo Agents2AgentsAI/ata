@@ -1,4 +1,6 @@
 use crate::auth::AuthCredentialsStoreMode;
+use crate::auth::PROVIDER_OPENAI;
+use crate::auth::list_configured_providers;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::types::AppsConfigToml;
@@ -1781,10 +1783,28 @@ impl Config {
             model_providers.entry(key).or_insert(provider);
         }
 
+        // Determine the auth credentials store mode for checking configured providers
+        let cli_auth_credentials_store_mode = cfg.cli_auth_credentials_store.unwrap_or_default();
+
+        // Determine the default provider based on configured API keys
+        let default_provider_id = {
+            let configured =
+                list_configured_providers(&codex_home, cli_auth_credentials_store_mode);
+            // Prefer OpenAI if configured, otherwise use the first configured provider
+            if configured.iter().any(|p| p.provider_id == PROVIDER_OPENAI) {
+                PROVIDER_OPENAI.to_string()
+            } else if let Some(first) = configured.first() {
+                first.provider_id.clone()
+            } else {
+                // No providers configured, default to OpenAI (will fail with auth error later)
+                PROVIDER_OPENAI.to_string()
+            }
+        };
+
         let model_provider_id = model_provider
             .or(config_profile.model_provider)
             .or(cfg.model_provider)
-            .unwrap_or_else(|| "openai".to_string());
+            .unwrap_or(default_provider_id);
         let model_provider = model_providers
             .get(&model_provider_id)
             .ok_or_else(|| {
@@ -1892,7 +1912,15 @@ impl Config {
 
         let forced_login_method = cfg.forced_login_method;
 
-        let model = model.or(config_profile.model).or(cfg.model);
+        // Determine the model, with provider-specific defaults
+        let model = model.or(config_profile.model).or(cfg.model).or_else(|| {
+            // If no model is specified, set a default based on the provider
+            match model_provider_id.as_str() {
+                "anthropic" => Some("claude-sonnet-4-6".to_string()),
+                "gemini" => Some("gemini-2.0-flash".to_string()),
+                _ => None, // OpenAI and others will use the model manager's default
+            }
+        });
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
             let trimmed = value.trim();
