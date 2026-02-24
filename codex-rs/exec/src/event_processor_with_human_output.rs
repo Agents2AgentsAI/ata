@@ -820,6 +820,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     "reading view".style(self.magenta).style(self.italic),
                     ev.title,
                 );
+                if !ev.content.trim().is_empty() {
+                    eprintln!("{}", ev.content);
+                }
             }
             EventMsg::UpdateDocumentSection(UpdateDocumentSectionEvent { content, .. }) => {
                 eprintln!("{content}");
