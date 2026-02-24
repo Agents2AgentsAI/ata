@@ -219,7 +219,7 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ contains(matrix.target, 'windows') }}" == 'true' ]]; then
-            cargo build --target ${{ matrix.target }} --release --timings --bin ata --bin ata-responses-api-proxy --bin ata-windows-sandbox-setup --bin ata-command-runner
+            cargo build --target ${{ matrix.target }} --release --timings -p codex-cli -p codex-responses-api-proxy -p codex-windows-sandbox --bin ata --bin ata-responses-api-proxy --bin ata-windows-sandbox-setup --bin ata-command-runner
           else
             cargo build --target ${{ matrix.target }} --release --timings --bin ata --bin ata-responses-api-proxy
           fi
@@ -259,6 +259,9 @@ jobs:
           target="${{ matrix.target }}"
           release_dir="target/${target}/release"
 
+          echo "Disk usage before cleanup:"
+          df -h .
+
           # Preserve only the final release binaries we need for the DMG.
           mkdir -p /tmp/ata-binaries
           cp "${release_dir}/ata" /tmp/ata-binaries/ 2>/dev/null || true
@@ -273,8 +276,27 @@ jobs:
 
           # Remove build tools no longer needed after compilation.
           rm -rf ~/.rustup ~/.cargo
+
+          # Remove Xcode simulator runtimes and unused platform SDKs (multi-GB).
+          xcrun simctl delete all 2>/dev/null || true
+          sudo rm -rf \
+            ~/Library/Developer/CoreSimulator \
+            /Library/Developer/CoreSimulator \
+            2>/dev/null || true
+          for plat in iPhoneOS WatchOS AppleTVOS XROS WatchSimulator AppleTVSimulator iPhoneSimulator; do
+            sudo rm -rf "/Applications/Xcode.app/Contents/Developer/Platforms/${plat}.platform" 2>/dev/null || true
+          done
+
+          # Remove Homebrew and its caches.
           brew cleanup --prune=all 2>/dev/null || true
           rm -rf ~/Library/Caches/Homebrew 2>/dev/null || true
+
+          # Remove other pre-installed large tools not needed for DMG creation.
+          sudo rm -rf \
+            /usr/local/share/dotnet \
+            /usr/local/share/powershell \
+            /usr/local/lib/node_modules \
+            2>/dev/null || true
 
           # Restore binaries into the expected release directory.
           mkdir -p "${release_dir}"
