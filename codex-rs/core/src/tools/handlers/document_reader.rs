@@ -500,7 +500,21 @@ impl ToolHandler for DocumentReaderHandler {
                     }
                 };
 
-                let _doc_id = args.document_id;
+                let doc_id = args.document_id;
+                if !is_subagent {
+                    session
+                        .send_event(
+                            turn.as_ref(),
+                            EventMsg::PresentDocument(PresentDocumentEvent {
+                                call_id: call_id.clone(),
+                                turn_id: turn.sub_id.clone(),
+                                document_id: doc_id.clone(),
+                                title: title.clone(),
+                                content: doc_content.clone(),
+                            }),
+                        )
+                        .await;
+                }
                 if is_subagent {
                     // In a subagent context the TUI never receives the event
                     // (it only processes events from the active thread).

@@ -187,6 +187,15 @@ Rules:
                     }
                 ),
                 (
+                    "synthesizer".to_string(),
+                    AgentRoleConfig {
+                        description: Some("Use `synthesizer` for paper synthesis subagents. \
+Synthesizers use a smaller, faster model to download and extract paper content. \
+They write results to a staging file and return the path.".to_string()),
+                        config_file: Some("synthesizer.toml".to_string().parse().unwrap_or_default()),
+                    }
+                ),
+                (
                     "awaiter".to_string(),
                     AgentRoleConfig {
                         description: Some(r#"Use an `awaiter` agent EVERY TIME you must run a command that might take some time.
