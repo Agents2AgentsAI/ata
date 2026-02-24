@@ -19,10 +19,22 @@ use codex_protocol::document_reader::UpdateDocumentSectionEvent;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
+use regex_lite::Regex;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::sync::Mutex;
+
+/// Strip web-browsing citation markers like `citeturn5view0`,
+/// `citeturn1view0turn2view3`, or `citeturn5search0` that the model
+/// sometimes injects into reading-view content. These are internal
+/// artifacts that appear as garbage to the user.
+fn strip_citation_markers(text: &str) -> String {
+    static RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\s*cite(?:turn\d+(?:view|search)\d+)+").expect("valid regex")
+    });
+    RE.replace_all(text, "").into_owned()
+}
 
 // ---------------------------------------------------------------------------
 // Cached document state
@@ -444,11 +456,12 @@ impl ToolHandler for DocumentReaderHandler {
                 })?;
 
                 // Resolve title and content: use provided values, or fall back to cache.
-                let (title, doc_content, is_outline_only, section_count) = {
+                let (title, doc_content, _is_outline_only, _section_count) = {
                     let mut cache = doc_cache.lock();
                     match (args.title, args.content) {
                         (Some(t), Some(c)) => {
                             // New document or full replacement — cache it.
+                            let c = strip_citation_markers(&c);
                             let sections = parse_sections(&c);
                             let sec_count = sections.len();
                             // Detect outline-only: all headed sections have empty
@@ -483,7 +496,7 @@ impl ToolHandler for DocumentReaderHandler {
                     }
                 };
 
-                let doc_id = args.document_id;
+                let _doc_id = args.document_id;
                 if is_subagent {
                     // In a subagent context the TUI never receives the event
                     // (it only processes events from the active thread).
@@ -491,52 +504,44 @@ impl ToolHandler for DocumentReaderHandler {
                     // agent receives it through the normal wait() path.
                     format!("# {title}\n\n{doc_content}")
                 } else {
-                    session
-                        .send_event(
-                            turn.as_ref(),
-                            EventMsg::PresentDocument(PresentDocumentEvent {
-                                call_id,
-                                turn_id: turn.sub_id.clone(),
-                                document_id: doc_id.clone(),
-                                title,
-                                content: doc_content,
-                            }),
-                        )
-                        .await;
-                    if is_outline_only {
-                        format!(
-                            "Document outline is now visible to the user with {section_count} \
-                             empty sections. NOW fill section 0 by calling \
-                             update_document_section(document_id=\"{doc_id}\", section_index=0, \
-                             content=\"<full section content>\"). Do not output text \u{2014} \
-                             make the tool call immediately.",
-                        )
-                    } else {
-                        "Document displayed in reading mode. The user can now navigate sections \
-                         and ask follow-up questions. For ANY follow-up about this topic \u{2014} \
-                         whether about a specific section or a broad request like 'explain more \
-                         intuitively' or 'simplify this' \u{2014} use the reading view tools: \
-                         `update_document_section` to rewrite a section with the answer woven in \
-                         at the relevant location (preferred \u{2014} keeps explanations inline \
-                         where the concept appears), `patch_document_section` to insert content \
-                         right after a specific passage, or `append_to_section` only when adding \
-                         genuinely new content that belongs at the end of a section. \
-                         Do NOT output plain text responses \u{2014} always \
-                         use reading view tools for follow-ups on this topic. \
-                         Content style: write straight prose that continues the section\u{2019}s \
-                         voice. Never prefix with bold/italic topic lines like \
-                         '**On the efficiency gains:**' \u{2014} just write the content directly."
-                            .to_string()
-                    }
+                    "Document displayed in reading mode. The user can now navigate sections \
+                     and ask follow-up questions. For ANY follow-up about this topic \u{2014} \
+                     whether about a specific section or a broad request like 'explain more \
+                     intuitively' or 'simplify this' \u{2014} use the reading view tools:\n\
+                     \n\
+                     Placement rule: before inserting content, determine its SCOPE. If the \
+                     content spans or references multiple items in a list/sequence (e.g. a \
+                     walkthrough of steps 1\u{2013}6), place it AFTER the entire list, not \
+                     after the first item it mentions. Match placement to the scope of the \
+                     content, not to the first keyword match.\n\
+                     \n\
+                     Tool choice for follow-ups:\n\
+                     - `append_to_section` with `foldable=true` \u{2014} preferred for \
+                     elaborations, examples, and walkthroughs. Adds a collapsible block at \
+                     the end of the section. Use a clear `fold_summary`.\n\
+                     - `update_document_section` \u{2014} for rewriting or restructuring a \
+                     section. When inserting new content, respect the placement rule above: \
+                     put elaborations after the full structure they reference, never in the \
+                     middle of a numbered list or multi-step sequence.\n\
+                     - `patch_document_section` \u{2014} for small targeted fixes like \
+                     correcting a sentence or updating a specific paragraph.\n\
+                     \n\
+                     Do NOT output plain text responses \u{2014} always \
+                     use reading view tools for follow-ups on this topic. \
+                     Content style: write straight prose that continues the section\u{2019}s \
+                     voice. Never prefix with bold/italic topic lines like \
+                     '**On the efficiency gains:**' \u{2014} just write the content directly."
+                        .to_string()
                 }
             }
             "update_document_section" => {
-                let args: UpdateDocumentSectionArgs =
-                    serde_json::from_str(&arguments).map_err(|e| {
+                let mut args: UpdateDocumentSectionArgs = serde_json::from_str(&arguments)
+                    .map_err(|e| {
                         FunctionCallError::RespondToModel(format!(
                             "failed to parse update_document_section arguments: {e}"
                         ))
                     })?;
+                args.content = strip_citation_markers(&args.content);
                 if !doc_cache.contains(&args.document_id) {
                     return Err(FunctionCallError::RespondToModel(format!(
                         "No document with id \"{}\" is currently being viewed. \
@@ -632,11 +637,13 @@ impl ToolHandler for DocumentReaderHandler {
                 })
             }
             "append_to_section" => {
-                let args: AppendToSectionArgs = serde_json::from_str(&arguments).map_err(|e| {
-                    FunctionCallError::RespondToModel(format!(
-                        "failed to parse append_to_section arguments: {e}"
-                    ))
-                })?;
+                let mut args: AppendToSectionArgs =
+                    serde_json::from_str(&arguments).map_err(|e| {
+                        FunctionCallError::RespondToModel(format!(
+                            "failed to parse append_to_section arguments: {e}"
+                        ))
+                    })?;
+                args.content = strip_citation_markers(&args.content);
                 if !doc_cache.contains(&args.document_id) {
                     return Err(FunctionCallError::RespondToModel(format!(
                         "No document with id \"{}\" is currently being viewed. \
@@ -712,12 +719,13 @@ impl ToolHandler for DocumentReaderHandler {
                 )
             }
             "patch_document_section" => {
-                let args: PatchDocumentSectionArgs =
+                let mut args: PatchDocumentSectionArgs =
                     serde_json::from_str(&arguments).map_err(|e| {
                         FunctionCallError::RespondToModel(format!(
                             "failed to parse patch_document_section arguments: {e}"
                         ))
                     })?;
+                args.new_text = strip_citation_markers(&args.new_text);
                 if !doc_cache.contains(&args.document_id) {
                     return Err(FunctionCallError::RespondToModel(format!(
                         "No document with id \"{}\" is currently being viewed. \
@@ -804,5 +812,28 @@ impl ToolHandler for DocumentReaderHandler {
             body: FunctionCallOutputBody::Text(content),
             success: Some(true),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_citation_markers() {
+        assert_eq!(strip_citation_markers("hello citeturn0view0"), "hello");
+        assert_eq!(
+            strip_citation_markers("quality. citeturn1view10turn7view0"),
+            "quality."
+        );
+        assert_eq!(
+            strip_citation_markers("text citeturn5search0 more"),
+            "text more"
+        );
+        assert_eq!(
+            strip_citation_markers("mixed citeturn7view0turn5search0turn1view2"),
+            "mixed"
+        );
+        assert_eq!(strip_citation_markers("no markers"), "no markers");
     }
 }
