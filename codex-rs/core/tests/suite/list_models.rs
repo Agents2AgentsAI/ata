@@ -16,9 +16,7 @@ async fn list_models_returns_api_key_models() -> Result<()> {
         CodexAuth::from_api_key("sk-test"),
         built_in_model_providers()["openai"].clone(),
     );
-    let models = manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
-        .await;
+    let models = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
 
     let expected_models = expected_models_for_api_key();
     assert_eq!(expected_models, models);
@@ -32,9 +30,7 @@ async fn list_models_returns_chatgpt_models() -> Result<()> {
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
         built_in_model_providers()["openai"].clone(),
     );
-    let models = manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
-        .await;
+    let models = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
 
     let expected_models = expected_models_for_chatgpt();
     assert_eq!(expected_models, models);
