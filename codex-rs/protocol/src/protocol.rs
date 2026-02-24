@@ -824,6 +824,13 @@ impl SandboxPolicy {
                 // made writable, not the entire codex home.
                 if let Ok(codex_home) = codex_utils_home_dir::find_codex_home() {
                     let kb_dir = codex_home.join("knowledge-base");
+                    // Create the KB directory (and staging subdir) if they
+                    // don't exist so the sandbox can grant write access even
+                    // on first use.
+                    let staging_dir = kb_dir.join("staging");
+                    if !staging_dir.is_dir() {
+                        let _ = std::fs::create_dir_all(&staging_dir);
+                    }
                     if kb_dir.is_dir() {
                         match AbsolutePathBuf::from_absolute_path(&kb_dir) {
                             Ok(kb_path) => {

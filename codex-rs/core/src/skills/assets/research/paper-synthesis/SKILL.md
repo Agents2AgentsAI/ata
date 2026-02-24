@@ -1,6 +1,6 @@
 ---
 name: paper-synthesis
-description: Synthesize academic papers into structured summaries and pedagogical deep dives. Use when a user asks to explain, summarize, synthesize, or deep-dive into a research paper, or when given an arXiv URL, DOI, paper title, or Zotero reference to analyze.
+description: Synthesize academic papers into structured summaries and pedagogical deep dives. Use when a user asks to explain, summarize, synthesize, or deep-dive into a research paper, or when given an arXiv URL, DOI, paper title, or Zotero reference to analyze. Also use when the user asks to explain or summarize papers CITED BY another paper (e.g., "explain the top papers this cites", "what are its key references", "find the top cited papers and explain them").
 metadata:
   short-description: Summarize and explain research papers
 ---
@@ -61,11 +61,11 @@ That's all the subagent needs. Do NOT read `research-context.md` to add context 
 
 ### Single-Paper Path
 1. Resolve identifier via Pre-Synthesis.
-2. **Quick KB check (1 tool call max)** — run `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` where PAPER_ID is the arXiv ID, DOI, or identifier. If it finds a match, read that one card and check for a Deep Dive section. If a Deep Dive exists → `present_reading_view` → done. If no match or no Deep Dive → continue to step 3. Do NOT read the KB skill docs. Do NOT list the KB directory. Do NOT read multiple cards.
+2. **Quick KB check (1 tool call max)** — run `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` where PAPER_ID is the arXiv ID, DOI, or identifier. If it finds a match, read that one card. If the card has substantial body content (more than just frontmatter — e.g., method details, results, multiple paragraphs) → present it directly via `present_reading_view` → done. If the card is just a stub with only frontmatter and a capsule → continue to step 3. Do NOT read the KB skill docs. Do NOT list the KB directory. Do NOT read multiple cards.
 3. Spawn one subagent via `spawn_agent`. Then call `wait` for the subagent to complete — it returns a staging file path.
 4. **Read the staging file** via `exec_command` (e.g., `cat ~/.ata/knowledge-base/staging/paper-1706.03762.md`).
 5. **Present the result immediately** — your VERY NEXT tool call after reading the staging file MUST be `present_reading_view`. Do NOT write to KB before presenting. Do NOT output text before presenting. Do NOT plan all sections in your reasoning first — call the tool NOW with just the section headings, then fill each section one at a time.
-6. **Persist to KB directly** — after presenting, write the KB card yourself using `exec_command` with a heredoc. Do NOT spawn a KB subagent for single papers — fire-and-forget subagents are unreliable due to rate limits. Instead, do it in one call:
+6. **MANDATORY: Persist to KB directly** — after presenting and filling ALL sections, you MUST write the KB card. Do NOT skip this step. Do NOT end the turn without persisting. If you skip persistence, the user will have to re-synthesize the paper next time, which wastes minutes. Write the card using `exec_command` with a heredoc:
 
 ```
 exec_command: cat <<'CARD_EOF' > ~/.ata/knowledge-base/cards/paper-[slug].md
@@ -105,6 +105,16 @@ Then in a second `exec_command`, append to `research-journal.md` and delete the 
 
 8. If the user wants comparison, suggest `$cross-paper-report` as a follow-up.
 
+### Cited/Referenced Papers Path
+
+Use this when the user asks to explain, summarize, or understand papers cited BY a paper they just read (e.g., "explain the top papers this cites", "what are its key references?", "find the top cited papers and explain them").
+
+**This is multi-paper synthesis with a reference-fetching step — NOT a discovery pipeline.** Do NOT read the paper-discovery or cross-paper-report skill files. Do NOT create a discovery overview (Landscape / Approaches / Open Questions). Go straight to synthesis.
+
+1. **Fetch references** — `paper_references(paper_id, limit=50)` to get the full reference list.
+2. **Select top papers** — pick 5-10 by citation count and relevance to the parent paper's method. Tell the user which you selected and why.
+3. **Run multi-paper synthesis** — follow the Multi-Paper Path above (steps 1-7) with the selected papers. Present one reading view with one section per paper.
+
 ## KB Card Persistence
 
 **Single paper:** The main agent writes the KB card directly via `exec_command` after presenting — this is fast (2 tool calls) and reliable. No subagent needed.
@@ -115,7 +125,7 @@ Card ID convention: kebab-case slug from the paper title, prefixed with `paper-`
 
 **Personalization.** If you already know the user's research priorities from the conversation context, adjust emphasis in the reading view accordingly. Do NOT read `research-context.md` for this — use only what's already in conversation context.
 
-**Follow-up persistence.** When the user exits the reading view, check if Q&A produced insights not in the KB card. If so, offer to persist using the update protocol in `$kb`.
+**Follow-up persistence.** When the user exits the reading view, if Q&A produced insights not already in the KB card (e.g., elaborations, walkthroughs, deeper explanations), **automatically persist them** — spawn a fire-and-forget `$kb` subagent with the updated content embedded in the prompt. Do NOT ask the user for permission — this is housekeeping. If no new insights were added (user just read without asking follow-ups), skip persistence silently.
 
 ## CRITICAL: You MUST Present Content
 
@@ -156,7 +166,16 @@ Add a 5th section only if the paper has a genuinely distinct component (e.g., a 
 
 **Markdown formatting:** Always put a blank line before numbered list items (`1.`, `2.`, etc.) and before bullet list items (`-`, `*`). Without a blank line, the markdown parser treats `2.`, `3.`, etc. as plain text instead of list items, so they lose their formatting. This also applies to content after paragraphs, blockquotes, and code blocks.
 
-When the user asks follow-up questions — whether about a specific section or a broader request like "explain more intuitively" or "explain the KV cache" — ALWAYS use the reading view tools. Prefer `update_document_section` to rewrite the section with the answer woven in at the relevant location (keeps explanations inline where the concept appears). Use `patch_document_section` to insert content right after a specific passage. Use `append_to_section` only when adding genuinely new content that belongs at the end. For a completely fresh take, call `present_reading_view` with a new document_id. Never fall back to plain text for follow-ups on a topic with an active reading view. Write the answer as straight prose that continues the section's voice — no editorial labels like "(clearer explanation)" or "(expanded)", and no bold/italic topic-line prefixes like "**On the efficiency gains:**" or "*Regarding caching:*". Just write the content directly.
+When the user asks follow-up questions — whether about a specific section or a broader request like "explain more intuitively" or "explain the KV cache" — ALWAYS use the reading view tools:
+
+- `append_to_section` with `foldable=true` — preferred for elaborations, examples, and walkthroughs. Adds a collapsible block at the end of the section so the original structure stays intact.
+- `update_document_section` — use when the user explicitly asks to rewrite, restructure, or simplify a section. Do NOT use it to insert elaborations into the middle of numbered lists or multi-step methods.
+- `patch_document_section` — for small targeted fixes like correcting a sentence.
+- For a completely fresh take, call `present_reading_view` with a new document_id.
+
+**Placement rule:** Before inserting content, determine its SCOPE. If the content spans multiple items in a list (e.g., a walkthrough of steps 1–6), place it AFTER the entire list, not after the first item it mentions.
+
+Never fall back to plain text for follow-ups on a topic with an active reading view. Write the answer as straight prose that continues the section's voice — no editorial labels like "(clearer explanation)" or "(expanded)", and no bold/italic topic-line prefixes like "**On the efficiency gains:**" or "*Regarding caching:*". Just write the content directly.
 
 ## Graceful Degradation
 
