@@ -1,6 +1,6 @@
 ---
 name: paper-discovery
-description: Use when a user asks a research question, wants to learn about a research topic, asks how something is done in the literature, or wants to discover papers. Examples -- "how do people train RL for robotic grasping", "what are the best methods for sim-to-real transfer", "I want to learn about diffusion policies", "find me papers on VLAs". Provides structured landscape briefings with approaches, best papers, and reading plans. Also handles KB/Zotero-based proactive discovery.
+description: "Use when a user asks a research question, wants to learn about a research topic, asks how something is done in the literature, or wants to discover papers. Examples -- 'how do people train RL for robotic grasping', 'what are the best methods for sim-to-real transfer', 'I want to learn about diffusion policies', 'find me papers on VLAs'. Provides structured landscape briefings with approaches, best papers, and reading plans. Also handles KB/Zotero-based proactive discovery. CRITICAL: NEVER open arXiv URLs or use web browsing for paper metadata — use only paper_search and paper_citations API tools. Read the SKILL.md first before taking any action."
 metadata:
   short-description: Discover and rank papers for a topic
 ---

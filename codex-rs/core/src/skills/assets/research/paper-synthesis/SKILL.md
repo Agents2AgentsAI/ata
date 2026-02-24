@@ -1,6 +1,6 @@
 ---
 name: paper-synthesis
-description: Synthesize academic papers into structured summaries and pedagogical deep dives. Use when a user asks to explain, summarize, synthesize, or deep-dive into a research paper, or when given an arXiv URL, DOI, paper title, or Zotero reference to analyze. Also use when the user asks to explain or summarize papers CITED BY another paper (e.g., "explain the top papers this cites", "what are its key references", "find the top cited papers and explain them").
+description: "Synthesize academic papers into structured summaries and pedagogical deep dives. Use when a user asks to explain, summarize, synthesize, or deep-dive into a research paper, or when given an arXiv URL, DOI, paper title, or Zotero reference to analyze. Also use when the user asks to explain or summarize papers CITED BY another paper (e.g., 'explain the top papers this cites', 'what are its key references'). CRITICAL: You are an orchestrator only — NEVER call attach_url_files or read the paper yourself. You MUST spawn a subagent with agent_type 'synthesizer' to fetch and read the paper. Read the SKILL.md first before taking any action."
 metadata:
   short-description: Summarize and explain research papers
 ---
