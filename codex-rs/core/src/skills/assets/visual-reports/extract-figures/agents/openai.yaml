@@ -1,0 +1,7 @@
+interface:
+  display_name: "Extract Figures"
+  short_description: "Extract figures from paper PDFs into KB cards"
+  default_prompt: "Use $extract-figures to extract figures from this paper's PDF"
+
+policy:
+  allow_implicit_invocation: true

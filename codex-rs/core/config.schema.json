@@ -323,6 +323,9 @@
             "connectors": {
               "type": "boolean"
             },
+            "data": {
+              "type": "boolean"
+            },
             "elevated_windows_sandbox": {
               "type": "boolean"
             },
@@ -459,6 +462,14 @@
         "model": {
           "type": "string"
         },
+        "model_catalog_json": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Optional path to a JSON model catalog (applied on startup only)."
+        },
         "model_instructions_file": {
           "allOf": [
             {
@@ -485,6 +496,9 @@
         },
         "personality": {
           "$ref": "#/definitions/Personality"
+        },
+        "plan_mode_reasoning_effort": {
+          "$ref": "#/definitions/ReasoningEffort"
         },
         "sandbox_mode": {
           "$ref": "#/definitions/SandboxMode"
@@ -513,6 +527,21 @@
             }
           ],
           "description": "Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution."
+        }
+      },
+      "type": "object"
+    },
+    "DataToolsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "huggingface_token": {
+          "type": "string"
+        },
+        "kaggle_key": {
+          "type": "string"
+        },
+        "kaggle_username": {
+          "type": "string"
         }
       },
       "type": "object"
@@ -596,6 +625,16 @@
           "type": "string"
         }
       ]
+    },
+    "KbToml": {
+      "additionalProperties": false,
+      "properties": {
+        "kb_path": {
+          "description": "Path to the knowledge base directory. Defaults to `<codex_home>/knowledge-base`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
     },
     "MemoriesToml": {
       "additionalProperties": false,
@@ -1428,6 +1467,11 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "theme": {
+          "default": null,
+          "description": "Syntax highlighting theme name (kebab-case).\n\nWhen set, overrides automatic light/dark theme detection. Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.",
+          "type": "string"
         }
       },
       "type": "object"
@@ -1512,7 +1556,7 @@
       ]
     }
   },
-  "description": "Base config deserialized from ~/.ata/config.toml.",
+  "description": "Base config deserialized from ~/.codex/config.toml.",
   "properties": {
     "agents": {
       "allOf": [
@@ -1532,7 +1576,7 @@
           "$ref": "#/definitions/AnalyticsConfigToml"
         }
       ],
-      "description": "When `true`, enables analytics across Codex product surfaces in this machine. Defaults to disabled unless explicitly opted in."
+      "description": "When `false`, disables analytics across Codex product surfaces in this machine. Defaults to `true`."
     },
     "approval_policy": {
       "allOf": [
@@ -1551,7 +1595,7 @@
       "default": null,
       "description": "Settings for app-specific controls."
     },
-    "background_terminal_timeout": {
+    "background_terminal_max_timeout": {
       "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `300000` (5 minutes).",
       "format": "uint64",
       "minimum": 0.0,
@@ -1562,7 +1606,7 @@
       "type": "string"
     },
     "check_for_update_on_startup": {
-      "description": "When `true`, checks for Ata updates on startup and surfaces update prompts. Set to `false` only if your Ata updates are centrally managed. Defaults to `true`.",
+      "description": "When `true`, checks for Codex updates on startup and surfaces update prompts. Set to `false` only if your Codex updates are centrally managed. Defaults to `true`.",
       "type": "boolean"
     },
     "cli_auth_credentials_store": {
@@ -1572,7 +1616,7 @@
         }
       ],
       "default": null,
-      "description": "Preferred backend for storing CLI auth credentials. file: Use a file in the Codex home directory with 0600 permissions. keyring: Use an OS-specific keyring service. auto (default): Use keyring when available, fall back to file. If keyring access fails, it remembers and uses file storage for the session."
+      "description": "Preferred backend for storing CLI auth credentials. file (default): Use a file in the Codex home directory. keyring: Use an OS-specific keyring service. auto: Use the keyring if available, otherwise use a file."
     },
     "commit_attribution": {
       "description": "Optional commit attribution text for commit message co-author trailers.\n\nSet to an empty string to disable automatic commit attribution.",
@@ -1581,6 +1625,15 @@
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
       "type": "string"
+    },
+    "data": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/DataToolsToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional non-secret data tool settings."
     },
     "developer_instructions": {
       "default": null,
@@ -1593,6 +1646,14 @@
     },
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
+    },
+    "experimental_realtime_ws_backend_prompt": {
+      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport backend prompt (the `Op::RealtimeConversation` `/ws` session.create backend_prompt) without changing normal prompts.",
+      "type": "string"
+    },
+    "experimental_realtime_ws_base_url": {
+      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport base URL (the `Op::RealtimeConversation` `/ws` connection) without changing normal provider HTTP requests.",
+      "type": "string"
     },
     "experimental_use_freeform_apply_patch": {
       "type": "boolean"
@@ -1627,6 +1688,9 @@
           "type": "boolean"
         },
         "connectors": {
+          "type": "boolean"
+        },
+        "data": {
           "type": "boolean"
         },
         "elevated_windows_sandbox": {
@@ -1755,7 +1819,7 @@
           "$ref": "#/definitions/FeedbackConfigToml"
         }
       ],
-      "description": "When `true`, enables feedback upload across Codex product surfaces. Defaults to disabled unless explicitly opted in."
+      "description": "When `false`, disables feedback collection across Codex product surfaces. Defaults to `true`."
     },
     "file_opener": {
       "allOf": [
@@ -1799,7 +1863,7 @@
         }
       ],
       "default": null,
-      "description": "Settings that govern if and what will be written to `~/.ata/history.jsonl`."
+      "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`."
     },
     "instructions": {
       "description": "System instructions.",
@@ -1819,6 +1883,15 @@
         }
       ],
       "description": "Optional absolute path to the Node runtime used by `js_repl`."
+    },
+    "kb": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/KbToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional KB settings."
     },
     "log_dir": {
       "allOf": [
@@ -1845,7 +1918,7 @@
         }
       ],
       "default": null,
-      "description": "Preferred backend for storing MCP OAuth credentials. keyring: Use an OS-specific keyring service. https://github.com/Agents2AgentsAI/ata/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2 file: Use a file in the Codex home directory. auto (default): Use the OS-specific keyring service if available, otherwise use a file."
+      "description": "Preferred backend for storing MCP OAuth credentials. keyring: Use an OS-specific keyring service. https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2 file: Use a file in the Codex home directory. auto (default): Use the OS-specific keyring service if available, otherwise use a file."
     },
     "mcp_servers": {
       "additionalProperties": {
@@ -1968,6 +2041,9 @@
       ],
       "description": "Optionally specify a personality for the model"
     },
+    "plan_mode_reasoning_effort": {
+      "$ref": "#/definitions/ReasoningEffort"
+    },
     "profile": {
       "description": "Profile to use from the `profiles` map.",
       "type": "string"
@@ -1995,7 +2071,7 @@
     },
     "project_root_markers": {
       "default": null,
-      "description": "Markers used to detect the project root when searching parent directories for `.ata` folders. Defaults to [\".git\"] when unset.",
+      "description": "Markers used to detect the project root when searching parent directories for `.codex` folders. Defaults to [\".git\"] when unset.",
       "items": {
         "type": "string"
       },
@@ -2013,8 +2089,7 @@
           "$ref": "#/definitions/ResearchToolsToml"
         }
       ],
-      "default": null,
-      "description": "Optional non-secret research tool settings."
+      "description": "Research tools configuration (Zotero, OpenAlex, etc.)."
     },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",

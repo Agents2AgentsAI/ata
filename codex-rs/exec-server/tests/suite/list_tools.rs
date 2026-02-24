@@ -15,6 +15,8 @@ use tempfile::TempDir;
 /// Verify the list_tools call to the MCP server returns the expected response.
 #[tokio::test(flavor = "current_thread")]
 async fn list_tools() -> Result<()> {
+    core_test_support::skip_if_no_dotslash!(Ok(()));
+
     let codex_home = TempDir::new()?;
     let policy_dir = codex_home.path().join("rules");
     fs::create_dir_all(&policy_dir)?;

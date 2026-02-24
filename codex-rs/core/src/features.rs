@@ -5,13 +5,13 @@
 //! booleans through multiple types, call sites consult a single `Features`
 //! container attached to `Config`.
 
-use crate::config::CONFIG_TOML_FILE;
 use crate::config::Config;
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::WarningEvent;
+use codex_config::CONFIG_TOML_FILE;
 use codex_otel::OtelManager;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -129,6 +129,8 @@ pub enum Feature {
     AppsMcpGateway,
     /// Enable research tool integrations and capability wiring.
     Research,
+    /// Enable data tools for dataset discovery and management.
+    Data,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Prompt for missing skill env var dependencies.
@@ -630,6 +632,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::Research,
         key: "research",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Data,
+        key: "data",
+        stage: Stage::Experimental {
+            name: "Data Tools",
+            menu_description: "Dataset discovery and management tools for HuggingFace, Kaggle, and more.",
+            announcement: "Data tools for dataset discovery are available as an experimental feature.",
+        },
         default_enabled: false,
     },
     FeatureSpec {

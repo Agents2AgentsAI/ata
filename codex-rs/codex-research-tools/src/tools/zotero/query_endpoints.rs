@@ -4,6 +4,7 @@ pub(crate) async fn zotero_search(
     toolkit: &ResearchToolkit,
     params: ZoteroSearchParams,
 ) -> Result<ZoteroSearchResult> {
+    toolkit.ensure_zotero_running().await?;
     let normalized = normalize_search_params(toolkit, params, "zotero_search").await?;
     let key = CacheKey {
         tool_name: "zotero_search",
@@ -45,6 +46,7 @@ pub(crate) async fn zotero_get_tags(
     toolkit: &ResearchToolkit,
     params: ZoteroTagsParams,
 ) -> Result<ZoteroTagsResult> {
+    toolkit.ensure_zotero_running().await?;
     let normalized = normalize_tags_params(toolkit, params)?;
     let key = CacheKey {
         tool_name: "zotero_get_tags",
@@ -79,6 +81,7 @@ pub(crate) async fn zotero_get_recent(
     toolkit: &ResearchToolkit,
     params: ZoteroRecentParams,
 ) -> Result<ZoteroSearchResult> {
+    toolkit.ensure_zotero_running().await?;
     let normalized = normalize_recent_params(toolkit, params)?;
     let key = CacheKey {
         tool_name: "zotero_get_recent",
@@ -121,6 +124,7 @@ pub(crate) async fn zotero_advanced_search(
     toolkit: &ResearchToolkit,
     params: ZoteroAdvancedSearchParams,
 ) -> Result<ZoteroAdvancedSearchResult> {
+    toolkit.ensure_zotero_running().await?;
     let resolved = resolve_scopes(
         toolkit,
         params.library_type.as_deref(),
@@ -270,6 +274,7 @@ pub(crate) async fn zotero_grep_text(
     toolkit: &ResearchToolkit,
     params: ZoteroGrepParams,
 ) -> Result<ZoteroGrepResult> {
+    toolkit.ensure_zotero_running().await?;
     grep::zotero_grep_text(toolkit, params).await
 }
 
@@ -277,6 +282,7 @@ pub(crate) async fn zotero_search_notes(
     toolkit: &ResearchToolkit,
     params: ZoteroSearchNotesParams,
 ) -> Result<ZoteroSearchNotesResult> {
+    toolkit.ensure_zotero_running().await?;
     search_notes::zotero_search_notes(toolkit, params).await
 }
 
@@ -284,6 +290,7 @@ pub(crate) async fn zotero_search_by_tag(
     toolkit: &ResearchToolkit,
     params: ZoteroTagSearchParams,
 ) -> Result<ZoteroSearchResult> {
+    toolkit.ensure_zotero_running().await?;
     let normalized = normalize_tag_search_params(toolkit, params)?;
     let key = CacheKey {
         tool_name: "zotero_search_by_tag",
@@ -392,6 +399,7 @@ pub(crate) async fn zotero_get_collections(
     toolkit: &ResearchToolkit,
     params: ZoteroCollectionsParams,
 ) -> Result<ZoteroCollectionsResult> {
+    toolkit.ensure_zotero_running().await?;
     let normalized = normalize_collections_params(toolkit, params).await?;
     let key = CacheKey {
         tool_name: "zotero_get_collections",
@@ -422,6 +430,7 @@ pub(crate) async fn zotero_list_groups(
     toolkit: &ResearchToolkit,
     params: ZoteroListGroupsParams,
 ) -> Result<ZoteroGroupsResult> {
+    toolkit.ensure_zotero_running().await?;
     let normalized = normalize_list_groups_params(toolkit, params)?;
     let key = CacheKey {
         tool_name: "zotero_list_groups",
@@ -453,6 +462,7 @@ pub(crate) async fn zotero_get_collection_items(
     toolkit: &ResearchToolkit,
     params: ZoteroCollectionItemsParams,
 ) -> Result<ZoteroSearchResult> {
+    toolkit.ensure_zotero_running().await?;
     let normalized = normalize_collection_items_params(toolkit, params).await?;
     let key = CacheKey {
         tool_name: "zotero_get_collection_items",

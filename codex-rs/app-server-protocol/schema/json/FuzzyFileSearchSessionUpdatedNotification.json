@@ -1,50 +1,18 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "definitions": {
-    "FuzzyFileSearchResult": {
-      "description": "Superset of [`codex_file_search::FileMatch`]",
-      "properties": {
-        "file_name": {
-          "type": "string"
-        },
-        "indices": {
-          "items": {
-            "format": "uint32",
-            "minimum": 0.0,
-            "type": "integer"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "path": {
-          "type": "string"
-        },
-        "root": {
-          "type": "string"
-        },
-        "score": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "file_name",
-        "path",
-        "root",
-        "score"
-      ],
-      "type": "object"
-    }
-  },
+  "title": "FuzzyFileSearchSessionUpdatedNotification",
+  "type": "object",
+  "required": [
+    "files",
+    "query",
+    "sessionId"
+  ],
   "properties": {
     "files": {
+      "type": "array",
       "items": {
         "$ref": "#/definitions/FuzzyFileSearchResult"
-      },
-      "type": "array"
+      }
     },
     "query": {
       "type": "string"
@@ -53,11 +21,43 @@
       "type": "string"
     }
   },
-  "required": [
-    "files",
-    "query",
-    "sessionId"
-  ],
-  "title": "FuzzyFileSearchSessionUpdatedNotification",
-  "type": "object"
+  "definitions": {
+    "FuzzyFileSearchResult": {
+      "description": "Superset of [`codex_file_search::FileMatch`]",
+      "type": "object",
+      "required": [
+        "file_name",
+        "path",
+        "root",
+        "score"
+      ],
+      "properties": {
+        "file_name": {
+          "type": "string"
+        },
+        "indices": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        },
+        "path": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        },
+        "score": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    }
+  }
 }

@@ -21,6 +21,7 @@ async-trait = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-cloud-requirements = { workspace = true }
 codex-core = { workspace = true }
+codex-shell-command = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-backend-client = { workspace = true }
 codex-file-search = { workspace = true }
@@ -30,6 +31,7 @@ codex-protocol = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-feedback = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
@@ -63,7 +65,6 @@ axum = { workspace = true, default-features = false, features = [
 base64 = { workspace = true }
 codex-execpolicy = { workspace = true }
 core_test_support = { workspace = true }
-codex-utils-absolute-path = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 os_info = { workspace = true }
 pretty_assertions = { workspace = true }

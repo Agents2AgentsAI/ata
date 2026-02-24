@@ -1,0 +1,7 @@
+interface:
+  display_name: "Paper Discovery"
+  short_description: "Discover and rank papers for a topic"
+  default_prompt: "Use $paper-discovery to explore this research question and shortlist key papers"
+
+policy:
+  allow_implicit_invocation: true

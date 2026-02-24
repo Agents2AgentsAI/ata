@@ -1,21 +1,39 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SkillsListResponse",
+  "type": "object",
+  "required": [
+    "data"
+  ],
+  "properties": {
+    "data": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/SkillsListEntry"
+      }
+    }
+  },
   "definitions": {
     "SkillDependencies": {
-      "properties": {
-        "tools": {
-          "items": {
-            "$ref": "#/definitions/SkillToolDependency"
-          },
-          "type": "array"
-        }
-      },
+      "type": "object",
       "required": [
         "tools"
       ],
-      "type": "object"
+      "properties": {
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SkillToolDependency"
+          }
+        }
+      }
     },
     "SkillErrorInfo": {
+      "type": "object",
+      "required": [
+        "message",
+        "path"
+      ],
       "properties": {
         "message": {
           "type": "string"
@@ -23,14 +41,10 @@
         "path": {
           "type": "string"
         }
-      },
-      "required": [
-        "message",
-        "path"
-      ],
-      "type": "object"
+      }
     },
     "SkillInterface": {
+      "type": "object",
       "properties": {
         "brandColor": {
           "type": [
@@ -68,10 +82,17 @@
             "null"
           ]
         }
-      },
-      "type": "object"
+      }
     },
     "SkillMetadata": {
+      "type": "object",
+      "required": [
+        "description",
+        "enabled",
+        "name",
+        "path",
+        "scope"
+      ],
       "properties": {
         "dependencies": {
           "anyOf": [
@@ -115,26 +136,23 @@
             "null"
           ]
         }
-      },
-      "required": [
-        "description",
-        "enabled",
-        "name",
-        "path",
-        "scope"
-      ],
-      "type": "object"
+      }
     },
     "SkillScope": {
+      "type": "string",
       "enum": [
         "user",
         "repo",
         "system",
         "admin"
-      ],
-      "type": "string"
+      ]
     },
     "SkillToolDependency": {
+      "type": "object",
+      "required": [
+        "type",
+        "value"
+      ],
       "properties": {
         "command": {
           "type": [
@@ -166,50 +184,32 @@
         "value": {
           "type": "string"
         }
-      },
-      "required": [
-        "type",
-        "value"
-      ],
-      "type": "object"
+      }
     },
     "SkillsListEntry": {
-      "properties": {
-        "cwd": {
-          "type": "string"
-        },
-        "errors": {
-          "items": {
-            "$ref": "#/definitions/SkillErrorInfo"
-          },
-          "type": "array"
-        },
-        "skills": {
-          "items": {
-            "$ref": "#/definitions/SkillMetadata"
-          },
-          "type": "array"
-        }
-      },
+      "type": "object",
       "required": [
         "cwd",
         "errors",
         "skills"
       ],
-      "type": "object"
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SkillErrorInfo"
+          }
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SkillMetadata"
+          }
+        }
+      }
     }
-  },
-  "properties": {
-    "data": {
-      "items": {
-        "$ref": "#/definitions/SkillsListEntry"
-      },
-      "type": "array"
-    }
-  },
-  "required": [
-    "data"
-  ],
-  "title": "SkillsListResponse",
-  "type": "object"
+  }
 }

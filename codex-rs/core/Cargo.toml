@@ -3,7 +3,6 @@ edition.workspace = true
 license.workspace = true
 name = "codex-core"
 version.workspace = true
-build = "build.rs"
 
 [lib]
 doctest = false
@@ -34,6 +33,7 @@ codex-async-utils = { workspace = true }
 codex-client = { workspace = true }
 codex-config = { workspace = true }
 codex-shell-command = { workspace = true }
+codex-skills = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-file-search = { workspace = true }
 codex-git = { workspace = true }
@@ -42,7 +42,8 @@ codex-keyring-store = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
-codex-research-tools = { workspace = true, features = ["paper_search", "zotero", "hackernews", "patents", "repo_analysis"] }
+codex-data-tools = { workspace = true, optional = true }
+codex-research-tools = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-state = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
@@ -60,7 +61,7 @@ env-flags = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
-include_dir = { workspace = true }
+include_dir = { workspace = true, optional = true }
 indexmap = { workspace = true }
 indoc = { workspace = true }
 keyring = { workspace = true, features = ["crypto-rust"] }
@@ -80,13 +81,13 @@ rmcp = { workspace = true, default-features = false, features = [
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-serde_path_to_error = { workspace = true }
 serde_yaml = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }
 tempfile = { workspace = true }
+test-case = "3.3.1"
 test-log = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = [
@@ -117,8 +118,14 @@ zip = { workspace = true }
 
 [features]
 deterministic_process_ids = []
-research-latex = ["codex-research-tools/latex"]
-research-pdf-images = ["codex-research-tools/pdf_images"]
+data = ["dep:codex-data-tools"]
+research = []
+research-hackernews = ["research", "codex-research-tools/hackernews"]
+research-latex = ["research", "codex-research-tools/latex"]
+research-pdf-images = ["research", "codex-research-tools/pdf_images"]
+research-patents = ["research", "codex-research-tools/patents"]
+research-repo = ["research", "codex-research-tools/repo_analysis"]
+visual-reports = ["research", "dep:include_dir"]
 test-support = []
 
 
@@ -171,7 +178,6 @@ opentelemetry_sdk = { workspace = true, features = [
 ] }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
-test-case = "3.3.1"
 tracing-subscriber = { workspace = true }
 tracing-test = { workspace = true, features = ["no-env-filter"] }
 walkdir = { workspace = true }

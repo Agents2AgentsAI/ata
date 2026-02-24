@@ -1,141 +1,12 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "definitions": {
-    "CommandAction": {
-      "oneOf": [
-        {
-          "properties": {
-            "command": {
-              "type": "string"
-            },
-            "name": {
-              "type": "string"
-            },
-            "path": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "read"
-              ],
-              "title": "ReadCommandActionType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "command",
-            "name",
-            "path",
-            "type"
-          ],
-          "title": "ReadCommandAction",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "command": {
-              "type": "string"
-            },
-            "path": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "listFiles"
-              ],
-              "title": "ListFilesCommandActionType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "command",
-            "type"
-          ],
-          "title": "ListFilesCommandAction",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "command": {
-              "type": "string"
-            },
-            "path": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "query": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "search"
-              ],
-              "title": "SearchCommandActionType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "command",
-            "type"
-          ],
-          "title": "SearchCommandAction",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "command": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "unknown"
-              ],
-              "title": "UnknownCommandActionType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "command",
-            "type"
-          ],
-          "title": "UnknownCommandAction",
-          "type": "object"
-        }
-      ]
-    },
-    "NetworkApprovalContext": {
-      "properties": {
-        "host": {
-          "type": "string"
-        },
-        "protocol": {
-          "$ref": "#/definitions/NetworkApprovalProtocol"
-        }
-      },
-      "required": [
-        "host",
-        "protocol"
-      ],
-      "type": "object"
-    },
-    "NetworkApprovalProtocol": {
-      "enum": [
-        "http",
-        "https",
-        "socks5Tcp",
-        "socks5Udp"
-      ],
-      "type": "string"
-    }
-  },
+  "title": "CommandExecutionRequestApprovalParams",
+  "type": "object",
+  "required": [
+    "itemId",
+    "threadId",
+    "turnId"
+  ],
   "properties": {
     "approvalId": {
       "description": "Unique identifier for this specific approval callback.\n\nFor regular shell/unified_exec approvals, this is null.\n\nFor zsh-exec-bridge subcommand approvals, multiple callbacks can belong to one parent `itemId`, so `approvalId` is a distinct opaque callback id (a UUID) used to disambiguate routing.",
@@ -153,13 +24,13 @@
     },
     "commandActions": {
       "description": "Best-effort parsed command actions for friendly display.",
-      "items": {
-        "$ref": "#/definitions/CommandAction"
-      },
       "type": [
         "array",
         "null"
-      ]
+      ],
+      "items": {
+        "$ref": "#/definitions/CommandAction"
+      }
     },
     "cwd": {
       "description": "The command's working directory.",
@@ -172,6 +43,7 @@
       "type": "string"
     },
     "networkApprovalContext": {
+      "description": "Optional context for managed-network approval prompts.",
       "anyOf": [
         {
           "$ref": "#/definitions/NetworkApprovalContext"
@@ -179,18 +51,17 @@
         {
           "type": "null"
         }
-      ],
-      "description": "Optional context for managed-network approval prompts."
+      ]
     },
     "proposedExecpolicyAmendment": {
       "description": "Optional proposed execpolicy amendment to allow similar commands without prompting.",
-      "items": {
-        "type": "string"
-      },
       "type": [
         "array",
         "null"
-      ]
+      ],
+      "items": {
+        "type": "string"
+      }
     },
     "reason": {
       "description": "Optional explanatory reason (e.g. request for network access).",
@@ -206,11 +77,140 @@
       "type": "string"
     }
   },
-  "required": [
-    "itemId",
-    "threadId",
-    "turnId"
-  ],
-  "title": "CommandExecutionRequestApprovalParams",
-  "type": "object"
+  "definitions": {
+    "CommandAction": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "command",
+            "name",
+            "path",
+            "type"
+          ],
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "read"
+              ],
+              "title": "ReadCommandActionType"
+            }
+          },
+          "title": "ReadCommandAction"
+        },
+        {
+          "type": "object",
+          "required": [
+            "command",
+            "type"
+          ],
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "listFiles"
+              ],
+              "title": "ListFilesCommandActionType"
+            }
+          },
+          "title": "ListFilesCommandAction"
+        },
+        {
+          "type": "object",
+          "required": [
+            "command",
+            "type"
+          ],
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "search"
+              ],
+              "title": "SearchCommandActionType"
+            }
+          },
+          "title": "SearchCommandAction"
+        },
+        {
+          "type": "object",
+          "required": [
+            "command",
+            "type"
+          ],
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "unknown"
+              ],
+              "title": "UnknownCommandActionType"
+            }
+          },
+          "title": "UnknownCommandAction"
+        }
+      ]
+    },
+    "NetworkApprovalContext": {
+      "type": "object",
+      "required": [
+        "host",
+        "protocol"
+      ],
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/definitions/NetworkApprovalProtocol"
+        }
+      }
+    },
+    "NetworkApprovalProtocol": {
+      "type": "string",
+      "enum": [
+        "http",
+        "https",
+        "socks5Tcp",
+        "socks5Udp"
+      ]
+    }
+  }
 }

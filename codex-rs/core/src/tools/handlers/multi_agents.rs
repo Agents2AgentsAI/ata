@@ -42,7 +42,7 @@ pub struct MultiAgentHandler;
 /// Minimum wait timeout to prevent tight polling loops from burning CPU.
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
-pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = 300_000;
+pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
 
 #[derive(Debug, Deserialize)]
 struct CloseAgentArgs {
@@ -109,6 +109,7 @@ mod spawn {
     #[derive(Debug, Serialize)]
     struct SpawnAgentResult {
         agent_id: String,
+        nickname: Option<String>,
     }
 
     pub async fn handle(
@@ -172,7 +173,7 @@ mod spawn {
                 Some(*thread_id),
                 session.services.agent_control.get_status(*thread_id).await,
             ),
-            Err(err) => (None, AgentStatus::Errored(err.to_string())),
+            Err(_) => (None, AgentStatus::NotFound),
         };
         let (new_agent_nickname, new_agent_role) = match new_thread_id {
             Some(thread_id) => session
@@ -183,6 +184,7 @@ mod spawn {
                 .unwrap_or((None, None)),
             None => (None, None),
         };
+        let nickname = new_agent_nickname.clone();
         session
             .send_event(
                 &turn,
@@ -202,6 +204,7 @@ mod spawn {
 
         let content = serde_json::to_string(&SpawnAgentResult {
             agent_id: new_thread_id.to_string(),
+            nickname,
         })
         .map_err(|err| {
             FunctionCallError::Fatal(format!("failed to serialize spawn_agent result: {err}"))
@@ -919,7 +922,7 @@ fn build_agent_shared_config(
     config
         .permissions
         .sandbox_policy
-        .set(turn.sandbox_policy.clone())
+        .set(turn.sandbox_policy.get().clone())
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!("sandbox_policy is invalid: {err}"))
         })?;
@@ -1085,6 +1088,7 @@ mod tests {
         #[derive(Debug, Deserialize)]
         struct SpawnAgentResult {
             agent_id: String,
+            nickname: Option<String>,
         }
 
         let (mut session, mut turn) = make_session_and_context().await;
@@ -1121,6 +1125,12 @@ mod tests {
         let result: SpawnAgentResult =
             serde_json::from_str(&content).expect("spawn_agent result should be json");
         let agent_id = agent_id(&result.agent_id).expect("agent_id should be valid");
+        assert!(
+            result
+                .nickname
+                .as_deref()
+                .is_some_and(|nickname| !nickname.is_empty())
+        );
         let snapshot = manager
             .get_thread(agent_id)
             .await
@@ -1184,6 +1194,7 @@ mod tests {
         #[derive(Debug, Deserialize)]
         struct SpawnAgentResult {
             agent_id: String,
+            nickname: Option<String>,
         }
 
         let (mut session, mut turn) = make_session_and_context().await;
@@ -1221,6 +1232,12 @@ mod tests {
         let result: SpawnAgentResult =
             serde_json::from_str(&content).expect("spawn_agent result should be json");
         assert!(!result.agent_id.is_empty());
+        assert!(
+            result
+                .nickname
+                .as_deref()
+                .is_some_and(|nickname| !nickname.is_empty())
+        );
         assert_eq!(success, Some(true));
     }
 
@@ -1913,10 +1930,13 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         turn.cwd = temp_dir.path().to_path_buf();
         turn.codex_linux_sandbox_exe = Some(PathBuf::from("/bin/echo"));
-        turn.sandbox_policy = pick_allowed_sandbox_policy(
+        let sandbox_policy = pick_allowed_sandbox_policy(
             &turn.config.permissions.sandbox_policy,
             turn.config.permissions.sandbox_policy.get().clone(),
         );
+        turn.sandbox_policy
+            .set(sandbox_policy)
+            .expect("sandbox policy set");
 
         let config = build_agent_spawn_config(&base_instructions, &turn, 0).expect("spawn config");
         let mut expected = (*turn.config).clone();
@@ -1938,7 +1958,7 @@ mod tests {
         expected
             .permissions
             .sandbox_policy
-            .set(turn.sandbox_policy)
+            .set(turn.sandbox_policy.get().clone())
             .expect("sandbox policy set");
         assert_eq!(config, expected);
     }
@@ -1987,7 +2007,7 @@ mod tests {
         expected
             .permissions
             .sandbox_policy
-            .set(turn.sandbox_policy)
+            .set(turn.sandbox_policy.get().clone())
             .expect("sandbox policy set");
         assert_eq!(config, expected);
     }

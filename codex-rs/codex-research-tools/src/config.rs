@@ -15,7 +15,8 @@ pub struct ResearchConfig {
     pub zotero_user_id: Option<String>,
     pub openalex_email: Option<String>,
     pub github_token: Option<String>,
-    pub patents_api_key: Option<String>,
+    pub epo_consumer_key: Option<String>,
+    pub epo_consumer_secret: Option<String>,
     pub zotero_library_type: Option<String>,
     pub zotero_group_id: Option<String>,
     pub zotero_storage_dir: Option<String>,
@@ -30,6 +31,9 @@ pub struct ResearchConfig {
     pub connect_timeout: Duration,
     pub request_timeout: Duration,
     pub tool_timeout: Duration,
+    /// Maximum time to wait for a single source in multi-source searches.
+    /// If a source exceeds this, partial results from other sources are returned.
+    pub per_source_timeout: Duration,
 
     pub cache_max_entries: usize,
     pub cache_ttls: CacheTtls,
@@ -85,9 +89,9 @@ impl Default for CacheTtls {
 impl Default for RetryConfig {
     fn default() -> Self {
         Self {
-            max_retries: 3,
-            base_delay: Duration::from_secs(1),
-            max_delay: Duration::from_secs(30),
+            max_retries: 2,
+            base_delay: Duration::from_millis(500),
+            max_delay: Duration::from_secs(8),
         }
     }
 }
@@ -100,7 +104,8 @@ impl Default for ResearchConfig {
             zotero_user_id: None,
             openalex_email: None,
             github_token: None,
-            patents_api_key: None,
+            epo_consumer_key: None,
+            epo_consumer_secret: None,
             zotero_library_type: None,
             zotero_group_id: None,
             zotero_storage_dir: None,
@@ -110,10 +115,11 @@ impl Default for ResearchConfig {
             zotero_base_url: DEFAULT_REMOTE_ZOTERO_BASE_URL.to_string(),
             github_api_base_url: "https://api.github.com".to_string(),
             hn_base_url: "https://hn.algolia.com/api/v1".to_string(),
-            patents_base_url: "https://serpapi.com".to_string(),
+            patents_base_url: "https://ops.epo.org/3.2".to_string(),
             connect_timeout: Duration::from_secs(10),
-            request_timeout: Duration::from_secs(30),
-            tool_timeout: Duration::from_secs(60),
+            request_timeout: Duration::from_secs(15),
+            tool_timeout: Duration::from_secs(30),
+            per_source_timeout: Duration::from_secs(12),
             cache_max_entries: 10_000,
             cache_ttls: CacheTtls::default(),
             retry: RetryConfig::default(),
@@ -156,7 +162,8 @@ impl ResearchConfig {
             zotero_user_id: std::env::var("ZOTERO_USER_ID").ok(),
             openalex_email: std::env::var("OPENALEX_EMAIL").ok(),
             github_token: std::env::var("GITHUB_TOKEN").ok(),
-            patents_api_key: std::env::var("SERPAPI_API_KEY").ok(),
+            epo_consumer_key: std::env::var("EPO_CONSUMER_KEY").ok(),
+            epo_consumer_secret: std::env::var("EPO_CONSUMER_SECRET").ok(),
             zotero_library_type: std::env::var("ZOTERO_LIBRARY_TYPE").ok(),
             zotero_group_id: std::env::var("ZOTERO_GROUP_ID").ok(),
             zotero_storage_dir: std::env::var("ZOTERO_STORAGE_DIR").ok(),
@@ -171,8 +178,8 @@ impl ResearchConfig {
                 .unwrap_or_else(|_| "https://api.github.com".to_string()),
             hn_base_url: std::env::var("HN_BASE_URL")
                 .unwrap_or_else(|_| "https://hn.algolia.com/api/v1".to_string()),
-            patents_base_url: std::env::var("SERPAPI_BASE_URL")
-                .unwrap_or_else(|_| "https://serpapi.com".to_string()),
+            patents_base_url: std::env::var("EPO_BASE_URL")
+                .unwrap_or_else(|_| "https://ops.epo.org/3.2".to_string()),
             ..Self::default()
         };
 
@@ -188,18 +195,21 @@ impl ResearchConfig {
     #[must_use]
     pub fn rate_limits(&self) -> HashMap<ResearchApi, ApiRateLimit> {
         let mut limits = HashMap::from([
+            // Semantic Scholar: /paper/search is always 1 RPS even with an API
+            // key (older keys allow 10 RPS on non-search endpoints, but search is
+            // capped at 1 RPS). Use 1 concurrent to avoid queuing behind the limiter.
             (
                 ResearchApi::SemanticScholar,
-                if self.semantic_scholar_api_key.is_some() {
-                    ApiRateLimit::new(10, Duration::from_secs(1), 3)
-                } else {
-                    ApiRateLimit::new(1, Duration::from_secs(1), 3)
-                },
+                ApiRateLimit::new(1, Duration::from_secs(1), 1),
             ),
+            // arXiv: official guideline is 1 request per 3 seconds, single connection.
             (
                 ResearchApi::Arxiv,
                 ApiRateLimit::new(1, Duration::from_secs(3), 1),
             ),
+            // OpenAlex: 100 req/sec hard cap, credit-based system (search costs 100
+            // credits, free tier has 100k credits/day ≈ 1000 searches/day). 10 req/sec
+            // with 5 concurrent is well within limits.
             (
                 ResearchApi::OpenAlex,
                 ApiRateLimit::new(10, Duration::from_secs(1), 5),
@@ -222,7 +232,7 @@ impl ResearchConfig {
             ),
             (
                 ResearchApi::Patents,
-                ApiRateLimit::new(45, Duration::from_secs(60), 3),
+                ApiRateLimit::new(25, Duration::from_secs(60), 2),
             ),
         ]);
 
@@ -261,7 +271,8 @@ impl fmt::Debug for ResearchConfig {
             .field("zotero_user_id", &self.zotero_user_id)
             .field("openalex_email", &self.openalex_email)
             .field("github_token", &redact(&self.github_token))
-            .field("patents_api_key", &redact(&self.patents_api_key))
+            .field("epo_consumer_key", &redact(&self.epo_consumer_key))
+            .field("epo_consumer_secret", &redact(&self.epo_consumer_secret))
             .field("zotero_library_type", &self.zotero_library_type)
             .field("zotero_group_id", &self.zotero_group_id)
             .field("zotero_storage_dir", &self.zotero_storage_dir)
@@ -275,6 +286,7 @@ impl fmt::Debug for ResearchConfig {
             .field("connect_timeout", &self.connect_timeout)
             .field("request_timeout", &self.request_timeout)
             .field("tool_timeout", &self.tool_timeout)
+            .field("per_source_timeout", &self.per_source_timeout)
             .field("cache_max_entries", &self.cache_max_entries)
             .field("cache_ttls", &self.cache_ttls)
             .field("retry", &self.retry)
