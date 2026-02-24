@@ -79,7 +79,7 @@ pub fn write_models_cache_with_models(
     let cache_path = codex_home.join("models_cache.json");
     // DateTime<Utc> serializes to RFC3339 format by default with serde
     let fetched_at: DateTime<Utc> = Utc::now();
-    let client_version = codex_core::models_manager::client_version_to_whole();
+    let client_version = codex_core::models_manager::models_api_client_version().to_string();
     let cache = json!({
         "fetched_at": fetched_at,
         "etag": null,
