@@ -223,11 +223,13 @@ impl BottomPaneView for ResearchToolsView {
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         if !self.items.is_empty() {
-            let updates = self
+            let mut updates: Vec<(Feature, bool)> = self
                 .items
                 .iter()
                 .map(|item| (item.feature, item.enabled))
                 .collect();
+            // Clear master research flag so per-category flags take sole authority.
+            updates.push((Feature::Research, false));
             self.app_event_tx
                 .send(AppEvent::UpdateFeatureFlags { updates });
         }
@@ -321,7 +323,7 @@ pub(crate) fn build_research_tool_items(
             feature,
             name,
             description,
-            enabled: features.enabled(feature),
+            enabled: features.enabled(Feature::Research) || features.enabled(feature),
         })
         .collect()
 }
