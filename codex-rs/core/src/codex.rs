@@ -8162,7 +8162,6 @@ mod tests {
             AgentControl::default(),
             None,
             None,
-            None,
         )
         .await;
 
