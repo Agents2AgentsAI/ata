@@ -139,10 +139,7 @@ mod visual_reports_impl {
     /// Writes the embedded `include_dir::Dir` to disk under `dest`.
     ///
     /// Preserves the embedded directory structure.
-    fn write_embedded_dir(
-        dir: &Dir<'_>,
-        dest: &AbsolutePathBuf,
-    ) -> Result<(), SystemSkillsError> {
+    fn write_embedded_dir(dir: &Dir<'_>, dest: &AbsolutePathBuf) -> Result<(), SystemSkillsError> {
         fs::create_dir_all(dest.as_path())
             .map_err(|source| skills_io_error("create system skills dir", source))?;
 
@@ -152,15 +149,14 @@ mod visual_reports_impl {
                     let subdir_dest = dest.join(subdir.path()).map_err(|source| {
                         skills_io_error("resolve system skills subdir", source)
                     })?;
-                    fs::create_dir_all(subdir_dest.as_path()).map_err(|source| {
-                        skills_io_error("create system skills subdir", source)
-                    })?;
+                    fs::create_dir_all(subdir_dest.as_path())
+                        .map_err(|source| skills_io_error("create system skills subdir", source))?;
                     write_embedded_dir(subdir, dest)?;
                 }
                 include_dir::DirEntry::File(file) => {
-                    let path = dest.join(file.path()).map_err(|source| {
-                        skills_io_error("resolve system skills file", source)
-                    })?;
+                    let path = dest
+                        .join(file.path())
+                        .map_err(|source| skills_io_error("resolve system skills file", source))?;
                     if let Some(parent) = path.as_path().parent() {
                         fs::create_dir_all(parent).map_err(|source| {
                             skills_io_error("create system skills file parent", source)

@@ -374,8 +374,7 @@ mod tests {
 
         assert!(args.shell.is_none());
 
-        let command =
-            get_command(&args, Arc::new(default_user_shell()));
+        let command = get_command(&args, Arc::new(default_user_shell()));
 
         assert_eq!(command.len(), 3);
         assert_eq!(command[2], "echo hello");
@@ -390,8 +389,7 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("/bin/bash"));
 
-        let command =
-            get_command(&args, Arc::new(default_user_shell()));
+        let command = get_command(&args, Arc::new(default_user_shell()));
 
         assert_eq!(command.last(), Some(&"echo hello".to_string()));
         if command
@@ -411,8 +409,7 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("powershell"));
 
-        let command =
-            get_command(&args, Arc::new(default_user_shell()));
+        let command = get_command(&args, Arc::new(default_user_shell()));
 
         assert_eq!(command[2], "echo hello");
         Ok(())
@@ -426,8 +423,7 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("cmd"));
 
-        let command =
-            get_command(&args, Arc::new(default_user_shell()));
+        let command = get_command(&args, Arc::new(default_user_shell()));
 
         assert_eq!(command[2], "echo hello");
         Ok(())
