@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::config::ResearchToolsToml;
+use crate::features::Features;
 
 use rmcp::model::Tool;
 use std::collections::BTreeMap;
@@ -195,6 +196,7 @@ pub fn configured_native_tool_context(
     research_toml: Option<&ResearchToolsToml>,
     codex_home: &Path,
     cwd: &Path,
+    features: &Features,
 ) -> ResearchToolContext {
     let defs = codex_research_tools::tool_specs::all_tool_defs();
     let research_config =
@@ -207,6 +209,9 @@ pub fn configured_native_tool_context(
 
     for def in defs {
         if !toolkit.is_tool_configured(def.id) {
+            continue;
+        }
+        if !features.is_research_tool_enabled(def.id) {
             continue;
         }
 

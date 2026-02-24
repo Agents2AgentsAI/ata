@@ -15,6 +15,7 @@ use crate::config::types::SkillsConfig;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
+use crate::features::Features;
 use crate::skills::SkillLoadOutcome;
 use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
@@ -63,6 +64,7 @@ impl SkillsManager {
             skill_roots_from_layer_stack_with_agents(&config.config_layer_stack, &config.cwd);
         let mut outcome = load_skills_from_roots(roots);
         outcome.disabled_paths = disabled_paths_from_stack(&config.config_layer_stack);
+        disable_ungated_research_skills(&mut outcome, &config.features);
         let mut cache = match self.cache_by_cwd.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
@@ -200,6 +202,15 @@ fn disabled_paths_from_stack(
 
 fn normalize_override_path(path: &Path) -> PathBuf {
     dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Disable research skills whose per-category feature flag is not enabled.
+fn disable_ungated_research_skills(outcome: &mut SkillLoadOutcome, features: &Features) {
+    for skill in &outcome.skills {
+        if !features.is_research_skill_enabled(&skill.name) {
+            outcome.disabled_paths.insert(skill.path.clone());
+        }
+    }
 }
 
 fn normalize_extra_user_roots(extra_user_roots: &[PathBuf]) -> Vec<PathBuf> {
