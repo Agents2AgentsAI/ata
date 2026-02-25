@@ -12,10 +12,9 @@ default = ["paper_search", "zotero"]
 paper_search = ["dep:quick-xml"]
 zotero = ["dep:regex"]
 repo_analysis = ["dep:regex", "dep:walkdir"]
-latex = ["dep:flate2"]
 hackernews = []
 patents = ["dep:quick-xml"]
-all = ["paper_search", "zotero", "repo_analysis", "latex", "hackernews", "patents"]
+all = ["paper_search", "zotero", "repo_analysis", "hackernews", "patents"]
 
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }
@@ -33,7 +32,6 @@ tokio = { workspace = true, features = ["fs", "macros", "process", "rt", "sync",
 tracing = { workspace = true }
 urlencoding = { workspace = true }
 
-flate2 = { version = "1", optional = true }
 quick-xml = { version = "0.38.4", optional = true }
 regex = { workspace = true, optional = true }
 walkdir = { workspace = true, optional = true }
