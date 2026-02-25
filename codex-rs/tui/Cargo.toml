@@ -20,10 +20,9 @@ debug-logs = []
 data = ["codex-core/data"]
 research-hackernews = ["codex-core/research-hackernews"]
 research-latex = ["codex-core/research-latex"]
-research-pdf-images = ["codex-core/research-pdf-images"]
 research-patents = ["codex-core/research-patents"]
 research-repo = ["codex-core/research-repo"]
-research-all = ["data", "research-hackernews", "research-latex", "research-patents", "research-pdf-images", "research-repo"]
+research-all = ["data", "research-hackernews", "research-latex", "research-patents", "research-repo"]
 
 [lints]
 workspace = true

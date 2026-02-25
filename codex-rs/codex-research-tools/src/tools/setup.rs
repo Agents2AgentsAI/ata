@@ -6,8 +6,6 @@ pub enum DependencyStatus {
     Found(PathBuf),
     /// Just installed by the setup process.
     Installed(PathBuf),
-    /// Just downloaded (e.g. the pdffigures2 JAR).
-    Downloaded(PathBuf),
     /// Could not be found or installed.
     Failed(String),
 }
@@ -46,7 +44,7 @@ impl SetupResult {
 /// Run the full research dependency setup.
 ///
 /// Checks (and optionally installs) all dependencies required by the
-/// research tools: pdflatex, tlmgr, java, poppler-utils, pdffigures2.jar.
+/// research tools: pdflatex, tlmgr.
 pub async fn run_setup(options: SetupOptions) -> SetupResult {
     let mut dependencies = Vec::new();
 
@@ -55,15 +53,6 @@ pub async fn run_setup(options: SetupOptions) -> SetupResult {
 
     // 2. tlmgr (probe only, non-fatal)
     dependencies.push(check_tlmgr().await);
-
-    // 3. java
-    dependencies.push(check_java(&options).await);
-
-    // 4. poppler-utils (pdftocairo)
-    dependencies.push(check_pdftocairo(&options).await);
-
-    // 5. pdffigures2.jar
-    dependencies.push(check_pdffigures2_jar(&options).await);
 
     SetupResult { dependencies }
 }
@@ -114,95 +103,3 @@ async fn check_tlmgr() -> DependencyResult {
     }
 }
 
-async fn check_java(options: &SetupOptions) -> DependencyResult {
-    if let Some(path) = super::pdf_images::probe_java().await {
-        return DependencyResult {
-            name: "java",
-            description: "JRE for pdffigures2",
-            status: DependencyStatus::Found(path),
-        };
-    }
-
-    if options.check_only {
-        return DependencyResult {
-            name: "java",
-            description: "JRE for pdffigures2",
-            status: DependencyStatus::Failed("not found".into()),
-        };
-    }
-
-    match super::pdf_images::find_java().await {
-        Ok(path) => DependencyResult {
-            name: "java",
-            description: "JRE for pdffigures2",
-            status: DependencyStatus::Installed(path),
-        },
-        Err(e) => DependencyResult {
-            name: "java",
-            description: "JRE for pdffigures2",
-            status: DependencyStatus::Failed(e),
-        },
-    }
-}
-
-async fn check_pdftocairo(options: &SetupOptions) -> DependencyResult {
-    if super::pdf_images::probe_pdftocairo().await {
-        return DependencyResult {
-            name: "poppler-utils",
-            description: "PDF rendering (pdftocairo/pdfimages)",
-            status: DependencyStatus::Found("pdftocairo".into()),
-        };
-    }
-
-    if options.check_only {
-        return DependencyResult {
-            name: "poppler-utils",
-            description: "PDF rendering (pdftocairo/pdfimages)",
-            status: DependencyStatus::Failed("not found".into()),
-        };
-    }
-
-    match super::pdf_images::ensure_pdftocairo().await {
-        Ok(()) => DependencyResult {
-            name: "poppler-utils",
-            description: "PDF rendering (pdftocairo/pdfimages)",
-            status: DependencyStatus::Installed("pdftocairo".into()),
-        },
-        Err(e) => DependencyResult {
-            name: "poppler-utils",
-            description: "PDF rendering (pdftocairo/pdfimages)",
-            status: DependencyStatus::Failed(e),
-        },
-    }
-}
-
-async fn check_pdffigures2_jar(options: &SetupOptions) -> DependencyResult {
-    if let Some(path) = super::pdf_images::probe_pdffigures2_jar() {
-        return DependencyResult {
-            name: "pdffigures2.jar",
-            description: "Figure extraction JAR",
-            status: DependencyStatus::Found(path),
-        };
-    }
-
-    if options.check_only {
-        return DependencyResult {
-            name: "pdffigures2.jar",
-            description: "Figure extraction JAR",
-            status: DependencyStatus::Failed("not found".into()),
-        };
-    }
-
-    match super::pdf_images::ensure_pdffigures2_jar().await {
-        Ok(path) => DependencyResult {
-            name: "pdffigures2.jar",
-            description: "Figure extraction JAR",
-            status: DependencyStatus::Downloaded(path),
-        },
-        Err(e) => DependencyResult {
-            name: "pdffigures2.jar",
-            description: "Figure extraction JAR",
-            status: DependencyStatus::Failed(e),
-        },
-    }
-}

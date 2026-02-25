@@ -47,10 +47,6 @@ pub(super) async fn run(args: SetupResearchArgs) -> anyhow::Result<()> {
                     path.display().dimmed()
                 ),
             ),
-            DependencyStatus::Downloaded(path) => (
-                "\u{2714}".green().to_string(),
-                format!("{} {}", "(downloaded)".dimmed(), path.display().dimmed()),
-            ),
             DependencyStatus::Failed(msg) => ("\u{2718}".red().to_string(), msg.red().to_string()),
         };
 

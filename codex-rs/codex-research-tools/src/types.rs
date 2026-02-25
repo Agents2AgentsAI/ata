@@ -691,57 +691,6 @@ pub struct LatexCompileResult {
     pub packages_installed: Vec<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct PdfExtractFiguresParams {
-    pub pdf_url: String,
-    pub output_dir: String,
-    #[serde(default = "default_dpi")]
-    pub dpi: Option<u32>,
-    #[serde(default = "default_min_size_kb")]
-    pub min_size_kb: Option<u32>,
-    #[serde(default = "default_min_width")]
-    pub min_width: Option<u32>,
-    #[serde(default = "default_min_height")]
-    pub min_height: Option<u32>,
-}
-
-fn default_dpi() -> Option<u32> {
-    Some(300)
-}
-
-fn default_min_size_kb() -> Option<u32> {
-    Some(5)
-}
-
-fn default_min_width() -> Option<u32> {
-    Some(100)
-}
-
-fn default_min_height() -> Option<u32> {
-    Some(100)
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct ExtractedFigure {
-    pub path: String,
-    pub width: u32,
-    pub height: u32,
-    pub size_bytes: u64,
-    pub page_number: u32,
-    pub index: u32,
-    pub caption: Option<String>,
-    pub figure_type: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct PdfExtractFiguresResult {
-    pub success: bool,
-    pub figures: Vec<ExtractedFigure>,
-    pub total_extracted: usize,
-    pub total_filtered: usize,
-    pub errors: Vec<String>,
-}
-
 // ---------------------------------------------------------------------------
 // Hacker News types
 // ---------------------------------------------------------------------------

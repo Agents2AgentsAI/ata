@@ -714,43 +714,6 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
         ]);
     }
 
-    #[cfg(feature = "pdf_images")]
-    {
-        defs.push(ToolDef {
-            id: "pdf_extract_figures",
-            native_name: "pdf_extract_figures",
-            mcp_name: "extract_pdf_figures",
-            description: "Download a PDF and extract figures/diagrams as PNG images using pdffigures2 for detection and pdftocairo for rendering. Supplements with pdfimages for embedded raster figures. Filters out small icons and decorations by size and dimensions. Returns metadata for each extracted figure including caption, page number, and dimensions.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "pdf_url": {
-                        "type": "string",
-                        "description": "URL to download the PDF from"
-                    },
-                    "output_dir": {
-                        "type": "string",
-                        "description": "Directory to save extracted PNG images"
-                    },
-                    "min_size_kb": {
-                        "type": "integer",
-                        "description": "Minimum file size in KB to keep (default 5)"
-                    },
-                    "min_width": {
-                        "type": "integer",
-                        "description": "Minimum pixel width to keep (default 100)"
-                    },
-                    "min_height": {
-                        "type": "integer",
-                        "description": "Minimum pixel height to keep (default 100)"
-                    }
-                },
-                "required": ["pdf_url", "output_dir"],
-                "additionalProperties": false
-            }),
-        });
-    }
-
     #[cfg(feature = "latex")]
     {
         defs.push(ToolDef {
