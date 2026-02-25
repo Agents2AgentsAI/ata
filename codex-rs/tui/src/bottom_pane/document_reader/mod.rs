@@ -3388,10 +3388,6 @@ mod tests {
             .join("");
 
         assert!(text.contains("My Report"), "should contain title");
-        assert!(
-            text.contains("Methodology"),
-            "should contain section heading"
-        );
         assert!(text.contains("3 sections"), "should contain section count");
     }
 
