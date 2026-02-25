@@ -19,7 +19,6 @@ all = ["paper_search", "zotero", "repo_analysis", "hackernews", "patents"]
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }
 dashmap = "6"
-dirs = { workspace = true }
 futures = { workspace = true }
 lru = { workspace = true }
 rand = { workspace = true }
