@@ -18,7 +18,7 @@ This skill orchestrates paper synthesis. The actual synthesis work is done by su
 - Do NOT read KB cards to "check" them — a single `rg` search is enough
 - Do NOT call `paper_search` when you already have a URL or arXiv ID
 
-**The optimal single-paper flow is exactly 6 tool calls:**
+**The optimal single-paper flow (with KB enabled) is exactly 6 tool calls:**
 1. `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` (KB check — 1 call)
 2. `spawn_agent` (1 call)
 3. `wait` (1 call)
@@ -27,6 +27,8 @@ This skill orchestrates paper synthesis. The actual synthesis work is done by su
 6. `update_document_section` × N (fill sections)
 
 Then 2 more for KB persistence. That's it. Any additional tool calls are waste.
+
+**If KB is disabled** (no `$kb` skill available), skip step 1 (KB check) and skip KB persistence after presenting. The flow is: spawn subagent → wait → read staging → present → fill sections. That's it.
 
 ## Rules
 
@@ -61,11 +63,11 @@ That's all the subagent needs. Do NOT read `research-context.md` to add context 
 
 ### Single-Paper Path
 1. Resolve identifier via Pre-Synthesis.
-2. **Quick KB check (1 tool call max)** — run `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` where PAPER_ID is the arXiv ID, DOI, or identifier. If it finds a match, read that one card and check for a Deep Dive section. If a Deep Dive exists → `present_reading_view` → done. If no match or no Deep Dive → continue to step 3. Do NOT read the KB skill docs. Do NOT list the KB directory. Do NOT read multiple cards.
+2. **Quick KB check (1 tool call max, skip if KB is disabled)** — run `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` where PAPER_ID is the arXiv ID, DOI, or identifier. If it finds a match, read that one card and check for a Deep Dive section. If a Deep Dive exists → `present_reading_view` → done. If no match or no Deep Dive → continue to step 3. Do NOT read the KB skill docs. Do NOT list the KB directory. Do NOT read multiple cards. **If KB is disabled**, skip this step entirely and go straight to step 3.
 3. Spawn one subagent via `spawn_agent`. Then call `wait` for the subagent to complete — it returns a staging file path.
-4. **Read the staging file** via `exec_command` (e.g., `cat ~/.ata/knowledge-base/staging/paper-1706.03762.md`).
+4. **Read the staging file** via `exec_command` (e.g., `cat ~/.ata/staging/paper-1706.03762.md`).
 5. **Present the result immediately** — your VERY NEXT tool call after reading the staging file MUST be `present_reading_view`. Do NOT write to KB before presenting. Do NOT output text before presenting. Do NOT plan all sections in your reasoning first — call the tool NOW with just the section headings, then fill each section one at a time.
-6. **Persist to KB directly** — after presenting, write the KB card yourself using `exec_command` with a heredoc. Do NOT spawn a KB subagent for single papers — fire-and-forget subagents are unreliable due to rate limits. Instead, do it in one call:
+6. **Persist to KB directly (skip if KB is disabled)** — after presenting, write the KB card yourself using `exec_command` with a heredoc. Do NOT spawn a KB subagent for single papers — fire-and-forget subagents are unreliable due to rate limits. Instead, do it in one call:
 
 ```
 exec_command: cat <<'CARD_EOF' > ~/.ata/knowledge-base/cards/paper-[slug].md
@@ -88,14 +90,16 @@ CARD_EOF
 
 Then in a second `exec_command`, append to `research-journal.md` and delete the staging file. This is 2 tool calls total — fast and reliable.
 
+**If KB is disabled:** Skip step 6 entirely. Do not write cards or journal entries. After presenting, delete the staging file with `exec_command: rm ~/.ata/staging/paper-*.md` so it doesn't accumulate.
+
 ### Multi-Paper Path
 1. **Collect identifiers** — gather all URLs, DOIs, and arXiv IDs you already have. Only call `paper_search` for papers where you have nothing but a title, and run those searches in one parallel batch.
-2. **Quick KB check** — run `exec_command: rg "ID1\|ID2\|ID3" ~/.ata/knowledge-base/cards/` to check all papers in one call. Skip papers that already have cards.
+2. **Quick KB check (skip if KB is disabled)** — run `exec_command: rg "ID1\|ID2\|ID3" ~/.ata/knowledge-base/cards/` to check all papers in one call. Skip papers that already have cards. **If KB is disabled**, skip this step and spawn subagents for all papers.
 3. **Spawn ALL subagents at once** — one per missing paper, all in a single parallel batch. Do not spawn sequentially or in multiple rounds.
 4. **Single wait** — call `wait` once for all subagents. Each returns a staging file path.
-5. **Read all staging files** via `exec_command` (e.g., `cat ~/.ata/knowledge-base/staging/paper-*.md`).
+5. **Read all staging files** via `exec_command` (e.g., `cat ~/.ata/staging/paper-*.md`).
 6. Present results to the user.
-7. **Persist to KB** — for multi-paper, spawn a KB subagent (fire-and-forget) with ALL card contents embedded in the prompt so it can write immediately without disk reads:
+7. **Persist to KB (skip if KB is disabled)** — for multi-paper, spawn a KB subagent (fire-and-forget) with ALL card contents embedded in the prompt so it can write immediately without disk reads:
 
 > $kb
 >
@@ -107,6 +111,8 @@ Then in a second `exec_command`, append to `research-journal.md` and delete the 
 
 ## KB Card Persistence
 
+**Skip this entire section if KB is disabled.** When KB is off, do not write cards, journal entries, or staging files. Present the synthesis and move on.
+
 **Single paper:** The main agent writes the KB card directly via `exec_command` after presenting — this is fast (2 tool calls) and reliable. No subagent needed.
 
 **Multi-paper:** A fire-and-forget `$kb` subagent handles batch persistence. The spawn prompt must include full card contents (not staging file paths) so the subagent can write immediately without disk reads.
@@ -115,7 +121,7 @@ Card ID convention: kebab-case slug from the paper title, prefixed with `paper-`
 
 **Personalization.** If you already know the user's research priorities from the conversation context, adjust emphasis in the reading view accordingly. Do NOT read `research-context.md` for this — use only what's already in conversation context.
 
-**Follow-up persistence.** When the user exits the reading view and Q&A produced new insights not already in the KB card, automatically spawn a fire-and-forget `$kb` subagent (do NOT call `wait`) to persist them. Do not ask the user. Include the card ID and a summary of new insights from the Q&A in the subagent prompt:
+**Follow-up persistence (skip if KB is disabled).** When the user exits the reading view and Q&A produced new insights not already in the KB card, automatically spawn a fire-and-forget `$kb` subagent (do NOT call `wait`) to persist them. Do not ask the user. Include the card ID and a summary of new insights from the Q&A in the subagent prompt:
 
 > $kb
 >
@@ -166,7 +172,16 @@ Add a 5th section only if the paper has a genuinely distinct component (e.g., a 
 
 **Markdown formatting:** Always put a blank line before numbered list items (`1.`, `2.`, etc.) and before bullet list items (`-`, `*`). Without a blank line, the markdown parser treats `2.`, `3.`, etc. as plain text instead of list items, so they lose their formatting. This also applies to content after paragraphs, blockquotes, and code blocks.
 
-When the user asks follow-up questions — whether about a specific section or a broader request like "explain more intuitively" or "explain the KV cache" — ALWAYS use the reading view tools. Prefer `update_document_section` to rewrite the section with the answer woven in at the relevant location (keeps explanations inline where the concept appears). Use `patch_document_section` to insert content right after a specific passage. Use `append_to_section` only when adding genuinely new content that belongs at the end. For a completely fresh take, call `present_reading_view` with a new document_id. Never fall back to plain text for follow-ups on a topic with an active reading view. Write the answer as straight prose that continues the section's voice — no editorial labels like "(clearer explanation)" or "(expanded)", and no bold/italic topic-line prefixes like "**On the efficiency gains:**" or "*Regarding caching:*". Just write the content directly.
+When the user asks follow-up questions — whether about a specific section or a broader request like "explain more intuitively" or "explain the KV cache" — ALWAYS use the reading view tools:
+
+- `append_to_section` with `foldable=true` — **preferred for expansion requests** (e.g., "explain more", "go deeper"). Adds a collapsible detail block below the existing content, preserving the original section's scannability while offering depth on demand. Each foldable block should be 3-5 sentences.
+- `patch_document_section` — to insert a clarification right after a specific passage.
+- `update_document_section` — to rewrite a section ONLY when the user explicitly asks for a different framing or the section is factually wrong. **Never use this just to add more detail** — it almost always results in bloated sections that exceed the 30-line limit.
+- For a completely fresh take, call `present_reading_view` with a new document_id.
+
+**Critical constraint:** After any follow-up update, the section must still be ≤30 lines of visible (non-folded) content. If a user's request would push a section past this limit, use foldable blocks or suggest `$cross-paper-report` for comparative deep dives.
+
+Never fall back to plain text for follow-ups on a topic with an active reading view. Write the answer as straight prose that continues the section's voice — no editorial labels like "(clearer explanation)" or "(expanded)", and no bold/italic topic-line prefixes like "**On the efficiency gains:**" or "*Regarding caching:*". Just write the content directly.
 
 ## Graceful Degradation
 

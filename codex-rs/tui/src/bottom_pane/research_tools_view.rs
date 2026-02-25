@@ -61,6 +61,11 @@ const RESEARCH_FEATURES: &[(Feature, &str, &str)] = &[
         "Reading View",
         "Present output in a navigable reading view instead of inline chat",
     ),
+    (
+        Feature::ResearchKnowledgeBase,
+        "Knowledge Base",
+        "Persist research cards, journal entries, and research context to KB",
+    ),
 ];
 
 pub(crate) struct ResearchToolItem {
@@ -325,12 +330,13 @@ pub(crate) fn build_research_tool_items(
     RESEARCH_FEATURES
         .iter()
         .map(|&(feature, name, description)| {
-            // ReadingView is independent of the master Research toggle.
-            let enabled = if feature == Feature::ReadingView {
-                features.enabled(feature)
-            } else {
-                features.enabled(Feature::Research) || features.enabled(feature)
-            };
+            // ReadingView and KB are independent of the master Research toggle.
+            let enabled =
+                if feature == Feature::ReadingView || feature == Feature::ResearchKnowledgeBase {
+                    features.enabled(feature)
+                } else {
+                    features.enabled(Feature::Research) || features.enabled(feature)
+                };
             ResearchToolItem {
                 feature,
                 name,

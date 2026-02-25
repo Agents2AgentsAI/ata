@@ -93,7 +93,7 @@ Present the full organized report in the conversation so the user sees it immedi
 
 No markdown file. No PDF. The chat response is the deliverable. Insights get persisted to KB cards (step 2) and the journal (step 3) — those are the durable artifacts, not a duplicate document.
 
-### 2. KB Card Updates
+### 2. KB Card Updates (skip if KB is disabled)
 Automatically persist conversation insights to KB cards via a fire-and-forget `$kb` subagent (do NOT call `wait`). Do not ask the user — this runs in the background after the reading view is presented.
 
 For each KB card referenced in the conversation, check if the discussion produced insights not already in the card. If yes, spawn a single fire-and-forget subagent to update all affected cards:
@@ -109,7 +109,7 @@ For each KB card referenced in the conversation, check if the discussion produce
 
 This connects conversation-report to KB updates — the report presents the conversation in the reading view, while the fire-and-forget subagent persists paper-specific insights back to individual cards for future reference.
 
-### 3. Research Journal Entry
+### 3. Research Journal Entry (skip if KB is disabled)
 Append a structured entry to `<kb_path>/research-journal.md`. If the file doesn't exist yet, create it. New entries are **prepended** (newest first) so the most recent session is at the top.
 
 The journal entry is much shorter than the full chat report — it's a structured summary for future reference, not a copy of the full narrative.
@@ -145,7 +145,7 @@ The journal entry is much shorter than the full chat report — it's a structure
 
 **How to prepend:** Read the existing `research-journal.md` content (if any), compose the new entry, then write the new entry followed by the existing content back to the file.
 
-### 4. Research Context Update (If Applicable)
+### 4. Research Context Update (skip if KB is disabled)
 After generating the report and journal entry, check if the conversation revealed new user preferences or project context:
 
 - Did the user express a priority? (e.g., "I care most about inference latency")
@@ -189,9 +189,13 @@ If yes, offer to update `<kb_path>/research-context.md`:
 **Markdown formatting:** Always put a blank line before numbered list items (`1.`, `2.`, etc.) and before bullet list items (`-`, `*`). Without a blank line, the markdown parser treats `2.`, `3.`, etc. as plain text instead of list items, so they lose their formatting. This also applies to content after paragraphs, blockquotes, and code blocks.
 
 When the user asks follow-up questions about a specific section, use the most efficient update tool:
-- `append_to_section` — to add new information at the end of a section (most common for follow-up questions)
-- `patch_document_section` — to change specific text within a section (for corrections or targeted edits)
-- `update_document_section` — to fully rewrite a section (only when the entire section needs to change)
+
+- `append_to_section` with `foldable=true` — **preferred for expansion requests** (e.g., "explain more", "go deeper on X"). Adds a collapsible detail block below existing content, preserving scannability. Each foldable block: 3-5 sentences.
+- `append_to_section` (without foldable) — to add genuinely new information at the end of a section.
+- `patch_document_section` — to change specific text within a section (for corrections or targeted edits).
+- `update_document_section` — to fully rewrite a section ONLY when the user asks for a different framing or the section is factually wrong. **Never use this just to add more detail.**
+
+**Critical constraint:** After any follow-up update, the section must still be ≤30 lines of visible (non-folded) content. If a request would push past this limit, use foldable blocks.
 
 Write follow-up answers as straight content — no editorial labels like "(clearer explanation)" or "(expanded)" in headings or topic lines.
 
