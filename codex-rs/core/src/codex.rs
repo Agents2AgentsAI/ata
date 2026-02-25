@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -440,6 +441,7 @@ impl Codex {
             session_source,
             dynamic_tools,
             persist_extended_history,
+            features_override: None,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -781,6 +783,10 @@ pub(crate) struct SessionConfiguration {
     session_source: SessionSource,
     dynamic_tools: Vec<DynamicToolSpec>,
     persist_extended_history: bool,
+
+    /// Feature flag override applied via OverrideTurnContext. When set,
+    /// takes precedence over original_config_do_not_use.features.
+    features_override: Option<Features>,
 }
 
 impl SessionConfiguration {
@@ -832,6 +838,12 @@ impl SessionConfiguration {
         {
             next_configuration.provider = provider;
         }
+        if let Some(flags) = &updates.feature_flags {
+            // Start from the original baseline to preserve legacy toggles, etc.
+            let mut features = self.original_config_do_not_use.features.clone();
+            features.apply_map(flags);
+            next_configuration.features_override = Some(features);
+        }
         Ok(next_configuration)
     }
 }
@@ -848,6 +860,8 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) personality: Option<Personality>,
     /// Model provider ID to switch to (e.g., "openai", "anthropic", "gemini").
     pub(crate) model_provider: Option<String>,
+    /// Feature flag overrides (key → enabled).
+    pub(crate) feature_flags: Option<BTreeMap<String, bool>>,
 }
 
 impl Session {
@@ -930,7 +944,10 @@ impl Session {
                 "resolved web_search_mode is disallowed by requirements; keeping constrained value"
             );
         }
-        per_turn_config.features = config.features.clone();
+        per_turn_config.features = session_configuration
+            .features_override
+            .clone()
+            .unwrap_or_else(|| config.features.clone());
         per_turn_config
     }
 
@@ -2822,9 +2839,12 @@ impl Session {
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
             items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
         }
-        // Add developer instructions for Zotero when configured.
+        // Add developer instructions for Zotero when configured and enabled.
         if let Some(ref toolkit) = self.services.research_toolkit
             && toolkit.is_tool_configured("zotero_search")
+            && turn_context
+                .features
+                .is_research_tool_enabled("zotero_search")
         {
             items
                 .push(DeveloperInstructions::new(ZOTERO_DEVELOPER_INSTRUCTIONS.to_string()).into());
@@ -3502,6 +3522,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 summary,
                 collaboration_mode,
                 personality,
+                feature_flags,
             } => {
                 let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
                     collab_mode
@@ -3525,6 +3546,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         reasoning_summary: summary,
                         personality,
                         model_provider,
+                        feature_flags,
                         ..Default::default()
                     },
                 )
@@ -3748,6 +3770,7 @@ mod handlers {
                         final_output_json_schema: Some(final_output_json_schema),
                         personality,
                         model_provider: None,
+                        feature_flags: None,
                     },
                 )
             }
@@ -7691,6 +7714,7 @@ mod tests {
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
+            features_override: None,
         };
 
         let mut state = SessionState::new(session_configuration);
@@ -7782,6 +7806,7 @@ mod tests {
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
+            features_override: None,
         };
 
         let mut state = SessionState::new(session_configuration);
@@ -8092,6 +8117,7 @@ mod tests {
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
+            features_override: None,
         }
     }
 
@@ -8143,6 +8169,7 @@ mod tests {
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
+            features_override: None,
         };
 
         let (tx_event, _rx_event) = async_channel::unbounded();
@@ -8224,6 +8251,7 @@ mod tests {
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
+            features_override: None,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_info = ModelsManager::construct_model_info_offline_for_tests(
@@ -8384,6 +8412,7 @@ mod tests {
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
+            features_override: None,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_info = ModelsManager::construct_model_info_offline_for_tests(

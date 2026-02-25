@@ -39,7 +39,7 @@ mod app_cmd;
 mod desktop_app;
 mod mcp_cmd;
 mod research;
-#[cfg(all(feature = "research-latex", feature = "research-pdf-images"))]
+#[cfg(feature = "research-latex")]
 mod setup_research;
 #[cfg(not(windows))]
 mod wsl_paths;
@@ -151,8 +151,8 @@ enum Subcommand {
     #[clap(hide = true, name = "stdio-to-uds")]
     StdioToUds(StdioToUdsCommand),
 
-    /// Check and install research tool dependencies (pdflatex, java, poppler, pdffigures2).
-    #[cfg(all(feature = "research-latex", feature = "research-pdf-images"))]
+    /// Check and install research tool dependencies (pdflatex, tlmgr).
+    #[cfg(feature = "research-latex")]
     #[clap(name = "setup-research")]
     SetupResearch(setup_research::SetupResearchArgs),
 
@@ -819,7 +819,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             tokio::task::spawn_blocking(move || codex_stdio_to_uds::run(socket_path.as_path()))
                 .await??;
         }
-        #[cfg(all(feature = "research-latex", feature = "research-pdf-images"))]
+        #[cfg(feature = "research-latex")]
         Some(Subcommand::SetupResearch(args)) => {
             setup_research::run(args).await?;
         }
