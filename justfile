@@ -8,11 +8,11 @@ help:
 # `codex`
 alias c := codex
 codex *args:
-    cargo run --bin codex --features research-all -- "$@"
+    cargo run --bin codex -- "$@"
 
 # `codex exec`
 exec *args:
-    cargo run --bin codex --features research-all -- exec "$@"
+    cargo run --bin codex -- exec "$@"
 
 # Run the CLI version of the file-search crate.
 file-search *args:
@@ -28,14 +28,14 @@ fmt:
     cargo fmt -- --config imports_granularity=Item 2>/dev/null
 
 fix *args:
-    cargo clippy --fix --tests --allow-dirty "$@"
+    cargo clippy --fix --all-features --tests --allow-dirty "$@"
 
 # Lint without --all-features
 fix-fast *args:
     cargo clippy --fix --tests --allow-dirty "$@"
 
 clippy:
-    cargo clippy --tests "$@"
+    cargo clippy --all-features --tests "$@"
 
 # Lint without --all-features
 clippy-fast *args:
@@ -49,18 +49,12 @@ install:
 # --no-fail-fast is important to ensure all tests are run.
 #
 # Run `cargo install cargo-nextest` if you don't have it installed.
-# Prefer this for routine local runs; use explicit `cargo test --all-features`
-# only when you specifically need full feature coverage.
 test:
     cargo nextest run --no-fail-fast
 
 # Test all workspace members
 test-all:
     cargo nextest run --workspace --no-fail-fast
-
-# Test research crates with all features
-test-research:
-    cargo test -p codex-research-tools --all-features
 
 # Build and run Codex from source using Bazel.
 # Note we have to use the combination of `[no-cd]` and `--run_under="cd $PWD &&"`

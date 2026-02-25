@@ -219,7 +219,7 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ contains(matrix.target, 'windows') }}" == 'true' ]]; then
-            cargo build --target ${{ matrix.target }} --release --timings --bin ata --bin ata-responses-api-proxy --bin ata-windows-sandbox-setup --bin ata-command-runner
+            cargo build --target ${{ matrix.target }} --release --timings -p codex-cli -p codex-responses-api-proxy -p codex-windows-sandbox --bin ata --bin ata-responses-api-proxy --bin ata-windows-sandbox-setup --bin ata-command-runner
           else
             cargo build --target ${{ matrix.target }} --release --timings --bin ata --bin ata-responses-api-proxy
           fi
@@ -259,6 +259,9 @@ jobs:
           target="${{ matrix.target }}"
           release_dir="target/${target}/release"
 
+          echo "Disk usage before cleanup:"
+          df -h .
+
           # Preserve only the final release binaries we need for the DMG.
           mkdir -p /tmp/ata-binaries
           cp "${release_dir}/ata" /tmp/ata-binaries/ 2>/dev/null || true
@@ -273,13 +276,33 @@ jobs:
 
           # Remove build tools no longer needed after compilation.
           rm -rf ~/.rustup ~/.cargo
+
+          # Remove Xcode simulator runtimes and unused platform SDKs (multi-GB).
+          xcrun simctl delete all 2>/dev/null || true
+          sudo rm -rf \
+            ~/Library/Developer/CoreSimulator \
+            /Library/Developer/CoreSimulator \
+            2>/dev/null || true
+          for plat in iPhoneOS WatchOS AppleTVOS XROS WatchSimulator AppleTVSimulator iPhoneSimulator; do
+            sudo rm -rf "/Applications/Xcode.app/Contents/Developer/Platforms/${plat}.platform" 2>/dev/null || true
+          done
+
+          # Remove Homebrew and its caches.
           brew cleanup --prune=all 2>/dev/null || true
           rm -rf ~/Library/Caches/Homebrew 2>/dev/null || true
+
+          # Remove other pre-installed large tools not needed for DMG creation.
+          sudo rm -rf \
+            /usr/local/share/dotnet \
+            /usr/local/share/powershell \
+            /usr/local/lib/node_modules \
+            2>/dev/null || true
 
           # Restore binaries into the expected release directory.
           mkdir -p "${release_dir}"
           cp /tmp/ata-binaries/* "${release_dir}/"
           rm -rf /tmp/ata-binaries
+
           echo "Disk usage after cleanup:"
           df -h .
 
@@ -317,12 +340,31 @@ jobs:
           ditto "$proxy_binary_path" "${dmg_root}/ata-responses-api-proxy"
 
           rm -f "$dmg_path"
-          hdiutil create \
-            -volname "$volname" \
-            -srcfolder "$dmg_root" \
-            -format UDZO \
-            -ov \
-            "$dmg_path"
+
+          # Force APFS to flush purgeable space from the earlier rm -rf cleanup.
+          # Without this, df may report free space that hdiutil cannot yet allocate,
+          # causing sporadic "No space left on device" failures.
+          sync
+
+          # Retry hdiutil up to 3 times — APFS space reclamation can be async.
+          for attempt in 1 2 3; do
+            if hdiutil create \
+              -volname "$volname" \
+              -srcfolder "$dmg_root" \
+              -format UDZO \
+              -ov \
+              "$dmg_path"; then
+              break
+            fi
+            echo "hdiutil attempt ${attempt} failed, waiting 10s for APFS to reclaim space..."
+            df -h .
+            sleep 10
+            sync
+            if [[ $attempt -eq 3 ]]; then
+              echo "hdiutil create failed after 3 attempts"
+              exit 1
+            fi
+          done
 
           if [[ ! -f "$dmg_path" ]]; then
             echo "dmg $dmg_path not found after build"
@@ -726,10 +768,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Download the 4 tar.gz artifacts needed for the tap.
-          # The cask now uses tar.gz (like upstream) instead of DMGs.
+          # Download the 6 artifacts needed for the tap
           tmp="$(mktemp -d)"
           artifacts=(
+            "ata-aarch64-apple-darwin.dmg"
+            "ata-x86_64-apple-darwin.dmg"
             "ata-aarch64-apple-darwin.tar.gz"
             "ata-x86_64-apple-darwin.tar.gz"
             "ata-aarch64-unknown-linux-musl.tar.gz"
@@ -742,48 +785,23 @@ jobs:
               --dir "${tmp}"
           done
 
-          # Compute SHA256 hashes (cask and formula share the macOS hashes)
+          # Compute SHA256 hashes
           sha() { sha256sum "${tmp}/$1" | cut -d' ' -f1; }
-          darwin_arm="$(sha ata-aarch64-apple-darwin.tar.gz)"
-          darwin_intel="$(sha ata-x86_64-apple-darwin.tar.gz)"
-          linux_arm="$(sha ata-aarch64-unknown-linux-musl.tar.gz)"
-          linux_intel="$(sha ata-x86_64-unknown-linux-musl.tar.gz)"
+          cask_arm="$(sha ata-aarch64-apple-darwin.dmg)"
+          cask_intel="$(sha ata-x86_64-apple-darwin.dmg)"
+          formula_darwin_arm="$(sha ata-aarch64-apple-darwin.tar.gz)"
+          formula_darwin_intel="$(sha ata-x86_64-apple-darwin.tar.gz)"
+          formula_linux_arm="$(sha ata-aarch64-unknown-linux-musl.tar.gz)"
+          formula_linux_intel="$(sha ata-x86_64-unknown-linux-musl.tar.gz)"
 
           # Clone the tap repo
           git clone "https://x-access-token:${GH_TOKEN}@github.com/Agents2AgentsAI/homebrew-tap.git" tap
           cd tap
 
-          # Write cask (tar.gz, ripgrep dependency, livecheck, no proxy binary)
-          cat > Casks/ata.rb << 'CASK_EOF'
-          cask "ata" do
-            arch arm: "aarch64-apple-darwin", intel: "x86_64-apple-darwin"
-
-            version "__VERSION__"
-            sha256 arm:   "__ARM_SHA__",
-                   intel: "__INTEL_SHA__"
-
-            url "https://github.com/Agents2AgentsAI/ata/releases/download/rust-v#{version}/ata-#{arch}.tar.gz"
-            name "Ata CLI"
-            desc "AI assistant that runs locally in your terminal"
-            homepage "https://github.com/Agents2AgentsAI/ata"
-
-            depends_on formula: "ripgrep"
-
-            binary "ata-#{arch}", target: "ata"
-
-            livecheck do
-              url :url
-              strategy :github_latest
-              regex(/rust[._-]v?(\d+(?:\.\d+)+)/i)
-            end
-
-            zap trash: "~/.ata"
-          end
-          CASK_EOF
-          # Fill in version and hashes
-          sed -i "s/__VERSION__/${VERSION}/" Casks/ata.rb
-          sed -i "s/__ARM_SHA__/${darwin_arm}/" Casks/ata.rb
-          sed -i "s/__INTEL_SHA__/${darwin_intel}/" Casks/ata.rb
+          # Update cask
+          sed -i "s/version \".*\"/version \"${VERSION}\"/" Casks/ata.rb
+          sed -i "s/sha256 arm:   \".*\",/sha256 arm:   \"${cask_arm}\",/" Casks/ata.rb
+          sed -i "s/intel: \".*\"/intel: \"${cask_intel}\"/" Casks/ata.rb
 
           # Update formula version
           sed -i "s/version \".*\"/version \"${VERSION}\"/" Formula/ata.rb
@@ -793,7 +811,7 @@ jobs:
           import re
           with open('Formula/ata.rb') as f:
               content = f.read()
-          shas = ['${darwin_arm}', '${darwin_intel}', '${linux_arm}', '${linux_intel}']
+          shas = ['${formula_darwin_arm}', '${formula_darwin_intel}', '${formula_linux_arm}', '${formula_linux_intel}']
           i = 0
           def replacer(m):
               global i
