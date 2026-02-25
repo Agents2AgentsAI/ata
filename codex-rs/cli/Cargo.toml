@@ -72,3 +72,6 @@ assert_matches = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
+
+[package.metadata.cargo-shear]
+ignored = ["codex-research-tools"]
