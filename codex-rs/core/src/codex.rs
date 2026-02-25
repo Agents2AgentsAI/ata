@@ -4707,8 +4707,7 @@ pub(crate) async fn run_turn(
     let skills_outcome = Some(
         sess.services
             .skills_manager
-            .skills_for_cwd(&turn_context.cwd, false)
-            .await,
+            .skills_for_config(&turn_context.config),
     );
 
     let available_connectors = if turn_context.config.features.enabled(Feature::Apps) {
