@@ -18,6 +18,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderMap;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -282,7 +283,19 @@ impl ModelsManager {
     fn load_remote_models_from_file() -> Result<Vec<ModelInfo>, std::io::Error> {
         let file_contents = include_str!("../../models.json");
         let response: ModelsResponse = serde_json::from_str(file_contents)?;
-        Ok(response.models)
+        let mut models = response.models;
+
+        // Merge bundled third-party model metadata (Claude, Gemini, etc.) so these
+        // models get proper ModelInfo even when no remote fetch or cache is available.
+        let third_party_contents = include_str!("../../third_party_models.json");
+        let third_party: ModelsResponse = serde_json::from_str(third_party_contents)?;
+        let base_instructions = include_str!("../../prompt.md").to_string();
+        for mut model in third_party.models {
+            model.base_instructions = base_instructions.clone();
+            models.push(model);
+        }
+
+        Ok(models)
     }
 
     /// Attempt to satisfy the refresh from the cache when it matches the provider and TTL.
@@ -315,7 +328,28 @@ impl ModelsManager {
 
         let remote_presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
         let existing_presets = self.local_models.clone();
+
+        // Capture provider_id from local presets before merge drops them.
+        // ModelInfo -> ModelPreset always sets provider_id = None; we need to
+        // restore it so provider-based filtering works correctly.
+        let local_provider_ids: HashMap<String, String> = existing_presets
+            .iter()
+            .filter_map(|p| {
+                p.provider_id
+                    .as_ref()
+                    .map(|pid| (p.model.clone(), pid.clone()))
+            })
+            .collect();
+
         let mut merged_presets = ModelPreset::merge(remote_presets, existing_presets);
+
+        for preset in &mut merged_presets {
+            if preset.provider_id.is_none()
+                && let Some(pid) = local_provider_ids.get(&preset.model)
+            {
+                preset.provider_id = Some(pid.clone());
+            }
+        }
         let chatgpt_mode = matches!(self.auth_manager.auth_mode(), Some(AuthMode::Chatgpt));
         merged_presets = ModelPreset::filter_by_auth(merged_presets, chatgpt_mode);
 
@@ -899,6 +933,27 @@ mod tests {
         assert!(
             !response.models.is_empty(),
             "bundled models.json should contain at least one model"
+        );
+    }
+
+    #[test]
+    fn bundled_third_party_models_json_roundtrips() {
+        let file_contents = include_str!("../../third_party_models.json");
+        let response: ModelsResponse = serde_json::from_str(file_contents)
+            .expect("bundled third_party_models.json should deserialize");
+
+        let serialized = serde_json::to_string(&response)
+            .expect("bundled third_party_models.json should serialize");
+        let roundtripped: ModelsResponse = serde_json::from_str(&serialized)
+            .expect("serialized third_party_models.json should deserialize");
+
+        assert_eq!(
+            response, roundtripped,
+            "bundled third_party_models.json should round trip through serde"
+        );
+        assert!(
+            !response.models.is_empty(),
+            "bundled third_party_models.json should contain at least one model"
         );
     }
 }

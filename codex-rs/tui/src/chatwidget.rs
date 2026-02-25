@@ -5280,13 +5280,18 @@ impl ChatWidget {
 
     pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
         // Get list of configured providers to filter models
-        let configured_providers: std::collections::HashSet<String> = list_configured_providers(
-            &self.config.codex_home,
-            self.config.cli_auth_credentials_store_mode,
-        )
-        .into_iter()
-        .map(|p| p.provider_id)
-        .collect();
+        let mut configured_providers: std::collections::HashSet<String> =
+            list_configured_providers(
+                &self.config.codex_home,
+                self.config.cli_auth_credentials_store_mode,
+            )
+            .into_iter()
+            .map(|p| p.provider_id)
+            .collect();
+
+        // Always include the current session's provider so the user can
+        // switch between models of their active provider.
+        configured_providers.insert(self.config.model_provider_id.clone());
 
         let mut presets: Vec<ModelPreset> = presets
             .into_iter()
