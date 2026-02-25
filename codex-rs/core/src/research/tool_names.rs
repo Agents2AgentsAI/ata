@@ -233,9 +233,11 @@ pub(crate) fn find_mcp_tool_matches(
     mcp_tools: &BTreeMap<String, Tool>,
 ) -> Vec<String> {
     mcp_tools
-        .keys()
-        .filter(|qualified| qualified.split("__").last() == Some(mcp_name))
-        .cloned()
+        .iter()
+        .filter(|(qualified, tool)| {
+            tool.name.as_ref() == mcp_name || qualified.split("__").last() == Some(mcp_name)
+        })
+        .map(|(qualified, _)| qualified.clone())
         .collect()
 }
 
@@ -331,6 +333,21 @@ mod tests {
 
         let names = ResearchToolNames::from_mcp_tools(&defs, &mcp_tools);
         assert_eq!(names.paper_search, "mcp__a__search_papers");
+    }
+
+    #[test]
+    fn from_mcp_tools_matches_tool_name_when_qualified_name_is_truncated() {
+        let defs = all_tool_defs();
+        let mcp_tools = BTreeMap::from([(
+            "mcp__very_long_server9f8e7d6c5b4a32100112233445566778899aabb".to_string(),
+            mcp_tool("search_papers"),
+        )]);
+
+        let names = ResearchToolNames::from_mcp_tools(&defs, &mcp_tools);
+        assert_eq!(
+            names.paper_search,
+            "mcp__very_long_server9f8e7d6c5b4a32100112233445566778899aabb"
+        );
     }
 
     #[test]

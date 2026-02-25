@@ -1793,7 +1793,9 @@ pub(crate) fn build_specs_with_toolkits(
             if suppressed_mcp_research_tool_names.contains(&name) {
                 continue;
             }
-            if should_suppress_research_mcp_tool(&name, &config.features) {
+            if should_suppress_research_mcp_tool(&name, &config.features)
+                || should_suppress_research_mcp_tool(tool.name.as_ref(), &config.features)
+            {
                 continue;
             }
             #[cfg(feature = "data")]
@@ -2112,6 +2114,41 @@ mod tests {
                 .iter()
                 .any(|tool| tool_name(&tool.spec) == "mcp__zotero__zotero_search"),
             "MCP zotero_search tool should be suppressed when ResearchZotero is disabled"
+        );
+    }
+
+    #[test]
+    fn disabled_hackernews_feature_suppresses_truncated_mcp_tools() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::ResearchPaperSearch);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: None,
+        });
+        let toolkit =
+            make_research_toolkit(codex_research_tools::config::ResearchConfig::default());
+        let mcp_tools = HashMap::from([(
+            "mcp__long_server_name_abcdef1234567890fedcba0987654321".to_string(),
+            mcp_tool(
+                "search_hackernews",
+                "search hacker news",
+                serde_json::json!({"type": "object", "properties": {}}),
+            ),
+        )]);
+
+        let (tools, _) =
+            build_specs_with_research(&tools_config, Some(mcp_tools), None, &[], Some(&toolkit))
+                .build();
+
+        assert!(
+            !tools.iter().any(|tool| {
+                tool_name(&tool.spec) == "mcp__long_server_name_abcdef1234567890fedcba0987654321"
+            }),
+            "MCP search_hackernews tool should be suppressed when ResearchHackerNews is disabled, even if the qualified name does not contain the tool suffix"
         );
     }
 
