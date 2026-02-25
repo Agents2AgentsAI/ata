@@ -47,7 +47,7 @@ jobs:
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: helpers
-            build_args: --bin ata-windows-sandbox-setup --bin ata-command-runner
+            build_args: -p codex-windows-sandbox --bin ata-windows-sandbox-setup --bin ata-command-runner
             runs_on: "runs-on=${{ github.run_id }}/runner=release-windows-x64"
 
     steps:
