@@ -239,9 +239,41 @@ pub(crate) fn find_mcp_tool_matches(
         .collect()
 }
 
+#[must_use]
+pub(crate) fn should_suppress_research_mcp_tool(qualified_name: &str, features: &Features) -> bool {
+    let tool_name = qualified_name.rsplit("__").next().unwrap_or(qualified_name);
+    let tool_id = match tool_name {
+        _ if tool_name.starts_with("paper_") => Some("paper_search"),
+        _ if tool_name.starts_with("zotero_") => Some("zotero_search"),
+        _ if tool_name.starts_with("hn_") => Some("hn_search"),
+        _ if tool_name.starts_with("patent_") => Some("patent_search"),
+        _ if tool_name.starts_with("repo_") => Some("repo_clone_and_summarize"),
+        "search_papers"
+        | "get_paper"
+        | "get_citations"
+        | "get_references"
+        | "get_recommendations" => Some("paper_search"),
+        "search_hackernews" | "get_hackernews_thread" => Some("hn_search"),
+        "search_patents" | "get_patent" => Some("patent_search"),
+        "clone_and_summarize"
+        | "find_model_definitions"
+        | "extract_requirements"
+        | "find_entrypoints"
+        | "extract_io_shapes"
+        | "get_repo_health"
+        | "find_export_paths"
+        | "extract_config_schema"
+        | "diff_requirements" => Some("repo_clone_and_summarize"),
+        _ => None,
+    };
+
+    tool_id.is_some_and(|id| !features.is_research_tool_enabled(id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::features::Feature;
     use codex_research_tools::tool_specs::all_tool_defs;
     use pretty_assertions::assert_eq;
 
@@ -299,6 +331,90 @@ mod tests {
 
         let names = ResearchToolNames::from_mcp_tools(&defs, &mcp_tools);
         assert_eq!(names.paper_search, "mcp__a__search_papers");
+    }
+
+    #[test]
+    fn should_suppress_research_mcp_tool_follows_feature_flags_for_all_categories() {
+        let cases = [
+            (
+                "mcp__paper_server__paper_search",
+                "mcp__paper_server__search_papers",
+                Feature::ResearchPaperSearch,
+            ),
+            (
+                "mcp__zotero_server__zotero_search",
+                "mcp__zotero_server__zotero_search",
+                Feature::ResearchZotero,
+            ),
+            (
+                "mcp__hn_server__hn_search",
+                "mcp__hn_server__search_hackernews",
+                Feature::ResearchHackerNews,
+            ),
+            (
+                "mcp__patent_server__patent_search",
+                "mcp__patent_server__search_patents",
+                Feature::ResearchPatents,
+            ),
+            (
+                "mcp__repo_server__repo_clone_and_summarize",
+                "mcp__repo_server__clone_and_summarize",
+                Feature::ResearchRepoAnalysis,
+            ),
+        ];
+
+        for (prefix_name, alias_name, feature) in cases {
+            let mut features = Features::with_defaults();
+
+            features.disable(feature);
+            assert!(
+                should_suppress_research_mcp_tool(prefix_name, &features),
+                "{prefix_name} should be suppressed when {feature:?} is disabled"
+            );
+            assert!(
+                should_suppress_research_mcp_tool(alias_name, &features),
+                "{alias_name} should be suppressed when {feature:?} is disabled"
+            );
+
+            features.enable(feature);
+            assert!(
+                !should_suppress_research_mcp_tool(prefix_name, &features),
+                "{prefix_name} should be allowed when {feature:?} is enabled"
+            );
+            assert!(
+                !should_suppress_research_mcp_tool(alias_name, &features),
+                "{alias_name} should be allowed when {feature:?} is enabled"
+            );
+        }
+    }
+
+    #[test]
+    fn should_suppress_research_mcp_tool_leaves_unknown_names_unsuppressed() {
+        let features = Features::with_defaults();
+        assert!(!should_suppress_research_mcp_tool(
+            "mcp__server__custom_tool",
+            &features
+        ));
+    }
+
+    #[test]
+    fn should_suppress_research_mcp_tool_respects_master_research_toggle() {
+        let cases = [
+            "mcp__paper_server__search_papers",
+            "mcp__zotero_server__zotero_search",
+            "mcp__hn_server__search_hackernews",
+            "mcp__patent_server__search_patents",
+            "mcp__repo_server__clone_and_summarize",
+        ];
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Research);
+
+        for name in cases {
+            assert!(
+                !should_suppress_research_mcp_tool(name, &features),
+                "{name} should be allowed when Research is enabled"
+            );
+        }
     }
 }
 
