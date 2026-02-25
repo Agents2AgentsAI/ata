@@ -8,10 +8,6 @@ pub mod tool_specs;
 pub mod types;
 
 mod clients;
-#[cfg(feature = "latex")]
-pub mod setup {
-    pub use crate::tools::setup::*;
-}
 mod text_utils;
 mod tools;
 
@@ -31,8 +27,6 @@ use types::HnGetThreadParams;
 use types::HnSearchParams;
 use types::HnSearchResult;
 use types::HnThread;
-use types::LatexCompileParams;
-use types::LatexCompileResult;
 use types::ModelDefinition;
 use types::PaginationParams;
 use types::PaperDetail;
@@ -514,18 +508,6 @@ impl ResearchToolkit {
     ) -> Result<ZoteroSearchResult> {
         Err(ResearchError::NotImplemented {
             tool: "zotero_get_collection_items",
-        })
-    }
-
-    #[cfg(feature = "latex")]
-    pub async fn latex_compile(&self, params: LatexCompileParams) -> Result<LatexCompileResult> {
-        tools::latex::latex_compile(params).await
-    }
-
-    #[cfg(not(feature = "latex"))]
-    pub async fn latex_compile(&self, _params: LatexCompileParams) -> Result<LatexCompileResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "latex_compile",
         })
     }
 
