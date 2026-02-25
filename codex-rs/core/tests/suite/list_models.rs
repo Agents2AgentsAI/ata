@@ -9,6 +9,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::default_input_modalities;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn list_models_returns_api_key_models() -> Result<()> {
@@ -51,11 +52,42 @@ fn expected_models(chatgpt_mode: bool) -> Vec<ModelPreset> {
     let response: ModelsResponse = serde_json::from_str(include_str!("../../models.json"))
         .expect("bundled models.json should deserialize");
     let mut remote_models = response.models;
+
+    // Also load third-party models, matching load_remote_models_from_file().
+    let tp: ModelsResponse = serde_json::from_str(include_str!("../../third_party_models.json"))
+        .expect("bundled third_party_models.json should deserialize");
+    let base_instructions = include_str!("../../prompt.md").to_string();
+    for mut model in tp.models {
+        model.base_instructions = base_instructions.clone();
+        remote_models.push(model);
+    }
+
     remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
 
     let remote_presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
     let existing_presets = extra_local_presets();
+
+    // Capture provider_id from local presets before merge drops them,
+    // mirroring build_available_models().
+    let local_provider_ids: HashMap<String, String> = existing_presets
+        .iter()
+        .filter_map(|p| {
+            p.provider_id
+                .as_ref()
+                .map(|pid| (p.model.clone(), pid.clone()))
+        })
+        .collect();
+
     let mut merged_presets = ModelPreset::merge(remote_presets, existing_presets);
+
+    for preset in &mut merged_presets {
+        if preset.provider_id.is_none()
+            && let Some(pid) = local_provider_ids.get(&preset.model)
+        {
+            preset.provider_id = Some(pid.clone());
+        }
+    }
+
     merged_presets = ModelPreset::filter_by_auth(merged_presets, chatgpt_mode);
 
     for preset in &mut merged_presets {
