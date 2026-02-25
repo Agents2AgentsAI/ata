@@ -179,7 +179,7 @@ impl McpProcess {
                 "serverInfo": {
                     "name": "codex-mcp-server",
                     "title": "Ata",
-                    "version": "0.0.0",
+                    "version": env!("CARGO_PKG_VERSION"),
                     "user_agent": user_agent
                 },
                 "protocolVersion": ProtocolVersion::V_2025_03_26
