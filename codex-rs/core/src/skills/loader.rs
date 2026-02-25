@@ -16,7 +16,6 @@ use crate::skills::permissions::SkillManifestPermissions;
 use crate::skills::permissions::compile_permission_profile;
 use crate::skills::system::research_cache_root_dir;
 use crate::skills::system::system_cache_root_dir;
-use crate::skills::system::visual_reports_cache_root_dir;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::protocol::SkillScope;
 use dirs::home_dir;
@@ -243,12 +242,6 @@ fn skill_roots_from_layer_stack_inner(
                     scope: SkillScope::System,
                 });
 
-                // Visual-reports skills are cached under
-                // `$CODEX_HOME/skills/.system-visual-reports`.
-                roots.push(SkillRoot {
-                    path: visual_reports_cache_root_dir(config_folder.as_path()),
-                    scope: SkillScope::System,
-                });
             }
             ConfigLayerSource::System { .. } => {
                 // The system config layer lives under `/etc/codex/` on Unix, so treat
@@ -963,10 +956,6 @@ mod tests {
                     SkillScope::System,
                     user_folder.join("skills").join(".system-research")
                 ),
-                (
-                    SkillScope::System,
-                    user_folder.join("skills").join(".system-visual-reports")
-                ),
                 (SkillScope::Admin, system_folder.join("skills")),
             ]
         );
@@ -1029,10 +1018,6 @@ mod tests {
                 (
                     SkillScope::System,
                     user_folder.join("skills").join(".system-research")
-                ),
-                (
-                    SkillScope::System,
-                    user_folder.join("skills").join(".system-visual-reports")
                 ),
             ]
         );

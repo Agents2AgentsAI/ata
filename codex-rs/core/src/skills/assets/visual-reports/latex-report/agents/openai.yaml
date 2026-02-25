@@ -1,7 +1,0 @@
-interface:
-  display_name: "LaTeX Report"
-  short_description: "Convert narrative reports to LaTeX PDF with TikZ diagrams"
-  default_prompt: "Use $latex-report to convert the current narrative into a LaTeX PDF"
-
-policy:
-  allow_implicit_invocation: true

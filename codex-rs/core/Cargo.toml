@@ -61,7 +61,6 @@ env-flags = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
-include_dir = { workspace = true, optional = true }
 indexmap = { workspace = true }
 indoc = { workspace = true }
 keyring = { workspace = true, features = ["crypto-rust"] }
@@ -121,10 +120,8 @@ deterministic_process_ids = []
 data = ["dep:codex-data-tools"]
 research = []
 research-hackernews = ["research", "codex-research-tools/hackernews"]
-research-latex = ["research", "codex-research-tools/latex"]
 research-patents = ["research", "codex-research-tools/patents"]
 research-repo = ["research", "codex-research-tools/repo_analysis"]
-visual-reports = ["research", "dep:include_dir"]
 test-support = []
 
 

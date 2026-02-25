@@ -9,8 +9,6 @@ use codex_research_tools::config::ResearchConfig;
 use codex_research_tools::error::ResearchError;
 use codex_research_tools::types::HnGetThreadParams;
 use codex_research_tools::types::HnSearchParams;
-#[cfg(feature = "research-latex")]
-use codex_research_tools::types::LatexCompileParams;
 use codex_research_tools::types::PaginationParams;
 use codex_research_tools::types::PaperRecommendationParams;
 use codex_research_tools::types::PaperSearchParams;
@@ -181,10 +179,6 @@ impl ResearchBridgeHandler {
                     .toolkit
                     .zotero_get_collection_items(params))
             }
-            #[cfg(feature = "research-latex")]
-            "latex_compile" => dispatch_with_params!(LatexCompileParams, |params| self
-                .toolkit
-                .latex_compile(params)),
             "hn_search" => {
                 dispatch_with_params!(HnSearchParams, |params| self.toolkit.hn_search(params))
             }
