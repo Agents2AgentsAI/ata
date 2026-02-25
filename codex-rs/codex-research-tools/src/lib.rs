@@ -8,10 +8,6 @@ pub mod tool_specs;
 pub mod types;
 
 mod clients;
-#[cfg(all(feature = "latex", feature = "pdf_images"))]
-pub mod setup {
-    pub use crate::tools::setup::*;
-}
 mod text_utils;
 mod tools;
 
@@ -31,8 +27,6 @@ use types::HnGetThreadParams;
 use types::HnSearchParams;
 use types::HnSearchResult;
 use types::HnThread;
-use types::LatexCompileParams;
-use types::LatexCompileResult;
 use types::ModelDefinition;
 use types::PaginationParams;
 use types::PaperDetail;
@@ -42,8 +36,6 @@ use types::PatentDetail;
 use types::PatentGetParams;
 use types::PatentSearchParams;
 use types::PatentSearchResult;
-use types::PdfExtractFiguresParams;
-use types::PdfExtractFiguresResult;
 use types::RecommendationResult;
 use types::RepoEntrypoint;
 use types::RepoExportPath;
@@ -516,36 +508,6 @@ impl ResearchToolkit {
     ) -> Result<ZoteroSearchResult> {
         Err(ResearchError::NotImplemented {
             tool: "zotero_get_collection_items",
-        })
-    }
-
-    #[cfg(feature = "latex")]
-    pub async fn latex_compile(&self, params: LatexCompileParams) -> Result<LatexCompileResult> {
-        tools::latex::latex_compile(params).await
-    }
-
-    #[cfg(not(feature = "latex"))]
-    pub async fn latex_compile(&self, _params: LatexCompileParams) -> Result<LatexCompileResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "latex_compile",
-        })
-    }
-
-    #[cfg(feature = "pdf_images")]
-    pub async fn pdf_extract_figures(
-        &self,
-        params: PdfExtractFiguresParams,
-    ) -> Result<PdfExtractFiguresResult> {
-        tools::pdf_images::pdf_extract_figures(params).await
-    }
-
-    #[cfg(not(feature = "pdf_images"))]
-    pub async fn pdf_extract_figures(
-        &self,
-        _params: PdfExtractFiguresParams,
-    ) -> Result<PdfExtractFiguresResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "pdf_extract_figures",
         })
     }
 

@@ -1,6 +1,6 @@
 ---
 name: hn-synthesis
-description: Search Hacker News for practitioner discussions on a topic, tool, library, or paper, and synthesize findings into structured KB cards. Use when a user asks about community sentiment, real-world experience, practitioner opinions, or HN discussions about a technology, project, or research paper.
+description: "Search Hacker News for practitioner discussions on a topic, tool, library, or paper, and synthesize findings into structured KB cards. Use when a user asks about community sentiment, real-world experience, practitioner opinions, or HN discussions about a technology, project, or research paper. CRITICAL: You are an orchestrator only — NEVER call hn_search or hn_get_thread yourself. You MUST spawn subagents (hn-discoverer and hn-synthesizer) to do the work. Read the SKILL.md first before taking any action."
 metadata:
   short-description: Synthesize Hacker News discussions into KB knowledge cards
 ---

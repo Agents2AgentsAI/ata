@@ -1,6 +1,6 @@
 ---
 name: paper-discovery
-description: Use when a user asks a research question, wants to learn about a research topic, asks how something is done in the literature, or wants to discover papers. Examples -- "how do people train RL for robotic grasping", "what are the best methods for sim-to-real transfer", "I want to learn about diffusion policies", "find me papers on VLAs". Provides structured landscape briefings with approaches, best papers, and reading plans. Also handles KB/Zotero-based proactive discovery.
+description: "Use when a user asks a research question, wants to learn about a research topic, asks how something is done in the literature, or wants to discover papers. Examples -- 'how do people train RL for robotic grasping', 'what are the best methods for sim-to-real transfer', 'I want to learn about diffusion policies', 'find me papers on VLAs'. Provides structured landscape briefings with approaches, best papers, and reading plans. Also handles KB/Zotero-based proactive discovery. CRITICAL: NEVER open arXiv URLs or use web browsing for paper metadata — use only paper_search and paper_citations API tools. Read the SKILL.md first before taking any action."
 metadata:
   short-description: Discover and rank papers for a topic
 ---
@@ -36,26 +36,19 @@ Three modes:
 - User invokes `$paper-discovery` with no arguments → **discovery**
 
 
-## Auto-Continue Detection (CRITICAL)
+## Auto-Continue Is the Default (CRITICAL)
 
-**Before doing ANY search work**, classify the user's request:
+**Auto-continue is ON by default.** After presenting the discovery reading view, you MUST automatically continue: invoke `$paper-synthesis` for the top 5 reading-plan papers (multi-paper path, parallel subagents), wait for results, then invoke `$cross-paper-report` to produce the integrated explained report. Do NOT stop at the reading plan. Do NOT present `$paper-synthesis` commands for the user to click — those are not actionable in the TUI.
 
-- **Survey / full analysis / explain these** → The user wants the FULL pipeline. After presenting the discovery reading view, you MUST automatically continue: invoke `$paper-synthesis` for all reading-plan papers (multi-paper path, parallel subagents), wait for results, then invoke `$cross-paper-report` to produce the integrated explained report. Do NOT stop at the reading plan. Do NOT present `$paper-synthesis` commands for the user to click.
-- **Explore / discover / find papers** → Discovery only. Present the reading view with the reading plan and stop. The user decides what to do next.
+**The ONLY exception — discovery-only mode:** The user explicitly says they ONLY want a list, not explanations. Trigger phrases: "just list them", "just find papers", "don't explain", "list only". In this case, present the reading plan and stop.
 
-**Trigger phrases for auto-continue** (non-exhaustive): "full survey", "survey", "explain these", "explain them", "I want a report", "deep dive on all", "synthesize all", "walk me through these", "I want to understand all of them", "give me a full analysis".
-
-**When auto-continuing**, the reading plan section should say "Proceeding to synthesize [N] papers..." instead of showing `$paper-synthesis` commands. After the discovery reading view is shown, immediately proceed to synthesis without waiting for user input.
+**When auto-continuing** (the default), the reading plan section should say "Proceeding to synthesize the top 5 papers..." instead of showing `$paper-synthesis` commands. After the discovery reading view is shown, immediately proceed to synthesis without waiting for user input.
 
 ## Pipeline Paths
 
-After discovery, three paths exist:
+After presenting the discovery reading view, the default path is:
 
-1. **Quick orientation** — `$research-briefing` gives a 2-4 page overview with core ideas per paper
-2. **Full deep analysis** — `$paper-synthesis` (multi-paper) → `$cross-paper-report` for the integrated narrative
-3. **Interactive exploration** — Chat about specific papers, ask follow-ups
-
-For auto-continue requests (see above), enforce path 2 automatically. Do not mark the request complete until cross-paper-report is done.
+**`$paper-synthesis` (multi-paper, top 5) → `$cross-paper-report`** for an integrated explained report. This runs automatically — do not wait for user input. Do not mark the request complete until the cross-paper report is presented.
 
 ### Scale-Aware Pipeline Branching
 
@@ -226,12 +219,13 @@ Cite as Author (Year) — no IDs inline.]
 
 ## Reading Plan (Top 10)
 
-[If auto-continue: list papers without $paper-synthesis commands, end with "Proceeding to synthesize..."]
-[If manual: list papers with synthesis commands]
+**Never show `$paper-synthesis` commands** — they are not actionable in the TUI. Just list the papers, then end with "Proceeding to synthesize the top 5..."
 
 1. **[Title]** — [Authors] ([Year])
 2. **[Title]** — [Authors] ([Year])
 ...
+
+Proceeding to synthesize the top 5 papers...
 
 ## Open Questions
 
@@ -300,7 +294,7 @@ After presenting the discovery report, do these:
 ---
 ```
 
-**2. Research context detection** — If the user's discovery request or follow-up questions reveal priorities (e.g., "focus on methods that work in real-time", "I'm not interested in simulation-only results"), offer to note it in `research-context.md`.
+**2. Research context update** — If the user's discovery request or follow-up questions reveal research priorities (e.g., "focus on methods that work in real-time", "I'm not interested in simulation-only results"), **automatically** append to `research-context.md`. Do not ask for permission — this is housekeeping. If no new priorities were expressed, skip silently.
 
 ## Presentation
 

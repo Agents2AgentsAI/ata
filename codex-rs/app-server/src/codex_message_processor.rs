@@ -5540,6 +5540,7 @@ impl CodexMessageProcessor {
                     summary: params.summary,
                     collaboration_mode,
                     personality: params.personality,
+                    feature_flags: None,
                 })
                 .await;
         }
