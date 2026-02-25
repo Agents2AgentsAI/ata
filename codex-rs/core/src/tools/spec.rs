@@ -11,6 +11,7 @@ use crate::features::Features;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::research::SharedResearchToolkit;
 use crate::research::tool_names::find_mcp_tool_matches;
+use crate::research::tool_names::should_suppress_research_mcp_tool;
 use crate::tools::handlers::APPEND_TO_SECTION_TOOL;
 use crate::tools::handlers::PATCH_DOCUMENT_SECTION_TOOL;
 use crate::tools::handlers::PLAN_TOOL;
@@ -1792,6 +1793,9 @@ pub(crate) fn build_specs_with_toolkits(
             if suppressed_mcp_research_tool_names.contains(&name) {
                 continue;
             }
+            if should_suppress_research_mcp_tool(&name, &config.features) {
+                continue;
+            }
             #[cfg(feature = "data")]
             if suppressed_mcp_data_tool_names.contains(&name) {
                 continue;
@@ -2064,6 +2068,50 @@ mod tests {
                 .iter()
                 .any(|tool| tool_name(&tool.spec) == "mcp__paper_search__search_papers"),
             "MCP paper_search tool should be suppressed when ResearchPaperSearch is disabled"
+        );
+    }
+
+    #[test]
+    fn disabled_zotero_feature_suppresses_mcp_tools() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::ResearchPaperSearch);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: None,
+        });
+        let research_config = codex_research_tools::config::ResearchConfig {
+            zotero_api_key: Some("test-key".to_string()),
+            ..Default::default()
+        };
+        let toolkit = make_research_toolkit(research_config);
+        let mcp_tools = HashMap::from([(
+            "mcp__zotero__zotero_search".to_string(),
+            mcp_tool(
+                "zotero_search",
+                "search zotero",
+                serde_json::json!({"type": "object", "properties": {}}),
+            ),
+        )]);
+
+        let (tools, _) =
+            build_specs_with_research(&tools_config, Some(mcp_tools), None, &[], Some(&toolkit))
+                .build();
+
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == "zotero_search"),
+            "native zotero_search should not appear when ResearchZotero is disabled"
+        );
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == "mcp__zotero__zotero_search"),
+            "MCP zotero_search tool should be suppressed when ResearchZotero is disabled"
         );
     }
 
