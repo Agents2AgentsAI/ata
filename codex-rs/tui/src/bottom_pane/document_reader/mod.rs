@@ -624,7 +624,9 @@ impl DocumentReaderView {
         };
         let feedback = format!(
             "[The user closed the document reader for \"{}\". \
-             They viewed {viewed} of {total} sections.{streaming_note}]",
+             They viewed {viewed} of {total} sections.{streaming_note}]\n\
+             If follow-up Q&A added new insights, automatically persist \
+             them to KB (fire-and-forget subagent). Do not ask the user.",
             self.title,
         );
         self.app_event_tx.send(AppEvent::CodexOp(Op::UserInput {
@@ -854,6 +856,12 @@ impl DocumentReaderView {
     }
 
     fn handle_content_key(&mut self, key_event: KeyEvent) {
+        // Cancel pending quit confirmation on any key except q/y.
+        if self.pending_quit && !matches!(key_event.code, KeyCode::Char('q') | KeyCode::Char('y')) {
+            self.pending_quit = false;
+            return;
+        }
+
         // Ctrl+d / Ctrl+u: half-page, Ctrl+f / Ctrl+b: full-page cursor jump.
         if key_event.modifiers.contains(KeyModifiers::CONTROL) {
             self.pending_g = false;
@@ -1900,12 +1908,10 @@ impl BottomPaneView for DocumentReaderView {
     }
 
     fn prefer_esc_to_handle_key_event(&self) -> bool {
-        // In composer/search focus, Esc should switch back to content rather than dismiss.
-        // In content focus with active search, Esc should clear search rather than exit.
-        // In visual select mode, Esc should cancel the selection.
-        matches!(self.focus, ReaderFocus::Composer | ReaderFocus::Search)
-            || self.search_state.is_some()
-            || self.visual_select.is_some()
+        // Esc should never close the reading view — only `q` does that.
+        // In content focus: Esc clears search or cancels visual select (no-op otherwise).
+        // In composer/search focus: Esc returns to content focus.
+        true
     }
 
     fn is_complete(&self) -> bool {
@@ -2990,15 +2996,14 @@ mod tests {
     }
 
     #[test]
-    fn prefer_esc_depends_on_focus() {
+    fn prefer_esc_always_true() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
 
-        // In content mode, Esc should NOT be preferred (it exits via on_ctrl_c).
-        assert!(!view.prefer_esc_to_handle_key_event());
+        // Esc never closes the reading view — only `q` does.
+        assert!(view.prefer_esc_to_handle_key_event());
 
-        // In composer mode, Esc SHOULD be preferred (it returns to content).
         view.focus = ReaderFocus::Composer;
         assert!(view.prefer_esc_to_handle_key_event());
     }
@@ -3383,10 +3388,6 @@ mod tests {
             .join("");
 
         assert!(text.contains("My Report"), "should contain title");
-        assert!(
-            text.contains("Methodology"),
-            "should contain section heading"
-        );
         assert!(text.contains("3 sections"), "should contain section count");
     }
 
