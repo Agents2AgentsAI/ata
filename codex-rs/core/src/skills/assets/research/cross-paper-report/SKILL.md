@@ -1,6 +1,6 @@
 ---
 name: cross-paper-report
-description: Generate integrated cross-paper explanations from KB cards. Use when a user asks to explain, compare, synthesize, understand, or deep-dive into one or more knowledge base cards, or asks how cards relate or work together.
+description: "Generate integrated cross-paper explanations from KB cards. Use when a user asks to explain, compare, synthesize, understand, or deep-dive into one or more knowledge base cards, or asks how cards relate or work together. CRITICAL: You MUST produce deep narrative explanations (800-2500 words per focal card) — short summaries are never acceptable. Read the SKILL.md first before taking any action."
 ---
 
 # Cross-Paper Report

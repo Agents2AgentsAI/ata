@@ -1,41 +1,37 @@
 ---
 name: paper-synthesis
-description: Synthesize academic papers into structured summaries and pedagogical deep dives. Use when a user asks to explain, summarize, synthesize, or deep-dive into a research paper, or when given an arXiv URL, DOI, paper title, or Zotero reference to analyze.
+description: "Synthesize academic papers into structured summaries and pedagogical deep dives. Use when a user asks to explain, summarize, synthesize, or deep-dive into a research paper, or when given an arXiv URL, DOI, paper title, or Zotero reference to analyze. Also use when the user asks to explain or summarize papers CITED BY another paper (e.g., 'explain the top papers this cites', 'what are its key references'). CRITICAL: You are an orchestrator only — NEVER call attach_url_files or read the paper yourself. You MUST spawn a subagent with agent_type 'synthesizer' to fetch and read the paper. Read the SKILL.md first before taking any action."
 metadata:
   short-description: Summarize and explain research papers
 ---
 
 # Paper Synthesis (Main Agent)
 
-This skill orchestrates paper synthesis. The actual synthesis work is done by subagents running the `$paper-synthesizer` skill.
+You are the ORCHESTRATOR. You do NOT read papers. You do NOT call `attach_url_files`. You spawn subagents and present their output.
 
-## CRITICAL: No Exploration
+## HARD RULES — violating any of these is a bug
 
-**Do NOT do any of these before spawning the subagent:**
-- Do NOT read any SKILL.md files (you already have the instructions)
-- Do NOT run `rg --version`, `ls`, or any diagnostic commands
-- Do NOT read `research-context.md`
-- Do NOT read KB cards to "check" them — a single `rg` search is enough
-- Do NOT call `paper_search` when you already have a URL or arXiv ID
+1. **NEVER call `attach_url_files` in this agent.** The subagent fetches the paper. You only orchestrate.
+2. **NEVER synthesize paper content yourself.** You did not read the paper. You cannot summarize what you haven't read. Spawn a subagent.
+3. **NEVER read SKILL.md files** — you already have these instructions loaded. Reading them wastes a tool call.
+4. **NEVER run `ls`, `rg --version`, or diagnostic commands.** Your first tool call must be the KB check or `spawn_agent`.
+5. **Use `agent_type: "synthesizer"`** when spawning — this uses a fast, cheap model. If you synthesize in the main agent, you waste expensive tokens.
 
-**The optimal single-paper flow is exactly 6 tool calls:**
-1. `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` (KB check — 1 call)
-2. `spawn_agent` (1 call)
-3. `wait` (1 call)
-4. `exec_command: cat staging_file` (1 call)
-5. `present_reading_view` (1 call)
-6. `update_document_section` × N (fill sections)
+## Single-Paper Flow (exactly 6 tool calls)
+
+1. `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` (KB check)
+2. `spawn_agent` with `agent_type: "synthesizer"`
+3. `wait`
+4. `exec_command: cat staging_file`
+5. `present_reading_view` (outline only)
+6. `update_document_section` × N (fill sections from staging file content)
 
 Then 2 more for KB persistence. That's it. Any additional tool calls are waste.
 
-## Rules
-
-1. **Always use subagents** — one per paper, parallel for multi-paper. Never synthesize in the main agent context.
-2. **Use `agent_type: "synthesizer"`** when spawning subagents for fast output.
-3. **Subagent prompts must include `$paper-synthesizer`** to trigger the subagent skill. Do not write custom synthesis instructions.
-4. **No KB references in prose.** Never say "as summarized in your KB." Present explanations as your own understanding.
-5. **No re-researching.** After the subagent returns, do NOT call `web.run`, `web_search`, `attach_url_files`, or open any URLs. The subagent already fetched and read the paper. Use the subagent's output as your source material.
-6. **NEVER re-resolve known papers.** If you already have a URL, arXiv ID, or DOI for a paper (from paper discovery, user-provided links, or any prior step), pass it directly to the subagent. Do NOT call `paper_search` to "verify", "look up", or "confirm" papers that already have identifiers. This wastes time and API quota. `paper_search` is ONLY for papers where you have nothing but a title or author name.
+**Additional rules:**
+- **No KB references in prose.** Never say "as summarized in your KB." Present explanations as your own understanding.
+- **No re-researching.** After the subagent returns, do NOT call `web.run`, `web_search`, `attach_url_files`, or open any URLs. The subagent already fetched and read the paper. Use the subagent's output as your source material.
+- **NEVER re-resolve known papers.** If you already have a URL, arXiv ID, or DOI, pass it directly to the subagent. Do NOT call `paper_search` to "verify" or "confirm" papers that already have identifiers. `paper_search` is ONLY for papers where you have nothing but a title or author name.
 
 ## Pre-Synthesis: Check What You Already Have
 
@@ -61,11 +57,11 @@ That's all the subagent needs. Do NOT read `research-context.md` to add context 
 
 ### Single-Paper Path
 1. Resolve identifier via Pre-Synthesis.
-2. **Quick KB check (1 tool call max)** — run `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` where PAPER_ID is the arXiv ID, DOI, or identifier. If it finds a match, read that one card and check for a Deep Dive section. If a Deep Dive exists → `present_reading_view` → done. If no match or no Deep Dive → continue to step 3. Do NOT read the KB skill docs. Do NOT list the KB directory. Do NOT read multiple cards.
+2. **Quick KB check (1 tool call max)** — run `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` where PAPER_ID is the arXiv ID, DOI, or identifier. If it finds a match, read that one card. If the card has substantial body content (more than just frontmatter — e.g., method details, results, multiple paragraphs) → present it directly via `present_reading_view` → done. If the card is just a stub with only frontmatter and a capsule → continue to step 3. Do NOT read the KB skill docs. Do NOT list the KB directory. Do NOT read multiple cards.
 3. Spawn one subagent via `spawn_agent`. Then call `wait` for the subagent to complete — it returns a staging file path.
 4. **Read the staging file** via `exec_command` (e.g., `cat ~/.ata/knowledge-base/staging/paper-1706.03762.md`).
 5. **Present the result immediately** — your VERY NEXT tool call after reading the staging file MUST be `present_reading_view`. Do NOT write to KB before presenting. Do NOT output text before presenting. Do NOT plan all sections in your reasoning first — call the tool NOW with just the section headings, then fill each section one at a time.
-6. **Persist to KB directly** — after presenting, write the KB card yourself using `exec_command` with a heredoc. Do NOT spawn a KB subagent for single papers — fire-and-forget subagents are unreliable due to rate limits. Instead, do it in one call:
+6. **MANDATORY: Persist to KB directly** — after presenting and filling ALL sections, you MUST write the KB card. Do NOT skip this step. Do NOT end the turn without persisting. If you skip persistence, the user will have to re-synthesize the paper next time, which wastes minutes. Write the card using `exec_command` with a heredoc:
 
 ```
 exec_command: cat <<'CARD_EOF' > ~/.ata/knowledge-base/cards/paper-[slug].md
@@ -105,6 +101,16 @@ Then in a second `exec_command`, append to `research-journal.md` and delete the 
 
 8. If the user wants comparison, suggest `$cross-paper-report` as a follow-up.
 
+### Cited/Referenced Papers Path
+
+Use this when the user asks to explain, summarize, or understand papers cited BY a paper they just read (e.g., "explain the top papers this cites", "what are its key references?", "find the top cited papers and explain them").
+
+**This is multi-paper synthesis with a reference-fetching step — NOT a discovery pipeline.** Do NOT read the paper-discovery or cross-paper-report skill files. Do NOT create a discovery overview (Landscape / Approaches / Open Questions). Go straight to synthesis.
+
+1. **Fetch references** — `paper_references(paper_id, limit=50)` to get the full reference list.
+2. **Select top papers** — pick 5-10 by citation count and relevance to the parent paper's method. Tell the user which you selected and why.
+3. **Run multi-paper synthesis** — follow the Multi-Paper Path above (steps 1-7) with the selected papers. Present one reading view with one section per paper.
+
 ## KB Card Persistence
 
 **Single paper:** The main agent writes the KB card directly via `exec_command` after presenting — this is fast (2 tool calls) and reliable. No subagent needed.
@@ -115,7 +121,7 @@ Card ID convention: kebab-case slug from the paper title, prefixed with `paper-`
 
 **Personalization.** If you already know the user's research priorities from the conversation context, adjust emphasis in the reading view accordingly. Do NOT read `research-context.md` for this — use only what's already in conversation context.
 
-**Follow-up persistence.** When the user exits the reading view, check if Q&A produced insights not in the KB card. If so, offer to persist using the update protocol in `$kb`.
+**Follow-up persistence.** When the user exits the reading view, if Q&A produced insights not already in the KB card (e.g., elaborations, walkthroughs, deeper explanations), **automatically persist them** — spawn a fire-and-forget `$kb` subagent with the updated content embedded in the prompt. Do NOT ask the user for permission — this is housekeeping. If no new insights were added (user just read without asking follow-ups), skip persistence silently.
 
 ## CRITICAL: You MUST Present Content
 
@@ -156,7 +162,16 @@ Add a 5th section only if the paper has a genuinely distinct component (e.g., a 
 
 **Markdown formatting:** Always put a blank line before numbered list items (`1.`, `2.`, etc.) and before bullet list items (`-`, `*`). Without a blank line, the markdown parser treats `2.`, `3.`, etc. as plain text instead of list items, so they lose their formatting. This also applies to content after paragraphs, blockquotes, and code blocks.
 
-When the user asks follow-up questions — whether about a specific section or a broader request like "explain more intuitively" or "explain the KV cache" — ALWAYS use the reading view tools. Prefer `update_document_section` to rewrite the section with the answer woven in at the relevant location (keeps explanations inline where the concept appears). Use `patch_document_section` to insert content right after a specific passage. Use `append_to_section` only when adding genuinely new content that belongs at the end. For a completely fresh take, call `present_reading_view` with a new document_id. Never fall back to plain text for follow-ups on a topic with an active reading view. Write the answer as straight prose that continues the section's voice — no editorial labels like "(clearer explanation)" or "(expanded)", and no bold/italic topic-line prefixes like "**On the efficiency gains:**" or "*Regarding caching:*". Just write the content directly.
+When the user asks follow-up questions — whether about a specific section or a broader request like "explain more intuitively" or "explain the KV cache" — ALWAYS use the reading view tools:
+
+- `append_to_section` with `foldable=true` — preferred for elaborations, examples, and walkthroughs. Adds a collapsible block at the end of the section so the original structure stays intact.
+- `update_document_section` — use when the user explicitly asks to rewrite, restructure, or simplify a section. Do NOT use it to insert elaborations into the middle of numbered lists or multi-step methods.
+- `patch_document_section` — for small targeted fixes like correcting a sentence.
+- For a completely fresh take, call `present_reading_view` with a new document_id.
+
+**Placement rule:** Before inserting content, determine its SCOPE. If the content spans multiple items in a list (e.g., a walkthrough of steps 1–6), place it AFTER the entire list, not after the first item it mentions.
+
+Never fall back to plain text for follow-ups on a topic with an active reading view. Write the answer as straight prose that continues the section's voice — no editorial labels like "(clearer explanation)" or "(expanded)", and no bold/italic topic-line prefixes like "**On the efficiency gains:**" or "*Regarding caching:*". Just write the content directly.
 
 ## Graceful Degradation
 

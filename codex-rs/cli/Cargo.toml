@@ -29,7 +29,6 @@ codex-utils-cli = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-exec = { workspace = true }
-codex-research-tools = { workspace = true, features = ["paper_search", "zotero", "hackernews", "patents", "repo_analysis"] }
 codex-execpolicy = { workspace = true }
 codex-login = { workspace = true }
 codex-mcp-server = { workspace = true }
