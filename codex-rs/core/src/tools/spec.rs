@@ -1722,11 +1722,13 @@ pub(crate) fn build_specs_with_toolkits(
             if !toolkit.is_tool_configured(def.id) {
                 continue;
             }
+
+            let matching_mcp_tools = find_mcp_tool_matches(def.mcp_name, &discovered_mcp_tools);
             if !is_research_tool_enabled(def.id, &config.features) {
+                suppressed_mcp_research_tool_names.extend(matching_mcp_tools);
                 continue;
             }
 
-            let matching_mcp_tools = find_mcp_tool_matches(def.mcp_name, &discovered_mcp_tools);
             match research_tool_to_openai_tool(&def) {
                 Ok(converted_tool) => {
                     builder.push_spec(ToolSpec::Function(converted_tool));
@@ -2019,6 +2021,49 @@ mod tests {
                 .iter()
                 .any(|tool| tool_name(&tool.spec) == "mcp__paper_search__search_papers"),
             "matched MCP tool should be suppressed when native paper_search is configured"
+        );
+    }
+
+    #[test]
+    fn disabled_research_feature_suppresses_mcp_tools() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        // Enable individual sub-features but NOT ResearchPaperSearch.
+        let mut features = Features::with_defaults();
+        features.enable(Feature::ResearchHackerNews);
+        // Do NOT enable Feature::Research or Feature::ResearchPaperSearch.
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: None,
+        });
+        let toolkit =
+            make_research_toolkit(codex_research_tools::config::ResearchConfig::default());
+        let mcp_tools = HashMap::from([(
+            "mcp__paper_search__search_papers".to_string(),
+            mcp_tool(
+                "search_papers",
+                "search papers",
+                serde_json::json!({"type": "object", "properties": {}}),
+            ),
+        )]);
+
+        let (tools, _) =
+            build_specs_with_research(&tools_config, Some(mcp_tools), None, &[], Some(&toolkit))
+                .build();
+
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == "paper_search"),
+            "native paper_search should not appear when ResearchPaperSearch is disabled"
+        );
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == "mcp__paper_search__search_papers"),
+            "MCP paper_search tool should be suppressed when ResearchPaperSearch is disabled"
         );
     }
 
