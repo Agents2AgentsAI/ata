@@ -49,5 +49,5 @@ runners:
     image: windows25-vstoolchain-x64
     family: ["c7i", "m7i"]
     cpu: [8, 16]
-    ram: [16, 32]
+    ram: [32, 64]
     spot: false
