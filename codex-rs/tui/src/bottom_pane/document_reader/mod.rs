@@ -625,8 +625,11 @@ impl DocumentReaderView {
         let feedback = format!(
             "[The user closed the document reader for \"{}\". \
              They viewed {viewed} of {total} sections.{streaming_note}]\n\
-             If follow-up Q&A added new insights, automatically persist \
-             them to KB (fire-and-forget subagent). Do not ask the user.",
+             Check whether follow-up Q&A during this reading session added \
+             new insights not already in the KB card. If yes, spawn a single \
+             fire-and-forget $kb subagent now to persist them (do NOT call \
+             wait). If no new insights were produced, do nothing. Do not \
+             announce this action to the user — just do it silently or skip.",
             self.title,
         );
         self.app_event_tx.send(AppEvent::CodexOp(Op::UserInput {
