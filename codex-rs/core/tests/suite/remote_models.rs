@@ -287,6 +287,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             summary: None,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -518,6 +519,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             summary: None,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 

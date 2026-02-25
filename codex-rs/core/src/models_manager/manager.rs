@@ -242,10 +242,10 @@ impl ModelsManager {
         let transport = ReqwestTransport::new(build_reqwest_client());
         let client = ModelsClient::new(transport, api_provider, api_auth);
 
-        let client_version = crate::models_manager::client_version_to_whole();
+        let client_version = crate::models_manager::models_api_client_version();
         let (models, etag) = timeout(
             MODELS_REFRESH_TIMEOUT,
-            client.list_models(&client_version, HeaderMap::new()),
+            client.list_models(client_version, HeaderMap::new()),
         )
         .await
         .map_err(|_| CodexErr::Timeout)?
@@ -254,7 +254,7 @@ impl ModelsManager {
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();
         self.cache_manager
-            .persist_cache(&models, etag, client_version)
+            .persist_cache(&models, etag, client_version.to_string())
             .await;
         Ok(())
     }
@@ -289,9 +289,9 @@ impl ModelsManager {
     async fn try_load_cache(&self) -> bool {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.load_cache.duration_ms", &[]);
-        let client_version = crate::models_manager::client_version_to_whole();
+        let client_version = crate::models_manager::models_api_client_version();
         info!(client_version, "models cache: evaluating cache eligibility");
-        let cache = match self.cache_manager.load_fresh(&client_version).await {
+        let cache = match self.cache_manager.load_fresh(client_version).await {
             Some(cache) => cache,
             None => {
                 info!("models cache: no usable cache entry");
@@ -714,7 +714,7 @@ mod tests {
         manager
             .cache_manager
             .mutate_cache_for_test(|cache| {
-                let client_version = crate::models_manager::client_version_to_whole();
+                let client_version = crate::models_manager::models_api_client_version();
                 cache.client_version = Some(format!("{client_version}-mismatch"));
             })
             .await

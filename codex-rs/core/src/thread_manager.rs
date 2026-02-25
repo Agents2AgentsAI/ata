@@ -13,7 +13,6 @@ use crate::default_client::build_reqwest_client_with_timeouts;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
-use crate::features::Features;
 use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
 use crate::models_manager::manager::ModelsManager;
@@ -515,29 +514,25 @@ impl ThreadManagerState {
         persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
         let watch_registration = self.file_watcher.register_config(&config);
-        let research_toolkit = if any_research_feature_enabled(&config.features) {
-            Some(
-                self.research_toolkit
-                    .get_or_init(|| async {
-                        let research_config = build_research_config(
-                            config.research.as_ref(),
-                            config.codex_home.as_path(),
-                            config.cwd.as_path(),
-                        );
-                        Arc::new(codex_research_tools::ResearchToolkit::new(
-                            build_reqwest_client_with_timeouts(
-                                Some(research_config.connect_timeout),
-                                Some(research_config.request_timeout),
-                            ),
-                            research_config,
-                        ))
-                    })
-                    .await
-                    .clone(),
-            )
-        } else {
-            None
-        };
+        let research_toolkit = Some(
+            self.research_toolkit
+                .get_or_init(|| async {
+                    let research_config = build_research_config(
+                        config.research.as_ref(),
+                        config.codex_home.as_path(),
+                        config.cwd.as_path(),
+                    );
+                    Arc::new(codex_research_tools::ResearchToolkit::new(
+                        build_reqwest_client_with_timeouts(
+                            Some(research_config.connect_timeout),
+                            Some(research_config.request_timeout),
+                        ),
+                        research_config,
+                    ))
+                })
+                .await
+                .clone(),
+        );
         let data_toolkit = if config.features.enabled(Feature::Data) {
             #[cfg(feature = "data")]
             {
@@ -640,17 +635,6 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
     } else {
         InitialHistory::Forked(rolled)
     }
-}
-
-/// Returns `true` when the master `Research` toggle or any per-category research
-/// feature is enabled, so the research toolkit should be initialised.
-fn any_research_feature_enabled(f: &Features) -> bool {
-    f.enabled(Feature::Research)
-        || f.enabled(Feature::ResearchPaperSearch)
-        || f.enabled(Feature::ResearchZotero)
-        || f.enabled(Feature::ResearchHackerNews)
-        || f.enabled(Feature::ResearchPatents)
-        || f.enabled(Feature::ResearchRepoAnalysis)
 }
 
 #[cfg(test)]

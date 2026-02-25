@@ -1,5 +1,7 @@
-<p align="center"><code>npm i -g @a2a-ai/ata</code><br />or <code>brew install --cask Agents2AgentsAI/tap/ata</code></p>
+<p align="center"><code>npm i -g @a2a-ai/ata</code><br />or <code>curl -fsSL https://agents2agents.ai/ata/install.sh | sh</code></p>
 <p align="center"><strong>Ata CLI</strong> is an AI assistant from Agents2Agents AI that runs locally on your computer.<br />It is built on top of OpenAI Codex CLI. Not affiliated with OpenAI.
+<p align="center">
+  <img src="https://github.com/Agents2AgentsAI/ata/blob/main/.github/cli-splash.png" alt="Ata CLI splash" width="80%" />
 
 ---
 
@@ -9,21 +11,15 @@
 
 Install globally with your preferred package manager:
 
+Install using npm
+
 ```shell
-# Install using npm
 npm install -g @a2a-ai/ata
 ```
 
-```shell
-# Install using Homebrew (macOS)
-brew install --cask Agents2AgentsAI/tap/ata
-
-# Or install the formula (macOS / Linux)
-brew install Agents2AgentsAI/tap/ata
-```
+Install using curl (macOS/Linux)
 
 ```shell
-# Install using curl (macOS/Linux)
 curl -fsSL https://agents2agents.ai/ata/install.sh | sh
 ```
 
@@ -39,7 +35,6 @@ Each GitHub Release contains many executables, but in practice, you likely want 
   - x86_64 (older Mac hardware): `ata-x86_64-apple-darwin.tar.gz`
 - Linux
   - x86_64: `ata-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `ata-aarch64-unknown-linux-musl.tar.gz`
 
 Each archive contains a single entry with the platform baked into the name (e.g., `ata-x86_64-unknown-linux-musl`), so you likely want to rename it to `ata` after extracting it.
 
@@ -53,5 +48,6 @@ You can use `ata` with ChatGPT plan or OpenAI, Anthropic, or Gemini API key. All
 
 - **Coming soon** - consult [Ata docs](https://github.com/Agents2AgentsAI/ata/tree/main/docs) for now
 - [**Installing & building**](./docs/install.md)
+- [**Setting up Zotero**](./docs/zotero-setup.md)
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).

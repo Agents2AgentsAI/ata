@@ -8,7 +8,7 @@ pub mod tool_specs;
 pub mod types;
 
 mod clients;
-#[cfg(all(feature = "latex", feature = "pdf_images"))]
+#[cfg(feature = "latex")]
 pub mod setup {
     pub use crate::tools::setup::*;
 }
@@ -42,8 +42,6 @@ use types::PatentDetail;
 use types::PatentGetParams;
 use types::PatentSearchParams;
 use types::PatentSearchResult;
-use types::PdfExtractFiguresParams;
-use types::PdfExtractFiguresResult;
 use types::RecommendationResult;
 use types::RepoEntrypoint;
 use types::RepoExportPath;
@@ -528,24 +526,6 @@ impl ResearchToolkit {
     pub async fn latex_compile(&self, _params: LatexCompileParams) -> Result<LatexCompileResult> {
         Err(ResearchError::NotImplemented {
             tool: "latex_compile",
-        })
-    }
-
-    #[cfg(feature = "pdf_images")]
-    pub async fn pdf_extract_figures(
-        &self,
-        params: PdfExtractFiguresParams,
-    ) -> Result<PdfExtractFiguresResult> {
-        tools::pdf_images::pdf_extract_figures(params).await
-    }
-
-    #[cfg(not(feature = "pdf_images"))]
-    pub async fn pdf_extract_figures(
-        &self,
-        _params: PdfExtractFiguresParams,
-    ) -> Result<PdfExtractFiguresResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "pdf_extract_figures",
         })
     }
 
