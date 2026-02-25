@@ -151,7 +151,9 @@ async fn uses_cache_when_version_matches() -> Result<()> {
             let cache = ModelsCache {
                 fetched_at: Utc::now(),
                 etag: None,
-                client_version: Some(codex_core::models_manager::client_version_to_whole()),
+                client_version: Some(
+                    codex_core::models_manager::models_api_client_version().to_string(),
+                ),
                 models: vec![cached_model],
             };
             let cache_path = home.join(CACHE_FILE);

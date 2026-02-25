@@ -252,6 +252,11 @@ pub enum Op {
         /// Updated personality preference.
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
+
+        /// Updated feature flags (key → enabled). Applied on top of the
+        /// session's baseline features for all subsequent turns.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        feature_flags: Option<std::collections::BTreeMap<String, bool>>,
     },
 
     /// Approve a command execution
@@ -823,8 +828,12 @@ impl SandboxPolicy {
                 // can write KB assets. Only the knowledge-base subtree is
                 // made writable, not the entire codex home.
                 if let Ok(codex_home) = codex_utils_home_dir::find_codex_home() {
-                    let kb_dir = codex_home.join("knowledge-base");
-                    if kb_dir.is_dir() {
+                    // Grant write access to the KB directory if the codex
+                    // home exists. We don't require the knowledge-base
+                    // subdir itself to exist — sandboxed commands can create
+                    // it via `mkdir -p` on first use.
+                    if codex_home.is_dir() {
+                        let kb_dir = codex_home.join("knowledge-base");
                         match AbsolutePathBuf::from_absolute_path(&kb_dir) {
                             Ok(kb_path) => {
                                 if !roots.iter().any(|r| r == &kb_path) {

@@ -1342,19 +1342,9 @@ fn research_tool_to_openai_tool(
 }
 
 /// Check whether a research tool is enabled based on per-category feature flags.
-/// When the master `Research` toggle is on, all tools are enabled (backward compat).
+/// Delegates to [`Features::is_research_tool_enabled`].
 fn is_research_tool_enabled(tool_id: &str, features: &Features) -> bool {
-    if features.enabled(Feature::Research) {
-        return true;
-    }
-    match () {
-        _ if tool_id.starts_with("paper_") => features.enabled(Feature::ResearchPaperSearch),
-        _ if tool_id.starts_with("zotero_") => features.enabled(Feature::ResearchZotero),
-        _ if tool_id.starts_with("hn_") => features.enabled(Feature::ResearchHackerNews),
-        _ if tool_id.starts_with("patent_") => features.enabled(Feature::ResearchPatents),
-        _ if tool_id.starts_with("repo_") => features.enabled(Feature::ResearchRepoAnalysis),
-        _ => true,
-    }
+    features.is_research_tool_enabled(tool_id)
 }
 
 #[cfg(feature = "data")]

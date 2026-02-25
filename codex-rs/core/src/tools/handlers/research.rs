@@ -9,15 +9,11 @@ use codex_research_tools::config::ResearchConfig;
 use codex_research_tools::error::ResearchError;
 use codex_research_tools::types::HnGetThreadParams;
 use codex_research_tools::types::HnSearchParams;
-#[cfg(feature = "research-latex")]
-use codex_research_tools::types::LatexCompileParams;
 use codex_research_tools::types::PaginationParams;
 use codex_research_tools::types::PaperRecommendationParams;
 use codex_research_tools::types::PaperSearchParams;
 use codex_research_tools::types::PatentGetParams;
 use codex_research_tools::types::PatentSearchParams;
-#[cfg(feature = "research-pdf-images")]
-use codex_research_tools::types::PdfExtractFiguresParams;
 use codex_research_tools::types::ZoteroAdvancedSearchParams;
 use codex_research_tools::types::ZoteroAnnotationsParams;
 use codex_research_tools::types::ZoteroCitationParams;
@@ -183,10 +179,6 @@ impl ResearchBridgeHandler {
                     .toolkit
                     .zotero_get_collection_items(params))
             }
-            #[cfg(feature = "research-latex")]
-            "latex_compile" => dispatch_with_params!(LatexCompileParams, |params| self
-                .toolkit
-                .latex_compile(params)),
             "hn_search" => {
                 dispatch_with_params!(HnSearchParams, |params| self.toolkit.hn_search(params))
             }
@@ -200,12 +192,6 @@ impl ResearchBridgeHandler {
             }
             "patent_get" => {
                 dispatch_with_params!(PatentGetParams, |params| self.toolkit.patent_get(params))
-            }
-            #[cfg(feature = "research-pdf-images")]
-            "pdf_extract_figures" => {
-                dispatch_with_params!(PdfExtractFiguresParams, |params| self
-                    .toolkit
-                    .pdf_extract_figures(params))
             }
             "repo_clone_and_summarize" => dispatch_with_params!(RepoCloneArgs, |params| self
                 .toolkit

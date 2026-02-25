@@ -272,6 +272,7 @@ async fn build_research_prompt_runtime_context(
         config.research.as_ref(),
         config.codex_home.as_path(),
         config.cwd.as_path(),
+        &config.features,
     );
     let has_web_search = matches!(
         config.web_search_mode.value(),

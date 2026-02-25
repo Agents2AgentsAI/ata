@@ -2177,26 +2177,20 @@ pub(crate) fn new_document_cell(
 
 impl HistoryCell for DocumentCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(
+        let section_count = self.section_headings.len();
+        vec![
             vec![
                 "\u{2022} ".dim(),
-                "Document: ".bold(),
+                "Agent showed document: ".dim(),
                 self.title.clone().into(),
+                format!(" ({section_count} sections)").dim(),
             ]
             .into(),
-        );
-        for heading in &self.section_headings {
-            lines.push(vec!["    \u{00A7} ".dim(), heading.clone().dim()].into());
-        }
-        let section_count = self.section_headings.len();
-        lines.push(
-            format!("    ({section_count} sections)")
+            "    Ask the agent to reopen it if needed."
                 .dim()
                 .italic()
                 .into(),
-        );
-        lines
+        ]
     }
 
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
