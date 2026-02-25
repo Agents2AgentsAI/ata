@@ -28,6 +28,8 @@ Rules:
 
 ## Phase 0: Source KB Cards
 
+**If KB is disabled**, this skill cannot source cards. Tell the user: "Knowledge Base is currently disabled. Enable it via /research to use card-based briefings, or run `$paper-synthesis` to get direct synthesis without KB." Skip to graceful degradation.
+
 1. Determine `<kb_path>` per the `$kb` skill and verify KB exists.
 2. List all cards per `$kb`.
 3. Filter cards whose tags, titles, or topics relate to the user's question or requested topic.
@@ -38,7 +40,7 @@ Rules:
 
 For each relevant card:
 
-1. Read the card per `$kb` to get the full content.
+1. Read the card per `$kb` to get the full content (skip if KB is disabled).
 2. Extract:
    - The core contribution (from Summary or Deep Dive — the single most important idea)
    - The key result (one specific number with context)
@@ -50,7 +52,7 @@ For each relevant card:
 
 Group the papers into 2-5 approach families based on their core paradigm. Each approach should have a clear name and a 1-sentence description of the shared strategy.
 
-## Phase 2.5: Read Research Context (Optional)
+## Phase 2.5: Read Research Context (Optional, skip if KB is disabled)
 
 If `<kb_path>/research-context.md` exists, use it to tailor the briefing:
 
@@ -123,13 +125,19 @@ For full technical walkthroughs of any paper above:
 **Markdown formatting:** Always put a blank line before numbered list items (`1.`, `2.`, etc.) and before bullet list items (`-`, `*`). Without a blank line, the markdown parser treats `2.`, `3.`, etc. as plain text instead of list items, so they lose their formatting. This also applies to content after paragraphs, blockquotes, and code blocks.
 
 When the user asks follow-up questions about a specific section, use the most efficient update tool:
-- `append_to_section` — to add new information at the end of a section (most common for follow-up questions)
-- `patch_document_section` — to change specific text within a section (for corrections or targeted edits)
-- `update_document_section` — to fully rewrite a section (only when the entire section needs to change)
+
+- `append_to_section` with `foldable=true` — **preferred for expansion requests** (e.g., "explain more", "go deeper on X"). Adds a collapsible detail block below existing content, preserving scannability. Each foldable block: 3-5 sentences.
+- `append_to_section` (without foldable) — to add genuinely new information at the end of a section.
+- `patch_document_section` — to change specific text within a section (for corrections or targeted edits).
+- `update_document_section` — to fully rewrite a section ONLY when the user asks for a different framing or the section is factually wrong. **Never use this just to add more detail.**
+
+**Critical constraint:** After any follow-up update, the section must still be ≤30 lines of visible (non-folded) content. If a request would push past this limit, use foldable blocks.
 
 Write follow-up answers as straight content — no editorial labels like "(clearer explanation)" or "(expanded)" in headings or topic lines.
 
 ## Post-Briefing Housekeeping
+
+**Skip this entire section if KB is disabled.** When KB is off, do not write journal entries, research-context updates, or spawn `$kb` subagents. The briefing in the reading view is the sole output.
 
 After presenting the briefing, do these:
 

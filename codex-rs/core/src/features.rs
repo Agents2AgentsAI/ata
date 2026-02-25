@@ -159,6 +159,8 @@ pub enum Feature {
     ResearchRepoAnalysis,
     /// Present research output in a navigable reading view instead of inline chat.
     ReadingView,
+    /// Enable knowledge base persistence (cards, journal, research-context).
+    ResearchKnowledgeBase,
 }
 
 impl Feature {
@@ -395,7 +397,8 @@ impl Features {
             "research-briefing" | "cross-paper-report" => {
                 self.enabled(Feature::ResearchPaperSearch)
             }
-            "conversation-report" | "kb" => false,
+            "kb" => self.enabled(Feature::ResearchKnowledgeBase),
+            "conversation-report" => self.enabled(Feature::ResearchKnowledgeBase),
             _ => true,
         }
     }
@@ -450,6 +453,7 @@ fn is_research_feature(f: Feature) -> bool {
             | Feature::ResearchPatents
             | Feature::ResearchRepoAnalysis
             | Feature::ReadingView
+            | Feature::ResearchKnowledgeBase
     )
 }
 
@@ -782,6 +786,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Stable,
         default_enabled: true,
     },
+    FeatureSpec {
+        id: Feature::ResearchKnowledgeBase,
+        key: "research_knowledge_base",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
 ];
 
 /// Push a warning event if any under-development features are enabled.
@@ -893,5 +903,47 @@ mod tests {
     fn collab_is_legacy_alias_for_multi_agent() {
         assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
         assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
+    }
+
+    #[test]
+    fn kb_skills_gated_by_research_knowledge_base() {
+        let mut features = Features::with_defaults();
+        // KB is enabled by default → kb and conversation-report skills should be enabled.
+        assert_eq!(
+            features.is_research_skill_enabled("kb"),
+            true,
+            "kb skill should be enabled when ResearchKnowledgeBase is on"
+        );
+        assert_eq!(
+            features.is_research_skill_enabled("conversation-report"),
+            true,
+            "conversation-report should be enabled when ResearchKnowledgeBase is on"
+        );
+
+        // Disable KB feature → both skills should be disabled.
+        features.disable(Feature::ResearchKnowledgeBase);
+        assert_eq!(
+            features.is_research_skill_enabled("kb"),
+            false,
+            "kb skill should be disabled when ResearchKnowledgeBase is off"
+        );
+        assert_eq!(
+            features.is_research_skill_enabled("conversation-report"),
+            false,
+            "conversation-report should be disabled when ResearchKnowledgeBase is off"
+        );
+
+        // Master Research toggle overrides per-category flags.
+        features.enable(Feature::Research);
+        assert_eq!(
+            features.is_research_skill_enabled("kb"),
+            true,
+            "kb skill should be enabled when master Research is on"
+        );
+        assert_eq!(
+            features.is_research_skill_enabled("conversation-report"),
+            true,
+            "conversation-report should be enabled when master Research is on"
+        );
     }
 }

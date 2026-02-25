@@ -70,6 +70,8 @@ Explore mode answers research questions by mapping the landscape of approaches a
 
 ### Explore Phase 0: Check Existing Knowledge (1 tool call max)
 
+**Skip this phase entirely if KB is disabled.** Proceed directly to Phase 1.
+
 **This is optional and must be fast — 1 tool call maximum.**
 
 Run `rg "tag1\|tag2\|tag3" ~/.ata/knowledge-base/cards/` with 2-3 relevant tags. This tells you which papers the user already has.
@@ -114,7 +116,7 @@ Use this path when the user references a specific paper (from a previous synthes
 
 Then immediately present results. Do NOT do facet decomposition, KB exploration, or research-context reading.
 
-**KB check (optional, 1 call max):** If KB is available, run `rg "relevant_tag" ~/.ata/knowledge-base/cards/` to mark which found papers are already in KB. Do NOT read individual cards.
+**KB check (optional, 1 call max; skip if KB is disabled):** If KB is available, run `rg "relevant_tag" ~/.ata/knowledge-base/cards/` to mark which found papers are already in KB. Do NOT read individual cards.
 
 #### General Explore Path (topic/question-based)
 
@@ -197,7 +199,7 @@ The same rule applies to both explore mode and discovery mode output.
 
 #### Section Length Rules
 
-**Hard rule: no section may exceed 40 lines.** The reading view is a terminal — each section should fit on one screen.
+**Hard rule: no section may exceed 40 lines.** The reading view is a terminal — each section should fit on one screen. This applies to BOTH initial fills AND follow-up rewrites. Never rewrite a section into a wall of text that exceeds these limits.
 
 - **The Landscape**: 2-3 short paragraphs max (~15 lines). Orientation, not literature review.
 - **Approaches**: 4-6 lines per approach cluster. Max 5 clusters. Total section ≤ 35 lines.
@@ -205,6 +207,15 @@ The same rule applies to both explore mode and discovery mode output.
 - **Open Questions**: 2-3 bullet points, one sentence each.
 
 When in doubt, err on the side of brevity. The reading view is for orientation — deep analysis belongs in `$paper-synthesis`.
+
+#### Follow-Up Expansion Rules
+
+When the user asks for more detail on a section (e.g., "explain the approaches in more detail"):
+
+- **Do NOT rewrite the section** with longer paragraphs. The structured format (Key idea / Papers / Tradeoff) is the correct format for discovery — it's designed for orientation, not deep analysis.
+- **Use `append_to_section` with `foldable=true`** to add expandable detail blocks BELOW the existing compact section. Each foldable block should cover one approach with 3-5 sentences of additional context. This preserves the scannable overview while offering depth on demand.
+- **If the user wants full explanations**, direct them to `$paper-synthesis` for individual papers or `$cross-paper-report` for comparative deep dives. Discovery is not the right tool for deep explanation — it's a map, not a textbook.
+- **Never turn the Approaches section into multi-paragraph prose.** The reading view is a terminal with limited vertical space. Dense paragraphs per approach make the section unscrollable and unnavigable.
 
 Use **4 sections** in the reading view:
 
@@ -254,9 +265,9 @@ Discovery mode finds papers adjacent to what you already know. Uses KB cards (or
 
 ### Discovery Phase 1: Gather Seeds
 
-1. List KB cards per `$kb`. Extract paper IDs from `source.refs` and topics from `tags`.
+1. List KB cards per `$kb` (skip if KB is disabled). Extract paper IDs from `source.refs` and topics from `tags`.
 2. If `topic:<topic>` specified, filter to matching cards.
-3. If no KB: try `zotero_get_recent(limit=50)`. If neither: ask user for 3-5 seed paper IDs.
+3. If no KB or KB is disabled: try `zotero_get_recent(limit=50)`. If neither: ask user for 3-5 seed paper IDs.
 
 ### Discovery Phase 2: Search
 
@@ -278,6 +289,8 @@ Deduplicate by DOI → arXiv → title fuzzy match. Filter out papers already in
 Use the same 4-section reading view format as explore mode: Landscape, Approaches, Reading Plan (top 10), Open Questions. Same section length rules apply.
 
 ## Post-Discovery Housekeeping
+
+**Skip this entire section if KB is disabled.** When KB is off, do not write journal entries or research-context updates. The discovery report in the reading view is the sole output.
 
 After presenting the discovery report, do these:
 
@@ -309,4 +322,6 @@ Use the same outline → fill pattern described in Explore Phase 4. Use 4 sectio
 **Phase 1 (Outline):** IMMEDIATELY call `present_reading_view` with headings-only content.
 **Phase 2 (Fill):** Fill sections sequentially via `update_document_section`.
 
-**Markdown:** Always put a blank line before list items. Follow-ups use `append_to_section`, `patch_document_section`, or `update_document_section`.
+**Markdown:** Always put a blank line before list items.
+
+**Follow-ups:** When the user asks for more detail on a section, use `append_to_section` with `foldable=true` to add expandable blocks below the existing content. Do NOT rewrite sections with longer paragraphs — this violates the section length rules. The compact format is intentional for discovery. For deep explanations, direct the user to `$paper-synthesis` or `$cross-paper-report`.
