@@ -241,7 +241,6 @@ fn skill_roots_from_layer_stack_inner(
                     path: research_cache_root_dir(config_folder.as_path()),
                     scope: SkillScope::System,
                 });
-
             }
             ConfigLayerSource::System { .. } => {
                 // The system config layer lives under `/etc/codex/` on Unix, so treat
@@ -2622,12 +2621,7 @@ permissions:
             .into_iter()
             .map(|root| root.scope)
             .collect();
-        let mut expected = vec![
-            SkillScope::User,
-            SkillScope::System,
-            SkillScope::System,
-            SkillScope::System,
-        ];
+        let mut expected = vec![SkillScope::User, SkillScope::System, SkillScope::System];
         if home_dir().is_some() {
             expected.insert(1, SkillScope::User);
         }
