@@ -672,25 +672,6 @@ pub struct ZoteroCollectionItemsParams {
     pub max_chars_per_item: Option<u32>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct LatexCompileParams {
-    pub content: String,
-    pub output_dir: String,
-    pub filename: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct LatexCompileResult {
-    pub success: bool,
-    pub pdf_path: Option<String>,
-    pub errors: Vec<String>,
-    pub warnings: Vec<String>,
-    pub num_pages: Option<usize>,
-    pub compilation_log_snippet: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub packages_installed: Vec<String>,
-}
-
 // ---------------------------------------------------------------------------
 // Hacker News types
 // ---------------------------------------------------------------------------
