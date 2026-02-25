@@ -1922,6 +1922,14 @@ impl BottomPaneView for DocumentReaderView {
         Some(DOCUMENT_READER_VIEW_ID)
     }
 
+    fn closed_document_id(&self) -> Option<&str> {
+        if self.complete {
+            Some(&self.document_id)
+        } else {
+            None
+        }
+    }
+
     fn handle_paste(&mut self, pasted: String) -> bool {
         if pasted.is_empty() {
             return false;

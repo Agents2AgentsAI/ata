@@ -13,6 +13,7 @@
 //!
 //! Some UI is time-based rather than input-based, such as the transient "press again to quit"
 //! hint. The pane schedules redraws so those hints can expire even when the UI is otherwise idle.
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::app_event::ConnectorsSnapshot;
@@ -176,6 +177,10 @@ pub(crate) struct BottomPane {
     queued_user_messages: QueuedUserMessages,
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
+    /// Document IDs whose reading views were closed by the user. Used to
+    /// prevent replayed `PresentDocument` events from re-opening a reader
+    /// after an agent switch round-trip.
+    closed_document_ids: HashSet<String>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -226,6 +231,7 @@ impl BottomPane {
             animations_enabled,
             context_window_percent: None,
             context_window_used_tokens: None,
+            closed_document_ids: HashSet::new(),
         }
     }
 
@@ -354,7 +360,7 @@ impl BottomPane {
             };
 
             if ctrl_c_completed {
-                self.view_stack.pop();
+                self.pop_view();
                 self.on_active_view_complete();
                 if let Some(next_view) = self.view_stack.last()
                     && next_view.is_in_paste_burst()
@@ -362,6 +368,11 @@ impl BottomPane {
                     self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
                 }
             } else if view_complete {
+                for v in &self.view_stack {
+                    if let Some(doc_id) = v.closed_document_id() {
+                        self.closed_document_ids.insert(doc_id.to_owned());
+                    }
+                }
                 self.view_stack.clear();
                 self.on_active_view_complete();
             } else if view_in_paste_burst {
@@ -407,7 +418,7 @@ impl BottomPane {
             let event = view.on_ctrl_c();
             if matches!(event, CancellationEvent::Handled) {
                 if view.is_complete() {
-                    self.view_stack.pop();
+                    self.pop_view();
                     self.on_active_view_complete();
                 }
                 self.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')));
@@ -417,7 +428,7 @@ impl BottomPane {
         } else if self.composer_is_empty() {
             CancellationEvent::NotHandled
         } else {
-            self.view_stack.pop();
+            self.pop_view();
             self.clear_composer_for_ctrl_c();
             self.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')));
             self.request_redraw();
@@ -709,7 +720,7 @@ impl BottomPane {
             return false;
         }
 
-        self.view_stack.pop();
+        self.pop_view();
         let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
         self.push_view(Box::new(view));
         true
@@ -831,6 +842,31 @@ impl BottomPane {
             Some("Answer the questions to continue.".to_string()),
         );
         self.push_view(Box::new(modal));
+    }
+
+    /// Pop the top view off the stack, recording any closed document ID so
+    /// replayed `PresentDocument` events won't re-open it.
+    fn pop_view(&mut self) -> Option<Box<dyn BottomPaneView>> {
+        let view = self.view_stack.pop();
+        if let Some(ref v) = view
+            && let Some(doc_id) = v.closed_document_id()
+        {
+            self.closed_document_ids.insert(doc_id.to_owned());
+        }
+        view
+    }
+
+    /// Returns a reference to the set of document IDs that were closed by the
+    /// user.  Used to transfer state when the `ChatWidget` is recreated during
+    /// agent/thread switching.
+    pub(crate) fn closed_document_ids(&self) -> &HashSet<String> {
+        &self.closed_document_ids
+    }
+
+    /// Seed previously-closed document IDs so replayed `PresentDocument` events
+    /// are suppressed for documents the user already dismissed.
+    pub(crate) fn set_closed_document_ids(&mut self, ids: HashSet<String>) {
+        self.closed_document_ids = ids;
     }
 
     fn on_active_view_complete(&mut self) {

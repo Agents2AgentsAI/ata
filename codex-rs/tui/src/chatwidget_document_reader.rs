@@ -11,9 +11,13 @@ impl ChatWidget {
         self.bottom_pane.is_document_reader_active()
     }
 
-    fn on_present_document(&mut self, ev: codex_protocol::document_reader::PresentDocumentEvent) {
+    fn on_present_document(
+        &mut self,
+        ev: codex_protocol::document_reader::PresentDocumentEvent,
+        from_replay: bool,
+    ) {
         self.flush_active_cell();
-        self.bottom_pane.show_document_reader(ev);
+        self.bottom_pane.show_document_reader(ev, from_replay);
     }
 
     fn on_update_document_section(

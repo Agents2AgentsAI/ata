@@ -94,13 +94,20 @@ Present the full organized report in the conversation so the user sees it immedi
 No markdown file. No PDF. The chat response is the deliverable. Insights get persisted to KB cards (step 2) and the journal (step 3) — those are the durable artifacts, not a duplicate document.
 
 ### 2. KB Card Updates
-Check if insights from the conversation should be persisted to KB cards:
+Automatically persist conversation insights to KB cards via a fire-and-forget `$kb` subagent (do NOT call `wait`). Do not ask the user — this runs in the background after the reading view is presented.
 
-1. For each KB card referenced in the conversation, check if the discussion produced insights not in the card.
-2. If yes, offer to update: "This conversation produced insights about [papers]. Want me to update the KB cards with these findings? This would add [brief description] to [card-ids]."
-3. If the user agrees, apply the update protocol from `$kb` (read card, append Discussion Notes, write card).
+For each KB card referenced in the conversation, check if the discussion produced insights not already in the card. If yes, spawn a single fire-and-forget subagent to update all affected cards:
 
-This connects conversation-report to KB updates — the report presents the conversation in chat, while the KB update protocol persists paper-specific insights back to individual cards for future reference.
+> $kb
+>
+> Update KB cards with conversation insights. Do NOT ask the user — this is automatic.
+> Cards to update: [card-id-1], [card-id-2], ...
+> New insights:
+> [For each card: card ID, the question/topic discussed, and the substantive insight, 2-4 sentences each]
+>
+> For each card: read it, append insights under `## Discussion Notes` per the update protocol, set `date_updated`, write the card back.
+
+This connects conversation-report to KB updates — the report presents the conversation in the reading view, while the fire-and-forget subagent persists paper-specific insights back to individual cards for future reference.
 
 ### 3. Research Journal Entry
 Append a structured entry to `<kb_path>/research-journal.md`. If the file doesn't exist yet, create it. New entries are **prepended** (newest first) so the most recent session is at the top.

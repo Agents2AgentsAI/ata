@@ -153,6 +153,17 @@ After presenting the briefing, do these:
 
 **2. Research context detection** — If the user's questions or reactions reveal priorities (e.g., "which of these is fastest at inference?", "I don't need the simulation-only ones"), offer to note it in `research-context.md`. This is especially valuable during briefings because the user is actively deciding what to focus on.
 
+**3. Follow-up Q&A persistence** — When the user exits the reading view and Q&A produced new insights not already in the relevant KB cards, automatically spawn a fire-and-forget `$kb` subagent (do NOT call `wait`) to persist them. Do not ask the user. Include the card IDs and a summary of new insights in the subagent prompt:
+
+> $kb
+>
+> Update KB cards with follow-up insights. Do NOT ask the user — this is automatic.
+> Cards to update: [card-id-1], [card-id-2], ...
+> New insights from Q&A:
+> [For each card: card ID, the question asked, and the substantive answer, 2-4 sentences each]
+>
+> For each card: read it, append insights under `## Discussion Notes` per the update protocol, set `date_updated`, write the card back.
+
 ## Anti-Patterns
 
 - **NEVER write more than 5 sentences per paper.** This is a briefing, not a deep dive. If you're writing multi-paragraph walkthroughs, you're doing cross-paper-report's job.
