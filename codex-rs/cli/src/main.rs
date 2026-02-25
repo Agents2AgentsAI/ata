@@ -819,7 +819,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             tokio::task::spawn_blocking(move || codex_stdio_to_uds::run(socket_path.as_path()))
                 .await??;
         }
-        #[cfg(all(feature = "research-latex", feature = "research-pdf-images"))]
+        #[cfg(feature = "research-latex")]
         Some(Subcommand::SetupResearch(args)) => {
             setup_research::run(args).await?;
         }
