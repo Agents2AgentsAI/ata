@@ -38,7 +38,6 @@ macro_rules! set_tool_name_for_id {
             "repo_find_export_paths" => $self.repo_find_export_paths = $resolved_name,
             "repo_extract_config_schema" => $self.repo_extract_config_schema = $resolved_name,
             "repo_diff_requirements" => $self.repo_diff_requirements = $resolved_name,
-            "pdf_extract_figures" => $self.pdf_extract_figures = $resolved_name,
             "hn_search" => $self.hn_search = $resolved_name,
             "hn_get_thread" => $self.hn_get_thread = $resolved_name,
             _ => {}
@@ -91,7 +90,6 @@ pub struct ResearchToolNames {
     pub repo_find_export_paths: String,
     pub repo_extract_config_schema: String,
     pub repo_diff_requirements: String,
-    pub pdf_extract_figures: String,
     pub hn_search: String,
     pub hn_get_thread: String,
 }
@@ -128,7 +126,6 @@ impl Default for ResearchToolNames {
             repo_find_export_paths: "repo_find_export_paths".to_string(),
             repo_extract_config_schema: "repo_extract_config_schema".to_string(),
             repo_diff_requirements: "repo_diff_requirements".to_string(),
-            pdf_extract_figures: "pdf_extract_figures".to_string(),
             hn_search: "hn_search".to_string(),
             hn_get_thread: "hn_get_thread".to_string(),
         }
