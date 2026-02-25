@@ -260,6 +260,17 @@ After the report is complete (both reading view + PDF delivered), do these:
 
 **2. Research context detection** — During the report interaction and follow-ups, watch for preference signals. If the user focuses on specific comparison dimensions ("I really care about the latency comparison"), asks to skip sections, or responds well to particular framings, offer briefly to note it in `research-context.md`. Never block the interaction on this.
 
+**3. Follow-up Q&A persistence** — When the user exits the reading view and Q&A produced new insights not already in the relevant KB cards, automatically spawn a fire-and-forget `$kb` subagent (do NOT call `wait`) to persist them. Do not ask the user. Include the card IDs and a summary of new insights in the subagent prompt:
+
+> $kb
+>
+> Update KB cards with follow-up insights. Do NOT ask the user — this is automatic.
+> Cards to update: [card-id-1], [card-id-2], ...
+> New insights from Q&A:
+> [For each card: card ID, the question asked, and the substantive answer, 2-4 sentences each]
+>
+> For each card: read it, append insights under `## Discussion Notes` per the update protocol, set `date_updated`, write the card back.
+
 ## Completion Checklist
 
 Before reporting done, verify ALL of these:

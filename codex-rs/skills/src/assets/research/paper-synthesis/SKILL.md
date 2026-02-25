@@ -115,7 +115,17 @@ Card ID convention: kebab-case slug from the paper title, prefixed with `paper-`
 
 **Personalization.** If you already know the user's research priorities from the conversation context, adjust emphasis in the reading view accordingly. Do NOT read `research-context.md` for this — use only what's already in conversation context.
 
-**Follow-up persistence.** When the user exits the reading view, check if Q&A produced insights not in the KB card. If so, offer to persist using the update protocol in `$kb`.
+**Follow-up persistence.** When the user exits the reading view and Q&A produced new insights not already in the KB card, automatically spawn a fire-and-forget `$kb` subagent (do NOT call `wait`) to persist them. Do not ask the user. Include the card ID and a summary of new insights from the Q&A in the subagent prompt:
+
+> $kb
+>
+> Update KB card with follow-up insights. Do NOT ask the user — this is automatic.
+> Card ID: [card-id]
+> Card file: ~/.ata/knowledge-base/cards/[card-id].md
+> New insights from Q&A:
+> [Summarize each new insight: the question asked and the substantive answer, 2-4 sentences each]
+>
+> Read the card, append insights under `## Discussion Notes` per the update protocol, set `date_updated`, write the card back.
 
 ## CRITICAL: You MUST Present Content
 

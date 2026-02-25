@@ -6,10 +6,19 @@
 
 impl BottomPane {
     /// Show the sectioned document reader for a `PresentDocument` event.
+    ///
+    /// When `from_replay` is true, skip documents the user already closed
+    /// (replayed events after an agent switch). Live events always open the
+    /// reader — the agent is deliberately re-presenting a document — and
+    /// clear the document from the closed set so future replays also work.
     pub(crate) fn show_document_reader(
         &mut self,
         ev: codex_protocol::document_reader::PresentDocumentEvent,
+        from_replay: bool,
     ) {
+        if from_replay && self.closed_document_ids.contains(&ev.document_id) {
+            return;
+        }
         // If the active view is already a document reader for the same document,
         // don't push a new view (which would reset navigation to section 0).
         if let Some(view) = self.view_stack.last()
@@ -17,6 +26,9 @@ impl BottomPane {
         {
             return;
         }
+        // Live re-presentation of a previously-closed document: clear the
+        // closed marker so the reader can be opened again.
+        self.closed_document_ids.remove(&ev.document_id);
         let view = document_reader::DocumentReaderView::new(
             ev.document_id,
             ev.title,

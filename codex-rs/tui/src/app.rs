@@ -585,6 +585,11 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
+    /// Per-thread set of document IDs whose reading views were closed.
+    ///
+    /// Persisted here so the state survives `ChatWidget` recreation during
+    /// agent/thread switches (the `BottomPane` is recreated from scratch).
+    thread_closed_document_ids: HashMap<ThreadId, HashSet<String>>,
 }
 
 #[derive(Default)]
@@ -1004,6 +1009,15 @@ impl App {
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = Some(receiver);
 
+        // Preserve closed-document-reader state so replayed PresentDocument
+        // events don't re-open readers the user already dismissed.
+        if let Some(prev_id) = previous_thread_id {
+            let closed = self.chat_widget.closed_document_ids().clone();
+            if !closed.is_empty() {
+                self.thread_closed_document_ids.insert(prev_id, closed);
+            }
+        }
+
         let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
         let codex_op_tx = if let Some(thread) = live_thread {
             crate::chatwidget::spawn_op_forwarder(thread)
@@ -1012,6 +1026,11 @@ impl App {
             tx
         };
         self.chat_widget = ChatWidget::new_with_op_sender(init, codex_op_tx);
+
+        // Restore closed-document IDs for the target thread before replay.
+        if let Some(closed) = self.thread_closed_document_ids.get(&thread_id) {
+            self.chat_widget.set_closed_document_ids(closed.clone());
+        }
 
         self.reset_for_thread_switch(tui)?;
         self.replay_thread_snapshot(snapshot);
@@ -1337,6 +1356,7 @@ impl App {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            thread_closed_document_ids: HashMap::new(),
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -3635,6 +3655,7 @@ mod tests {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            thread_closed_document_ids: HashMap::new(),
         }
     }
 
@@ -3693,6 +3714,7 @@ mod tests {
                 primary_thread_id: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
+                thread_closed_document_ids: HashMap::new(),
             },
             rx,
             op_rx,

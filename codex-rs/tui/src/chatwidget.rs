@@ -1214,6 +1214,18 @@ impl ChatWidget {
         self.bottom_pane.set_skills(skills);
     }
 
+    /// Returns the set of document IDs whose reading views were closed by the
+    /// user.  Used by `App` to transfer state across `ChatWidget` recreations.
+    pub(crate) fn closed_document_ids(&self) -> &std::collections::HashSet<String> {
+        self.bottom_pane.closed_document_ids()
+    }
+
+    /// Seed closed document IDs from a previous `ChatWidget` so replayed
+    /// `PresentDocument` events are suppressed for already-dismissed documents.
+    pub(crate) fn set_closed_document_ids(&mut self, ids: std::collections::HashSet<String>) {
+        self.bottom_pane.set_closed_document_ids(ids);
+    }
+
     pub(crate) fn open_feedback_note(
         &mut self,
         category: crate::app_event::FeedbackCategory,
@@ -4334,7 +4346,7 @@ impl ChatWidget {
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
-            EventMsg::PresentDocument(ev) => self.on_present_document(ev),
+            EventMsg::PresentDocument(ev) => self.on_present_document(ev, from_replay),
             EventMsg::UpdateDocumentSection(ev) => self.on_update_document_section(ev),
             EventMsg::AppendDocumentSection(ev) => self.on_append_document_section(ev),
             EventMsg::PatchDocumentSection(ev) => self.on_patch_document_section(ev),
