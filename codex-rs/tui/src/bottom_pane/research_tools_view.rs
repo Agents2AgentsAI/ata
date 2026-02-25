@@ -56,6 +56,11 @@ const RESEARCH_FEATURES: &[(Feature, &str, &str)] = &[
         "Repo Analysis",
         "Clone, summarize, and analyze code repositories",
     ),
+    (
+        Feature::ReadingView,
+        "Reading View",
+        "Present output in a navigable reading view instead of inline chat",
+    ),
 ];
 
 pub(crate) struct ResearchToolItem {
@@ -319,11 +324,19 @@ pub(crate) fn build_research_tool_items(
 ) -> Vec<ResearchToolItem> {
     RESEARCH_FEATURES
         .iter()
-        .map(|&(feature, name, description)| ResearchToolItem {
-            feature,
-            name,
-            description,
-            enabled: features.enabled(Feature::Research) || features.enabled(feature),
+        .map(|&(feature, name, description)| {
+            // ReadingView is independent of the master Research toggle.
+            let enabled = if feature == Feature::ReadingView {
+                features.enabled(feature)
+            } else {
+                features.enabled(Feature::Research) || features.enabled(feature)
+            };
+            ResearchToolItem {
+                feature,
+                name,
+                description,
+                enabled,
+            }
         })
         .collect()
 }

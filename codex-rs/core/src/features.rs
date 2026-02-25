@@ -157,6 +157,8 @@ pub enum Feature {
     ResearchPatents,
     /// Enable repository cloning, summarization, and analysis tools.
     ResearchRepoAnalysis,
+    /// Present research output in a navigable reading view instead of inline chat.
+    ReadingView,
 }
 
 impl Feature {
@@ -447,6 +449,7 @@ fn is_research_feature(f: Feature) -> bool {
             | Feature::ResearchHackerNews
             | Feature::ResearchPatents
             | Feature::ResearchRepoAnalysis
+            | Feature::ReadingView
     )
 }
 
@@ -772,6 +775,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "research_repo_analysis",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ReadingView,
+        key: "reading_view",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
 ];
 
