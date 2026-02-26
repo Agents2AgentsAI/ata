@@ -420,6 +420,20 @@ impl From<ModelInfo> for ModelPreset {
 }
 
 impl ModelPreset {
+    /// Merge remote presets with existing local presets.
+    /// Remote presets take precedence by model key; local-only presets are appended.
+    pub fn merge(remote: Vec<ModelPreset>, local: Vec<ModelPreset>) -> Vec<ModelPreset> {
+        let remote_models: std::collections::HashSet<String> =
+            remote.iter().map(|p| p.model.clone()).collect();
+        let mut merged = remote;
+        for preset in local {
+            if !remote_models.contains(&preset.model) {
+                merged.push(preset);
+            }
+        }
+        merged
+    }
+
     /// Filter models based on authentication mode.
     ///
     /// In ChatGPT mode, all models are visible. Otherwise, only API-supported models are shown.

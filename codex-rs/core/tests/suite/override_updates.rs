@@ -118,10 +118,12 @@ async fn override_turn_context_without_user_turn_does_not_record_permissions_upd
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
+            model_provider: None,
             effort: None,
             summary: None,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -159,10 +161,12 @@ async fn override_turn_context_without_user_turn_does_not_record_environment_upd
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
+            model_provider: None,
             effort: None,
             summary: None,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -197,10 +201,12 @@ async fn override_turn_context_without_user_turn_does_not_record_collaboration_u
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
+            model_provider: None,
             effort: None,
             summary: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            feature_flags: None,
         })
         .await?;
 

@@ -312,7 +312,7 @@ pub async fn run_main_with_transport(
     arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
-    default_analytics_enabled: bool,
+    _default_analytics_enabled: bool,
     transport: AppServerTransport,
 ) -> IoResult<()> {
     let (transport_event_tx, mut transport_event_rx) =

@@ -1480,6 +1480,8 @@ async fn websocket_harness_with_options(
         false,
         runtime_metrics_enabled,
         None,
+        codex_home.path().to_path_buf(),
+        codex_core::auth::AuthCredentialsStoreMode::default(),
     );
 
     WebsocketTestHarness {

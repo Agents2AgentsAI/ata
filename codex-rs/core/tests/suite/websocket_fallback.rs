@@ -160,10 +160,12 @@ async fn websocket_fallback_hides_first_websocket_retry_stream_error() -> Result
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_configured.model.clone(),
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 

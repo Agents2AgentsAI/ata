@@ -4304,7 +4304,7 @@ url = "https://example.com/mcp"
         let codex_home = TempDir::new()?;
 
         ConfigEditsBuilder::new(codex_home.path())
-            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High))
+            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High), None)
             .apply()
             .await?;
 
@@ -4336,7 +4336,7 @@ model = "gpt-4.1"
         .await?;
 
         ConfigEditsBuilder::new(codex_home.path())
-            .set_model(Some("o4-mini"), Some(ReasoningEffort::High))
+            .set_model(Some("o4-mini"), Some(ReasoningEffort::High), None)
             .apply()
             .await?;
 
@@ -4362,7 +4362,7 @@ model = "gpt-4.1"
 
         ConfigEditsBuilder::new(codex_home.path())
             .with_profile(Some("dev"))
-            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::Medium))
+            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::Medium), None)
             .apply()
             .await?;
 
@@ -4403,7 +4403,7 @@ model = "gpt-5.1-codex"
 
         ConfigEditsBuilder::new(codex_home.path())
             .with_profile(Some("dev"))
-            .set_model(Some("o4-high"), Some(ReasoningEffort::Medium))
+            .set_model(Some("o4-high"), Some(ReasoningEffort::Medium), None)
             .apply()
             .await?;
 

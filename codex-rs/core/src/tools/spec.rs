@@ -2205,6 +2205,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: None,
+            session_source: SessionSource::Cli,
         })
     }
 
@@ -2261,6 +2262,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: None,
+            session_source: SessionSource::Cli,
         });
         let toolkit =
             make_research_toolkit(codex_research_tools::config::ResearchConfig::default());
@@ -2302,6 +2304,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: None,
+            session_source: SessionSource::Cli,
         });
         let research_config = codex_research_tools::config::ResearchConfig {
             zotero_api_key: Some("test-key".to_string()),
@@ -2346,6 +2349,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: None,
+            session_source: SessionSource::Cli,
         });
         let toolkit =
             make_research_toolkit(codex_research_tools::config::ResearchConfig::default());

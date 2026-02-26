@@ -174,10 +174,12 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
             approval_policy: config.permissions.approval_policy.value(),
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             model: requested_model.to_string(),
+            model_provider: None,
             effort: None,
             summary: config.model_reasoning_summary,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -226,10 +228,12 @@ async fn namespaced_model_slug_uses_catalog_metadata_without_fallback_warning() 
             approval_policy: config.permissions.approval_policy.value(),
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             model: requested_model.to_string(),
+            model_provider: None,
             effort: None,
             summary: config.model_reasoning_summary,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -380,10 +384,12 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: REMOTE_MODEL_SLUG.to_string(),
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -593,10 +599,12 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: model.to_string(),
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
