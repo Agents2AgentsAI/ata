@@ -119,9 +119,6 @@ zip = { workspace = true }
 deterministic_process_ids = []
 data = ["dep:codex-data-tools"]
 research = []
-research-hackernews = ["research", "codex-research-tools/hackernews"]
-research-patents = ["research", "codex-research-tools/patents"]
-research-repo = ["research", "codex-research-tools/repo_analysis"]
 test-support = []
 
 
