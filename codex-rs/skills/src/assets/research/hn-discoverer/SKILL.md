@@ -31,9 +31,23 @@ hn_search(query: "<topic>", content_type: "story", sort_by: "relevance", min_poi
 hn_search(query: "<topic>", content_type: "comment", sort_by: "relevance", min_points: 3, limit: 15)
 ```
 
-For broad topics, use multiple query variations (e.g., "AI agent", "agentic", "LLM agent") — run all variations in a single parallel batch.
+### Query Variation
 
-If the user specifies a date range, pass `date_from` and `date_to` parameters.
+For broad topics, use multiple query variations — run all variations in a single parallel batch:
+- Synonyms: "AI agent" / "agentic" / "LLM agent"
+- Product names: "Claude" / "Anthropic" / "Claude Code"
+- Broader terms: if the specific topic returns few results, broaden (e.g., "Rust async runtime" → also search "Rust tokio" / "Rust async")
+
+### Date Filtering
+
+If the user specifies a date range, pass `date_from` and `date_to` parameters (format: YYYY-MM-DD). The API filters by `created_at_i` timestamps. Use date filtering for:
+- "recent discussions" → `date_from` = 6 months ago
+- "what did people think when X launched" → narrow date range around launch
+- "how has sentiment changed" → run multiple searches with different date ranges
+
+### Deduplication
+
+When merging results from multiple searches, deduplicate by `object_id` (story ID). A story appearing in multiple search results is a positive signal — weight it higher in ranking.
 
 ## Return Format
 

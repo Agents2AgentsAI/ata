@@ -11,8 +11,12 @@ This skill orchestrates paper synthesis. The actual synthesis work is done by su
 
 ## CRITICAL: No Exploration
 
-**Do NOT do any of these before spawning the subagent:**
-- Do NOT read any SKILL.md files (you already have the instructions)
+**You are an orchestrator. You NEVER read papers yourself. The subagent does ALL paper reading.**
+
+**Do NOT do any of these — not before, during, or after spawning the subagent:**
+- Do NOT call `attach_url_files` — ONLY the subagent calls this. If you call it, the full PDF gets injected into your context, wasting hundreds of thousands of tokens and adding 60+ seconds of latency.
+- Do NOT call `paper_get` — you don't need paper metadata. The subagent extracts everything.
+- Do NOT read SKILL.md files with `cat`, `sed`, `exec_command`, or any tool. You already have these instructions — they were injected into your context automatically. Reading them again wastes 4K tokens and a tool call.
 - Do NOT run `rg --version`, `ls`, or any diagnostic commands
 - Do NOT read `research-context.md`
 - Do NOT read KB cards to "check" them — a single `rg` search is enough
@@ -36,7 +40,7 @@ Then 2 more for KB persistence. That's it. Any additional tool calls are waste.
 2. **Use `agent_type: "synthesizer"`** when spawning subagents for fast output.
 3. **Subagent prompts must include `$paper-synthesizer`** to trigger the subagent skill. Do not write custom synthesis instructions.
 4. **No KB references in prose.** Never say "as summarized in your KB." Present explanations as your own understanding.
-5. **No re-researching.** After the subagent returns, do NOT call `web.run`, `web_search`, `attach_url_files`, or open any URLs. The subagent already fetched and read the paper. Use the subagent's output as your source material.
+5. **No paper fetching in the main agent — ever.** Do NOT call `attach_url_files`, `paper_get`, `web.run`, `web_search`, or open any URLs at any point — not before, not during, and not after subagent execution. The subagent fetches and reads the paper. You only read the staging file output.
 6. **NEVER re-resolve known papers.** If you already have a URL, arXiv ID, or DOI for a paper (from paper discovery, user-provided links, or any prior step), pass it directly to the subagent. Do NOT call `paper_search` to "verify", "look up", or "confirm" papers that already have identifiers. This wastes time and API quota. `paper_search` is ONLY for papers where you have nothing but a title or author name.
 
 ## Pre-Synthesis: Check What You Already Have
@@ -65,7 +69,7 @@ That's all the subagent needs. Do NOT read `research-context.md` to add context 
 1. Resolve identifier via Pre-Synthesis.
 2. **Quick KB check (1 tool call max, skip if KB is disabled)** — run `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` where PAPER_ID is the arXiv ID, DOI, or identifier. If it finds a match, read that one card and check for a Deep Dive section. If a Deep Dive exists → `present_reading_view` → done. If no match or no Deep Dive → continue to step 3. Do NOT read the KB skill docs. Do NOT list the KB directory. Do NOT read multiple cards. **If KB is disabled**, skip this step entirely and go straight to step 3.
 3. Spawn one subagent via `spawn_agent`. Then call `wait` for the subagent to complete — it returns a staging file path.
-4. **Read the staging file** via `exec_command` (e.g., `cat ~/.ata/staging/paper-1706.03762.md`).
+4. **Read the staging file** via `exec_command` (e.g., `cat ~/.ata/knowledge-base/staging/paper-1706.03762.md`).
 5. **Present the result immediately** — your VERY NEXT tool call after reading the staging file MUST be `present_reading_view`. Do NOT write to KB before presenting. Do NOT output text before presenting. Do NOT plan all sections in your reasoning first — call the tool NOW with just the section headings, then fill each section one at a time.
 6. **Persist to KB directly (skip if KB is disabled)** — after presenting, write the KB card yourself using `exec_command` with a heredoc. Do NOT spawn a KB subagent for single papers — fire-and-forget subagents are unreliable due to rate limits. Instead, do it in one call:
 
@@ -90,14 +94,14 @@ CARD_EOF
 
 Then in a second `exec_command`, append to `research-journal.md` and delete the staging file. This is 2 tool calls total — fast and reliable.
 
-**If KB is disabled:** Skip step 6 entirely. Do not write cards or journal entries. After presenting, delete the staging file with `exec_command: rm ~/.ata/staging/paper-*.md` so it doesn't accumulate.
+**If KB is disabled:** Skip step 6 entirely. Do not write cards or journal entries. After presenting, delete the staging file with `exec_command: rm ~/.ata/knowledge-base/staging/paper-*.md` so it doesn't accumulate.
 
 ### Multi-Paper Path
 1. **Collect identifiers** — gather all URLs, DOIs, and arXiv IDs you already have. Only call `paper_search` for papers where you have nothing but a title, and run those searches in one parallel batch.
 2. **Quick KB check (skip if KB is disabled)** — run `exec_command: rg "ID1\|ID2\|ID3" ~/.ata/knowledge-base/cards/` to check all papers in one call. Skip papers that already have cards. **If KB is disabled**, skip this step and spawn subagents for all papers.
 3. **Spawn ALL subagents at once** — one per missing paper, all in a single parallel batch. Do not spawn sequentially or in multiple rounds.
 4. **Single wait** — call `wait` once for all subagents. Each returns a staging file path.
-5. **Read all staging files** via `exec_command` (e.g., `cat ~/.ata/staging/paper-*.md`).
+5. **Read all staging files** via `exec_command` (e.g., `cat ~/.ata/knowledge-base/staging/paper-*.md`).
 6. Present results to the user.
 7. **Persist to KB (skip if KB is disabled)** — for multi-paper, spawn a KB subagent (fire-and-forget) with ALL card contents embedded in the prompt so it can write immediately without disk reads:
 

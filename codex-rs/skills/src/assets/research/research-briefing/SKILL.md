@@ -26,21 +26,38 @@ Rules:
 - **Citation formatting**: cite as **Author (Year)** in prose. Never put DOIs or arXiv IDs inline in paragraphs — they break reading flow. Collect full references (with IDs) in a References section at the end of the briefing if the user needs them for follow-up.
 - **Never reference the KB in explanations.** Do not say "as summarized in your KB" or "your KB card says." The KB is infrastructure — present content as if you understand the papers directly.
 
-## Phase 0: Source KB Cards
+## Phase 0: Source Material
 
-**If KB is disabled**, this skill cannot source cards. Tell the user: "Knowledge Base is currently disabled. Enable it via /research to use card-based briefings, or run `$paper-synthesis` to get direct synthesis without KB." Skip to graceful degradation.
+This skill works best with KB cards, but it can also work without them.
+
+### Path A: KB Available (preferred)
 
 1. Determine `<kb_path>` per the `$kb` skill and verify KB exists.
 2. List all cards per `$kb`.
 3. Filter cards whose tags, titles, or topics relate to the user's question or requested topic.
 4. If related unrequested cards exist, present them: "I also found cards for X, Y — want me to include them in the briefing?"
-5. If no cards match the topic, tell the user: "No KB cards found for this topic. Run `$paper-synthesis` on relevant papers first, then re-run this briefing." The briefing synthesizes from existing KB content — it does not read papers itself.
+5. If no cards match the topic but KB is enabled, tell the user: "No KB cards found for this topic. Run `$paper-synthesis` on relevant papers first, then re-run this briefing." The briefing synthesizes from existing KB content — it does not read papers itself.
 
-## Phase 1: Read and Analyze Cards
+### Path B: No KB, but conversation context available
 
-For each relevant card:
+If KB is disabled but the conversation already contains synthesis output (from `$paper-synthesis` staging files, prior explanations, or user-provided paper details), use that content as source material. Extract the same fields as Phase 1 (core contribution, key result, approach family, tradeoffs, status) from whatever is available.
 
-1. Read the card per `$kb` to get the full content (skip if KB is disabled).
+### Path C: No KB, no prior context (cold start)
+
+If KB is disabled and no prior synthesis exists in the conversation, run a lightweight discovery:
+
+1. Use `paper_search` with 2-3 facets from the user's topic (same facet design as `$paper-discovery` Phase 1).
+2. Fetch the top 8-12 results sorted by citation count.
+3. Use the paper abstracts and metadata as source material for the briefing — this produces a shallower briefing than Path A, but still gives the user actionable orientation.
+4. Note in the briefing: "This briefing is based on paper abstracts only. For deeper analysis, run `$paper-synthesis` on papers of interest."
+
+**Path C is a fallback.** The briefing will lack the depth of a KB-sourced briefing — abstracts don't contain method details, specific numbers, or implementation insights. But it still answers "what are my options?" and gives the user a starting point.
+
+## Phase 1: Read and Analyze Source Material
+
+For each relevant card (or paper abstract in Path C):
+
+1. Read the card per `$kb` to get the full content. For Path B, read from conversation context. For Path C, use the paper_search results directly.
 2. Extract:
    - The core contribution (from Summary or Deep Dive — the single most important idea)
    - The key result (one specific number with context)
@@ -177,10 +194,11 @@ After presenting the briefing, do these:
 - **NEVER write more than 5 sentences per paper.** This is a briefing, not a deep dive. If you're writing multi-paragraph walkthroughs, you're doing cross-paper-report's job.
 - **NEVER mirror the paper's self-assessment of novelty.** Every paper claims to be revolutionary. Your job is to say plainly what it actually does.
 - **NEVER skip the Recommendation section.** The whole point is to help the user decide where to focus. Be opinionated.
-- **NEVER generate the briefing without KB cards.** This skill synthesizes from existing KB content. If cards don't exist, direct the user to `$paper-synthesis` first.
+- **NEVER generate a briefing with zero source material.** If no KB cards, conversation context, or paper search results are available, ask the user for a topic or paper URLs.
 
 ## Graceful Degradation
 
-- **No KB configured**: Present the briefing in chat. Note that a KB path is needed for card-based briefings — without one, the skill cannot source content.
+- **No KB configured**: Use Path B (conversation context) or Path C (paper search). Note in the output that a KB-sourced briefing would be deeper.
 - **Few cards (1-2)**: Still produce the briefing, but note that coverage is thin and suggest adding more papers via `$paper-discovery` or `$paper-synthesis`.
 - **Cards lack depth**: If cards are shallow (abstract-only synthesis), note this in the briefing and suggest re-running `$paper-synthesis` with full PDF access.
+- **Path C paper search returns few results**: Broaden the search facets or note that the topic is niche. A thin briefing is better than no briefing.
