@@ -568,6 +568,22 @@ impl ToolHandler for DocumentReaderHandler {
                     )));
                 }
 
+                // Bounds-check the section index before proceeding.
+                {
+                    let cache = doc_cache.lock();
+                    if let Some(doc) = cache.get(&args.document_id)
+                        && args.section_index >= doc.sections.len()
+                    {
+                        return Err(FunctionCallError::RespondToModel(format!(
+                            "Section index {} is out of bounds. \
+                                 Document has {} section(s) (valid indices: 0\u{2013}{}).",
+                            args.section_index,
+                            doc.sections.len(),
+                            doc.sections.len().saturating_sub(1),
+                        )));
+                    }
+                }
+
                 // Mirror the update in the cache and advance streaming state.
                 let (streaming_msg, reopen_payload) = {
                     let mut cache = doc_cache.lock();
@@ -670,6 +686,22 @@ impl ToolHandler for DocumentReaderHandler {
                     )));
                 }
 
+                // Bounds-check the section index before proceeding.
+                {
+                    let cache = doc_cache.lock();
+                    if let Some(doc) = cache.get(&args.document_id)
+                        && args.section_index >= doc.sections.len()
+                    {
+                        return Err(FunctionCallError::RespondToModel(format!(
+                            "Section index {} is out of bounds. \
+                                 Document has {} section(s) (valid indices: 0\u{2013}{}).",
+                            args.section_index,
+                            doc.sections.len(),
+                            doc.sections.len().saturating_sub(1),
+                        )));
+                    }
+                }
+
                 // Mirror the append in the cache.
                 let (streaming_reminder, reopen_payload) = {
                     let mut cache = doc_cache.lock();
@@ -750,6 +782,32 @@ impl ToolHandler for DocumentReaderHandler {
                          Call present_reading_view first to display a document.",
                         args.document_id
                     )));
+                }
+
+                // Bounds-check section index and verify old_text exists.
+                {
+                    let cache = doc_cache.lock();
+                    if let Some(doc) = cache.get(&args.document_id) {
+                        if args.section_index >= doc.sections.len() {
+                            return Err(FunctionCallError::RespondToModel(format!(
+                                "Section index {} is out of bounds. \
+                                 Document has {} section(s) (valid indices: 0\u{2013}{}).",
+                                args.section_index,
+                                doc.sections.len(),
+                                doc.sections.len().saturating_sub(1),
+                            )));
+                        }
+                        if let Some(section) = doc.sections.get(args.section_index)
+                            && !section.content.contains(&args.old_text)
+                        {
+                            let preview: String = section.content.chars().take(120).collect();
+                            return Err(FunctionCallError::RespondToModel(format!(
+                                "old_text not found in section {}. \
+                                     Section content starts with: \"{preview}\u{2026}\"",
+                                args.section_index,
+                            )));
+                        }
+                    }
                 }
 
                 // Mirror the patch in the cache.
