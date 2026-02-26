@@ -1847,7 +1847,11 @@ impl CodexMessageProcessor {
 
         match ConfigEditsBuilder::new(&self.config.codex_home)
             .with_profile(self.config.active_profile.as_deref())
-            .set_model(model.as_deref(), reasoning_effort, None)
+            .set_model(
+                model.as_deref(),
+                reasoning_effort,
+                Some(self.config.model_provider_id.clone()),
+            )
             .apply()
             .await
         {
