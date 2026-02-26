@@ -1,0 +1,5 @@
+# https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference#package-ecosystem-
+# Disabled for now — re-enable when CI secrets are configured.
+
+version: 2
+updates: []
