@@ -41,6 +41,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use tokio::runtime::Handle;
+use tokio::runtime::RuntimeFlavor;
 use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
@@ -76,12 +77,13 @@ impl Drop for TempCodexHomeGuard {
 }
 
 fn build_file_watcher(codex_home: PathBuf, skills_manager: Arc<SkillsManager>) -> Arc<FileWatcher> {
-    if should_use_test_thread_manager_behavior() {
-        // Tests don't need a real file watcher. Under the current-thread
-        // runtime the background tasks can starve the executor, and under
-        // the multi-thread runtime the FSEvents watcher.watch() calls are
-        // unexpectedly slow, adding seconds per test.
-        warn!("using noop file watcher in test mode");
+    if should_use_test_thread_manager_behavior()
+        && let Ok(handle) = Handle::try_current()
+        && handle.runtime_flavor() == RuntimeFlavor::CurrentThread
+    {
+        // The real watcher spins background tasks that can starve the
+        // current-thread test runtime and cause event waits to time out.
+        warn!("using noop file watcher under current-thread test runtime");
         return Arc::new(FileWatcher::noop());
     }
 
@@ -308,6 +310,22 @@ impl ThreadManager {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
+        self.start_thread_with_tools_and_service_name(
+            config,
+            dynamic_tools,
+            persist_extended_history,
+            None,
+        )
+        .await
+    }
+
+    pub async fn start_thread_with_tools_and_service_name(
+        &self,
+        config: Config,
+        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        persist_extended_history: bool,
+        metrics_service_name: Option<String>,
+    ) -> CodexResult<NewThread> {
         self.state
             .spawn_thread(
                 config,
@@ -316,6 +334,7 @@ impl ThreadManager {
                 self.agent_control(),
                 dynamic_tools,
                 persist_extended_history,
+                metrics_service_name,
             )
             .await
     }
@@ -346,6 +365,7 @@ impl ThreadManager {
                 self.agent_control(),
                 Vec::new(),
                 persist_extended_history,
+                None,
             )
             .await
     }
@@ -387,6 +407,7 @@ impl ThreadManager {
                 self.agent_control(),
                 Vec::new(),
                 persist_extended_history,
+                None,
             )
             .await
     }
@@ -437,8 +458,14 @@ impl ThreadManagerState {
         config: Config,
         agent_control: AgentControl,
     ) -> CodexResult<NewThread> {
-        self.spawn_new_thread_with_source(config, agent_control, self.session_source.clone(), false)
-            .await
+        self.spawn_new_thread_with_source(
+            config,
+            agent_control,
+            self.session_source.clone(),
+            false,
+            None,
+        )
+        .await
     }
 
     pub(crate) async fn spawn_new_thread_with_source(
@@ -447,6 +474,7 @@ impl ThreadManagerState {
         agent_control: AgentControl,
         session_source: SessionSource,
         persist_extended_history: bool,
+        metrics_service_name: Option<String>,
     ) -> CodexResult<NewThread> {
         self.spawn_thread_with_source(
             config,
@@ -456,6 +484,7 @@ impl ThreadManagerState {
             session_source,
             Vec::new(),
             persist_extended_history,
+            metrics_service_name,
         )
         .await
     }
@@ -476,11 +505,13 @@ impl ThreadManagerState {
             session_source,
             Vec::new(),
             false,
+            None,
         )
         .await
     }
 
     /// Spawn a new thread with optional history and register it with the manager.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn_thread(
         &self,
         config: Config,
@@ -489,6 +520,7 @@ impl ThreadManagerState {
         agent_control: AgentControl,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
+        metrics_service_name: Option<String>,
     ) -> CodexResult<NewThread> {
         self.spawn_thread_with_source(
             config,
@@ -498,6 +530,7 @@ impl ThreadManagerState {
             self.session_source.clone(),
             dynamic_tools,
             persist_extended_history,
+            metrics_service_name,
         )
         .await
     }
@@ -512,6 +545,7 @@ impl ThreadManagerState {
         session_source: SessionSource,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
+        metrics_service_name: Option<String>,
     ) -> CodexResult<NewThread> {
         let watch_registration = self.file_watcher.register_config(&config);
         let research_toolkit = Some(
@@ -581,6 +615,7 @@ impl ThreadManagerState {
             research_toolkit,
             data_toolkit,
             persist_extended_history,
+            metrics_service_name,
         )
         .await?;
         self.finalize_thread_spawn(codex, thread_id, watch_registration)
@@ -691,7 +726,6 @@ mod tests {
                 call_id: "c1".to_string(),
                 name: "tool".to_string(),
                 arguments: "{}".to_string(),
-                thought_signature: None,
             },
             assistant_msg("a4"),
         ];

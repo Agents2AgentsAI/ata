@@ -6,7 +6,6 @@ use crate::codex::TurnContext;
 use crate::compact::InitialContextInjection;
 use crate::compact::extract_trailing_model_switch_update_for_compaction_request;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
-use crate::compact::sanitize_compaction_inline_files;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
@@ -101,9 +100,7 @@ async fn run_remote_compact_task_inner_impl(
         .collect();
 
     let prompt = Prompt {
-        input: sanitize_compaction_inline_files(
-            history.for_prompt(&turn_context.model_info.input_modalities),
-        ),
+        input: history.for_prompt(&turn_context.model_info.input_modalities),
         tools: vec![],
         parallel_tool_calls: false,
         base_instructions,
@@ -187,7 +184,6 @@ pub(crate) async fn process_compacted_history(
     };
 
     compacted_history.retain(should_keep_compacted_history_item);
-    compacted_history = sanitize_compaction_inline_files(compacted_history);
     insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context)
 }
 

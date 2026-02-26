@@ -5,6 +5,8 @@ mod collaboration_mode_list;
 mod compaction;
 mod config_rpc;
 mod connection_handling_websocket;
+#[cfg(unix)]
+mod connection_handling_websocket_unix;
 mod dynamic_tools;
 mod experimental_api;
 mod experimental_feature_list;
@@ -16,6 +18,7 @@ mod rate_limits;
 mod request_user_input;
 mod review;
 mod safety_check_downgrade;
+mod skill_approval;
 mod skills_list;
 mod thread_archive;
 mod thread_fork;

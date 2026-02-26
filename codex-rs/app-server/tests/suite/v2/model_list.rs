@@ -12,14 +12,55 @@ use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_app_server_protocol::RequestId;
-use codex_protocol::openai_models::InputModality;
-use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ModelPreset;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+
+fn model_from_preset(preset: &ModelPreset) -> Model {
+    Model {
+        id: preset.id.clone(),
+        model: preset.model.clone(),
+        upgrade: preset.upgrade.as_ref().map(|upgrade| upgrade.id.clone()),
+        display_name: preset.display_name.clone(),
+        description: preset.description.clone(),
+        hidden: !preset.show_in_picker,
+        supported_reasoning_efforts: preset
+            .supported_reasoning_efforts
+            .iter()
+            .map(|preset| ReasoningEffortOption {
+                reasoning_effort: preset.effort,
+                description: preset.description.clone(),
+            })
+            .collect(),
+        default_reasoning_effort: preset.default_reasoning_effort,
+        input_modalities: preset.input_modalities.clone(),
+        // `write_models_cache()` round-trips through a simplified ModelInfo fixture that does not
+        // preserve personality placeholders in base instructions, so app-server list results from
+        // cache report `supports_personality = false`.
+        // todo(sayan): fix, maybe make roundtrip use ModelInfo only
+        supports_personality: false,
+        is_default: preset.is_default,
+    }
+}
+
+fn expected_visible_models() -> Vec<Model> {
+    // Filter by supported_in_api to support testing with both ChatGPT and non-ChatGPT auth modes.
+    let mut presets =
+        ModelPreset::filter_by_auth(codex_core::test_support::all_model_presets().clone(), false);
+
+    // Mirror `ModelsManager::build_available_models()` default selection after auth filtering.
+    ModelPreset::mark_default_by_picker_visibility(&mut presets);
+
+    presets
+        .iter()
+        .filter(|preset| preset.show_in_picker)
+        .map(model_from_preset)
+        .collect()
+}
 
 #[tokio::test]
 async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
@@ -48,298 +89,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
         next_cursor,
     } = to_response::<ModelListResponse>(response)?;
 
-    let expected_models = vec![
-        Model {
-            id: "gpt-5.3-codex".to_string(),
-            model: "gpt-5.3-codex".to_string(),
-            upgrade: None,
-            display_name: "gpt-5.3-codex".to_string(),
-            description: "Latest frontier agentic coding model.".to_string(),
-            hidden: false,
-            supported_reasoning_efforts: vec![
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Low,
-                    description: "Fast responses with lighter reasoning".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Medium,
-                    description: "Balances speed and reasoning depth for everyday tasks"
-                        .to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::High,
-                    description: "Greater reasoning depth for complex problems".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::XHigh,
-                    description: "Extra high reasoning depth for complex problems".to_string(),
-                },
-            ],
-            default_reasoning_effort: ReasoningEffort::Medium,
-            input_modalities: vec![InputModality::Text, InputModality::Image],
-            supports_personality: false,
-            is_default: true,
-        },
-        Model {
-            id: "gpt-5.2-codex".to_string(),
-            model: "gpt-5.2-codex".to_string(),
-            upgrade: Some("gpt-5.3-codex".to_string()),
-            display_name: "gpt-5.2-codex".to_string(),
-            description: "Frontier agentic coding model.".to_string(),
-            hidden: false,
-            supported_reasoning_efforts: vec![
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Low,
-                    description: "Fast responses with lighter reasoning".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Medium,
-                    description: "Balances speed and reasoning depth for everyday tasks"
-                        .to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::High,
-                    description: "Greater reasoning depth for complex problems".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::XHigh,
-                    description: "Extra high reasoning depth for complex problems".to_string(),
-                },
-            ],
-            default_reasoning_effort: ReasoningEffort::Medium,
-            input_modalities: vec![InputModality::Text, InputModality::Image],
-            supports_personality: false,
-            is_default: false,
-        },
-        Model {
-            id: "gpt-5.1-codex-max".to_string(),
-            model: "gpt-5.1-codex-max".to_string(),
-            upgrade: Some("gpt-5.3-codex".to_string()),
-            display_name: "gpt-5.1-codex-max".to_string(),
-            description: "Ata-optimized flagship for deep and fast reasoning.".to_string(),
-            hidden: false,
-            supported_reasoning_efforts: vec![
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Low,
-                    description: "Fast responses with lighter reasoning".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Medium,
-                    description: "Balances speed and reasoning depth for everyday tasks"
-                        .to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::High,
-                    description: "Greater reasoning depth for complex problems".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::XHigh,
-                    description: "Extra high reasoning depth for complex problems".to_string(),
-                },
-            ],
-            default_reasoning_effort: ReasoningEffort::Medium,
-            input_modalities: vec![InputModality::Text, InputModality::Image],
-            supports_personality: false,
-            is_default: false,
-        },
-        Model {
-            id: "gpt-5.1-codex-mini".to_string(),
-            model: "gpt-5.1-codex-mini".to_string(),
-            upgrade: Some("gpt-5.3-codex".to_string()),
-            display_name: "gpt-5.1-codex-mini".to_string(),
-            description: "Optimized for codex. Cheaper, faster, but less capable.".to_string(),
-            hidden: false,
-            supported_reasoning_efforts: vec![
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Medium,
-                    description: "Dynamically adjusts reasoning based on the task".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::High,
-                    description: "Maximizes reasoning depth for complex or ambiguous problems"
-                        .to_string(),
-                },
-            ],
-            default_reasoning_effort: ReasoningEffort::Medium,
-            input_modalities: vec![InputModality::Text, InputModality::Image],
-            supports_personality: false,
-            is_default: false,
-        },
-        Model {
-            id: "gpt-5.2".to_string(),
-            model: "gpt-5.2".to_string(),
-            upgrade: Some("gpt-5.3-codex".to_string()),
-            display_name: "gpt-5.2".to_string(),
-            description:
-                "Latest frontier model with improvements across knowledge, reasoning and coding"
-                    .to_string(),
-            hidden: false,
-            supported_reasoning_efforts: vec![
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Low,
-                    description: "Balances speed with some reasoning; useful for straightforward \
-                                   queries and short explanations"
-                        .to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Medium,
-                    description: "Provides a solid balance of reasoning depth and latency for \
-                         general-purpose tasks"
-                        .to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::High,
-                    description: "Maximizes reasoning depth for complex or ambiguous problems"
-                        .to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::XHigh,
-                    description: "Extra high reasoning depth for complex problems".to_string(),
-                },
-            ],
-            default_reasoning_effort: ReasoningEffort::Medium,
-            input_modalities: vec![InputModality::Text, InputModality::Image],
-            supports_personality: false,
-            is_default: false,
-        },
-        // Anthropic Claude models
-        Model {
-            id: "claude-sonnet-4-6".to_string(),
-            model: "claude-sonnet-4-6".to_string(),
-            upgrade: None,
-            display_name: "Claude Sonnet 4-6".to_string(),
-            description: "Anthropic's balanced model for coding tasks.".to_string(),
-            hidden: false,
-            supported_reasoning_efforts: vec![
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Low,
-                    description: "Fast responses with lighter reasoning".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Medium,
-                    description: "Balanced reasoning for everyday tasks".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::High,
-                    description: "Greater reasoning depth for complex problems".to_string(),
-                },
-            ],
-            default_reasoning_effort: ReasoningEffort::Medium,
-            input_modalities: vec![InputModality::Text, InputModality::Image],
-            supports_personality: false,
-            is_default: false,
-        },
-        Model {
-            id: "claude-opus-4-6".to_string(),
-            model: "claude-opus-4-6".to_string(),
-            upgrade: None,
-            display_name: "Claude Opus 4-6".to_string(),
-            description: "Anthropic's most capable model for complex reasoning.".to_string(),
-            hidden: false,
-            supported_reasoning_efforts: vec![
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Low,
-                    description: "Fast responses with lighter reasoning".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Medium,
-                    description: "Balanced reasoning for everyday tasks".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::High,
-                    description: "Greater reasoning depth for complex problems".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Adaptive,
-                    description: "Automatically adjusts reasoning depth based on task complexity"
-                        .to_string(),
-                },
-            ],
-            default_reasoning_effort: ReasoningEffort::Adaptive,
-            input_modalities: vec![InputModality::Text, InputModality::Image],
-            supports_personality: false,
-            is_default: false,
-        },
-        // Google Gemini models
-        Model {
-            id: "gemini-3-pro-preview".to_string(),
-            model: "gemini-3-pro-preview".to_string(),
-            upgrade: None,
-            display_name: "Gemini 3 Pro".to_string(),
-            description: "Google's advanced model for complex tasks.".to_string(),
-            hidden: false,
-            supported_reasoning_efforts: vec![
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Low,
-                    description: "Fast responses with lighter reasoning".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::High,
-                    description: "Deep reasoning for complex problems".to_string(),
-                },
-            ],
-            default_reasoning_effort: ReasoningEffort::Medium,
-            input_modalities: vec![InputModality::Text, InputModality::Image],
-            supports_personality: false,
-            is_default: false,
-        },
-        Model {
-            id: "gemini-3.1-pro-preview".to_string(),
-            model: "gemini-3.1-pro-preview".to_string(),
-            upgrade: None,
-            display_name: "Gemini 3.1 Pro".to_string(),
-            description: "Google's advanced model for complex tasks.".to_string(),
-            hidden: false,
-            supported_reasoning_efforts: vec![
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Low,
-                    description: "Fast responses with lighter reasoning".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Medium,
-                    description: "Balanced reasoning for everyday tasks".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::High,
-                    description: "Deep reasoning for complex problems".to_string(),
-                },
-            ],
-            default_reasoning_effort: ReasoningEffort::Medium,
-            input_modalities: vec![InputModality::Text, InputModality::Image],
-            supports_personality: false,
-            is_default: false,
-        },
-        Model {
-            id: "gemini-3-flash-preview".to_string(),
-            model: "gemini-3-flash-preview".to_string(),
-            upgrade: None,
-            display_name: "Gemini 3 Flash".to_string(),
-            description: "Google's fast and efficient model.".to_string(),
-            hidden: false,
-            supported_reasoning_efforts: vec![
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Minimal,
-                    description: "Fastest responses with minimal reasoning".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Low,
-                    description: "Quick responses with light reasoning".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Medium,
-                    description: "Balanced reasoning for everyday tasks".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::High,
-                    description: "Deep reasoning for complex problems".to_string(),
-                },
-            ],
-            default_reasoning_effort: ReasoningEffort::Medium,
-            input_modalities: vec![InputModality::Text, InputModality::Image],
-            supports_personality: false,
-            is_default: false,
-        },
-    ];
+    let expected_models = expected_visible_models();
 
     assert_eq!(items, expected_models);
     assert!(next_cursor.is_none());
@@ -405,8 +155,10 @@ async fn list_models_pagination_works() -> Result<()> {
         next_cursor: first_cursor,
     } = to_response::<ModelListResponse>(first_response)?;
 
+    let expected_models = expected_visible_models();
+
     assert_eq!(first_items.len(), 1);
-    assert_eq!(first_items[0].id, "gpt-5.3-codex");
+    assert_eq!(first_items[0].id, expected_models[0].id);
     let next_cursor = first_cursor.ok_or_else(|| anyhow!("cursor for second page"))?;
 
     let second_request = mcp
@@ -429,7 +181,7 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(second_response)?;
 
     assert_eq!(second_items.len(), 1);
-    assert_eq!(second_items[0].id, "gpt-5.2-codex");
+    assert_eq!(second_items[0].id, expected_models[1].id);
     let third_cursor = second_cursor.ok_or_else(|| anyhow!("cursor for third page"))?;
 
     let third_request = mcp
@@ -452,7 +204,7 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(third_response)?;
 
     assert_eq!(third_items.len(), 1);
-    assert_eq!(third_items[0].id, "gpt-5.1-codex-max");
+    assert_eq!(third_items[0].id, expected_models[2].id);
     let fourth_cursor = third_cursor.ok_or_else(|| anyhow!("cursor for fourth page"))?;
 
     let fourth_request = mcp
@@ -475,152 +227,8 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(fourth_response)?;
 
     assert_eq!(fourth_items.len(), 1);
-    assert_eq!(fourth_items[0].id, "gpt-5.1-codex-mini");
-    let fifth_cursor = fourth_cursor.ok_or_else(|| anyhow!("cursor for fifth page"))?;
-
-    // Fifth page: gpt-5.2
-    let fifth_request = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(1),
-            cursor: Some(fifth_cursor.clone()),
-            include_hidden: None,
-        })
-        .await?;
-
-    let fifth_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(fifth_request)),
-    )
-    .await??;
-
-    let ModelListResponse {
-        data: fifth_items,
-        next_cursor: fifth_cursor,
-    } = to_response::<ModelListResponse>(fifth_response)?;
-
-    assert_eq!(fifth_items.len(), 1);
-    assert_eq!(fifth_items[0].id, "gpt-5.2");
-    let sixth_cursor = fifth_cursor.ok_or_else(|| anyhow!("cursor for sixth page"))?;
-
-    // Sixth page: claude-sonnet-4-6
-    let sixth_request = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(1),
-            cursor: Some(sixth_cursor.clone()),
-            include_hidden: None,
-        })
-        .await?;
-
-    let sixth_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(sixth_request)),
-    )
-    .await??;
-
-    let ModelListResponse {
-        data: sixth_items,
-        next_cursor: sixth_cursor,
-    } = to_response::<ModelListResponse>(sixth_response)?;
-
-    assert_eq!(sixth_items.len(), 1);
-    assert_eq!(sixth_items[0].id, "claude-sonnet-4-6");
-    let seventh_cursor = sixth_cursor.ok_or_else(|| anyhow!("cursor for seventh page"))?;
-
-    // Seventh page: claude-opus-4-6
-    let seventh_request = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(1),
-            cursor: Some(seventh_cursor.clone()),
-            include_hidden: None,
-        })
-        .await?;
-
-    let seventh_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(seventh_request)),
-    )
-    .await??;
-
-    let ModelListResponse {
-        data: seventh_items,
-        next_cursor: seventh_cursor,
-    } = to_response::<ModelListResponse>(seventh_response)?;
-
-    assert_eq!(seventh_items.len(), 1);
-    assert_eq!(seventh_items[0].id, "claude-opus-4-6");
-    let eighth_cursor = seventh_cursor.ok_or_else(|| anyhow!("cursor for eighth page"))?;
-
-    // Eighth page: gemini-3-pro-preview
-    let eighth_request = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(1),
-            cursor: Some(eighth_cursor.clone()),
-            include_hidden: None,
-        })
-        .await?;
-
-    let eighth_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(eighth_request)),
-    )
-    .await??;
-
-    let ModelListResponse {
-        data: eighth_items,
-        next_cursor: eighth_cursor,
-    } = to_response::<ModelListResponse>(eighth_response)?;
-
-    assert_eq!(eighth_items.len(), 1);
-    assert_eq!(eighth_items[0].id, "gemini-3-pro-preview");
-    let ninth_cursor = eighth_cursor.ok_or_else(|| anyhow!("cursor for ninth page"))?;
-
-    // Ninth page: gemini-3.1-pro-preview
-    let ninth_request = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(1),
-            cursor: Some(ninth_cursor.clone()),
-            include_hidden: None,
-        })
-        .await?;
-
-    let ninth_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(ninth_request)),
-    )
-    .await??;
-
-    let ModelListResponse {
-        data: ninth_items,
-        next_cursor: ninth_cursor,
-    } = to_response::<ModelListResponse>(ninth_response)?;
-
-    assert_eq!(ninth_items.len(), 1);
-    assert_eq!(ninth_items[0].id, "gemini-3.1-pro-preview");
-    let tenth_cursor = ninth_cursor.ok_or_else(|| anyhow!("cursor for tenth page"))?;
-
-    // Tenth page: gemini-3-flash-preview (last)
-    let tenth_request = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(1),
-            cursor: Some(tenth_cursor.clone()),
-            include_hidden: None,
-        })
-        .await?;
-
-    let tenth_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(tenth_request)),
-    )
-    .await??;
-
-    let ModelListResponse {
-        data: tenth_items,
-        next_cursor: tenth_cursor,
-    } = to_response::<ModelListResponse>(tenth_response)?;
-
-    assert_eq!(tenth_items.len(), 1);
-    assert_eq!(tenth_items[0].id, "gemini-3-flash-preview");
-    assert!(tenth_cursor.is_none());
+    assert_eq!(fourth_items[0].id, expected_models[3].id);
+    assert!(fourth_cursor.is_none());
     Ok(())
 }
 
