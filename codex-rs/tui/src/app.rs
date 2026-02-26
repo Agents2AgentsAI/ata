@@ -495,7 +495,7 @@ async fn handle_model_migration_prompt_if_needed(
                 app_event_tx.send(AppEvent::PersistModelSelection {
                     model: target_model.clone(),
                     effort: mapped_effort,
-                    provider: None,
+                    provider: Some(config.model_provider_id.clone()),
                 });
             }
             ModelMigrationOutcome::Rejected => {
