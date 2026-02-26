@@ -135,6 +135,7 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: Some(CollaborationMode {
@@ -146,6 +147,7 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
                 },
             }),
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -256,10 +258,12 @@ where
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            feature_flags: None,
         })
         .await?;
 

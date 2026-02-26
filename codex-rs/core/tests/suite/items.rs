@@ -376,10 +376,12 @@ async fn plan_mode_emits_plan_item_from_proposed_plan_block() -> anyhow::Result<
             approval_policy: codex_protocol::protocol::AskForApproval::Never,
             sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
             model: session_configured.model.clone(),
+            model_provider: None,
             effort: None,
             summary: codex_protocol::config_types::ReasoningSummary::Auto,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -451,10 +453,12 @@ async fn plan_mode_strips_plan_from_agent_messages() -> anyhow::Result<()> {
             approval_policy: codex_protocol::protocol::AskForApproval::Never,
             sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
             model: session_configured.model.clone(),
+            model_provider: None,
             effort: None,
             summary: codex_protocol::config_types::ReasoningSummary::Auto,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -558,10 +562,12 @@ async fn plan_mode_streaming_citations_are_stripped_across_added_deltas_and_done
             approval_policy: codex_protocol::protocol::AskForApproval::Never,
             sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
             model: session_configured.model.clone(),
+            model_provider: None,
             effort: None,
             summary: codex_protocol::config_types::ReasoningSummary::Auto,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -743,10 +749,12 @@ async fn plan_mode_streaming_proposed_plan_tag_split_across_added_and_delta_is_p
             approval_policy: codex_protocol::protocol::AskForApproval::Never,
             sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
             model: session_configured.model.clone(),
+            model_provider: None,
             effort: None,
             summary: codex_protocol::config_types::ReasoningSummary::Auto,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -855,10 +863,12 @@ async fn plan_mode_handles_missing_plan_close_tag() -> anyhow::Result<()> {
             approval_policy: codex_protocol::protocol::AskForApproval::Never,
             sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
             model: session_configured.model.clone(),
+            model_provider: None,
             effort: None,
             summary: codex_protocol::config_types::ReasoningSummary::Auto,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            feature_flags: None,
         })
         .await?;
 

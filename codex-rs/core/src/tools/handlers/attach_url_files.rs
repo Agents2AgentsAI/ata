@@ -718,10 +718,7 @@ mod tests {
         ];
         for (mode, label) in modes_that_register {
             let mut builder = ToolRegistryBuilder::new();
-            let config = ToolsConfig {
-                web_search_mode: mode,
-                ..minimal_tools_config()
-            };
+            let config = minimal_tools_config_with_search(mode);
             register_attach_url_files(&mut builder, &config);
             let (specs, _) = builder.build();
             assert!(
@@ -731,10 +728,7 @@ mod tests {
         }
 
         let mut builder = ToolRegistryBuilder::new();
-        let config = ToolsConfig {
-            web_search_mode: Some(WebSearchMode::Disabled),
-            ..minimal_tools_config()
-        };
+        let config = minimal_tools_config_with_search(Some(WebSearchMode::Disabled));
         register_attach_url_files(&mut builder, &config);
         let (specs, _) = builder.build();
         assert!(
@@ -791,20 +785,23 @@ mod tests {
         assert!(pending.is_empty(), "no pending input for rejected PDF");
     }
 
-    fn minimal_tools_config() -> ToolsConfig {
-        ToolsConfig {
-            shell_type: codex_protocol::openai_models::ConfigShellToolType::Disabled,
-            apply_patch_tool_type: None,
-            web_search_mode: None,
-            agent_roles: BTreeMap::new(),
-            search_tool: false,
-            collab_tools: false,
-            collaboration_modes_tools: false,
-            js_repl_enabled: false,
-            js_repl_tools_only: false,
-            experimental_supported_tools: Vec::new(),
-            allow_login_shell: false,
-            features: crate::features::Features::with_defaults(),
-        }
+    fn minimal_tools_config_with_search(
+        web_search_mode: Option<WebSearchMode>,
+    ) -> ToolsConfig {
+        use crate::config::test_config;
+        use crate::models_manager::manager::ModelsManager;
+        use crate::tools::spec::ToolsConfigParams;
+        use codex_protocol::protocol::SessionSource;
+
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let features = crate::features::Features::with_defaults();
+        ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode,
+            session_source: SessionSource::Cli,
+        })
     }
 }

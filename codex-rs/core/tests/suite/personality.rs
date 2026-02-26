@@ -96,10 +96,12 @@ async fn user_turn_personality_none_does_not_add_update_message() -> anyhow::Res
             approval_policy: test.config.permissions.approval_policy.value(),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -142,10 +144,12 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
             approval_policy: test.config.permissions.approval_policy.value(),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -195,10 +199,12 @@ async fn config_personality_none_sends_no_personality() -> anyhow::Result<()> {
             approval_policy: test.config.permissions.approval_policy.value(),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -254,10 +260,12 @@ async fn default_personality_is_pragmatic_without_config_toml() -> anyhow::Resul
             approval_policy: test.config.permissions.approval_policy.value(),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -301,10 +309,12 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             approval_policy: test.config.permissions.approval_policy.value(),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -337,10 +347,12 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             approval_policy: test.config.permissions.approval_policy.value(),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -399,10 +411,12 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
             approval_policy: test.config.permissions.approval_policy.value(),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -435,10 +449,12 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
             approval_policy: test.config.permissions.approval_policy.value(),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -507,10 +523,12 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
             approval_policy: test.config.permissions.approval_policy.value(),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -543,10 +561,12 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
             approval_policy: test.config.permissions.approval_policy.value(),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -651,10 +671,12 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: remote_slug.to_string(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
+            feature_flags: None,
         })
         .await?;
 
@@ -761,10 +783,12 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: remote_slug.to_string(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -797,10 +821,12 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: remote_slug.to_string(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 

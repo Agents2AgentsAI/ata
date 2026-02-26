@@ -106,10 +106,12 @@ async fn submit_turn_with_policies(
             approval_policy,
             sandbox_policy,
             model: session_model,
+            model_provider: None,
             effort: None,
             summary: codex_protocol::config_types::ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
     Ok(())
