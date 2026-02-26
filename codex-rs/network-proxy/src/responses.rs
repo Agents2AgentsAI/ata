@@ -3,6 +3,7 @@ use crate::network_policy::NetworkPolicyDecision;
 use crate::network_policy::NetworkProtocol;
 use crate::reasons::REASON_DENIED;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
+use crate::reasons::REASON_MITM_REQUIRED;
 use crate::reasons::REASON_NOT_ALLOWED;
 use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
 use rama_http::Body;
@@ -51,6 +52,7 @@ pub fn blocked_header_value(reason: &str) -> &'static str {
         REASON_NOT_ALLOWED | REASON_NOT_ALLOWED_LOCAL => "blocked-by-allowlist",
         REASON_DENIED => "blocked-by-denylist",
         REASON_METHOD_NOT_ALLOWED => "blocked-by-method-policy",
+        REASON_MITM_REQUIRED => "blocked-by-mitm-required",
         _ => "blocked-by-policy",
     }
 }
@@ -58,19 +60,28 @@ pub fn blocked_header_value(reason: &str) -> &'static str {
 pub fn blocked_message(reason: &str) -> &'static str {
     match reason {
         REASON_NOT_ALLOWED => {
-            "Ata blocked this request: domain not in allowlist (this is not a denylist block)."
+            "Codex blocked this request: domain not in allowlist (this is not a denylist block)."
         }
         REASON_NOT_ALLOWED_LOCAL => {
-            "Ata blocked this request: local/private addresses not allowed."
+            "Codex blocked this request: local/private addresses not allowed."
         }
-        REASON_DENIED => "Ata blocked this request: domain denied by policy.",
+        REASON_DENIED => "Codex blocked this request: domain denied by policy.",
         REASON_METHOD_NOT_ALLOWED => {
-            "Ata blocked this request: method not allowed in limited mode."
+            "Codex blocked this request: method not allowed in limited mode."
         }
-        _ => "Ata blocked this request by network policy.",
+        REASON_MITM_REQUIRED => "Codex blocked this request: MITM required for limited HTTPS.",
+        _ => "Codex blocked this request by network policy.",
     }
 }
 
+pub fn blocked_text_response(reason: &str) -> Response {
+    Response::builder()
+        .status(StatusCode::FORBIDDEN)
+        .header("content-type", "text/plain")
+        .header("x-proxy-error", blocked_header_value(reason))
+        .body(Body::from(blocked_message(reason)))
+        .unwrap_or_else(|_| Response::new(Body::from("blocked")))
+}
 pub fn blocked_message_with_policy(reason: &str, details: &PolicyDecisionDetails<'_>) -> String {
     let _ = (details.reason, details.host);
     blocked_message(reason).to_string()
@@ -108,7 +119,7 @@ mod tests {
         let message = blocked_message_with_policy(REASON_NOT_ALLOWED, &details);
         assert_eq!(
             message,
-            "Ata blocked this request: domain not in allowlist (this is not a denylist block)."
+            "Codex blocked this request: domain not in allowlist (this is not a denylist block)."
         );
     }
 }

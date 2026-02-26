@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 7060
 expression: header
 ---
-› Ask Ata to do anything
+› Ask Codex to do anything

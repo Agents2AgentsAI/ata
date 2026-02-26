@@ -232,6 +232,14 @@ impl TestCodexBuilder {
         }
         if let Ok(path) = cached_ata_bin() {
             config.codex_linux_sandbox_exe = Some(path);
+        } else if let Ok(exe) = std::env::current_exe()
+            && let Some(path) = exe
+                .parent()
+                .and_then(|parent| parent.parent())
+                .map(|parent| parent.join("codex"))
+            && path.is_file()
+        {
+            config.codex_linux_sandbox_exe = Some(path);
         }
 
         let mut mutators = vec![];
@@ -312,6 +320,8 @@ impl TestCodex {
                 summary: ReasoningSummary::Auto,
                 collaboration_mode: None,
                 personality: None,
+                model_provider: None,
+                feature_flags: None,
             })
             .await?;
 

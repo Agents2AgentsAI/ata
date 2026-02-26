@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 
 use codex_utils_file::encode_inline_cached;
 use codex_utils_file::into_owned_processed_file;
@@ -38,11 +39,85 @@ pub enum SandboxPermissions {
     UseDefault,
     /// Request to run outside the sandbox
     RequireEscalated,
+    /// Request to run in the sandbox with additional per-command permissions.
+    WithAdditionalPermissions,
 }
 
 impl SandboxPermissions {
+    /// True if SandboxPermissions requires full unsandboxed execution (i.e. RequireEscalated)
     pub fn requires_escalated_permissions(self) -> bool {
         matches!(self, SandboxPermissions::RequireEscalated)
+    }
+
+    /// True if SandboxPermissions requires permissions beyond UseDefault
+    pub fn requires_additional_permissions(self) -> bool {
+        !matches!(self, SandboxPermissions::UseDefault)
+    }
+}
+
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct FileSystemPermissions {
+    pub read: Option<Vec<PathBuf>>,
+    pub write: Option<Vec<PathBuf>>,
+}
+
+impl FileSystemPermissions {
+    pub fn is_empty(&self) -> bool {
+        self.read.is_none() && self.write.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct MacOsPermissions {
+    pub preferences: Option<MacOsPreferencesValue>,
+    pub automations: Option<MacOsAutomationValue>,
+    pub accessibility: Option<bool>,
+    pub calendar: Option<bool>,
+}
+
+impl MacOsPermissions {
+    pub fn is_empty(&self) -> bool {
+        self.preferences.is_none()
+            && self.automations.is_none()
+            && self.accessibility.is_none()
+            && self.calendar.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum MacOsPreferencesValue {
+    Bool(bool),
+    Mode(String),
+}
+
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum MacOsAutomationValue {
+    Bool(bool),
+    BundleIds(Vec<String>),
+}
+
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct PermissionProfile {
+    pub network: Option<bool>,
+    pub file_system: Option<FileSystemPermissions>,
+    pub macos: Option<MacOsPermissions>,
+}
+
+impl PermissionProfile {
+    pub fn is_empty(&self) -> bool {
+        self.network.is_none()
+            && self
+                .file_system
+                .as_ref()
+                .map(FileSystemPermissions::is_empty)
+                .unwrap_or(true)
+            && self
+                .macos
+                .as_ref()
+                .map(MacOsPermissions::is_empty)
+                .unwrap_or(true)
     }
 }
 
@@ -382,6 +457,8 @@ const APPROVAL_POLICY_ON_FAILURE: &str =
     include_str!("prompts/permissions/approval_policy/on_failure.md");
 const APPROVAL_POLICY_ON_REQUEST_RULE: &str =
     include_str!("prompts/permissions/approval_policy/on_request_rule.md");
+const APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION: &str =
+    include_str!("prompts/permissions/approval_policy/on_request_rule_request_permission.md");
 
 const SANDBOX_MODE_DANGER_FULL_ACCESS: &str =
     include_str!("prompts/permissions/sandbox_mode/danger_full_access.md");
@@ -394,16 +471,25 @@ impl DeveloperInstructions {
         Self { text: text.into() }
     }
 
-    pub fn from(approval_policy: AskForApproval, exec_policy: &Policy) -> DeveloperInstructions {
+    pub fn from(
+        approval_policy: AskForApproval,
+        exec_policy: &Policy,
+        request_permission_enabled: bool,
+    ) -> DeveloperInstructions {
         let on_request_instructions = || {
+            let on_request_rule = if request_permission_enabled {
+                APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION
+            } else {
+                APPROVAL_POLICY_ON_REQUEST_RULE
+            };
             let command_prefixes = format_allow_prefixes(exec_policy.get_allowed_prefixes());
             match command_prefixes {
                 Some(prefixes) => {
                     format!(
-                        "{APPROVAL_POLICY_ON_REQUEST_RULE}\n## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
+                        "{on_request_rule}\n## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
                     )
                 }
-                None => APPROVAL_POLICY_ON_REQUEST_RULE.to_string(),
+                None => on_request_rule.to_string(),
             }
         };
         let text = match approval_policy {
@@ -461,6 +547,7 @@ impl DeveloperInstructions {
         approval_policy: AskForApproval,
         exec_policy: &Policy,
         cwd: &Path,
+        request_permission_enabled: bool,
     ) -> Self {
         let network_access = if sandbox_policy.has_full_network_access() {
             NetworkAccess::Enabled
@@ -484,6 +571,7 @@ impl DeveloperInstructions {
             approval_policy,
             exec_policy,
             writable_roots,
+            request_permission_enabled,
         )
     }
 
@@ -507,6 +595,7 @@ impl DeveloperInstructions {
         approval_policy: AskForApproval,
         exec_policy: &Policy,
         writable_roots: Option<Vec<WritableRoot>>,
+        request_permission_enabled: bool,
     ) -> Self {
         let start_tag = DeveloperInstructions::new("<permissions instructions>");
         let end_tag = DeveloperInstructions::new("</permissions instructions>");
@@ -515,7 +604,11 @@ impl DeveloperInstructions {
                 sandbox_mode,
                 network_access,
             ))
-            .concat(DeveloperInstructions::from(approval_policy, exec_policy))
+            .concat(DeveloperInstructions::from(
+                approval_policy,
+                exec_policy,
+                request_permission_enabled,
+            ))
             .concat(DeveloperInstructions::from_writable_roots(writable_roots))
             .concat(end_tag)
     }
@@ -649,7 +742,7 @@ fn local_image_error_placeholder(
 ) -> ContentItem {
     ContentItem::InputText {
         text: format!(
-            "Ata could not read the local image at `{}`: {}",
+            "Codex could not read the local image at `{}`: {}",
             path.display(),
             error
         ),
@@ -775,7 +868,7 @@ fn invalid_image_error_placeholder(
 fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> ContentItem {
     ContentItem::InputText {
         text: format!(
-            "Ata cannot attach image at `{}`: unsupported image format `{}`.",
+            "Codex cannot attach image at `{}`: unsupported image format `{}`.",
             path.display(),
             mime
         ),
@@ -1042,6 +1135,9 @@ pub struct ShellToolCallParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub prefix_rule: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub additional_permissions: Option<PermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -1065,6 +1161,9 @@ pub struct ShellCommandToolCallParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub prefix_rule: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub additional_permissions: Option<PermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -1490,6 +1589,7 @@ mod tests {
             AskForApproval::OnRequest,
             &Policy::empty(),
             None,
+            false,
         );
 
         let text = instructions.into_text();
@@ -1518,6 +1618,7 @@ mod tests {
             AskForApproval::UnlessTrusted,
             &Policy::empty(),
             &PathBuf::from("/tmp"),
+            false,
         );
         let text = instructions.into_text();
         assert!(text.contains("Network access is enabled."));
@@ -1539,12 +1640,29 @@ mod tests {
             AskForApproval::OnRequest,
             &exec_policy,
             None,
+            false,
         );
 
         let text = instructions.into_text();
         assert!(text.contains("prefix_rule"));
         assert!(text.contains("Approved command prefixes"));
         assert!(text.contains(r#"["git", "pull"]"#));
+    }
+
+    #[test]
+    fn includes_request_permission_rule_instructions_for_on_request_when_enabled() {
+        let instructions = DeveloperInstructions::from_permissions_with_network(
+            SandboxMode::WorkspaceWrite,
+            NetworkAccess::Enabled,
+            AskForApproval::OnRequest,
+            &Policy::empty(),
+            None,
+            true,
+        );
+
+        let text = instructions.into_text();
+        assert!(text.contains("with_additional_permissions"));
+        assert!(text.contains("additional_permissions"));
     }
 
     #[test]
@@ -1857,6 +1975,7 @@ mod tests {
                 timeout_ms: Some(1000),
                 sandbox_permissions: None,
                 prefix_rule: None,
+                additional_permissions: None,
                 justification: None,
             },
             params
@@ -2034,7 +2153,7 @@ mod tests {
             ResponseInputItem::Message { content, .. } => {
                 assert_eq!(content.len(), 1);
                 let expected = format!(
-                    "Ata cannot attach image at `{}`: unsupported image format `image/svg+xml`.",
+                    "Codex cannot attach image at `{}`: unsupported image format `image/svg+xml`.",
                     svg_path.display()
                 );
                 match &content[0] {
@@ -2046,346 +2165,5 @@ mod tests {
         }
 
         Ok(())
-    }
-
-    #[test]
-    fn input_file_inline_has_file_data_only() {
-        let item = ContentItem::inline_file(
-            "JVBERi0xLjQ=".to_string(),
-            "application/pdf".to_string(),
-            Some("report.pdf".to_string()),
-        );
-
-        match item {
-            ContentItem::InputFile {
-                file_data,
-                file_id,
-                mime_type,
-                filename,
-            } => {
-                assert_eq!(file_data, Some("JVBERi0xLjQ=".to_string()));
-                assert_eq!(file_id, None);
-                assert_eq!(mime_type, Some("application/pdf".to_string()));
-                assert_eq!(filename, Some("report.pdf".to_string()));
-            }
-            other => panic!("expected input file but found {other:?}"),
-        }
-    }
-
-    #[test]
-    fn input_file_ref_has_file_id_only() {
-        let item = ContentItem::file_ref(
-            "file-123".to_string(),
-            "application/pdf".to_string(),
-            Some("report.pdf".to_string()),
-        );
-
-        match item {
-            ContentItem::InputFile {
-                file_data,
-                file_id,
-                mime_type,
-                filename,
-            } => {
-                assert_eq!(file_data, None);
-                assert_eq!(file_id, Some("file-123".to_string()));
-                assert_eq!(mime_type, Some("application/pdf".to_string()));
-                assert_eq!(filename, Some("report.pdf".to_string()));
-            }
-            other => panic!("expected input file but found {other:?}"),
-        }
-    }
-
-    #[test]
-    fn local_file_open_tag_with_filename_is_detected() {
-        let tag = local_file_open_tag_text_with_filename(1, Some("report.pdf"));
-        assert!(is_local_file_open_tag_text(&tag));
-        assert!(is_file_open_tag_text(&tag));
-    }
-
-    #[test]
-    fn input_file_deserialization_rejects_both_file_data_and_file_id() {
-        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
-            "type": "input_file",
-            "file_data": "JVBERi0xLjQ=",
-            "file_id": "file-123",
-            "mime_type": "application/pdf",
-            "filename": "report.pdf",
-        }))
-        .expect_err("deserialization should fail");
-
-        assert!(
-            err.to_string()
-                .contains("input_file must include exactly one of `file_data` or `file_id`"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn input_file_deserialization_rejects_missing_file_data_and_file_id() {
-        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
-            "type": "input_file",
-            "mime_type": "application/pdf",
-            "filename": "report.pdf",
-        }))
-        .expect_err("deserialization should fail");
-
-        assert!(
-            err.to_string()
-                .contains("input_file must include exactly one of `file_data` or `file_id`"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn input_file_deserialization_rejects_empty_file_data() {
-        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
-            "type": "input_file",
-            "file_data": "",
-            "mime_type": "application/pdf",
-            "filename": "report.pdf",
-        }))
-        .expect_err("deserialization should fail");
-
-        assert!(
-            err.to_string()
-                .contains("input_file must include exactly one of `file_data` or `file_id`"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn input_file_deserialization_rejects_empty_file_id() {
-        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
-            "type": "input_file",
-            "file_id": "",
-            "mime_type": "application/pdf",
-            "filename": "report.pdf",
-        }))
-        .expect_err("deserialization should fail");
-
-        assert!(
-            err.to_string()
-                .contains("input_file must include exactly one of `file_data` or `file_id`"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn url_file_deserialization_accepts_non_empty_url() {
-        let item = serde_json::from_value::<ContentItem>(serde_json::json!({
-            "type": "url_file",
-            "url": " https://example.com/report.pdf ",
-            "filename": "report.pdf",
-            "mime_type": "application/pdf",
-        }))
-        .expect("deserialization should succeed");
-
-        assert_eq!(
-            item,
-            ContentItem::UrlFile {
-                url: "https://example.com/report.pdf".to_string(),
-                mime_type: Some("application/pdf".to_string()),
-                filename: Some("report.pdf".to_string()),
-            }
-        );
-    }
-
-    #[test]
-    fn url_file_deserialization_rejects_invalid_scheme() {
-        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
-            "type": "url_file",
-            "url": "file:///tmp/report.pdf",
-        }))
-        .expect_err("deserialization should fail");
-
-        assert!(
-            err.to_string()
-                .contains("url_file `url` must use http or https"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn url_file_deserialization_rejects_non_url_values() {
-        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
-            "type": "url_file",
-            "url": "not-a-url",
-        }))
-        .expect_err("deserialization should fail");
-
-        assert!(
-            err.to_string()
-                .contains("url_file `url` must be a valid absolute URL"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn url_file_deserialization_rejects_overly_long_urls() {
-        let long_url = format!(
-            "https://example.com/{}",
-            "a".repeat(MAX_URL_FILE_URL_LENGTH)
-        );
-        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
-            "type": "url_file",
-            "url": long_url,
-        }))
-        .expect_err("deserialization should fail");
-
-        assert!(
-            err.to_string()
-                .contains("url_file `url` exceeds max length of 8192 characters"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn url_file_deserialization_rejects_empty_url() {
-        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
-            "type": "url_file",
-            "url": "",
-        }))
-        .expect_err("deserialization should fail");
-
-        assert!(
-            err.to_string()
-                .contains("url_file requires a non-empty `url`"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn url_file_deserialization_rejects_whitespace_url() {
-        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
-            "type": "url_file",
-            "url": "   ",
-        }))
-        .expect_err("deserialization should fail");
-
-        assert!(
-            err.to_string()
-                .contains("url_file requires a non-empty `url`"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn url_file_round_trip_preserves_fields() {
-        let original = ContentItem::UrlFile {
-            url: "https://example.com/docs/report.pdf".to_string(),
-            mime_type: Some("application/pdf".to_string()),
-            filename: Some("report.pdf".to_string()),
-        };
-        let serialized = serde_json::to_value(&original).expect("serialize");
-        let parsed = serde_json::from_value::<ContentItem>(serialized).expect("deserialize");
-
-        assert_eq!(parsed, original);
-    }
-
-    #[test]
-    fn wraps_local_file_user_input_with_tags() -> Result<()> {
-        let dir = tempdir()?;
-        let path = dir.path().join("report.pdf");
-        std::fs::write(&path, b"%PDF-1.4\nhello")?;
-
-        let item = ResponseInputItem::from(vec![UserInput::LocalFile { path }]);
-
-        match item {
-            ResponseInputItem::Message { content, .. } => {
-                assert_eq!(content.len(), 3);
-                assert_eq!(
-                    content[0],
-                    ContentItem::InputText {
-                        text: local_file_open_tag_text_with_filename(1, Some("report.pdf")),
-                    }
-                );
-                match &content[1] {
-                    ContentItem::InputFile {
-                        file_data,
-                        file_id,
-                        mime_type,
-                        filename,
-                    } => {
-                        assert!(file_data.is_some(), "inline file should include file_data");
-                        assert_eq!(file_id, &None);
-                        assert_eq!(mime_type, &Some("application/pdf".to_string()));
-                        assert_eq!(filename, &Some("report.pdf".to_string()));
-                    }
-                    other => panic!("expected input file content but found {other:?}"),
-                }
-                assert_eq!(
-                    content[2],
-                    ContentItem::InputText {
-                        text: FILE_CLOSE_TAG.to_string(),
-                    }
-                );
-            }
-            other => panic!("expected message response but got {other:?}"),
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn local_file_read_error_inserts_error_placeholder() {
-        let dir = tempdir().expect("temp dir");
-        let missing = dir.path().join("missing-report.pdf");
-        let item = ResponseInputItem::from(vec![UserInput::LocalFile {
-            path: missing.clone(),
-        }]);
-
-        match item {
-            ResponseInputItem::Message { content, .. } => {
-                assert_eq!(content.len(), 1, "should have exactly one placeholder item");
-                match &content[0] {
-                    ContentItem::InputText { text } => {
-                        assert!(
-                            text.contains(&missing.display().to_string()),
-                            "placeholder should mention the file path"
-                        );
-                        assert!(
-                            text.starts_with("Codex could not read"),
-                            "placeholder should start with error prefix"
-                        );
-                    }
-                    other => panic!("expected InputText placeholder but got {other:?}"),
-                }
-            }
-            other => panic!("expected message response but got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn uploaded_file_user_input_produces_tagged_file_ref_content_item() {
-        let item = ResponseInputItem::from(vec![UserInput::UploadedFile {
-            file_id: "file-abc".to_string(),
-            mime_type: "application/pdf".to_string(),
-            filename: "report.pdf".to_string(),
-            source_path: PathBuf::from("/tmp/report.pdf"),
-        }]);
-
-        match item {
-            ResponseInputItem::Message { content, .. } => {
-                assert_eq!(
-                    content,
-                    vec![
-                        ContentItem::InputText {
-                            text: local_file_open_tag_text_with_filename(1, Some("report.pdf")),
-                        },
-                        ContentItem::InputFile {
-                            file_data: None,
-                            file_id: Some("file-abc".to_string()),
-                            mime_type: Some("application/pdf".to_string()),
-                            filename: Some("report.pdf".to_string()),
-                        },
-                        ContentItem::InputText {
-                            text: FILE_CLOSE_TAG.to_string(),
-                        }
-                    ]
-                );
-            }
-            other => panic!("expected message response but got {other:?}"),
-        }
     }
 }

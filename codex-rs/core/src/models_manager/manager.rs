@@ -10,7 +10,6 @@ use crate::error::Result as CoreResult;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::models_manager::model_info;
-use crate::models_manager::model_presets::builtin_model_presets;
 use codex_api::ModelsClient;
 use codex_api::ReqwestTransport;
 use codex_protocol::config_types::CollaborationModeMask;
@@ -18,7 +17,6 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderMap;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,12 +41,20 @@ pub enum RefreshStrategy {
     OnlineIfUncached,
 }
 
+/// How the manager's base catalog is sourced for the lifetime of the process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CatalogMode {
+    /// Start from bundled `models.json` and allow cache/network refresh updates.
+    Default,
+    /// Use a caller-provided catalog as authoritative and do not mutate it via refresh.
+    Custom,
+}
+
 /// Coordinates remote model discovery plus cached metadata on disk.
 #[derive(Debug)]
 pub struct ModelsManager {
-    local_models: Vec<ModelPreset>,
     remote_models: RwLock<Vec<ModelInfo>>,
-    has_custom_model_catalog: bool,
+    catalog_mode: CatalogMode,
     auth_manager: Arc<AuthManager>,
     etag: RwLock<Option<String>>,
     cache_manager: ModelsCacheManager,
@@ -58,7 +64,7 @@ pub struct ModelsManager {
 impl ModelsManager {
     /// Construct a manager scoped to the provided `AuthManager`.
     ///
-    /// Uses `codex_home` to store cached model metadata and initializes with built-in presets.
+    /// Uses `codex_home` to store cached model metadata and initializes with bundled catalog
     /// When `model_catalog` is provided, it becomes the authoritative remote model list and
     /// background refreshes from `/models` are disabled.
     pub fn new(
@@ -68,14 +74,20 @@ impl ModelsManager {
     ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
-        let has_custom_model_catalog = model_catalog.is_some();
+        let catalog_mode = if model_catalog.is_some() {
+            CatalogMode::Custom
+        } else {
+            CatalogMode::Default
+        };
         let remote_models = model_catalog
             .map(|catalog| catalog.models)
-            .unwrap_or_else(|| Self::load_remote_models_from_file().unwrap_or_default());
+            .unwrap_or_else(|| {
+                Self::load_remote_models_from_file()
+                    .unwrap_or_else(|err| panic!("failed to load bundled models.json: {err}"))
+            });
         Self {
-            local_models: builtin_model_presets(auth_manager.auth_mode()),
             remote_models: RwLock::new(remote_models),
-            has_custom_model_catalog,
+            catalog_mode,
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,
@@ -160,12 +172,33 @@ impl ModelsManager {
         best
     }
 
+    /// Retry metadata lookup for a single namespaced slug like `namespace/model-name`.
+    ///
+    /// This only strips one leading namespace segment and only when the namespace is ASCII
+    /// alphanumeric/underscore (`\\w+`) to avoid broadly matching arbitrary aliases.
+    fn find_model_by_namespaced_suffix(model: &str, candidates: &[ModelInfo]) -> Option<ModelInfo> {
+        let (namespace, suffix) = model.split_once('/')?;
+        if suffix.contains('/') {
+            return None;
+        }
+        if !namespace
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return None;
+        }
+        Self::find_model_by_longest_prefix(suffix, candidates)
+    }
+
     fn construct_model_info_from_candidates(
         model: &str,
         candidates: &[ModelInfo],
         config: &Config,
     ) -> ModelInfo {
-        let remote = Self::find_model_by_longest_prefix(model, candidates);
+        // First use the normal longest-prefix match. If that misses, allow a narrowly scoped
+        // retry for namespaced slugs like `custom/gpt-5.3-codex`.
+        let remote = Self::find_model_by_longest_prefix(model, candidates)
+            .or_else(|| Self::find_model_by_namespaced_suffix(model, candidates));
         let model_info = if let Some(remote) = remote {
             ModelInfo {
                 slug: model.to_string(),
@@ -197,7 +230,7 @@ impl ModelsManager {
     /// Refresh available models according to the specified strategy.
     async fn refresh_available_models(&self, refresh_strategy: RefreshStrategy) -> CoreResult<()> {
         // don't override the custom model catalog if one was provided by the user
-        if self.has_custom_model_catalog {
+        if matches!(self.catalog_mode, CatalogMode::Custom) {
             return Ok(());
         }
 
@@ -322,50 +355,17 @@ impl ModelsManager {
         true
     }
 
-    /// Merge remote model metadata into picker-ready presets, preserving existing entries.
+    /// Build picker-ready presets from the active catalog snapshot.
     fn build_available_models(&self, mut remote_models: Vec<ModelInfo>) -> Vec<ModelPreset> {
         remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
 
-        let remote_presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
-        let existing_presets = self.local_models.clone();
-
-        // Capture provider_id from local presets before merge drops them.
-        // ModelInfo -> ModelPreset always sets provider_id = None; we need to
-        // restore it so provider-based filtering works correctly.
-        let local_provider_ids: HashMap<String, String> = existing_presets
-            .iter()
-            .filter_map(|p| {
-                p.provider_id
-                    .as_ref()
-                    .map(|pid| (p.model.clone(), pid.clone()))
-            })
-            .collect();
-
-        let mut merged_presets = ModelPreset::merge(remote_presets, existing_presets);
-
-        for preset in &mut merged_presets {
-            if preset.provider_id.is_none()
-                && let Some(pid) = local_provider_ids.get(&preset.model)
-            {
-                preset.provider_id = Some(pid.clone());
-            }
-        }
+        let mut presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
         let chatgpt_mode = matches!(self.auth_manager.auth_mode(), Some(AuthMode::Chatgpt));
-        merged_presets = ModelPreset::filter_by_auth(merged_presets, chatgpt_mode);
+        presets = ModelPreset::filter_by_auth(presets, chatgpt_mode);
 
-        for preset in &mut merged_presets {
-            preset.is_default = false;
-        }
-        if let Some(default) = merged_presets
-            .iter_mut()
-            .find(|preset| preset.show_in_picker)
-        {
-            default.is_default = true;
-        } else if let Some(default) = merged_presets.first_mut() {
-            default.is_default = true;
-        }
+        ModelPreset::mark_default_by_picker_visibility(&mut presets);
 
-        merged_presets
+        presets
     }
 
     async fn get_remote_models(&self) -> Vec<ModelInfo> {
@@ -385,9 +385,11 @@ impl ModelsManager {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         Self {
-            local_models: builtin_model_presets(auth_manager.auth_mode()),
-            remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
-            has_custom_model_catalog: false,
+            remote_models: RwLock::new(
+                Self::load_remote_models_from_file()
+                    .unwrap_or_else(|err| panic!("failed to load bundled models.json: {err}")),
+            ),
+            catalog_mode: CatalogMode::Default,
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,
@@ -400,7 +402,9 @@ impl ModelsManager {
         if let Some(model) = model {
             return model.to_string();
         }
-        let presets = builtin_model_presets(None);
+        let mut models = Self::load_remote_models_from_file().unwrap_or_default();
+        models.sort_by(|a, b| a.priority.cmp(&b.priority));
+        let presets: Vec<ModelPreset> = models.into_iter().map(Into::into).collect();
         presets
             .iter()
             .find(|preset| preset.show_in_picker)
@@ -560,6 +564,58 @@ mod tests {
         assert_eq!(model_info.context_window, Some(272_000));
         assert!(!model_info.supports_parallel_tool_calls);
         assert!(!model_info.used_fallback_model_metadata);
+    }
+
+    #[tokio::test]
+    async fn get_model_info_matches_namespaced_suffix() {
+        let codex_home = tempdir().expect("temp dir");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager, None);
+        let known_slug = manager
+            .get_remote_models()
+            .await
+            .first()
+            .expect("bundled models should include at least one model")
+            .slug
+            .clone();
+        let namespaced_model = format!("custom/{known_slug}");
+
+        let model_info = manager.get_model_info(&namespaced_model, &config).await;
+
+        assert_eq!(model_info.slug, namespaced_model);
+        assert!(!model_info.used_fallback_model_metadata);
+    }
+
+    #[tokio::test]
+    async fn get_model_info_rejects_multi_segment_namespace_suffix_matching() {
+        let codex_home = tempdir().expect("temp dir");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager, None);
+        let known_slug = manager
+            .get_remote_models()
+            .await
+            .first()
+            .expect("bundled models should include at least one model")
+            .slug
+            .clone();
+        let namespaced_model = format!("ns1/ns2/{known_slug}");
+
+        let model_info = manager.get_model_info(&namespaced_model, &config).await;
+
+        assert_eq!(model_info.slug, namespaced_model);
+        assert!(model_info.used_fallback_model_metadata);
     }
 
     #[tokio::test]
@@ -896,12 +952,11 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let provider = provider_for("http://example.test".to_string());
-        let mut manager = ModelsManager::with_provider_for_tests(
+        let manager = ModelsManager::with_provider_for_tests(
             codex_home.path().to_path_buf(),
             auth_manager,
             provider,
         );
-        manager.local_models = Vec::new();
 
         let hidden_model = remote_model_with_visibility("hidden", "Hidden", 0, "hide");
         let visible_model = remote_model_with_visibility("visible", "Visible", 1, "list");

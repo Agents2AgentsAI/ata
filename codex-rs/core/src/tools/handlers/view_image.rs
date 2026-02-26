@@ -81,19 +81,22 @@ impl ToolHandler for ViewImageHandler {
         }
         let event_path = abs_path.clone();
 
-        let content = local_image_content_items_with_label_number(&abs_path, None)
+        let content = local_image_content_items_with_label_number(&abs_path, None);
+        let content = content
             .into_iter()
-            .filter_map(|item| match item {
+            .map(|item| match item {
                 ContentItem::InputText { text } => {
-                    Some(FunctionCallOutputContentItem::InputText { text })
+                    FunctionCallOutputContentItem::InputText { text }
                 }
                 ContentItem::InputImage { image_url } => {
-                    Some(FunctionCallOutputContentItem::InputImage { image_url })
+                    FunctionCallOutputContentItem::InputImage { image_url }
                 }
                 ContentItem::OutputText { text } => {
-                    Some(FunctionCallOutputContentItem::InputText { text })
+                    FunctionCallOutputContentItem::InputText { text }
                 }
-                ContentItem::InputFile { .. } | ContentItem::UrlFile { .. } => None,
+                ContentItem::InputFile { .. } | ContentItem::UrlFile { .. } => {
+                    unreachable!("view_image does not produce file content items")
+                }
             })
             .collect();
 

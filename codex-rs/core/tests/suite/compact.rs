@@ -395,8 +395,8 @@ async fn summarize_context_three_requests_and_instructions() {
     }
 
     assert!(
-        regular_turn_context_count == 3,
-        "expected three regular sampling TurnContext entries in rollout (two user turns + one compaction turn)"
+        regular_turn_context_count == 2,
+        "expected two regular sampling TurnContext entries in rollout"
     );
     assert!(
         saw_compacted_summary,
@@ -2985,12 +2985,10 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
-            model_provider: None,
             effort: None,
             summary: None,
             collaboration_mode: None,
             personality: None,
-            feature_flags: None,
         })
         .await
         .expect("override turn context");

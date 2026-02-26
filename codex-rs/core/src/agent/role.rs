@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 use toml::Value as TomlValue;
 
-const DEFAULT_ROLE_NAME: &str = "default";
+pub const DEFAULT_ROLE_NAME: &str = "default";
 const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not available";
 
 /// Applies a role config layer to a mutable config and preserves unspecified keys.
@@ -87,6 +87,7 @@ pub(crate) async fn apply_role_to_config(
         ConfigOverrides {
             cwd: Some(config.cwd.clone()),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+            main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
             js_repl_node_path: config.js_repl_node_path.clone(),
             ..Default::default()
         },
@@ -187,15 +188,6 @@ Rules:
                     }
                 ),
                 (
-                    "synthesizer".to_string(),
-                    AgentRoleConfig {
-                        description: Some("Use `synthesizer` for paper synthesis subagents. \
-Synthesizers use a smaller, faster model to download and extract paper content. \
-They write results to a staging file and return the path.".to_string()),
-                        config_file: Some("synthesizer.toml".to_string().parse().unwrap_or_default()),
-                    }
-                ),
-                (
                     "awaiter".to_string(),
                     AgentRoleConfig {
                         description: Some(r#"Use an `awaiter` agent EVERY TIME you must run a command that might take some time.
@@ -216,11 +208,9 @@ When YOU wait for the `awaiter` agent to be done, use the largest possible timeo
     /// Resolves a built-in role `config_file` path to embedded content.
     pub(super) fn config_file_contents(path: &Path) -> Option<&'static str> {
         const EXPLORER: &str = include_str!("builtins/explorer.toml");
-        const SYNTHESIZER: &str = include_str!("builtins/synthesizer.toml");
         const AWAITER: &str = include_str!("builtins/awaiter.toml");
         match path.to_str()? {
             "explorer.toml" => Some(EXPLORER),
-            "synthesizer.toml" => Some(SYNTHESIZER),
             "awaiter.toml" => Some(AWAITER),
             _ => None,
         }
@@ -351,6 +341,8 @@ mod tests {
             TomlValue::String("base-model".to_string()),
         )])
         .await;
+        config.codex_linux_sandbox_exe = Some(PathBuf::from("/tmp/codex-linux-sandbox"));
+        config.main_execve_wrapper_exe = Some(PathBuf::from("/tmp/codex-execve-wrapper"));
         let role_path = write_role_config(
             &home,
             "effort-only.toml",
@@ -371,6 +363,14 @@ mod tests {
 
         assert_eq!(config.model.as_deref(), Some("base-model"));
         assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(
+            config.codex_linux_sandbox_exe,
+            Some(PathBuf::from("/tmp/codex-linux-sandbox"))
+        );
+        assert_eq!(
+            config.main_execve_wrapper_exe,
+            Some(PathBuf::from("/tmp/codex-execve-wrapper"))
+        );
     }
 
     #[tokio::test]
