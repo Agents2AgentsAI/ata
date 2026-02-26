@@ -13,6 +13,7 @@ use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_app_server_protocol::RequestId;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelsResponse;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -48,11 +49,18 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
 }
 
 fn expected_visible_models() -> Vec<Model> {
-    // Filter by supported_in_api to support testing with both ChatGPT and non-ChatGPT auth modes.
-    let mut presets =
-        ModelPreset::filter_by_auth(codex_core::test_support::all_model_presets().clone(), false);
+    let mut bundled: ModelsResponse =
+        serde_json::from_str(include_str!("../../../../core/models.json"))
+            .expect("bundled models.json should parse");
+    let mut third_party: ModelsResponse =
+        serde_json::from_str(include_str!("../../../../core/third_party_models.json"))
+            .expect("bundled third_party_models.json should parse");
+    bundled.models.append(&mut third_party.models);
+    bundled.models.sort_by(|a, b| a.priority.cmp(&b.priority));
 
-    // Mirror `ModelsManager::build_available_models()` default selection after auth filtering.
+    // Filter by supported_in_api to support testing with both ChatGPT and non-ChatGPT auth modes.
+    let mut presets: Vec<ModelPreset> = bundled.models.into_iter().map(Into::into).collect();
+    presets = ModelPreset::filter_by_auth(presets, false);
     ModelPreset::mark_default_by_picker_visibility(&mut presets);
 
     presets
@@ -136,99 +144,42 @@ async fn list_models_pagination_works() -> Result<()> {
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
-    let first_request = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(1),
-            cursor: None,
-            include_hidden: None,
-        })
-        .await?;
-
-    let first_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(first_request)),
-    )
-    .await??;
-
-    let ModelListResponse {
-        data: first_items,
-        next_cursor: first_cursor,
-    } = to_response::<ModelListResponse>(first_response)?;
-
     let expected_models = expected_visible_models();
+    assert!(!expected_models.is_empty());
+    let mut cursor: Option<String> = None;
 
-    assert_eq!(first_items.len(), 1);
-    assert_eq!(first_items[0].id, expected_models[0].id);
-    let next_cursor = first_cursor.ok_or_else(|| anyhow!("cursor for second page"))?;
+    for (idx, expected_model) in expected_models.iter().enumerate() {
+        let request_id = mcp
+            .send_list_models_request(ModelListParams {
+                limit: Some(1),
+                cursor: cursor.clone(),
+                include_hidden: None,
+            })
+            .await?;
 
-    let second_request = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(1),
-            cursor: Some(next_cursor.clone()),
-            include_hidden: None,
-        })
-        .await?;
+        let response: JSONRPCResponse = timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
 
-    let second_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(second_request)),
-    )
-    .await??;
+        let ModelListResponse {
+            data: items,
+            next_cursor,
+        } = to_response::<ModelListResponse>(response)?;
 
-    let ModelListResponse {
-        data: second_items,
-        next_cursor: second_cursor,
-    } = to_response::<ModelListResponse>(second_response)?;
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, expected_model.id);
+        cursor = next_cursor;
 
-    assert_eq!(second_items.len(), 1);
-    assert_eq!(second_items[0].id, expected_models[1].id);
-    let third_cursor = second_cursor.ok_or_else(|| anyhow!("cursor for third page"))?;
+        if idx + 1 < expected_models.len() {
+            cursor
+                .as_ref()
+                .ok_or_else(|| anyhow!("cursor for next page"))?;
+        }
+    }
 
-    let third_request = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(1),
-            cursor: Some(third_cursor.clone()),
-            include_hidden: None,
-        })
-        .await?;
-
-    let third_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(third_request)),
-    )
-    .await??;
-
-    let ModelListResponse {
-        data: third_items,
-        next_cursor: third_cursor,
-    } = to_response::<ModelListResponse>(third_response)?;
-
-    assert_eq!(third_items.len(), 1);
-    assert_eq!(third_items[0].id, expected_models[2].id);
-    let fourth_cursor = third_cursor.ok_or_else(|| anyhow!("cursor for fourth page"))?;
-
-    let fourth_request = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(1),
-            cursor: Some(fourth_cursor.clone()),
-            include_hidden: None,
-        })
-        .await?;
-
-    let fourth_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(fourth_request)),
-    )
-    .await??;
-
-    let ModelListResponse {
-        data: fourth_items,
-        next_cursor: fourth_cursor,
-    } = to_response::<ModelListResponse>(fourth_response)?;
-
-    assert_eq!(fourth_items.len(), 1);
-    assert_eq!(fourth_items[0].id, expected_models[3].id);
-    assert!(fourth_cursor.is_none());
+    assert!(cursor.is_none());
     Ok(())
 }
 
