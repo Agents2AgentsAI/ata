@@ -1,6 +1,6 @@
 ---
 name: paper-discovery
-description: Use when a user asks a research question, wants to learn about a research topic, asks how something is done in the literature, or wants to discover papers. Examples -- "how do people train RL for robotic grasping", "what are the best methods for sim-to-real transfer", "I want to learn about diffusion policies", "find me papers on VLAs". Provides structured landscape briefings with approaches, best papers, and reading plans. Also handles KB/Zotero-based proactive discovery.
+description: Use when a user asks a research question, wants to learn about a research topic, asks how something is done in the literature, or wants to discover papers. Examples -- "how do people train RL for robotic grasping", "what are the best methods for sim-to-real transfer", "I want to learn about diffusion policies", "find me papers on VLAs". Provides structured landscape briefings with approaches, key insights, and automatic synthesis. Also handles KB/Zotero-based proactive discovery.
 metadata:
   short-description: Discover and rank papers for a topic
 ---
@@ -18,6 +18,7 @@ metadata:
 - Do NOT read individual KB cards one by one — a single `rg` search is enough
 - Do NOT open arXiv URLs for ANY reason — not to verify existence, not to read abstracts, not to confirm metadata. `paper_search` and `paper_citations` already return titles, authors, years, and abstracts.
 - Do NOT use `web.run`, `web_search`, or any web browsing to look up papers — the paper API tools are your only source.
+- Do NOT call `paper_get` for papers returned by `paper_search` or `paper_citations` — those APIs already return titles, authors, years, abstracts, and IDs. Calling `paper_get` per-result wastes API quota (14+ unnecessary calls per session) and adds 20+ seconds of latency. `paper_get` is ONLY useful if you have a bare S2 ID with no metadata.
 - Do NOT include `citeturn*view*` or similar citation markers in reading view content — these are internal artifacts that appear as garbage to the user. Write citations as Author (Year) only.
 
 **Speed matters.** The user should see results within 30 seconds of their request. Every tool call you make before `paper_search` or `paper_citations` is delay the user feels. The paper API returns all metadata you need — never supplement with web browsing.
@@ -40,28 +41,20 @@ Three modes:
 
 **Before doing ANY search work**, classify the user's request into one of two categories:
 
-### Category 1: Auto-Continue (full pipeline)
+### The Default: Always Auto-Continue
 
-The user wants discovery + synthesis + comparison. After presenting the discovery reading view, you MUST automatically continue: invoke `$paper-synthesis` for all reading-plan papers (multi-paper path, parallel subagents), wait for results, then invoke `$cross-paper-report` to produce the integrated explained report. Do NOT stop at the reading plan. Do NOT present `$paper-synthesis` commands for the user to click.
+**Auto-continue is the default behavior.** After presenting the discovery reading view, you MUST automatically continue: invoke `$paper-synthesis` for all top papers (multi-paper path, parallel subagents), wait for results, then invoke `$cross-paper-report` to produce the integrated explained report. Do NOT stop at the discovery map. Do NOT present `$paper-synthesis` commands for the user to click. The user asked a research question — they want answers, not a bibliography.
 
-**Decision rule**: Auto-continue if the user's request implies they want to *understand* the papers, not just *find* them. Apply this test: "Would the user be satisfied with just a list of papers and a reading plan?" If no → auto-continue.
+**The Key Insights section** (formerly "Reading Plan") should say "Proceeding to synthesize [N] papers..." After the discovery reading view is shown, immediately proceed to synthesis without waiting for user input.
 
-**Trigger patterns** (match any):
-- Explicit: "full survey", "survey", "explain", "synthesize", "deep dive", "walk me through", "full analysis", "I want a report", "tell me everything about"
-- Implicit understanding requests: "how does X work in the literature?", "what are the approaches to X and how do they differ?", "I want to understand X"
-- Scope + depth: "give me a comprehensive overview of X", "I need to get up to speed on X"
+### Exception: Discovery Only
 
-### Category 2: Discovery Only
+Only stop at the discovery map (without auto-continuing to synthesis) when the user **explicitly** asks for just a list:
+- "just find papers", "just list papers", "don't synthesize", "discovery only"
+- "what cites X" (citation lookup — the user already has the paper)
+- "show me recent work on X" (browsing, not studying)
 
-The user wants to *find* papers, not necessarily understand them in depth. Present the reading view with the reading plan and stop.
-
-**Trigger patterns**: "find papers on", "discover", "what's out there on", "show me recent work", "find me related papers", "what cites X"
-
-### When in doubt
-
-If the request is ambiguous (e.g., "tell me about X"), default to **discovery only** — it's faster and the user can always request synthesis afterward. But if the user says "explain" or "understand" anywhere in the request, auto-continue.
-
-**When auto-continuing**, the reading plan section should say "Proceeding to synthesize [N] papers..." instead of showing `$paper-synthesis` commands. After the discovery reading view is shown, immediately proceed to synthesis without waiting for user input.
+**When in doubt, auto-continue.** A user asking "find papers about how X can be used for Y" is asking a research question — they want to understand X, not just get titles. The word "find" does not mean "stop at a list."
 
 ## Pipeline Paths
 
@@ -205,7 +198,7 @@ Organize papers into tiers:
 **Keep DOIs, arXiv IDs, and long URLs out of prose paragraphs.** They break reading flow and add no value inline.
 
 - **In narrative sections** (The Landscape, Approaches, recommendations): cite as **Author (Year)** only. Example: "This approach was introduced by Smith et al. (2020)." Never: "This approach was introduced by Smith et al. (2020; arXiv 2003.XXXXX; DOI 10.xxx)."
-- **In the Reading Plan**: include IDs on their own line as a synthesis command: `→ $paper-synthesis [arXiv ID or DOI]`. This is where IDs belong — actionable, not decorative.
+- **In Key Insights**: cite as Author (Year) like other sections. Do NOT include `$paper-synthesis` commands — auto-continue handles synthesis automatically.
 - **In a References section at the end**: list full citations with IDs. This is the one place DOIs and arXiv IDs appear in full.
 - **For web sources**: cite as `(source name)` in prose; collect full URLs in References.
 
@@ -219,7 +212,7 @@ The same rule applies to both explore mode and discovery mode output.
 
 - **The Landscape**: 2-3 short paragraphs max (~15 lines). Orientation, not literature review.
 - **Approaches**: 4-6 lines per approach cluster. Max 5 clusters. Total section ≤ 35 lines.
-- **Reading Plan**: **Top 10 papers only**, each 2 lines (title + synthesis command). If you found more than 10, list only the top 10 by relevance/citations. Mention the total count ("Found 19 papers; showing the top 10"). Total section ≤ 30 lines.
+- **Key Insights**: The 3-5 most important takeaways from the discovered papers — practical findings, surprising results, consensus views, or unresolved debates. Each insight is 2-3 sentences grounded in specific papers (cite as Author (Year)). This is NOT a paper list — it's what someone would learn from reading these papers. Total section ≤ 30 lines. End with "Proceeding to synthesize [N] papers for full analysis..." (auto-continue) or nothing (discovery-only).
 - **Open Questions**: 2-3 bullet points, one sentence each.
 
 When in doubt, err on the side of brevity. The reading view is for orientation — deep analysis belongs in `$paper-synthesis`.
@@ -251,14 +244,14 @@ Cite as Author (Year) — no IDs inline.]
 #### 2. [Approach Name]
 ...
 
-## Reading Plan (Top 10)
+## Key Insights
 
-[If auto-continue: list papers without $paper-synthesis commands, end with "Proceeding to synthesize..."]
-[If manual: list papers with synthesis commands]
+[3-5 insights extracted from the discovered papers. Each is a finding, not a paper title.]
 
-1. **[Title]** — [Authors] ([Year])
-2. **[Title]** — [Authors] ([Year])
-...
+- **[Insight]**: [2-3 sentences grounded in specific papers. Cite as Author (Year).]
+- **[Insight]**: ...
+
+[If auto-continue: "Proceeding to synthesize [N] papers for full analysis..."]
 
 ## Open Questions
 
@@ -302,7 +295,7 @@ Deduplicate by DOI → arXiv → title fuzzy match. Filter out papers already in
 
 ### Discovery Phase 4: Present
 
-Use the same 4-section reading view format as explore mode: Landscape, Approaches, Reading Plan (top 10), Open Questions. Same section length rules apply.
+Use the same 4-section reading view format as explore mode: Landscape, Approaches, Key Insights, Open Questions. Same section length rules apply.
 
 ## Post-Discovery Housekeeping
 
@@ -333,7 +326,7 @@ After presenting the discovery report, do these:
 
 ## Presentation
 
-Use the same outline → fill pattern described in Explore Phase 4. Use 4 sections: `"## The Landscape\n\n## Approaches\n\n## Reading Plan (Top 10)\n\n## Open Questions"`.
+Use the same outline → fill pattern described in Explore Phase 4. Use 4 sections: `"## The Landscape\n\n## Approaches\n\n## Key Insights\n\n## Open Questions"`.
 
 **Phase 1 (Outline):** IMMEDIATELY call `present_reading_view` with headings-only content.
 **Phase 2 (Fill):** Fill sections sequentially via `update_document_section`.
