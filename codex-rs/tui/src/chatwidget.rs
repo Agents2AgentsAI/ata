@@ -50,6 +50,7 @@ use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_core::auth::PROVIDER_OPENAI;
 use codex_core::auth::list_configured_providers;
+use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintResult;
@@ -5278,6 +5279,28 @@ impl ChatWidget {
         Some(trimmed.to_string())
     }
 
+    /// Resolve which provider ID to persist when selecting a model from a
+    /// preset. If the user's current provider is wire-compatible with the
+    /// preset's built-in provider, preserve the user's provider (e.g. a custom
+    /// OpenAI-compatible loadbalancer). Otherwise, switch to the preset's
+    /// built-in provider.
+    fn resolve_provider_for_persistence(&self, preset: &ModelPreset) -> Option<String> {
+        let preset_provider = preset.provider_id.as_deref().unwrap_or(PROVIDER_OPENAI);
+        // If the current provider is already the preset's built-in, keep it.
+        if self.config.model_provider_id == preset_provider {
+            return Some(self.config.model_provider_id.clone());
+        }
+        // If the current provider speaks the same wire protocol, preserve it
+        // (e.g. a custom loadbalancer that is OpenAI Responses-compatible).
+        if let Some(preset_info) = built_in_model_providers().get(preset_provider)
+            && self.config.model_provider.wire_api == preset_info.wire_api
+        {
+            return Some(self.config.model_provider_id.clone());
+        }
+        // Different wire protocol → switch to the preset's built-in provider.
+        Some(preset_provider.to_string())
+    }
+
     pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
         // Get list of configured providers to filter models
         let mut configured_providers: std::collections::HashSet<String> =
@@ -5352,12 +5375,7 @@ impl ChatWidget {
                 let description =
                     (!preset.description.is_empty()).then_some(preset.description.clone());
                 let model = preset.model.clone();
-                let provider_id = Some(
-                    preset
-                        .provider_id
-                        .clone()
-                        .unwrap_or_else(|| PROVIDER_OPENAI.to_string()),
-                );
+                let provider_id = self.resolve_provider_for_persistence(&preset);
                 let should_prompt_plan_mode_scope = self.should_prompt_plan_mode_reasoning_scope(
                     model.as_str(),
                     Some(preset.default_reasoning_effort),
@@ -5649,14 +5667,9 @@ impl ChatWidget {
 
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
     pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
+        let provider_id = self.resolve_provider_for_persistence(&preset);
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
-        let provider_id = Some(
-            preset
-                .provider_id
-                .clone()
-                .unwrap_or_else(|| PROVIDER_OPENAI.to_string()),
-        );
         let in_plan_mode =
             self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan;
 
