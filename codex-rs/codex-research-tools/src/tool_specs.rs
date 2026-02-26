@@ -14,9 +14,7 @@ pub struct ToolDef {
 pub fn all_tool_defs() -> Vec<ToolDef> {
     let mut defs = Vec::new();
 
-    #[cfg(feature = "paper_search")]
-    {
-        defs.extend([
+    defs.extend([
             ToolDef {
                 id: "paper_search",
                 native_name: "paper_search",
@@ -115,12 +113,9 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                     "additionalProperties": false
                 }),
             },
-        ]);
-    }
+    ]);
 
-    #[cfg(feature = "zotero")]
-    {
-        defs.extend([
+    defs.extend([
             ToolDef {
                 id: "zotero_search",
                 native_name: "zotero_search",
@@ -476,141 +471,135 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                     "additionalProperties": false
                 }),
             },
-        ]);
-    }
+    ]);
 
-    #[cfg(feature = "repo_analysis")]
-    {
-        defs.extend([
-            ToolDef {
-                id: "repo_clone_and_summarize",
-                native_name: "repo_clone_and_summarize",
-                mcp_name: "clone_and_summarize",
-                description: "Shallow-clone a repo and summarize its structure.",
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "repo_url": { "type": "string" },
-                        "branch": { "type": "string" }
-                    },
-                    "required": ["repo_url"],
-                    "additionalProperties": false
-                }),
-            },
-            ToolDef {
-                id: "repo_find_models",
-                native_name: "repo_find_models",
-                mcp_name: "find_model_definitions",
-                description: "Find model class definitions in a repo.",
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "repo_url": { "type": "string" },
-                        "framework": { "type": "string" }
-                    },
-                    "required": ["repo_url"],
-                    "additionalProperties": false
-                }),
-            },
-            ToolDef {
-                id: "repo_extract_requirements",
-                native_name: "repo_extract_requirements",
-                mcp_name: "extract_requirements",
-                description: "Extract dependency requirements from a repo.",
-                input_schema: json!({
-                    "type": "object",
-                    "properties": { "repo_url": { "type": "string" } },
-                    "required": ["repo_url"],
-                    "additionalProperties": false
-                }),
-            },
-            ToolDef {
-                id: "repo_find_entrypoints",
-                native_name: "repo_find_entrypoints",
-                mcp_name: "find_entrypoints",
-                description: "Find training/eval/inference/export entrypoints.",
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "repo_url": { "type": "string" },
-                        "task_hint": { "type": "string" }
-                    },
-                    "required": ["repo_url"],
-                    "additionalProperties": false
-                }),
-            },
-            ToolDef {
-                id: "repo_extract_io_shapes",
-                native_name: "repo_extract_io_shapes",
-                mcp_name: "extract_io_shapes",
-                description: "Extract model input/output shape hints.",
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "repo_url": { "type": "string" },
-                        "model_class": { "type": "string" }
-                    },
-                    "required": ["repo_url"],
-                    "additionalProperties": false
-                }),
-            },
-            ToolDef {
-                id: "repo_get_health",
-                native_name: "repo_get_health",
-                mcp_name: "get_repo_health",
-                description: "Get repo health and maintenance signals.",
-                input_schema: json!({
-                    "type": "object",
-                    "properties": { "repo_url": { "type": "string" } },
-                    "required": ["repo_url"],
-                    "additionalProperties": false
-                }),
-            },
-            ToolDef {
-                id: "repo_find_export_paths",
-                native_name: "repo_find_export_paths",
-                mcp_name: "find_export_paths",
-                description: "Find model export and conversion code paths.",
-                input_schema: json!({
-                    "type": "object",
-                    "properties": { "repo_url": { "type": "string" } },
-                    "required": ["repo_url"],
-                    "additionalProperties": false
-                }),
-            },
-            ToolDef {
-                id: "repo_extract_config_schema",
-                native_name: "repo_extract_config_schema",
-                mcp_name: "extract_config_schema",
-                description: "Extract training config schema and defaults.",
-                input_schema: json!({
-                    "type": "object",
-                    "properties": { "repo_url": { "type": "string" } },
-                    "required": ["repo_url"],
-                    "additionalProperties": false
-                }),
-            },
-            ToolDef {
-                id: "repo_diff_requirements",
-                native_name: "repo_diff_requirements",
-                mcp_name: "diff_requirements",
-                description: "Compare repo dependencies to a local requirements file.",
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "repo_url": { "type": "string" },
-                        "local_requirements_path": { "type": "string" }
-                    },
-                    "required": ["repo_url", "local_requirements_path"],
-                    "additionalProperties": false
-                }),
-            },
-        ]);
-    }
+    defs.extend([
+        ToolDef {
+            id: "repo_clone_and_summarize",
+            native_name: "repo_clone_and_summarize",
+            mcp_name: "clone_and_summarize",
+            description: "Shallow-clone a repo and summarize its structure.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "repo_url": { "type": "string" },
+                    "branch": { "type": "string" }
+                },
+                "required": ["repo_url"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDef {
+            id: "repo_find_models",
+            native_name: "repo_find_models",
+            mcp_name: "find_model_definitions",
+            description: "Find model class definitions in a repo.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "repo_url": { "type": "string" },
+                    "framework": { "type": "string" }
+                },
+                "required": ["repo_url"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDef {
+            id: "repo_extract_requirements",
+            native_name: "repo_extract_requirements",
+            mcp_name: "extract_requirements",
+            description: "Extract dependency requirements from a repo.",
+            input_schema: json!({
+                "type": "object",
+                "properties": { "repo_url": { "type": "string" } },
+                "required": ["repo_url"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDef {
+            id: "repo_find_entrypoints",
+            native_name: "repo_find_entrypoints",
+            mcp_name: "find_entrypoints",
+            description: "Find training/eval/inference/export entrypoints.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "repo_url": { "type": "string" },
+                    "task_hint": { "type": "string" }
+                },
+                "required": ["repo_url"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDef {
+            id: "repo_extract_io_shapes",
+            native_name: "repo_extract_io_shapes",
+            mcp_name: "extract_io_shapes",
+            description: "Extract model input/output shape hints.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "repo_url": { "type": "string" },
+                    "model_class": { "type": "string" }
+                },
+                "required": ["repo_url"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDef {
+            id: "repo_get_health",
+            native_name: "repo_get_health",
+            mcp_name: "get_repo_health",
+            description: "Get repo health and maintenance signals.",
+            input_schema: json!({
+                "type": "object",
+                "properties": { "repo_url": { "type": "string" } },
+                "required": ["repo_url"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDef {
+            id: "repo_find_export_paths",
+            native_name: "repo_find_export_paths",
+            mcp_name: "find_export_paths",
+            description: "Find model export and conversion code paths.",
+            input_schema: json!({
+                "type": "object",
+                "properties": { "repo_url": { "type": "string" } },
+                "required": ["repo_url"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDef {
+            id: "repo_extract_config_schema",
+            native_name: "repo_extract_config_schema",
+            mcp_name: "extract_config_schema",
+            description: "Extract training config schema and defaults.",
+            input_schema: json!({
+                "type": "object",
+                "properties": { "repo_url": { "type": "string" } },
+                "required": ["repo_url"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDef {
+            id: "repo_diff_requirements",
+            native_name: "repo_diff_requirements",
+            mcp_name: "diff_requirements",
+            description: "Compare repo dependencies to a local requirements file.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "repo_url": { "type": "string" },
+                    "local_requirements_path": { "type": "string" }
+                },
+                "required": ["repo_url", "local_requirements_path"],
+                "additionalProperties": false
+            }),
+        },
+    ]);
 
-    #[cfg(feature = "hackernews")]
-    {
-        defs.extend([
+    defs.extend([
             ToolDef {
                 id: "hn_search",
                 native_name: "hn_search",
@@ -665,12 +654,9 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                     "additionalProperties": false
                 }),
             },
-        ]);
-    }
+    ]);
 
-    #[cfg(feature = "patents")]
-    {
-        defs.extend([
+    defs.extend([
             ToolDef {
                 id: "patent_search",
                 native_name: "patent_search",
@@ -711,8 +697,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                     "additionalProperties": false
                 }),
             },
-        ]);
-    }
+    ]);
 
     defs
 }

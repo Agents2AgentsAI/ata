@@ -18,10 +18,6 @@ vt100-tests = []
 # Gate verbose debug logging inside the TUI implementation.
 debug-logs = []
 data = ["codex-core/data"]
-research-hackernews = ["codex-core/research-hackernews"]
-research-patents = ["codex-core/research-patents"]
-research-repo = ["codex-core/research-repo"]
-research-all = ["data", "research-hackernews", "research-patents", "research-repo"]
 
 [lints]
 workspace = true
