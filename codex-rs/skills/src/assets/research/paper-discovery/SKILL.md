@@ -38,12 +38,28 @@ Three modes:
 
 ## Auto-Continue Detection (CRITICAL)
 
-**Before doing ANY search work**, classify the user's request:
+**Before doing ANY search work**, classify the user's request into one of two categories:
 
-- **Survey / full analysis / explain these** → The user wants the FULL pipeline. After presenting the discovery reading view, you MUST automatically continue: invoke `$paper-synthesis` for all reading-plan papers (multi-paper path, parallel subagents), wait for results, then invoke `$cross-paper-report` to produce the integrated explained report. Do NOT stop at the reading plan. Do NOT present `$paper-synthesis` commands for the user to click.
-- **Explore / discover / find papers** → Discovery only. Present the reading view with the reading plan and stop. The user decides what to do next.
+### Category 1: Auto-Continue (full pipeline)
 
-**Trigger phrases for auto-continue** (non-exhaustive): "full survey", "survey", "explain these", "explain them", "I want a report", "deep dive on all", "synthesize all", "walk me through these", "I want to understand all of them", "give me a full analysis".
+The user wants discovery + synthesis + comparison. After presenting the discovery reading view, you MUST automatically continue: invoke `$paper-synthesis` for all reading-plan papers (multi-paper path, parallel subagents), wait for results, then invoke `$cross-paper-report` to produce the integrated explained report. Do NOT stop at the reading plan. Do NOT present `$paper-synthesis` commands for the user to click.
+
+**Decision rule**: Auto-continue if the user's request implies they want to *understand* the papers, not just *find* them. Apply this test: "Would the user be satisfied with just a list of papers and a reading plan?" If no → auto-continue.
+
+**Trigger patterns** (match any):
+- Explicit: "full survey", "survey", "explain", "synthesize", "deep dive", "walk me through", "full analysis", "I want a report", "tell me everything about"
+- Implicit understanding requests: "how does X work in the literature?", "what are the approaches to X and how do they differ?", "I want to understand X"
+- Scope + depth: "give me a comprehensive overview of X", "I need to get up to speed on X"
+
+### Category 2: Discovery Only
+
+The user wants to *find* papers, not necessarily understand them in depth. Present the reading view with the reading plan and stop.
+
+**Trigger patterns**: "find papers on", "discover", "what's out there on", "show me recent work", "find me related papers", "what cites X"
+
+### When in doubt
+
+If the request is ambiguous (e.g., "tell me about X"), default to **discovery only** — it's faster and the user can always request synthesis afterward. But if the user says "explain" or "understand" anywhere in the request, auto-continue.
 
 **When auto-continuing**, the reading plan section should say "Proceeding to synthesize [N] papers..." instead of showing `$paper-synthesis` commands. After the discovery reading view is shown, immediately proceed to synthesis without waiting for user input.
 

@@ -25,10 +25,39 @@ fn launch_zotero() -> Result<()> {
             .map_err(|e| ResearchError::Internal(format!("failed to launch Zotero: {e}")))?;
         Ok(())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        // Try common Zotero binary names on Linux.
+        let names = ["zotero", "zotero-bin"];
+        for name in &names {
+            if let Ok(_child) = std::process::Command::new(name)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                return Ok(());
+            }
+        }
+        // Try flatpak as a fallback.
+        if let Ok(_child) = std::process::Command::new("flatpak")
+            .args(["run", "org.zotero.Zotero"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            return Ok(());
+        }
+        Err(ResearchError::Internal(
+            "could not find Zotero on this system — install it or start it manually".to_string(),
+        ))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         Err(ResearchError::Internal(
-            "auto-starting Zotero is only supported on macOS".to_string(),
+            "auto-starting Zotero is only supported on macOS and Linux — start it manually"
+                .to_string(),
         ))
     }
 }

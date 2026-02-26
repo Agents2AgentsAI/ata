@@ -30,41 +30,51 @@ use super::selection_popup_common::measure_rows_height;
 use super::selection_popup_common::render_rows;
 
 /// Per-category research features with display metadata.
-const RESEARCH_FEATURES: &[(Feature, &str, &str)] = &[
+///
+/// Each entry: (feature flag, display name, description, optional setup hint).
+/// The setup hint is shown when a feature requires external configuration.
+const RESEARCH_FEATURES: &[(Feature, &str, &str, &str)] = &[
     (
         Feature::ResearchPaperSearch,
         "Paper Search",
         "Search academic papers via Semantic Scholar, arXiv, OpenAlex",
+        "",
     ),
     (
         Feature::ResearchZotero,
         "Zotero",
         "Zotero library search, notes, annotations, citations",
+        "config: zotero_api_key + zotero_user_id",
     ),
     (
         Feature::ResearchHackerNews,
         "Hacker News",
         "Search and browse Hacker News stories and comments",
+        "",
     ),
     (
         Feature::ResearchPatents,
         "Patents",
-        "Search and retrieve USPTO patent information",
+        "Search worldwide patent data from 90+ patent offices",
+        "config: EPO_CONSUMER_KEY + EPO_CONSUMER_SECRET",
     ),
     (
         Feature::ResearchRepoAnalysis,
         "Repo Analysis",
         "Clone, summarize, and analyze code repositories",
+        "",
     ),
     (
         Feature::ReadingView,
         "Reading View",
-        "Present output in a navigable reading view instead of inline chat",
+        "Present output as a navigable document with foldable sections",
+        "",
     ),
     (
         Feature::ResearchKnowledgeBase,
         "Knowledge Base",
-        "Persist research cards, journal entries, and research context to KB",
+        "Persist research cards, journal entries, and cross-paper reports",
+        "",
     ),
 ];
 
@@ -72,6 +82,7 @@ pub(crate) struct ResearchToolItem {
     pub feature: Feature,
     pub name: &'static str,
     pub description: &'static str,
+    pub setup_hint: &'static str,
     pub enabled: bool,
 }
 
@@ -127,9 +138,14 @@ impl ResearchToolsView {
             };
             let marker = if item.enabled { 'x' } else { ' ' };
             let name = format!("{prefix} [{marker}] {}", item.name);
+            let description = if !item.enabled && !item.setup_hint.is_empty() {
+                format!("{} ({})", item.description, item.setup_hint)
+            } else {
+                item.description.to_string()
+            };
             rows.push(GenericDisplayRow {
                 name,
-                description: Some(item.description.to_string()),
+                description: Some(description),
                 ..Default::default()
             });
         }
@@ -329,7 +345,7 @@ pub(crate) fn build_research_tool_items(
 ) -> Vec<ResearchToolItem> {
     RESEARCH_FEATURES
         .iter()
-        .map(|&(feature, name, description)| {
+        .map(|&(feature, name, description, setup_hint)| {
             // ReadingView and KB are independent of the master Research toggle.
             let enabled =
                 if feature == Feature::ReadingView || feature == Feature::ResearchKnowledgeBase {
@@ -341,6 +357,7 @@ pub(crate) fn build_research_tool_items(
                 feature,
                 name,
                 description,
+                setup_hint,
                 enabled,
             }
         })
