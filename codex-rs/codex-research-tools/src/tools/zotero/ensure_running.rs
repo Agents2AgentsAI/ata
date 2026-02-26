@@ -63,7 +63,7 @@ fn launch_zotero() -> Result<()> {
 }
 
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
-const POLL_TIMEOUT: Duration = Duration::from_secs(20);
+const POLL_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Ensure the local Zotero API is reachable, launching the application if
 /// necessary. When talking to the remote (cloud) API this is a no-op.
@@ -94,7 +94,8 @@ pub(crate) async fn ensure_zotero_running_impl(toolkit: &ResearchToolkit) -> Res
         }
         if tokio::time::Instant::now() >= deadline {
             return Err(ResearchError::Internal(
-                "Zotero was launched but its local API did not become reachable within 20 seconds"
+                "Zotero was launched but its local API did not become reachable within 8 seconds \
+                 — is Zotero installed? Start it manually or check the connection."
                     .to_string(),
             ));
         }

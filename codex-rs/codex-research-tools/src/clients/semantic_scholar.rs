@@ -306,7 +306,7 @@ fn map_paper(paper: SemanticScholarPaper, api_url: &str, source: &str) -> Paper 
 
 #[derive(Debug, Deserialize)]
 struct SemanticScholarSearchResponse {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_empty_vec")]
     data: Vec<SemanticScholarPaper>,
     total: Option<u64>,
     next: Option<u32>,
@@ -314,7 +314,7 @@ struct SemanticScholarSearchResponse {
 
 #[derive(Debug, Deserialize)]
 struct SemanticScholarRelationResponse {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_empty_vec")]
     data: Vec<SemanticScholarRelationItem>,
     total: Option<u64>,
     next: Option<u32>,
@@ -400,11 +400,68 @@ struct SemanticScholarExternalIds {
 
 #[derive(Debug, Deserialize)]
 struct SemanticScholarRecommendationResponse {
-    #[serde(rename = "recommendedPapers")]
+    #[serde(
+        default,
+        rename = "recommendedPapers",
+        deserialize_with = "null_as_empty_vec"
+    )]
     recommended_papers: Vec<SemanticScholarPaper>,
+}
+
+/// Deserialize a JSON array or `null` into `Vec<T>`. The Semantic Scholar API
+/// sometimes returns `{"data": null}` instead of an empty array, which
+/// causes serde to fail with "invalid type: null, expected a sequence".
+fn null_as_empty_vec<'de, D, T>(deserializer: D) -> std::result::Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Option::<Vec<T>>::deserialize(deserializer).map(Option::unwrap_or_default)
 }
 
 #[derive(Debug, Deserialize)]
 struct SemanticScholarAuthor {
     name: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn search_response_handles_null_data() {
+        let json = r#"{"data": null, "total": 0}"#;
+        let resp: SemanticScholarSearchResponse = serde_json::from_str(json).expect("null data");
+        assert_eq!(resp.data.len(), 0);
+    }
+
+    #[test]
+    fn search_response_handles_missing_data() {
+        let json = r#"{"total": 0}"#;
+        let resp: SemanticScholarSearchResponse = serde_json::from_str(json).expect("missing data");
+        assert_eq!(resp.data.len(), 0);
+    }
+
+    #[test]
+    fn search_response_handles_empty_array() {
+        let json = r#"{"data": [], "total": 0}"#;
+        let resp: SemanticScholarSearchResponse = serde_json::from_str(json).expect("empty array");
+        assert_eq!(resp.data.len(), 0);
+    }
+
+    #[test]
+    fn relation_response_handles_null_data() {
+        let json = r#"{"data": null, "total": 0}"#;
+        let resp: SemanticScholarRelationResponse = serde_json::from_str(json).expect("null data");
+        assert_eq!(resp.data.len(), 0);
+    }
+
+    #[test]
+    fn recommendation_response_handles_null_papers() {
+        let json = r#"{"recommendedPapers": null}"#;
+        let resp: SemanticScholarRecommendationResponse =
+            serde_json::from_str(json).expect("null papers");
+        assert_eq!(resp.recommended_papers.len(), 0);
+    }
 }

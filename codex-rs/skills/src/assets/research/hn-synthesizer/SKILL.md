@@ -17,7 +17,7 @@ You are an HN thread analysis subagent. Your job: retrieve ONE Hacker News threa
 2. Analyze the full thread discussion (see What to Extract below).
 3. **Write a staging file** via `exec_command` (the staging directory is always used for temporary data transfer, regardless of whether KB persistence is enabled):
    ```
-   mkdir -p ~/.ata/staging && cat <<'CARD_EOF' > ~/.ata/knowledge-base/staging/hn-<thread_id>.md
+   mkdir -p $HOME/.ata/knowledge-base/staging && cat <<'CARD_EOF' > $HOME/.ata/knowledge-base/staging/hn-<thread_id>.md
    ---
    thread_id: "<story_id>"
    title: "<thread title>"

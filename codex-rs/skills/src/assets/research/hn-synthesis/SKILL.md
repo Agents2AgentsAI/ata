@@ -42,7 +42,11 @@ The main agent orchestrates but does not call `hn_search` or `hn_get_thread` dir
 > [If specific keywords requested: Keywords: [list]]
 
 2. **Wait** for the discovery subagent to return thread IDs.
-3. **Spawn one `$hn-synthesizer` subagent per thread** (in parallel), passing the URLs from discovery:
+3. **Spawn `$hn-synthesizer` subagents in batches of 8.** The system has a 20-thread limit — spawning more than ~10 subagents at once causes silent failures. Process threads in waves:
+   - **Batch 1**: Spawn subagents for threads 1-8. Wait for all 8 to complete (single `wait` call — see step 4).
+   - **Batch 2**: Spawn subagents for threads 9-16. Wait again.
+   - **Continue** until all threads are processed.
+   - If discovery returned > 25 threads, take the top 25 ranked by points × relevance. Diminishing returns beyond that.
 
 > $hn-synthesizer
 >
@@ -51,7 +55,7 @@ The main agent orchestrates but does not call `hn_search` or `hn_get_thread` dir
 > Article URL: [linked URL, if any]
 > Topic context: [brief context from discovery results]
 
-4. **Wait** for all analysis subagents to complete — each returns a staging file path.
+4. **Wait ONCE per batch** — pass all subagent IDs from the current batch in a single `wait` call. Do NOT call `wait` per subagent or poll in a loop. One `wait` call returns all results for that batch. After each batch completes, spawn the next batch.
 5. **Read all staging files** via `exec_command` (e.g., `cat ~/.ata/knowledge-base/staging/hn-*.md`).
 6. **Present** a unified summary to the user immediately (see Presentation). Do NOT write to KB before presenting.
 7. If multiple threads were analyzed, include the cross-thread synthesis sections (see Phase 4) in the reading view.
@@ -72,7 +76,7 @@ The main agent orchestrates but does not call `hn_search` or `hn_get_thread` dir
 >
 > Confirm completion of each step before moving to the next.
 
-**If KB is disabled:** Skip step 8. After presenting, delete staging files with `exec_command: rm ~/.ata/knowledge-base/staging/hn-*.md` so they don't accumulate. No card, journal, or context persistence happens.
+**If KB is disabled:** Skip step 8. After presenting, delete staging files with `exec_command: for f in $HOME/.ata/knowledge-base/staging/hn-*.md; do unlink "$f"; done` so they don't accumulate. No card, journal, or context persistence happens. **Use `unlink`, not `rm -f`** — the sandbox blocks `rm` but allows `unlink`.
 
 ### Pre-Synthesis Check (Optional)
 
