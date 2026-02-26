@@ -785,9 +785,7 @@ mod tests {
         assert!(pending.is_empty(), "no pending input for rejected PDF");
     }
 
-    fn minimal_tools_config_with_search(
-        web_search_mode: Option<WebSearchMode>,
-    ) -> ToolsConfig {
+    fn minimal_tools_config_with_search(web_search_mode: Option<WebSearchMode>) -> ToolsConfig {
         use crate::config::test_config;
         use crate::models_manager::manager::ModelsManager;
         use crate::tools::spec::ToolsConfigParams;
