@@ -246,7 +246,7 @@ Multiple insights on the same day go under the same date header.
 
 ### What NOT to Update
 
-- **Do not modify Summary, Architecture, Training Pipeline, or Deep Dive sections.** Those represent the original synthesis. Discussion Notes supplement, not replace.
+- **Do not modify the original synthesis sections** (Problem & Motivation, Core Method, Results, Limitations & Connections). Those represent the original synthesis. Discussion Notes supplement, not replace.
 - Exception: if the user explicitly asks to correct a section, modify it and note the correction in Discussion Notes.
 
 ### Bulk Update
