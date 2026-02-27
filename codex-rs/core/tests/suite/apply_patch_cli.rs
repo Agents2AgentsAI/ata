@@ -8,6 +8,7 @@ use core_test_support::responses::ev_shell_command_call;
 use core_test_support::test_codex::ApplyPatchModelOutput;
 use pretty_assertions::assert_eq;
 use std::fs;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
@@ -84,6 +85,43 @@ fn apply_patch_responses(
             ev_completed("resp-2"),
         ]),
     ]
+}
+
+#[large_stack_test]
+#[test_case(ApplyPatchModelOutput::Function)]
+#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
+async fn apply_patch_ignores_codex_linux_sandbox_exe_override(
+    model_output: ApplyPatchModelOutput,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = apply_patch_harness_with(|builder| {
+        builder.with_config(|config| {
+            config.codex_linux_sandbox_exe =
+                Some(PathBuf::from("definitely-not-a-real-codex-linux-sandbox"));
+        })
+    })
+    .await?;
+
+    let target = harness.path("sandbox-override.txt");
+    fs::write(&target, "before\n")?;
+
+    let patch = "*** Begin Patch\n*** Update File: sandbox-override.txt\n@@\n-before\n+after\n*** End Patch";
+    let call_id = "apply-sandbox-override";
+    mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
+
+    harness
+        .submit("apply patch with codex_linux_sandbox_exe override")
+        .await?;
+
+    let out = harness.apply_patch_output(call_id, model_output).await;
+    assert!(
+        out.contains("Success. Updated the following files:"),
+        "expected apply_patch to succeed via current_exe, got {out}"
+    );
+    assert_eq!(fs::read_to_string(&target)?, "after\n");
+
+    Ok(())
 }
 
 #[large_stack_test]
