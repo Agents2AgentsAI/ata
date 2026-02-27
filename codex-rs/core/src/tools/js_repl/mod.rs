@@ -1650,15 +1650,13 @@ mod tests {
                 .args(["-p", "(version 1) (allow default)", "/usr/bin/true"])
                 .output()
             else {
-                eprintln!(
-                    "Skipping js_repl runtime tests: unable to run /usr/bin/sandbox-exec probe."
-                );
+                warn!("Skipping js_repl runtime tests: unable to run /usr/bin/sandbox-exec probe.");
                 return false;
             };
             if output.status.success() {
                 true
             } else {
-                eprintln!(
+                warn!(
                     "Skipping js_repl runtime tests: /usr/bin/sandbox-exec probe failed: {}",
                     String::from_utf8_lossy(&output.stderr)
                 );

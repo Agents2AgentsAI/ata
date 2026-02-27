@@ -48,13 +48,11 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
     }
 }
 
-fn expected_visible_models() -> Vec<Model> {
+fn expected_visible_models() -> Result<Vec<Model>> {
     let mut bundled: ModelsResponse =
-        serde_json::from_str(include_str!("../../../../core/models.json"))
-            .expect("bundled models.json should parse");
+        serde_json::from_str(include_str!("../../../../core/models.json"))?;
     let mut third_party: ModelsResponse =
-        serde_json::from_str(include_str!("../../../../core/third_party_models.json"))
-            .expect("bundled third_party_models.json should parse");
+        serde_json::from_str(include_str!("../../../../core/third_party_models.json"))?;
     bundled.models.append(&mut third_party.models);
     bundled.models.sort_by(|a, b| a.priority.cmp(&b.priority));
 
@@ -63,11 +61,11 @@ fn expected_visible_models() -> Vec<Model> {
     presets = ModelPreset::filter_by_auth(presets, false);
     ModelPreset::mark_default_by_picker_visibility(&mut presets);
 
-    presets
+    Ok(presets
         .iter()
         .filter(|preset| preset.show_in_picker)
         .map(model_from_preset)
-        .collect()
+        .collect())
 }
 
 #[tokio::test]
@@ -97,7 +95,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
         next_cursor,
     } = to_response::<ModelListResponse>(response)?;
 
-    let expected_models = expected_visible_models();
+    let expected_models = expected_visible_models()?;
 
     assert_eq!(items, expected_models);
     assert!(next_cursor.is_none());
@@ -144,7 +142,7 @@ async fn list_models_pagination_works() -> Result<()> {
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
-    let expected_models = expected_visible_models();
+    let expected_models = expected_visible_models()?;
     assert!(!expected_models.is_empty());
     let mut cursor: Option<String> = None;
 
