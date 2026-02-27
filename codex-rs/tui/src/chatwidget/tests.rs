@@ -6001,6 +6001,69 @@ async fn model_selection_popup_snapshot() {
 }
 
 #[tokio::test]
+async fn model_selection_popup_scopes_to_current_provider() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("claude-sonnet-4-6")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.model_provider_id = "anthropic".to_string();
+    chat.open_model_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("claude-sonnet-4-6"),
+        "expected anthropic model in popup:\n{popup}"
+    );
+    assert!(
+        !popup.contains("gpt-5.2-codex"),
+        "expected openai model to be excluded:\n{popup}"
+    );
+    assert!(
+        !popup.contains("gemini-3-pro-preview"),
+        "expected gemini model to be excluded:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn provider_model_filter_keeps_untagged_models_for_custom_provider() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("custom-current")).await;
+    chat.config.model_provider_id = "custom-provider".to_string();
+
+    let preset = |slug: &str, provider_id: Option<&str>| ModelPreset {
+        id: slug.to_string(),
+        model: slug.to_string(),
+        display_name: slug.to_string(),
+        description: format!("{slug} description"),
+        default_reasoning_effort: ReasoningEffortConfig::Medium,
+        supported_reasoning_efforts: vec![ReasoningEffortPreset {
+            effort: ReasoningEffortConfig::Medium,
+            description: "medium".to_string(),
+        }],
+        supports_personality: false,
+        is_default: false,
+        upgrade: None,
+        show_in_picker: true,
+        supported_in_api: true,
+        input_modalities: default_input_modalities(),
+        provider_id: provider_id.map(ToString::to_string),
+    };
+
+    let presets = vec![
+        preset("custom-current", None),
+        preset("custom-fallback", None),
+        preset("claude-sonnet-4-6", Some("anthropic")),
+    ];
+
+    let filtered = chat.filter_model_presets_for_current_provider(presets);
+
+    assert_eq!(
+        filtered,
+        vec![
+            preset("custom-current", None),
+            preset("custom-fallback", None),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn personality_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
     chat.thread_id = Some(ThreadId::new());
