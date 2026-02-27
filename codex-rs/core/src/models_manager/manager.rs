@@ -10,6 +10,7 @@ use crate::error::Result as CoreResult;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::models_manager::model_info;
+use crate::models_manager::model_presets::builtin_model_presets;
 use codex_api::ModelsClient;
 use codex_api::ReqwestTransport;
 use codex_protocol::config_types::CollaborationModeMask;
@@ -17,6 +18,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderMap;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -53,6 +55,7 @@ enum CatalogMode {
 /// Coordinates remote model discovery plus cached metadata on disk.
 #[derive(Debug)]
 pub struct ModelsManager {
+    local_models: Vec<ModelPreset>,
     remote_models: RwLock<Vec<ModelInfo>>,
     catalog_mode: CatalogMode,
     auth_manager: Arc<AuthManager>,
@@ -86,6 +89,7 @@ impl ModelsManager {
                     .unwrap_or_else(|err| panic!("failed to load bundled models.json: {err}"))
             });
         Self {
+            local_models: builtin_model_presets(auth_manager.auth_mode()),
             remote_models: RwLock::new(remote_models),
             catalog_mode,
             auth_manager,
@@ -355,15 +359,45 @@ impl ModelsManager {
         true
     }
 
-    /// Build picker-ready presets from the active catalog snapshot.
+    /// Merge remote model metadata into picker-ready presets, preserving existing entries.
     fn build_available_models(&self, mut remote_models: Vec<ModelInfo>) -> Vec<ModelPreset> {
         remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
 
-        let mut presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
+        let remote_presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
+        let existing_presets = self.local_models.clone();
+
+        // ModelInfo -> ModelPreset sets provider_id=None. Capture local provider IDs and restore
+        // them after merge so provider-based filtering keeps working.
+        let local_provider_ids: HashMap<String, String> = existing_presets
+            .iter()
+            .filter_map(|preset| {
+                preset
+                    .provider_id
+                    .as_ref()
+                    .map(|provider_id| (preset.model.clone(), provider_id.clone()))
+            })
+            .collect();
+
+        let mut presets = ModelPreset::merge(remote_presets, existing_presets);
+        for preset in &mut presets {
+            if preset.provider_id.is_none()
+                && let Some(provider_id) = local_provider_ids.get(&preset.model)
+            {
+                preset.provider_id = Some(provider_id.clone());
+            }
+        }
+
         let chatgpt_mode = matches!(self.auth_manager.auth_mode(), Some(AuthMode::Chatgpt));
         presets = ModelPreset::filter_by_auth(presets, chatgpt_mode);
 
-        ModelPreset::mark_default_by_picker_visibility(&mut presets);
+        for preset in &mut presets {
+            preset.is_default = false;
+        }
+        if let Some(default) = presets.iter_mut().find(|preset| preset.show_in_picker) {
+            default.is_default = true;
+        } else if let Some(default) = presets.first_mut() {
+            default.is_default = true;
+        }
 
         presets
     }
@@ -385,6 +419,7 @@ impl ModelsManager {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         Self {
+            local_models: builtin_model_presets(auth_manager.auth_mode()),
             remote_models: RwLock::new(
                 Self::load_remote_models_from_file()
                     .unwrap_or_else(|err| panic!("failed to load bundled models.json: {err}")),
@@ -952,11 +987,12 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let provider = provider_for("http://example.test".to_string());
-        let manager = ModelsManager::with_provider_for_tests(
+        let mut manager = ModelsManager::with_provider_for_tests(
             codex_home.path().to_path_buf(),
             auth_manager,
             provider,
         );
+        manager.local_models = Vec::new();
 
         let hidden_model = remote_model_with_visibility("hidden", "Hidden", 0, "hide");
         let visible_model = remote_model_with_visibility("visible", "Visible", 1, "list");

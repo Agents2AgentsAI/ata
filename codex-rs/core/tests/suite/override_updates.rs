@@ -47,7 +47,11 @@ async fn read_rollout_text(path: &Path) -> anyhow::Result<String> {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    Ok(std::fs::read_to_string(path)?)
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(err) => Err(err.into()),
+    }
 }
 
 fn rollout_developer_texts(text: &str) -> Vec<String> {

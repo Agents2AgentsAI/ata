@@ -842,8 +842,9 @@ async fn remote_models_request_times_out_after_5s() -> Result<()> {
     let elapsed = start.elapsed();
     // get_model should return a default model even when refresh times out
     let default_model = model.expect("get_model should finish and return default model");
+    let expected_default = bundled_default_visible_model_slug();
     assert!(
-        default_model == "gpt-5.3-codex",
+        default_model == expected_default,
         "get_model should return default model when refresh times out, got: {default_model}"
     );
     let _ = server
@@ -901,7 +902,7 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     let selected = manager
         .get_default_model(&None, RefreshStrategy::OnlineIfUncached)
         .await;
-    assert_eq!(selected, "gpt-5.3-codex");
+    assert_eq!(selected, bundled_default_visible_model_slug());
 
     let available = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
     let hidden = available
@@ -942,6 +943,20 @@ fn bundled_model_slug() -> String {
     response
         .models
         .first()
+        .expect("bundled models.json should include at least one model")
+        .slug
+        .clone()
+}
+
+fn bundled_default_visible_model_slug() -> String {
+    let response: ModelsResponse = serde_json::from_str(include_str!("../../models.json"))
+        .expect("bundled models.json should deserialize");
+    let mut models = response.models;
+    models.sort_by(|a, b| a.priority.cmp(&b.priority));
+    models
+        .iter()
+        .find(|model| model.visibility == ModelVisibility::List)
+        .or_else(|| models.first())
         .expect("bundled models.json should include at least one model")
         .slug
         .clone()

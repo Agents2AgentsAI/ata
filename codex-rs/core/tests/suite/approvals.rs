@@ -32,6 +32,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -43,6 +44,7 @@ use serde_json::json;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
 use tempfile::TempDir;
 use wiremock::Mock;
@@ -50,6 +52,8 @@ use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+
+const APPROVAL_SCENARIO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Clone, Copy)]
 enum TargetPath {
@@ -1576,12 +1580,46 @@ fn scenarios() -> Vec<ScenarioSpec> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn approval_matrix_covers_all_modes() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    if !seatbelt_is_available_here() {
+        return Ok(());
+    }
 
     for scenario in scenarios() {
-        run_scenario(&scenario).await?;
+        match tokio::time::timeout(APPROVAL_SCENARIO_TIMEOUT, run_scenario(&scenario)).await {
+            Ok(result) => result?,
+            Err(_) => {
+                panic!(
+                    "approval scenario '{}' timed out after {:?}",
+                    scenario.name, APPROVAL_SCENARIO_TIMEOUT
+                );
+            }
+        }
     }
 
     Ok(())
+}
+
+fn seatbelt_is_available_here() -> bool {
+    if !cfg!(target_os = "macos") {
+        return true;
+    }
+    let Ok(output) = Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", "(version 1) (allow default)", "/usr/bin/true"])
+        .output()
+    else {
+        eprintln!("Skipping approval matrix: unable to run /usr/bin/sandbox-exec probe.");
+        return false;
+    };
+    if output.status.success() {
+        true
+    } else {
+        eprintln!(
+            "Skipping approval matrix: /usr/bin/sandbox-exec probe failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        false
+    }
 }
 
 async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
