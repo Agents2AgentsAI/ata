@@ -10,49 +10,35 @@ metadata:
 ## RULES — read these first, follow them exactly
 
 1. **ALWAYS auto-continue.** After presenting the discovery reading view, IMMEDIATELY proceed to `$paper-synthesis` (multi-paper path) then `$cross-paper-report`. Do NOT stop at a paper list. Do NOT wait for user input. The ONLY exception: user explicitly said "just list", "just find", "don't synthesize", or "discovery only".
-2. **ALWAYS use exactly these 4 sections** in the reading view — no other structure:
-   - `The Landscape` — 2-3 paragraphs: what is this field, main challenges, paradigms
-   - `Approaches` — 3-6 approach clusters, each with Key idea / Papers / Tradeoff
-   - `Key Insights` — 3-5 findings (NOT paper titles), end with "Proceeding to synthesize [N] papers..."
-   - `Open Questions` — 2-3 bullets
+2. **Let the content determine the number of sections.** Use as many `## ` sections as the topic needs — there is no fixed count. The only hard rule is that **no section may exceed 40 lines** (one terminal screen). If a section is getting long, split it. If a topic only needs 3 sections, use 3. Typical sections include things like "The Landscape", "Approaches", "Key Insights", "Reading Plan", "Open Questions" — but adapt the structure to what the paper landscape actually looks like.
 3. **NEVER** create sections like "What you asked for", "Summary", or "Papers Found". Every section must contain **analysis**, not paper lists.
 4. **NEVER** output a flat list of paper titles. Cluster papers into approaches and explain what each approach does.
 5. **ALWAYS** present via `present_reading_view`. Never as chat text.
 6. **ALWAYS** call `present_reading_view` with headings-only content FIRST, then fill sections via `update_document_section`.
 
-### Reading View Template (EXACT FORMAT — use this)
+### Reading View Template
+
+Choose section headings that fit the topic. A typical outline might look like:
 
 ```
 present_reading_view(title="[Topic] — Research Landscape", content=
-"## The Landscape\n\n## Approaches\n\n## Key Insights\n\n## Open Questions")
+"## The Landscape\n\n## Approaches\n\n## Key Insights\n\n## Reading Plan\n\n## Open Questions")
 ```
 
-Then fill each section:
+But adapt freely — a narrow topic might need only 3 sections, a broad one might need 6. The only hard rules:
 
-**Section 0 — The Landscape**: 2-3 short paragraphs. What is this field about? Main challenges and paradigms. Cite as Author (Year) — no IDs inline.
+1. **No section may exceed 40 lines.** The reading view is a terminal — each section should fit on one screen. If a section is growing past 40 lines, split it into two.
+2. Every section must contain **analysis**, not just paper lists.
 
-**Section 1 — Approaches**:
-```
-#### 1. [Approach Name]
-**Key idea**: [1-2 sentences]
-**Papers**: Author1 (Year), Author2 (Year)
-**Tradeoff**: [1 sentence]
+Then fill each section via `update_document_section`. Common section types:
 
-#### 2. [Approach Name]
-...
-```
+- **Landscape / Background**: 2-3 short paragraphs. What is this field about? Main challenges and paradigms. Cite as Author (Year).
+- **Approaches**: 3-6 approach clusters, each with Key idea / Papers / Tradeoff.
+- **Key Insights**: Findings extracted from the papers (NOT paper titles). End with "Proceeding to synthesize [N] papers..."
+- **Reading Plan**: Top papers ranked by relevance.
+- **Open Questions**: 2-3 bullet points.
 
-**Section 2 — Key Insights**: 3-5 insights extracted from the papers. Each is a finding, not a paper title.
-```
-- **[Insight]**: [2-3 sentences grounded in specific papers. Cite as Author (Year).]
-- **[Insight]**: ...
-
-Proceeding to synthesize [N] papers for full analysis...
-```
-
-**Section 3 — Open Questions**: 2-3 bullet points, one sentence each.
-
-**Hard rule: no section may exceed 40 lines.** The reading view is a terminal — each section should fit on one screen.
+Add, remove, rename, or reorder sections as the content demands.
 
 ---
 
@@ -154,7 +140,7 @@ Merge, deduplicate, update reading view.
 
 ### Phase 4: Present the Briefing
 
-Follow the EXACT template from the Rules section above. 4 sections: The Landscape, Approaches, Key Insights, Open Questions.
+Follow the template from the Rules section above. Choose sections that fit the content — no fixed count. Keep each section ≤ 40 lines.
 
 ### Citation Formatting
 
@@ -201,7 +187,7 @@ Dedup by DOI → arXiv → title fuzzy. Filter out papers already in KB. Rank by
 
 ### Phase 4: Present
 
-Same 4-section reading view as explore mode. Same rules.
+Same reading view format as explore mode. Choose sections that fit the content — no fixed count. Same section length rules apply (≤ 40 lines each).
 
 ---
 

@@ -69,7 +69,7 @@ Always use `agent_type: "synthesizer"`. That's the complete prompt — the subag
 
 ## KB Check (skip when KB is disabled)
 
-**Single paper:** `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` — one call. If a card with a Deep Dive section exists, present it directly via `present_reading_view`. Otherwise, spawn the subagent.
+**Single paper:** `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` — one call. If a card already exists, present it directly via `present_reading_view`. Otherwise, spawn the subagent.
 
 **Multi-paper:** `exec_command: rg "ID1\|ID2\|ID3" ~/.ata/knowledge-base/cards/` — one call for all. Skip papers that already have cards.
 
@@ -96,13 +96,13 @@ content: "## Overview\n\n## Method\n\n## Results\n\n## Discussion"
 
 **Phase 2 (Fill):** The tool result tells you which section to fill. Call `update_document_section` for each section sequentially. Each section: 15-30 lines, bullet points and bold terms for scannability.
 
-**Sections** (use 4-5):
-- **Overview** — problem, motivation, core idea
-- **Method** — how it works, architecture, key mechanisms
-- **Results** — specific numbers, baselines, key findings
-- **Discussion** — limitations, connections, takeaways
+**Sections:** Let the paper's content determine the number and names of sections. A simple paper might need 3 sections; a paper with a novel dataset, a separate training pipeline, and a theoretical analysis might need 6. The only hard rules:
 
-Add a 5th section only for a genuinely distinct component (separate training pipeline, novel dataset, theoretical analysis).
+- **No section may exceed 40 lines** (one terminal screen). If a section grows past that, split it.
+- **No section should be thinner than 8 lines** — merge thin sections with adjacent ones.
+- Target **15-30 lines** per section for comfortable reading.
+
+Common section types (adapt as needed): Overview, Method, Architecture, Training, Results, Ablations, Discussion, Limitations.
 
 **Markdown:** Always put a blank line before list items (`1.`, `-`).
 

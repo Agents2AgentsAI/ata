@@ -969,49 +969,40 @@ impl DocumentReaderView {
             };
             let half = (self.last_content_height.get() / 2).max(1) as usize;
             let full = self.last_content_height.get().max(1) as usize;
-            let handled = if key_event.modifiers.contains(KeyModifiers::CONTROL) {
+            if key_event.modifiers.contains(KeyModifiers::CONTROL) {
                 match key_event.code {
                     KeyCode::Char('d') => {
                         scroll_cell.set(scroll_cell.get().saturating_add(half));
-                        true
                     }
                     KeyCode::Char('u') => {
                         scroll_cell.set(scroll_cell.get().saturating_sub(half));
-                        true
                     }
                     KeyCode::Char('f') => {
                         scroll_cell.set(scroll_cell.get().saturating_add(full));
-                        true
                     }
                     KeyCode::Char('b') => {
                         scroll_cell.set(scroll_cell.get().saturating_sub(full));
-                        true
                     }
-                    _ => false,
+                    _ => {}
                 }
             } else {
                 match key_event.code {
                     KeyCode::Char('j') | KeyCode::Down => {
                         scroll_cell.set(scroll_cell.get().saturating_add(1));
-                        true
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
                         scroll_cell.set(scroll_cell.get().saturating_sub(1));
-                        true
                     }
                     KeyCode::Char('G') => {
                         scroll_cell.set(usize::MAX);
-                        true
                     }
                     KeyCode::Char('g') => {
                         // gg = jump to top (consume even without pending_g
                         // since overlays don't use g for anything else).
                         scroll_cell.set(0);
-                        true
                     }
                     KeyCode::Char(':') => {
                         self.line_number_input = Some(String::new());
-                        true
                     }
                     KeyCode::Char('q') | KeyCode::Esc => {
                         if self.show_tutorial {
@@ -1022,11 +1013,10 @@ impl DocumentReaderView {
                             self.show_help = false;
                             self.help_scroll.set(0);
                         }
-                        true
                     }
-                    _ => true, // consume all other keys (don't dismiss)
+                    _ => {} // consume all other keys (don't dismiss)
                 }
-            };
+            }
             return;
         }
 
