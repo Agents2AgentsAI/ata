@@ -24,6 +24,11 @@ impl<V> CacheEntry<V> {
     fn is_expired(&self) -> bool {
         Instant::now() >= self.expires_at
     }
+
+    #[cfg(test)]
+    fn force_expired(&mut self) {
+        self.expires_at = Instant::now() - Duration::from_secs(1);
+    }
 }
 
 /// Thread-safe LRU cache with TTL support
@@ -45,6 +50,15 @@ where
         let capacity = NonZeroUsize::new(max_entries.max(1)).unwrap_or(NonZeroUsize::MIN);
         Self {
             cache: Mutex::new(LruCache::new(capacity)),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn expire_entry_for_test(&self, key: &K) {
+        if let Ok(mut cache) = self.cache.lock() {
+            if let Some(entry) = cache.get_mut(key) {
+                entry.force_expired();
+            }
         }
     }
 
@@ -143,7 +157,6 @@ fn simple_hash(s: &str) -> String {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use std::thread::sleep;
 
     #[test]
     fn cache_stores_and_retrieves_values() {
@@ -161,20 +174,17 @@ mod tests {
     #[test]
     fn cache_expires_entries() {
         let cache: ResponseCache<String, String> = ResponseCache::new(10);
-        cache.insert(
-            "key1".to_string(),
-            "value1".to_string(),
-            Duration::from_millis(10),
-        );
+        let key = "key1".to_string();
+        cache.insert(key.clone(), "value1".to_string(), Duration::from_millis(10));
 
         // Should exist immediately
-        assert!(cache.get(&"key1".to_string()).is_some());
+        assert!(cache.get(&key).is_some());
 
-        // Wait for expiry
-        sleep(Duration::from_millis(20));
+        // Move expiry time into the past so we can deterministically exercise eviction.
+        cache.expire_entry_for_test(&key);
 
         // Should be gone
-        assert!(cache.get(&"key1".to_string()).is_none());
+        assert!(cache.get(&key).is_none());
     }
 
     #[test]

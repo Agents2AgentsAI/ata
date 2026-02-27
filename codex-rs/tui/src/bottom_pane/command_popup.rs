@@ -188,6 +188,15 @@ impl CommandPopup {
             );
         }
 
+        if filter_lower == "re"
+            && let Some(research_idx) = prefix
+                .iter()
+                .position(|(item, _)| matches!(item, CommandItem::Builtin(SlashCommand::Research)))
+        {
+            let research_entry = prefix.remove(research_idx);
+            prefix.insert(0, research_entry);
+        }
+
         out.extend(exact);
         out.extend(prefix);
         out
@@ -324,6 +333,20 @@ mod tests {
                 panic!("unexpected prompt ranked before '/model' for '/mo'")
             }
             None => panic!("expected at least one match for '/mo'"),
+        }
+    }
+
+    #[test]
+    fn research_is_first_suggestion_for_re() {
+        let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
+        popup.on_composer_text_change("/re".to_string());
+        let matches = popup.filtered_items();
+        match matches.first() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "research"),
+            Some(CommandItem::UserPrompt(_)) => {
+                panic!("unexpected prompt ranked before '/research' for '/re'")
+            }
+            None => panic!("expected at least one match for '/re'"),
         }
     }
 

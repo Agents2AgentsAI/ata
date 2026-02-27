@@ -73,6 +73,7 @@ mod tests {
     use codex_client::Response;
     use codex_client::StreamResponse;
     use codex_client::TransportError;
+    use serde_json::Value;
 
     #[derive(Clone, Default)]
     struct DummyTransport;
@@ -128,6 +129,36 @@ mod tests {
             }
             // Return a minimal valid CompactHistoryResponse.
             let resp_body = serde_json::to_vec(&serde_json::json!({ "output": [] })).unwrap();
+            Ok(Response {
+                status: http::StatusCode::OK,
+                headers: Default::default(),
+                body: resp_body.into(),
+            })
+        }
+
+        async fn stream(&self, _req: Request) -> Result<StreamResponse, TransportError> {
+            Err(TransportError::Build("stream should not run".to_string()))
+        }
+    }
+
+    #[derive(Clone)]
+    struct StaticResponseTransport {
+        body: Arc<Value>,
+    }
+
+    impl StaticResponseTransport {
+        fn new(body: Value) -> Self {
+            Self {
+                body: Arc::new(body),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl HttpTransport for StaticResponseTransport {
+        async fn execute(&self, _req: Request) -> Result<Response, TransportError> {
+            let resp_body = serde_json::to_vec(&*self.body)
+                .map_err(|e| TransportError::Build(e.to_string()))?;
             Ok(Response {
                 status: http::StatusCode::OK,
                 headers: Default::default(),
@@ -202,6 +233,47 @@ mod tests {
                 "type": "input_file",
                 "file_url": "https://example.com/report.pdf"
             })
+        );
+    }
+
+    #[tokio::test]
+    async fn compact_accepts_openai_input_file_url_in_output() {
+        use codex_protocol::models::ContentItem;
+        use codex_protocol::models::ResponseItem;
+        use pretty_assertions::assert_eq;
+
+        let transport = StaticResponseTransport::new(serde_json::json!({
+            "output": [{
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_file",
+                    "file_url": "https://example.com/report.pdf",
+                    "mime_type": "application/pdf",
+                    "filename": "report.pdf"
+                }]
+            }]
+        }));
+        let client = CompactClient::new(transport, test_provider(), DummyAuth);
+
+        let output = client
+            .compact(serde_json::json!({ "model": "gpt-4o" }), HeaderMap::new())
+            .await
+            .expect("compact output should deserialize");
+
+        assert_eq!(
+            output,
+            vec![ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::UrlFile {
+                    url: "https://example.com/report.pdf".to_string(),
+                    mime_type: Some("application/pdf".to_string()),
+                    filename: Some("report.pdf".to_string()),
+                }],
+                end_turn: None,
+                phase: None,
+            }]
         );
     }
 }

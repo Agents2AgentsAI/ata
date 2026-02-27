@@ -4378,6 +4378,51 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
 }
 
 #[tokio::test]
+async fn research_slash_command_opens_popup_and_saves_updates() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let initial_paper_search = chat
+        .config_ref()
+        .features
+        .enabled(Feature::ResearchPaperSearch);
+
+    chat.bottom_pane
+        .set_composer_text("/research".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Research tools"),
+        "expected research popup after /research, got: {popup}"
+    );
+
+    // Toggle the initially selected item (Paper Search), then save.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let mut updates = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::UpdateFeatureFlags {
+            updates: event_updates,
+        } = event
+        {
+            updates = Some(event_updates);
+            break;
+        }
+    }
+    let updates = updates.expect("expected UpdateFeatureFlags event from /research popup");
+    let research_update = updates
+        .iter()
+        .find(|(feature, _)| *feature == Feature::Research)
+        .map(|(_, enabled)| *enabled);
+    assert_eq!(research_update, Some(false));
+    let paper_search_update = updates
+        .iter()
+        .find(|(feature, _)| *feature == Feature::ResearchPaperSearch)
+        .map(|(_, enabled)| *enabled);
+    assert_eq!(paper_search_update, Some(!initial_paper_search));
+}
+
+#[tokio::test]
 async fn plan_slash_command_switches_to_plan_mode() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);

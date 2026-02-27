@@ -37,6 +37,7 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
+use futures::TryStreamExt;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
@@ -54,6 +55,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 const APPROVAL_SCENARIO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const APPROVAL_MATRIX_MAX_CONCURRENCY: usize = 4;
 
 #[derive(Clone, Copy)]
 enum TargetPath {
@@ -1585,17 +1587,24 @@ async fn approval_matrix_covers_all_modes() -> Result<()> {
         return Ok(());
     }
 
-    for scenario in scenarios() {
-        match tokio::time::timeout(APPROVAL_SCENARIO_TIMEOUT, run_scenario(&scenario)).await {
-            Ok(result) => result?,
-            Err(_) => {
-                panic!(
+    futures::stream::iter(
+        scenarios()
+            .into_iter()
+            .map(Ok::<ScenarioSpec, anyhow::Error>),
+    )
+    .try_for_each_concurrent(
+        Some(APPROVAL_MATRIX_MAX_CONCURRENCY),
+        |scenario| async move {
+            match tokio::time::timeout(APPROVAL_SCENARIO_TIMEOUT, run_scenario(&scenario)).await {
+                Ok(result) => result,
+                Err(_) => panic!(
                     "approval scenario '{}' timed out after {:?}",
                     scenario.name, APPROVAL_SCENARIO_TIMEOUT
-                );
+                ),
             }
-        }
-    }
+        },
+    )
+    .await?;
 
     Ok(())
 }

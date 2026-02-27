@@ -197,6 +197,7 @@ enum UncheckedContentItem {
     InputFile {
         file_data: Option<String>,
         file_id: Option<String>,
+        file_url: Option<String>,
         mime_type: Option<String>,
         filename: Option<String>,
     },
@@ -212,6 +213,24 @@ enum UncheckedContentItem {
 
 const MAX_URL_FILE_URL_LENGTH: usize = 8192;
 
+fn validated_http_url(
+    url: Option<String>,
+    missing_error: &'static str,
+) -> Result<String, &'static str> {
+    let url = url
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or(missing_error)?;
+    if url.len() > MAX_URL_FILE_URL_LENGTH {
+        return Err("url_file `url` exceeds max length of 8192 characters");
+    }
+    let parsed = Url::parse(&url).map_err(|_| "url_file `url` must be a valid absolute URL")?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("url_file `url` must use http or https");
+    }
+    Ok(url)
+}
+
 impl TryFrom<UncheckedContentItem> for ContentItem {
     type Error = &'static str;
 
@@ -222,13 +241,29 @@ impl TryFrom<UncheckedContentItem> for ContentItem {
             UncheckedContentItem::InputFile {
                 file_data,
                 file_id,
+                file_url,
                 mime_type,
                 filename,
             } => {
                 let file_data = file_data.filter(|value| !value.trim().is_empty());
                 let file_id = file_id.filter(|value| !value.trim().is_empty());
+                let file_url = file_url.filter(|value| !value.trim().is_empty());
                 let has_file_data = file_data.is_some();
                 let has_file_id = file_id.is_some();
+                let has_file_url = file_url.is_some();
+                if has_file_url {
+                    if has_file_data || has_file_id {
+                        return Err(
+                            "input_file with `file_url` cannot include `file_data` or `file_id`",
+                        );
+                    }
+                    let url = validated_http_url(file_url, "url_file requires a non-empty `url`")?;
+                    return Ok(Self::UrlFile {
+                        url,
+                        mime_type,
+                        filename,
+                    });
+                }
                 // Both present or both absent is invalid; exactly one is required.
                 if has_file_data == has_file_id {
                     return Err("input_file must include exactly one of `file_data` or `file_id`");
@@ -247,18 +282,7 @@ impl TryFrom<UncheckedContentItem> for ContentItem {
                 mime_type,
                 filename,
             } => {
-                let url = url
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty())
-                    .ok_or("url_file requires a non-empty `url`")?;
-                if url.len() > MAX_URL_FILE_URL_LENGTH {
-                    return Err("url_file `url` exceeds max length of 8192 characters");
-                }
-                let parsed =
-                    Url::parse(&url).map_err(|_| "url_file `url` must be a valid absolute URL")?;
-                if !matches!(parsed.scheme(), "http" | "https") {
-                    return Err("url_file `url` must use http or https");
-                }
+                let url = validated_http_url(url, "url_file requires a non-empty `url`")?;
                 Ok(Self::UrlFile {
                     url,
                     mime_type,
@@ -1868,6 +1892,42 @@ mod tests {
             }
         );
         Ok(())
+    }
+
+    #[test]
+    fn input_file_with_file_url_deserializes_as_url_file() -> Result<()> {
+        let item: ContentItem = serde_json::from_value(serde_json::json!({
+            "type": "input_file",
+            "file_url": "https://example.com/report.pdf",
+            "mime_type": "application/pdf",
+            "filename": "report.pdf",
+        }))?;
+
+        assert_eq!(
+            item,
+            ContentItem::UrlFile {
+                url: "https://example.com/report.pdf".to_string(),
+                mime_type: Some("application/pdf".to_string()),
+                filename: Some("report.pdf".to_string()),
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn input_file_with_file_url_rejects_mixed_file_fields() {
+        let err = serde_json::from_value::<ContentItem>(serde_json::json!({
+            "type": "input_file",
+            "file_url": "https://example.com/report.pdf",
+            "file_id": "file_123",
+        }))
+        .expect_err("deserialization should fail");
+
+        assert!(
+            err.to_string()
+                .contains("input_file with `file_url` cannot include `file_data` or `file_id`"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
