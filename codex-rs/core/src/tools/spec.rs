@@ -2034,7 +2034,8 @@ mod tests {
         // Enable individual sub-features but NOT ResearchPaperSearch.
         let mut features = Features::with_defaults();
         features.enable(Feature::ResearchHackerNews);
-        // Do NOT enable Feature::Research or Feature::ResearchPaperSearch.
+        features.disable(Feature::ResearchPaperSearch);
+        // Do NOT enable Feature::Research.
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
