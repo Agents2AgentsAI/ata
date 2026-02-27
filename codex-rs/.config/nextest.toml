@@ -21,3 +21,9 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # Known flaky due to second-granularity timestamps and cwd-based session ordering.
 filter = 'test(exec_resume_last_respects_cwd_filter_and_all_flag)'
 retries = 2
+
+[[profile.default.overrides]]
+# zsh fork tests are slow on CI (spawn zsh subprocesses) and occasionally flaky.
+filter = 'test(turn_start_shell_zsh_fork)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+retries = 2
