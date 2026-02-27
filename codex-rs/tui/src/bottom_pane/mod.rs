@@ -424,6 +424,7 @@ impl BottomPane {
             if key_event.code == KeyCode::Esc
                 && self.is_task_running
                 && !self.composer.popup_active()
+                && !self.composer.is_reverse_search_active()
                 && let Some(status) = &self.status
             {
                 // Send Op::Interrupt
@@ -836,7 +837,10 @@ impl BottomPane {
     /// overlays or popups and not running a task. This is the safe context to
     /// use Esc-Esc for backtracking from the main view.
     pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
-        !self.is_task_running && self.view_stack.is_empty() && !self.composer.popup_active()
+        !self.is_task_running
+            && self.view_stack.is_empty()
+            && !self.composer.popup_active()
+            && !self.composer.is_reverse_search_active()
     }
 
     /// Return true when no popups or modal views are active, regardless of task state.
