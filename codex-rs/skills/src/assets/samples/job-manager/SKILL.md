@@ -246,20 +246,6 @@ Standard 5-field Unix cron is supported:
 | `0 8-17 * * 1-5` | Every hour 8 AM–5 PM on weekdays |
 | `30 6,18 * * *` | At 6:30 AM and 6:30 PM daily |
 
-## IMPORTANT: Sandbox Limitations
-
-**You are running inside a sandboxed ata session.** The sandbox blocks network access and kills child processes when the session ends. This means:
-
-- **DO NOT run `ata jobs run`** from inside this session — it spawns `ata exec` which needs network to reach the LLM API. It will always fail with "stream disconnected" or "process exited with code 1".
-- **DO NOT run `ata scheduler start`** from inside this session — the daemon process will be killed when the sandbox tears down, even with `--daemon`.
-- **DO** create the job TOML file, validate it with `ata jobs show`, and then tell the user to run these commands in their normal terminal:
-
-```
-ata scheduler start --daemon
-ata jobs run <job-name>        # optional: test one run
-ata scheduler status           # verify daemon is running
-```
-
 ## Workflow: Creating a Job for the User
 
 When a user asks you to schedule something:
@@ -267,11 +253,9 @@ When a user asks you to schedule something:
 1. **Understand what they want**: the task, frequency, and any delivery/output requirements.
 2. **Create the TOML file** by writing directly to `~/.ata/jobs/<job-name>.toml`. Use the format above.
 3. **Validate** by running `ata jobs show <job-name>` to confirm it parses correctly.
-4. **Tell the user** to run these in their normal terminal (NOT from this session):
-   - `ata scheduler start --daemon` (if not already running)
-   - `ata jobs run <job-name>` (to test)
-   - `ata jobs history <job-name>` (to check results)
-5. **Confirm** to the user: show them the schedule, next run time, and how to check results.
+4. **Test** by running `ata jobs run <job-name>` to verify it works.
+5. **Start the daemon** if not running: check with `ata scheduler status`, start with `ata scheduler start`.
+6. **Confirm** to the user: show them the schedule, next run time, and how to check results.
 
 ### Choosing the schedule type
 
@@ -295,66 +279,48 @@ When a user asks you to schedule something:
 
 ## Connecting External Services (Slack, etc.)
 
-When a job needs to interact with an external service (Slack, email, webhooks, etc.), **always use browser automation first**. You have Playwright MCP tools that can automate the entire setup flow in the user's real Chrome browser.
+When a job needs to interact with an external service (Slack, email, webhooks, etc.), **always minimize user friction**. Follow this principle: do everything you can locally, and for the part that requires the user, give them the most automated single-step option first.
 
-### IMPORTANT: Always offer automation first
+### Browser automation (preferred)
 
-When external service setup is needed, you MUST proactively ask the user:
+Playwright MCP is configured with `--extension` mode, which connects to the **user's real Chrome** via the Playwright MCP Bridge extension. This means the agent can automate authenticated browser flows — the user's Slack, GitHub, Google sessions are all available.
 
-> "I can set this up automatically using browser automation — I'll navigate your Chrome, fill in the forms, and extract the credentials. You just watch. Want me to do that, or would you prefer to do it manually?"
+**When to use browser automation:**
+- Setting up Slack apps/webhooks
+- Creating GitHub tokens
+- Any multi-step web UI flow where the user is already logged in
 
-**Default to automation.** Never give the user manual browser steps without first offering to do it for them with Playwright. The manual approach is a fallback, not the default.
+**How to use it:**
 
-### Browser automation (default)
+Playwright MCP is configured in `~/.ata/config.toml` as `[mcp_servers.playwright]`. The agent has access to tools prefixed with `mcp__playwright__`:
 
-Playwright MCP is configured in `~/.ata/config.toml` as `[mcp_servers.playwright]` with `--extension` mode. This connects to the **user's real Chrome** via the Playwright MCP Bridge extension — the user's Slack, GitHub, Google sessions are all available.
+1. Use `mcp__playwright__browser_navigate` to open the service URL
+2. Use `mcp__playwright__browser_snapshot` to see the current page state
+3. Use `mcp__playwright__browser_click`, `mcp__playwright__browser_fill_form`, `mcp__playwright__browser_evaluate` to interact
+4. The user watches their Chrome as the agent clicks through the flow
 
-**Tools available** (prefixed `mcp__playwright__`):
-
-| Tool | Use for |
-|---|---|
-| `browser_navigate` | Open a URL |
-| `browser_snapshot` | Read current page state (accessibility tree) |
-| `browser_click` | Click elements by ref |
-| `browser_fill_form` | Fill input fields |
-| `browser_evaluate` | Extract values from the DOM |
-| `browser_run_code` | Run arbitrary Playwright code (for complex interactions like CodeMirror editors) |
-| `browser_wait_for` | Wait for page transitions |
-
-**Automation flow:**
-1. Navigate to the service setup page
-2. Snapshot to see current state
-3. Click, fill, and interact to complete the flow
-4. Extract credentials/URLs via `browser_evaluate`
-5. Store credentials locally and wire into the job — zero user effort
-
-**Tips from real usage:**
-- Slack's manifest editor uses CodeMirror, not a plain `<textarea>`. Use `browser_run_code` with `page.evaluate()` to call `document.querySelector('.CodeMirror').CodeMirror.setValue(text)` instead of trying to click the textarea directly.
-- Always snapshot after each action to confirm the page transitioned correctly.
-- If a click times out, check the snapshot — an overlay or modal may be intercepting pointer events.
-
-**If Playwright tools are not available** (extension not installed, server not configured), fall back to the manual approach below.
+**If extension mode is not available** (extension not installed), the tools will fall back to launching a sandboxed browser. If that happens, fall back to the manual approach below.
 
 ### Fallback: manual with least-friction
 
-Only use this if browser automation is unavailable. Minimize manual steps:
+If browser automation isn't available, minimize manual steps:
 
-1. **Open URLs in the user's browser** using `open <url>` (macOS) or `xdg-open <url>` (Linux).
-2. **Provide app manifests / config files** that can be pasted in one shot.
-3. **Never give more than 4-5 user-facing steps.**
-4. **Do all local work silently** — then present only what the user must do manually.
+Rules:
+1. **Open URLs in the user's browser** using `open <url>` (macOS) or `xdg-open <url>` (Linux). Their default browser is already authenticated.
+2. **Provide app manifests / config files** that can be pasted in one shot, instead of step-by-step UI walkthroughs.
+3. **Never give more than 4-5 user-facing steps.** If you're writing more, you're not automating enough.
+4. **Do all local work silently** — write config files, set permissions, wire scripts — then present only what the user must do manually.
 
 ### Slack webhook setup
 
-**Automated (with Playwright — always try this first):**
+**Automated (with Playwright extension):**
 1. `browser_navigate` to `https://api.slack.com/apps?new_app=1`
-2. Select "From a manifest" tab, use `browser_run_code` with `page.evaluate` to set the JSON manifest in the CodeMirror editor
-3. Click Next → review summary → click Create
-4. Navigate to Incoming Webhooks → Add New Webhook → select channel → Allow
-5. Extract the webhook URL via `browser_evaluate` on the URL textbox
-6. Store it securely and wire it into the job — zero user effort
+2. Select "From a manifest" → paste the YAML manifest via `browser_fill_form`
+3. Click through creation, enable Incoming Webhooks, add to workspace
+4. Extract the webhook URL from the page via `browser_evaluate`
+5. Store it securely and wire it into the job — zero user effort
 
-**Manual fallback (only if automation unavailable):**
+**Manual fallback:**
 1. `open "https://api.slack.com/apps?new_app=1"`
 2. Give them a ready-to-paste app manifest:
    ```yaml
