@@ -2401,7 +2401,7 @@ impl Renderable for DocumentReaderView {
                     raw_lines.push(Line::from(""));
                     raw_lines.push(Line::from(vec![
                         Span::from("  Sections").dim().bold(),
-                        Span::from(format!(" (n/p to navigate)")).dim(),
+                        Span::from(" (n/p to navigate)").dim(),
                     ]));
                     for (i, s) in self.sections.iter().enumerate() {
                         if !s.heading.is_empty() {

@@ -232,6 +232,7 @@ pub(super) fn separator_with_indicator(width: u16, label: &str) -> Line<'static>
 }
 
 /// Build the keyboard hints line shown below the content area.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn hints_line(
     composer_focused: bool,
     search_focused: bool,
@@ -859,7 +860,7 @@ pub(super) fn help_overlay_lines(width: u16, section_count: Option<usize>) -> Ve
 
     let push_binding = |lines: &mut Vec<Line<'static>>, keys: &str, desc: &str| {
         let key_col_w = 18;
-        let padded_keys = format!("{keys:>width$}", width = key_col_w);
+        let padded_keys = format!("{keys:>key_col_w$}");
         lines.push(Line::from(vec![
             Span::from(padded_keys).bold(),
             "   ".into(),

@@ -34,13 +34,17 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
 
     let mut builder = test_codex()
         .with_model(model)
-        // Keep tool expectations stable when the default web_search mode changes.
+        // Keep tool expectations stable when defaults change.
         .with_config(|config| {
             config
                 .web_search_mode
                 .set(WebSearchMode::Cached)
                 .expect("test web_search_mode should satisfy constraints");
             config.features.enable(Feature::CollaborationModes);
+            // Disable research features so expected tool lists stay stable
+            // regardless of whether they are default-enabled.
+            config.features.disable(Feature::ResearchPaperSearch);
+            config.features.disable(Feature::ResearchHackerNews);
         });
     let test = builder
         .build(&server)
