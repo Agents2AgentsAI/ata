@@ -300,6 +300,32 @@ async fn cmd_run(name: &str) -> anyhow::Result<()> {
     let home = codex_utils_home_dir::find_codex_home().map_err(|e| anyhow::anyhow!(e))?;
     let runs_dir = home.join("scheduler").join("runs");
 
+    // Ensure the job exists in the DB (the runs table has a FK to jobs).
+    if jobs_repo::get_job(db.pool(), name).await?.is_none() {
+        let now = chrono::Utc::now().timestamp();
+        let serialized = toml::to_string(&def).unwrap_or_default();
+        let hash = {
+            use std::hash::Hash;
+            use std::hash::Hasher;
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            serialized.hash(&mut hasher);
+            format!("{:016x}", hasher.finish())
+        };
+        let job_record = jobs_repo::JobRecord {
+            id: name.to_string(),
+            definition_hash: hash,
+            enabled: def.enabled,
+            paused: false,
+            created_at: now,
+            updated_at: now,
+            last_run_at: None,
+            next_run_at: None,
+            run_count: 0,
+            consecutive_failures: 0,
+        };
+        jobs_repo::upsert_job(db.pool(), &job_record).await?;
+    }
+
     let run_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp();
 
