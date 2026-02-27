@@ -4259,6 +4259,8 @@ mod tests {
             Some(&target_hn)
         );
         assert_eq!(feature_flags.get(Feature::Research.key()), Some(&false));
+        #[cfg(target_os = "windows")]
+        let _ = emitted_windows_sandbox_level;
         #[cfg(not(target_os = "windows"))]
         assert_eq!(emitted_windows_sandbox_level, Some(None));
     }
