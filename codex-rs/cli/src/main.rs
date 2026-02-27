@@ -1179,12 +1179,19 @@ mod tests {
     fn format_exit_messages_includes_resume_hint_without_color() {
         let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"), None);
         let lines = format_exit_messages(exit_info, false);
+        let expected_resume_cmd = codex_core::util::resume_command(
+            None,
+            Some(
+                ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000")
+                    .expect("valid thread id"),
+            ),
+        )
+        .expect("resume command should exist");
         assert_eq!(
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run codex resume 123e4567-e89b-12d3-a456-426614174000"
-                    .to_string(),
+                format!("To continue this session, run {expected_resume_cmd}"),
             ]
         );
     }
@@ -1204,11 +1211,13 @@ mod tests {
             Some("my-thread"),
         );
         let lines = format_exit_messages(exit_info, false);
+        let expected_resume_cmd = codex_core::util::resume_command(Some("my-thread"), None)
+            .expect("resume command should exist");
         assert_eq!(
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run codex resume my-thread".to_string(),
+                format!("To continue this session, run {expected_resume_cmd}"),
             ]
         );
     }
