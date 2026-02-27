@@ -1279,6 +1279,9 @@ impl ChatWidget {
     }
 
     fn on_agent_message(&mut self, message: String) {
+        if self.is_suppressing_streaming_for_reader() {
+            return;
+        }
         // If we have a stream_controller, then the final agent message is redundant and will be a
         // duplicate of what has already been streamed.
         if self.stream_controller.is_none() && !message.is_empty() {
@@ -1290,6 +1293,9 @@ impl ChatWidget {
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
+        if self.is_suppressing_streaming_for_reader() {
+            return;
+        }
         self.handle_streaming_delta(delta);
     }
 
@@ -1361,6 +1367,10 @@ impl ChatWidget {
         // (between **/**) as the chunk header. Show this header as status.
         self.reasoning_buffer.push_str(&delta);
 
+        if self.is_suppressing_streaming_for_reader() {
+            return;
+        }
+
         if self.unified_exec_wait_streak.is_some() {
             // Unified exec waiting should take precedence over reasoning-derived status headers.
             self.request_redraw();
@@ -1379,7 +1389,7 @@ impl ChatWidget {
     fn on_agent_reasoning_final(&mut self) {
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
-        if !self.full_reasoning_buffer.is_empty() {
+        if !self.full_reasoning_buffer.is_empty() && !self.is_suppressing_streaming_for_reader() {
             let cell =
                 history_cell::new_reasoning_summary_block(self.full_reasoning_buffer.clone());
             self.add_boxed_history(cell);
@@ -1465,6 +1475,9 @@ impl ChatWidget {
         self.agent_turn_running = false;
         self.turn_sleep_inhibitor.set_turn_running(false);
         self.update_task_running_state();
+        // Notify the active bottom pane view (e.g. document reader) that the
+        // turn ended so it can clear any stale "waiting" state.
+        self.bottom_pane.notify_turn_complete();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
@@ -4513,10 +4526,6 @@ impl ChatWidget {
                     self.on_agent_message_item_completed(item);
                 }
             }
-            EventMsg::PresentDocument(_)
-            | EventMsg::UpdateDocumentSection(_)
-            | EventMsg::AppendDocumentSection(_)
-            | EventMsg::PatchDocumentSection(_) => {}
         }
 
         if !from_replay && self.agent_turn_running {
@@ -7922,6 +7931,10 @@ async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Vec<RateLimitSn
         }
     }
 }
+
+// Document reader integration (fork-specific, kept in a separate file to reduce
+// merge conflicts with upstream).
+include!("chatwidget_document_reader.rs");
 
 #[cfg(test)]
 pub(crate) fn show_review_commit_picker_with_entries(

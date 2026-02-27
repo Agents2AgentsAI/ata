@@ -43,6 +43,7 @@ use std::time::Duration;
 
 mod app_link_view;
 mod approval_overlay;
+pub(crate) mod document_reader;
 mod multi_select_picker;
 mod request_user_input;
 mod status_line_setup;
@@ -1117,6 +1118,10 @@ impl Renderable for BottomPane {
         self.as_renderable().cursor_pos(area)
     }
 }
+
+// Document reader forwarding methods (fork-specific, kept in a separate file
+// to reduce merge conflicts with upstream).
+include!("document_reader_ext.rs");
 
 #[cfg(test)]
 mod tests {
