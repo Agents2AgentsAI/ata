@@ -8,10 +8,10 @@ use crate::storage::db::SchedulerDb;
 
 const DEFAULT_MAX_CONCURRENT: usize = 4;
 
-/// Path to the PID file (`~/.ata/scheduler.pid`).
+/// Path to the PID file (`~/.ata/scheduler/scheduler.pid`).
 fn pid_file_path() -> anyhow::Result<PathBuf> {
     let home = codex_utils_home_dir::find_codex_home().map_err(|e| anyhow::anyhow!(e))?;
-    Ok(home.join("scheduler.pid"))
+    Ok(home.join("scheduler").join("scheduler.pid"))
 }
 
 /// RAII guard that writes the PID file on creation and removes it on drop.

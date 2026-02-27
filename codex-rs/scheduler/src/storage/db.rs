@@ -41,10 +41,10 @@ impl SchedulerDb {
         Ok(Self { pool })
     }
 
-    /// Open the default scheduler database at `~/.ata/scheduler.sqlite`.
+    /// Open the default scheduler database at `~/.ata/scheduler/scheduler.sqlite`.
     pub async fn open_default() -> anyhow::Result<Self> {
         let home = codex_utils_home_dir::find_codex_home().map_err(|e| anyhow::anyhow!(e))?;
-        let path = home.join("scheduler.sqlite");
+        let path = home.join("scheduler").join("scheduler.sqlite");
         Self::open(&path).await
     }
 
