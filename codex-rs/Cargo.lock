@@ -1686,6 +1686,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-coordination"
+version = "0.105.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "pretty_assertions",
+ "serde",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "codex-core"
 version = "0.105.0"
 dependencies = [
@@ -1707,6 +1722,7 @@ dependencies = [
  "codex-async-utils",
  "codex-client",
  "codex-config",
+ "codex-coordination",
  "codex-data-tools",
  "codex-execpolicy",
  "codex-file-search",
