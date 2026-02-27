@@ -97,6 +97,7 @@ pub(crate) use status_line_setup::StatusLineSetupView;
 mod paste_burst;
 pub mod popup_consts;
 mod queued_user_messages;
+mod reverse_search;
 mod scroll_state;
 mod selection_popup_common;
 mod textarea;
@@ -246,6 +247,11 @@ impl BottomPane {
     pub fn set_image_paste_enabled(&mut self, enabled: bool) {
         self.composer.set_image_paste_enabled(enabled);
         self.request_redraw();
+    }
+
+    /// Set the path to `history.jsonl` for reverse search (`Ctrl+R`).
+    pub fn set_history_path(&mut self, path: PathBuf) {
+        self.composer.set_history_path(path);
     }
 
     pub fn set_connectors_snapshot(&mut self, snapshot: Option<ConnectorsSnapshot>) {

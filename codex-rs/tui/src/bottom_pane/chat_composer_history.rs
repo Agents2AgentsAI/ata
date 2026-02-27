@@ -154,6 +154,15 @@ impl ChatComposerHistory {
         self.local_history.push(entry);
     }
 
+    /// Return local session history texts in newest-first order for reverse search.
+    pub(crate) fn local_history_texts_newest_first(&self) -> Vec<String> {
+        self.local_history
+            .iter()
+            .rev()
+            .map(|entry| entry.text.clone())
+            .collect()
+    }
+
     /// Reset navigation tracking so the next Up key resumes from the latest entry.
     pub fn reset_navigation(&mut self) {
         self.history_cursor = None;

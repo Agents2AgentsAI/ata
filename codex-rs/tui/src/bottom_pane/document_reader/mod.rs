@@ -42,6 +42,33 @@ pub(crate) const DOCUMENT_READER_VIEW_ID: &str = "doc_reader";
 /// thread it through BottomPane (which is upstream code).
 static SAVED_FOLD_STATE: std::sync::Mutex<Option<SavedFoldState>> = std::sync::Mutex::new(None);
 
+/// Whether the reading view tutorial has been shown (process-level cache).
+/// Checked once at startup via the `~/.ata/.reading-view-seen` dotfile.
+static TUTORIAL_SEEN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Resolve the codex home directory (`$CODEX_HOME` or `~/.ata`).
+fn codex_home() -> Option<std::path::PathBuf> {
+    std::env::var_os("CODEX_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".ata")))
+}
+
+/// Check whether the tutorial has been seen before (reads dotfile on first call).
+fn has_seen_tutorial() -> bool {
+    *TUTORIAL_SEEN.get_or_init(|| {
+        codex_home()
+            .map(|home| home.join(".reading-view-seen").exists())
+            .unwrap_or(true) // If we can't find home, skip the tutorial
+    })
+}
+
+/// Mark the tutorial as seen by writing the dotfile.
+fn mark_tutorial_seen() {
+    if let Some(home) = codex_home() {
+        let _ = std::fs::write(home.join(".reading-view-seen"), "");
+    }
+}
+
 struct SavedFoldState {
     document_id: String,
     /// Per-section fold regions (index = section index).
@@ -203,6 +230,20 @@ pub(crate) struct DocumentReaderView {
     /// Set of section indices still awaiting content during streaming.
     /// `Some(set)` means streaming is active; `None` means all sections are filled.
     streaming_sections: Option<HashSet<usize>>,
+
+    /// When `true`, render a full-screen help overlay listing all keybindings.
+    show_help: bool,
+    /// Scroll offset for the help overlay (when content doesn't fit).
+    help_scroll: Cell<usize>,
+
+    /// When `true`, render the first-time tutorial overlay.
+    show_tutorial: bool,
+    /// Scroll offset for the tutorial overlay (when content doesn't fit).
+    tutorial_scroll: Cell<usize>,
+
+    /// When `Some`, the user pressed `:` and is typing a line number.
+    /// Line numbers are shown on the left margin while active.
+    line_number_input: Option<String>,
 }
 
 impl DocumentReaderView {
@@ -280,6 +321,11 @@ impl DocumentReaderView {
             visual_select: None,
             selection_context: None,
             streaming_sections,
+            show_help: false,
+            help_scroll: Cell::new(0),
+            show_tutorial: !has_seen_tutorial(),
+            tutorial_scroll: Cell::new(0),
+            line_number_input: None,
         }
     }
 
@@ -663,10 +709,18 @@ impl DocumentReaderView {
     }
 
     fn submit_follow_up(&mut self) {
-        let text = self.textarea.text().trim().to_string();
-        if text.is_empty() {
-            return;
-        }
+        let raw_text = self.textarea.text().trim().to_string();
+        // When the user presses Enter with no text but has a visual selection,
+        // default to "Explain this in more detail" — the most common action.
+        let text = if raw_text.is_empty() {
+            if self.selection_context.is_some() {
+                "Explain this in more detail".to_string()
+            } else {
+                return;
+            }
+        } else {
+            raw_text
+        };
 
         let heading = self
             .sections
@@ -859,6 +913,123 @@ impl DocumentReaderView {
     }
 
     fn handle_content_key(&mut self, key_event: KeyEvent) {
+        // Line-number jump mode (`:` prefix) — must run before overlay/quit
+        // handlers so digit keys are captured instead of dismissing overlays.
+        if let Some(ref mut input) = self.line_number_input {
+            match key_event.code {
+                KeyCode::Char(c) if c.is_ascii_digit() => {
+                    input.push(c);
+                }
+                KeyCode::Backspace => {
+                    if input.is_empty() {
+                        self.line_number_input = None;
+                    } else {
+                        input.pop();
+                    }
+                }
+                KeyCode::Enter => {
+                    if let Ok(n) = input.parse::<usize>() {
+                        let target = n.saturating_sub(1); // 1-indexed → 0-indexed
+                        if self.show_tutorial || self.show_help {
+                            let scroll_cell = if self.show_tutorial {
+                                &self.tutorial_scroll
+                            } else {
+                                &self.help_scroll
+                            };
+                            scroll_cell.set(target);
+                        } else {
+                            self.cursor_line = target;
+                            self.clamp_and_scroll();
+                        }
+                    }
+                    self.line_number_input = None;
+                    self.pending_g = false;
+                    self.pending_z = false;
+                }
+                KeyCode::Esc => {
+                    self.line_number_input = None;
+                    self.pending_g = false;
+                    self.pending_z = false;
+                }
+                _ => {
+                    self.line_number_input = None;
+                    self.pending_g = false;
+                    self.pending_z = false;
+                }
+            }
+            return;
+        }
+
+        // Tutorial / help overlay: navigate with vim keys, dismiss with others.
+        if self.show_tutorial || self.show_help {
+            let scroll_cell = if self.show_tutorial {
+                &self.tutorial_scroll
+            } else {
+                &self.help_scroll
+            };
+            let half = (self.last_content_height.get() / 2).max(1) as usize;
+            let full = self.last_content_height.get().max(1) as usize;
+            let handled = if key_event.modifiers.contains(KeyModifiers::CONTROL) {
+                match key_event.code {
+                    KeyCode::Char('d') => {
+                        scroll_cell.set(scroll_cell.get().saturating_add(half));
+                        true
+                    }
+                    KeyCode::Char('u') => {
+                        scroll_cell.set(scroll_cell.get().saturating_sub(half));
+                        true
+                    }
+                    KeyCode::Char('f') => {
+                        scroll_cell.set(scroll_cell.get().saturating_add(full));
+                        true
+                    }
+                    KeyCode::Char('b') => {
+                        scroll_cell.set(scroll_cell.get().saturating_sub(full));
+                        true
+                    }
+                    _ => false,
+                }
+            } else {
+                match key_event.code {
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        scroll_cell.set(scroll_cell.get().saturating_add(1));
+                        true
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        scroll_cell.set(scroll_cell.get().saturating_sub(1));
+                        true
+                    }
+                    KeyCode::Char('G') => {
+                        scroll_cell.set(usize::MAX);
+                        true
+                    }
+                    KeyCode::Char('g') => {
+                        // gg = jump to top (consume even without pending_g
+                        // since overlays don't use g for anything else).
+                        scroll_cell.set(0);
+                        true
+                    }
+                    KeyCode::Char(':') => {
+                        self.line_number_input = Some(String::new());
+                        true
+                    }
+                    KeyCode::Char('q') | KeyCode::Esc => {
+                        if self.show_tutorial {
+                            self.show_tutorial = false;
+                            self.tutorial_scroll.set(0);
+                            mark_tutorial_seen();
+                        } else {
+                            self.show_help = false;
+                            self.help_scroll.set(0);
+                        }
+                        true
+                    }
+                    _ => true, // consume all other keys (don't dismiss)
+                }
+            };
+            return;
+        }
+
         // Cancel pending quit confirmation on any key except q/y.
         if self.pending_quit && !matches!(key_event.code, KeyCode::Char('q') | KeyCode::Char('y')) {
             self.pending_quit = false;
@@ -1078,12 +1249,26 @@ impl DocumentReaderView {
         // --- Visual mode only ---
         if self.visual_select.is_some() {
             match key_event.code {
-                KeyCode::Tab => {
+                KeyCode::Enter => {
+                    // Quick-explain: extract selection and submit immediately
+                    // with the default "Explain this in more detail" prompt.
                     let inner_w = self.last_inner_width.get();
                     let text = self.selected_text(inner_w);
                     if let Some(text) = text {
                         self.selection_context = Some(text);
                     }
+                    self.visual_select = None;
+                    self.submit_follow_up();
+                }
+                KeyCode::Tab => {
+                    // Open composer with selection as context — user can type
+                    // a custom question, or just press Enter for the default.
+                    let inner_w = self.last_inner_width.get();
+                    let text = self.selected_text(inner_w);
+                    if let Some(text) = text {
+                        self.selection_context = Some(text);
+                    }
+                    self.visual_select = None;
                     self.focus = ReaderFocus::Composer;
                 }
                 KeyCode::Esc => {
@@ -1211,6 +1396,13 @@ impl DocumentReaderView {
             }
             KeyCode::Tab => {
                 self.focus = ReaderFocus::Composer;
+            }
+            KeyCode::Char(':') => {
+                self.line_number_input = Some(String::new());
+            }
+            KeyCode::Char('?') => {
+                self.show_help = true;
+                self.help_scroll.set(0);
             }
             KeyCode::Char('q') => {
                 if self.pending_quit {
@@ -2003,54 +2195,28 @@ impl BottomPaneView for DocumentReaderView {
 }
 
 impl Renderable for DocumentReaderView {
-    fn desired_height(&self, width: u16) -> u16 {
-        // Content lines inside the card (accounting for 2-char padding each side).
-        let inner_width = width.saturating_sub(4);
-
-        // When the current section is streaming-empty, the render path uses
-        // `render_section_loading` (3 lines: heading + blank + indicator)
-        // instead of `rendered_lines` (2 lines: heading + blank).  Use the
-        // same line count here so the card requests enough vertical space
-        // for the loading indicator to be visible.
-        let is_streaming_empty = self
-            .streaming_sections
-            .as_ref()
-            .is_some_and(|set| set.contains(&self.current_section))
-            && self
-                .sections
-                .get(self.current_section)
-                .is_some_and(|s| s.content.trim().is_empty());
-
-        let section_lines = if is_streaming_empty {
-            let heading = self
-                .sections
-                .get(self.current_section)
-                .map_or("", |s| s.heading.as_str());
-            render::render_section_loading(heading, false).len() as u16
-        } else {
-            self.sections
-                .get(self.current_section)
-                .map(|s| s.rendered_lines(inner_width).len() as u16)
-                .unwrap_or(1)
-        };
-
-        let extra_rows = match self.focus {
-            ReaderFocus::Composer => 1 + self.input_height(inner_width), // separator + input
-            ReaderFocus::Search => 1 + 1,                                // separator + search bar
-            ReaderFocus::Content => 0,
-        };
-
-        // top_border(1) + header(1) + separator(1) + content + separator(1) + hints(1)
-        //   + extra_rows + bottom_border(1)
-        let ideal = 1 + 1 + 1 + section_lines + 1 + 1 + extra_rows + 1;
-        ideal.max(8)
+    fn desired_height(&self, _width: u16) -> u16 {
+        // The reading view is a full-screen experience — request all available
+        // terminal height so the flex allocator gives us maximum space.
+        // Use a large-but-safe value (not u16::MAX) because upstream
+        // InsetRenderable adds inset values to this with non-saturating
+        // arithmetic.
+        u16::MAX / 2
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
         if area.height < 4 || area.width < 6 {
             return;
         }
-        Clear.render(area, buf);
+        // Clear the reading view area and any inset gap row above (the
+        // chatwidget adds a 1-row top inset to the bottom pane; when the
+        // reading view fills the terminal that gap can show residual content).
+        let clear_area = if area.y > 0 {
+            Rect::new(area.x, area.y - 1, area.width, area.height + 1)
+        } else {
+            area
+        };
+        Clear.render(clear_area, buf);
 
         let w = area.width;
         let section_count = self.sections.len();
@@ -2122,10 +2288,16 @@ impl Renderable for DocumentReaderView {
                 self.sections.len()
             ))
         });
+        let current_heading = self
+            .sections
+            .get(self.current_section)
+            .map(|s| s.heading.as_str())
+            .unwrap_or("");
         let header = render::header_line(
             &self.title,
             section_num,
             section_count,
+            current_heading,
             false,
             streaming_status.as_deref(),
             w,
@@ -2152,8 +2324,70 @@ impl Renderable for DocumentReaderView {
         y += 1;
 
         // === Content area (fills remaining space between top and bottom fixed rows) ===
+        let show_line_nums = self.line_number_input.is_some();
         let mut has_more_below = false;
-        if content_height > 0 {
+        if content_height > 0 && (self.show_tutorial || self.show_help) {
+            // Render tutorial or help overlay (unified content) with scroll.
+            let (overlay_lines, scroll_cell) = if self.show_tutorial {
+                (
+                    render::help_overlay_lines(w, Some(self.sections.len())),
+                    &self.tutorial_scroll,
+                )
+            } else {
+                (render::help_overlay_lines(w, None), &self.help_scroll)
+            };
+            let total = overlay_lines.len();
+            let visible = content_height as usize;
+            let max_scroll = total.saturating_sub(visible);
+            let scroll = scroll_cell.get().min(max_scroll);
+            scroll_cell.set(scroll);
+            let rendered = total.saturating_sub(scroll).min(visible);
+            for (i, line) in overlay_lines
+                .into_iter()
+                .skip(scroll)
+                .take(visible)
+                .enumerate()
+            {
+                let row_y = y + i as u16;
+                if row_y >= bottom {
+                    break;
+                }
+                let abs_line = scroll + i + 1; // 1-indexed
+                let bordered = if show_line_nums {
+                    render::bordered_line_numbered(line, w, false, abs_line)
+                } else {
+                    render::bordered_line(line, w, false)
+                };
+                Paragraph::new(bordered).render(
+                    Rect {
+                        x: area.x,
+                        y: row_y,
+                        width: w,
+                        height: 1,
+                    },
+                    buf,
+                );
+            }
+            // Fill remaining content rows with empty bordered lines.
+            for i in rendered..visible {
+                let row_y = y + i as u16;
+                if row_y >= bottom {
+                    break;
+                }
+                Paragraph::new(render::bordered_line(Line::from(""), w, false)).render(
+                    Rect {
+                        x: area.x,
+                        y: row_y,
+                        width: w,
+                        height: 1,
+                    },
+                    buf,
+                );
+            }
+            if scroll + visible < total {
+                has_more_below = true;
+            }
+        } else if content_height > 0 {
             let inner_width = w.saturating_sub(4);
             self.last_inner_width.set(inner_width);
             if let Some(section) = self.sections.get(self.current_section) {
@@ -2170,6 +2404,30 @@ impl Renderable for DocumentReaderView {
                 } else {
                     section.rendered_lines(inner_width)
                 };
+
+                // On the first section, append a table of contents listing
+                // all section headings so the user knows the full structure.
+                if self.current_section == 0 && self.sections.len() > 1 {
+                    raw_lines.push(Line::from(""));
+                    raw_lines.push(Line::from(vec![
+                        Span::from("  Sections").dim().bold(),
+                        Span::from(format!(" (n/p to navigate)")).dim(),
+                    ]));
+                    for (i, s) in self.sections.iter().enumerate() {
+                        if !s.heading.is_empty() {
+                            let marker = if self.visited_sections.contains(&i) {
+                                "\u{2713} " // ✓
+                            } else {
+                                "  "
+                            };
+                            let num = format!("  {marker}{}. ", i + 1);
+                            raw_lines.push(Line::from(vec![
+                                Span::from(num).dim(),
+                                Span::from(s.heading.clone()).dim(),
+                            ]));
+                        }
+                    }
+                }
 
                 // Compute the rendered-line range that should get green
                 // borders.  We render the unchanged prefix/suffix of the raw
@@ -2267,6 +2525,16 @@ impl Renderable for DocumentReaderView {
                     .as_ref()
                     .and_then(|vs| self.selection_bounds(vs, total));
 
+                // Helper: wrap a line with borders, optionally with a line number.
+                let border_fn =
+                    |line: Line<'static>, w: u16, changed: bool, abs: usize| -> Line<'static> {
+                        if show_line_nums {
+                            render::bordered_line_numbered(line, w, changed, abs + 1)
+                        } else {
+                            render::bordered_line(line, w, changed)
+                        }
+                    };
+
                 // Render each visible line wrapped in side borders.
                 for (i, line) in visible.into_iter().enumerate() {
                     let row_y = y + i as u16;
@@ -2294,12 +2562,12 @@ impl Renderable for DocumentReaderView {
                             };
                             let highlighted =
                                 render::apply_char_selection(line, col_start, col_end);
-                            render::bordered_line(highlighted, w, is_changed)
+                            border_fn(highlighted, w, is_changed, abs_line)
                         } else {
-                            render::bordered_line(line, w, is_changed)
+                            border_fn(line, w, is_changed, abs_line)
                         }
                     } else {
-                        render::bordered_line(line, w, is_changed)
+                        border_fn(line, w, is_changed, abs_line)
                     };
                     Paragraph::new(bordered).render(
                         Rect {
@@ -2423,8 +2691,12 @@ impl Renderable for DocumentReaderView {
                     let mut state = self.textarea_state.borrow_mut();
                     StatefulWidgetRef::render_ref(&(&self.textarea), ta_area, buf, &mut state);
                     if self.textarea.text().is_empty() {
-                        Paragraph::new("Ask about this section...".dim().italic())
-                            .render(ta_area, buf);
+                        let placeholder = if self.selection_context.is_some() {
+                            "Press Enter to explain, or type a question..."
+                        } else {
+                            "Ask about this section..."
+                        };
+                        Paragraph::new(placeholder.dim().italic()).render(ta_area, buf);
                     }
                 }
 
@@ -2489,6 +2761,7 @@ impl Renderable for DocumentReaderView {
             self.visual_select.is_some(),
             current_has_folds,
             self.pending_quit,
+            self.line_number_input.as_deref(),
             w,
         );
         Paragraph::new(hints).render(
@@ -2500,10 +2773,27 @@ impl Renderable for DocumentReaderView {
             buf,
         );
 
-        // Separator above hints (with scroll indicator when content overflows).
+        // Separator above hints (with scroll indicator when content overflows,
+        // or a next-section nudge when the user has reached the bottom).
         by = by.saturating_sub(1);
         let sep = if has_more_below {
             render::separator_with_indicator(w, " \u{25BC} scroll for more ")
+        } else if self.current_section + 1 < self.sections.len() {
+            let next_heading = self
+                .sections
+                .get(self.current_section + 1)
+                .map(|s| s.heading.as_str())
+                .unwrap_or("");
+            let label = if next_heading.is_empty() {
+                format!(
+                    " n \u{25B6} next section ({}/{}) ",
+                    section_num + 1,
+                    section_count
+                )
+            } else {
+                format!(" n \u{25B6} {next_heading} ")
+            };
+            render::separator_with_indicator(w, &label)
         } else {
             render::separator(w)
         };
@@ -2692,14 +2982,16 @@ mod tests {
     }
 
     fn make_view(tx: AppEventSender) -> DocumentReaderView {
-        DocumentReaderView::new(
+        let mut view = DocumentReaderView::new(
             "test-doc".to_string(),
             "Test Report".to_string(),
             test_content(),
             tx,
             true,
             crate::tui::FrameRequester::test_dummy(),
-        )
+        );
+        view.show_tutorial = false;
+        view
     }
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -2772,7 +3064,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         // Outline-only content: all sections have headings but no body.
         let outline = "## Overview\n\n## Methodology\n\n## Results";
-        let view = DocumentReaderView::new(
+        let mut view = DocumentReaderView::new(
             "test-streaming".to_string(),
             "Streaming Test".to_string(),
             outline.to_string(),
@@ -2780,6 +3072,7 @@ mod tests {
             false, // animations_enabled = false so we get static text
             crate::tui::FrameRequester::test_dummy(),
         );
+        view.show_tutorial = false;
         // streaming_sections should be active.
         assert!(
             view.streaming_sections.is_some(),
@@ -2829,7 +3122,7 @@ mod tests {
         assert!(snap.contains("Test Report"), "title should be visible");
         assert!(snap.contains("1/4"), "section indicator should show 1/4");
         assert!(
-            snap.contains("move"),
+            snap.contains("scroll"),
             "hints bar should show cursor movement keys"
         );
     }
