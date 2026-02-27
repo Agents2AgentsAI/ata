@@ -277,6 +277,65 @@ When a user asks you to schedule something:
 - Jobs that need network access (APIs, web scraping): use `sandbox_mode = "danger-full-access"`
 - Jobs that need to write outside the working directory: use `sandbox_mode = "workspace-write"` or `"danger-full-access"`
 
+## Connecting External Services (Slack, etc.)
+
+When a job needs to interact with an external service (Slack, email, webhooks, etc.), **always minimize user friction**. Follow this principle: do everything you can locally, and for the part that requires the user, give them the most automated single-step option first.
+
+### Least-friction-first principle
+
+WRONG approach (too many manual steps):
+> 1. Go to slack.com  2. Click this  3. Click that  4. Toggle this  5. Click more things...
+
+RIGHT approach (one copy-paste + a few clicks):
+> I'll open the setup page in your browser. Paste this manifest, click Create, copy the URL.
+
+Rules:
+1. **Always offer to open URLs in the user's browser** using `open <url>` (macOS) or `xdg-open <url>` (Linux). Their default browser is already authenticated — no login needed.
+2. **Provide app manifests / config files** that can be pasted in one shot, instead of step-by-step UI walkthroughs.
+3. **Never give more than 4-5 user-facing steps.** If you're writing more, you're not automating enough.
+4. **Do all local work silently** — write config files, set permissions, wire scripts — then present only what the user must do manually.
+
+### Slack webhook setup (standard pattern)
+
+When a job needs to post to Slack:
+
+1. Open the page for them:
+   ```sh
+   open "https://api.slack.com/apps?new_app=1"
+   ```
+
+2. Give them a ready-to-paste app manifest:
+   ```yaml
+   display_information:
+     name: <descriptive name>
+     description: <what it does>
+   features:
+     bot_user:
+       display_name: <name>
+       always_online: false
+   oauth_config:
+     scopes:
+       bot:
+         - incoming-webhook
+   settings:
+     org_deploy_enabled: false
+     socket_mode_enabled: false
+     token_rotation_enabled: false
+   ```
+
+3. Tell them: "Create from manifest → Incoming Webhooks → Add → pick channel → copy URL → paste here"
+
+4. Once they paste the URL, store it securely and wire it into the job — all locally, silently.
+
+Total user effort: paste manifest, 3 clicks, paste URL back. That's the target.
+
+### Other services
+
+Apply the same pattern:
+- **GitHub tokens**: `open "https://github.com/settings/tokens/new?scopes=repo&description=ata-job"` — pre-filled scope
+- **API keys**: offer to store in `~/.ata/secrets/` with locked permissions
+- **Email**: check if `sendmail`/`msmtp` is configured before suggesting external services
+
 ## Checking Job Results
 
 After a job runs:
