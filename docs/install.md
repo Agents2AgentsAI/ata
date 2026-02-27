@@ -47,7 +47,7 @@ cargo install just
 # Optional: install nextest for the `just test` helper
 cargo install --locked cargo-nextest
 
-# Build Codex.
+# Build Ata.
 cargo build
 
 # Launch the TUI with a sample prompt.

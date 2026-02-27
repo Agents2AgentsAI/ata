@@ -1,6 +1,6 @@
 # @openai/codex-shell-tool-mcp
 
-**Note: This MCP server is still experimental. When using it with Codex CLI, ensure the CLI version matches the MCP server version.**
+**Note: This MCP server is still experimental. When using it with Ata CLI, ensure the CLI version matches the MCP server version.**
 
 `@openai/codex-shell-tool-mcp` is an MCP server that provides a tool named `shell` that runs a shell command inside a sandboxed instance of Bash. This special instance of Bash intercepts requests to spawn new processes (specifically, [`execve(2)`](https://man7.org/linux/man-pages/man2/execve.2.html) calls). For each call, it makes a request back to the MCP server to determine whether to allow the proposed command to execute. It also has the option of _escalating_ the command to run unprivileged outside of the sandbox governing the Bash process.
 
@@ -29,14 +29,14 @@ First, verify that you can download and run the MCP executable:
 npx -y @openai/codex-shell-tool-mcp --version
 ```
 
-To test out the MCP with a one-off invocation of Codex CLI, it is important to _disable_ the default shell tool in addition to enabling the MCP so Codex has exactly one shell-like tool available to it:
+To test out the MCP with a one-off invocation of Ata CLI, it is important to _disable_ the default shell tool in addition to enabling the MCP so Ata has exactly one shell-like tool available to it:
 
 ```bash
-codex --disable shell_tool \
+ata --disable shell_tool \
   --config 'mcp_servers.bash={command = "npx", args = ["-y", "@openai/codex-shell-tool-mcp"]}'
 ```
 
-To configure this permanently so you can use the MCP while running `codex` without additional command-line flags, add the following to your `~/.codex/config.toml`:
+To configure this permanently so you can use the MCP while running `ata` without additional command-line flags, add the following to your `~/.ata/config.toml`:
 
 ```toml
 [features]

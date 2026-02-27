@@ -390,14 +390,7 @@ impl ModelsManager {
         let chatgpt_mode = matches!(self.auth_manager.auth_mode(), Some(AuthMode::Chatgpt));
         presets = ModelPreset::filter_by_auth(presets, chatgpt_mode);
 
-        for preset in &mut presets {
-            preset.is_default = false;
-        }
-        if let Some(default) = presets.iter_mut().find(|preset| preset.show_in_picker) {
-            default.is_default = true;
-        } else if let Some(default) = presets.first_mut() {
-            default.is_default = true;
-        }
+        ModelPreset::mark_default_by_picker_visibility(&mut presets);
 
         presets
     }
@@ -453,12 +446,20 @@ impl ModelsManager {
         model: &str,
         config: &Config,
     ) -> ModelInfo {
-        let candidates: &[ModelInfo] = if let Some(model_catalog) = config.model_catalog.as_ref() {
-            &model_catalog.models
-        } else {
-            &[]
-        };
-        Self::construct_model_info_from_candidates(model, candidates, config)
+        let mut candidates = Self::load_remote_models_from_file().unwrap_or_default();
+        if let Some(model_catalog) = config.model_catalog.as_ref() {
+            for catalog_model in &model_catalog.models {
+                if let Some(existing_index) = candidates
+                    .iter()
+                    .position(|existing| existing.slug == catalog_model.slug)
+                {
+                    candidates[existing_index] = catalog_model.clone();
+                } else {
+                    candidates.push(catalog_model.clone());
+                }
+            }
+        }
+        Self::construct_model_info_from_candidates(model, &candidates, config)
     }
 }
 
