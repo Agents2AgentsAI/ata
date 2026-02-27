@@ -377,6 +377,9 @@
             "prevent_idle_sleep": {
               "type": "boolean"
             },
+            "reading_view": {
+              "type": "boolean"
+            },
             "realtime_conversation": {
               "type": "boolean"
             },
@@ -393,6 +396,9 @@
               "type": "boolean"
             },
             "research_hacker_news": {
+              "type": "boolean"
+            },
+            "research_knowledge_base": {
               "type": "boolean"
             },
             "research_paper_search": {
@@ -1759,6 +1765,9 @@
         "prevent_idle_sleep": {
           "type": "boolean"
         },
+        "reading_view": {
+          "type": "boolean"
+        },
         "realtime_conversation": {
           "type": "boolean"
         },
@@ -1775,6 +1784,9 @@
           "type": "boolean"
         },
         "research_hacker_news": {
+          "type": "boolean"
+        },
+        "research_knowledge_base": {
           "type": "boolean"
         },
         "research_paper_search": {

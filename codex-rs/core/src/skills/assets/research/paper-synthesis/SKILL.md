@@ -143,18 +143,15 @@ Card ID convention: kebab-case slug from the paper title, prefixed with `paper-`
 - **Quick question** ("what's the main idea?", "how does X work?") → answer directly in chat
 - **Brief summary** → chat for short responses, reading view for longer ones
 
-**Section structure:** Use **4-5 sections** for a standard paper synthesis. Each section should be **15-30 lines** (one screen in a terminal). Do not create more than 6 sections — thin sections (< 8 lines) should be merged with adjacent ones.
+**Section structure:** Let the paper's content determine the number and names of sections. A simple paper might need 3 sections; a complex one with distinct components might need 6. The only hard rules:
 
-Recommended sections:
+- **No section may exceed 40 lines** (one terminal screen). If a section grows past that, split it.
+- **No section should be thinner than 8 lines** — merge thin sections with adjacent ones.
+- Target **15-30 lines** per section for comfortable reading.
 
-- **Overview** — problem, motivation, core idea (what and why)
-- **Method** — how it works, architecture, key mechanisms
-- **Results** — specific numbers, baselines, key findings, ablations
-- **Discussion** — limitations, connections to related work, takeaways
+Common section types (adapt as needed): Overview, Method, Architecture, Training, Results, Ablations, Discussion, Limitations.
 
-Add a 5th section only if the paper has a genuinely distinct component (e.g., a separate training pipeline, a novel dataset, a theoretical analysis) that doesn't fit naturally into the 4 above.
-
-**Phase 1 (Outline):** Call `present_reading_view` with `document_id` set to a unique slug, `title` to the report title, and `content` containing ONLY the `## ` section headings with empty bodies. Example: `"## Overview\n\n## Method\n\n## Results\n\n## Discussion"`. This opens the reading view instantly with "Generating..." placeholders.
+**Phase 1 (Outline):** Call `present_reading_view` with `document_id` set to a unique slug, `title` to the report title, and `content` containing ONLY the `## ` section headings with empty bodies. Choose headings that match the paper's structure — e.g., `"## Overview\n\n## Method\n\n## Results\n\n## Discussion"` for a standard paper, or `"## Overview\n\n## Architecture\n\n## Training Pipeline\n\n## Results\n\n## Ablations\n\n## Discussion"` for a systems paper. This opens the reading view instantly with "Generating..." placeholders.
 
 **Phase 2 (Fill):** The tool result will tell you to fill section 0. Immediately call `update_document_section(document_id, section_index=0, content="...")` with the FULL content for that section — do not output any text, just make the tool call. Each tool result tells you the next section to fill. Continue calling `update_document_section` for each subsequent section until all are filled.
 

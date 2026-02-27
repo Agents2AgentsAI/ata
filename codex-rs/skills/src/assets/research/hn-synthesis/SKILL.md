@@ -42,7 +42,11 @@ The main agent orchestrates but does not call `hn_search` or `hn_get_thread` dir
 > [If specific keywords requested: Keywords: [list]]
 
 2. **Wait** for the discovery subagent to return thread IDs.
-3. **Spawn one `$hn-synthesizer` subagent per thread** (in parallel), passing the URLs from discovery:
+3. **Spawn `$hn-synthesizer` subagents in batches of 8.** The system has a 20-thread limit — spawning more than ~10 subagents at once causes silent failures. Process threads in waves:
+   - **Batch 1**: Spawn subagents for threads 1-8. Wait for all 8 to complete (single `wait` call — see step 4).
+   - **Batch 2**: Spawn subagents for threads 9-16. Wait again.
+   - **Continue** until all threads are processed.
+   - If discovery returned > 25 threads, take the top 25 ranked by points × relevance. Diminishing returns beyond that.
 
 > $hn-synthesizer
 >
@@ -51,11 +55,11 @@ The main agent orchestrates but does not call `hn_search` or `hn_get_thread` dir
 > Article URL: [linked URL, if any]
 > Topic context: [brief context from discovery results]
 
-4. **Wait** for all analysis subagents to complete — each returns a staging file path.
+4. **Wait ONCE per batch** — pass all subagent IDs from the current batch in a single `wait` call. Do NOT call `wait` per subagent or poll in a loop. One `wait` call returns all results for that batch. After each batch completes, spawn the next batch.
 5. **Read all staging files** via `exec_command` (e.g., `cat ~/.ata/knowledge-base/staging/hn-*.md`).
 6. **Present** a unified summary to the user immediately (see Presentation). Do NOT write to KB before presenting.
 7. If multiple threads were analyzed, include the cross-thread synthesis sections (see Phase 4) in the reading view.
-8. **Spawn a KB subagent** (fire-and-forget, do NOT call `wait`) to persist the card in the background:
+8. **Spawn a KB subagent (skip if KB is disabled)** — fire-and-forget, do NOT call `wait` — to persist the card in the background:
 
 > $kb
 >
@@ -72,19 +76,25 @@ The main agent orchestrates but does not call `hn_search` or `hn_get_thread` dir
 >
 > Confirm completion of each step before moving to the next.
 
+**If KB is disabled:** Skip step 8. After presenting, delete staging files with `exec_command: for f in $HOME/.ata/knowledge-base/staging/hn-*.md; do unlink "$f"; done` so they don't accumulate. No card, journal, or context persistence happens. **Use `unlink`, not `rm -f`** — the sandbox blocks `rm` but allows `unlink`.
+
 ### Pre-Synthesis Check (Optional)
 
 **Skip when the user explicitly asks to search** ("search hackernews for...", "find HN posts about..."). Go straight to spawning the discovery subagent.
 
-Only check KB when the request is ambiguous ("what do people think about X?"):
+Only check KB when the request is ambiguous ("what do people think about X?") and KB is enabled:
 1. Search cards per `$kb` with the topic query. Look for `source_type: hackernews`.
 2. If a matching recent card exists, return it and ask if the user wants a fresh search.
+
+**If KB is disabled**, skip the pre-synthesis check entirely and go straight to spawning the discovery subagent.
 
 ### User provides a specific HN URL
 
 Extract the item ID and skip discovery — spawn a single `$hn-synthesizer` subagent directly.
 
 ## Phase 3: KB Card Persistence
+
+**Skip this phase entirely if KB is disabled.** The reading view presentation is the sole output when KB is off.
 
 KB writes happen in the **background** via a fire-and-forget `$kb` subagent, AFTER the reading view is presented. The main agent never writes KB cards directly.
 
@@ -129,9 +139,13 @@ emerging consensus, or new alternatives entering the conversation.>
 **Markdown formatting:** Always put a blank line before numbered list items (`1.`, `2.`, etc.) and before bullet list items (`-`, `*`). Without a blank line, the markdown parser treats `2.`, `3.`, etc. as plain text instead of list items, so they lose their formatting. This also applies to content after paragraphs, blockquotes, and code blocks.
 
 When the user asks follow-up questions about a specific section, use the most efficient update tool:
-- `append_to_section` — to add new information at the end of a section (most common for follow-up questions)
-- `patch_document_section` — to change specific text within a section (for corrections or targeted edits)
-- `update_document_section` — to fully rewrite a section (only when the entire section needs to change)
+
+- `append_to_section` with `foldable=true` — **preferred for expansion requests** (e.g., "explain more", "go deeper on X"). Adds a collapsible detail block below existing content, preserving scannability. Each foldable block: 3-5 sentences.
+- `append_to_section` (without foldable) — to add genuinely new information at the end of a section.
+- `patch_document_section` — to change specific text within a section (for corrections or targeted edits).
+- `update_document_section` — to fully rewrite a section ONLY when the user asks for a different framing or the section is factually wrong. **Never use this just to add more detail.**
+
+**Critical constraint:** After any follow-up update, the section must still be ≤30 lines of visible (non-folded) content. If a request would push past this limit, use foldable blocks.
 
 Write follow-up answers as straight content — no editorial labels like "(clearer explanation)" or "(expanded)" in headings or topic lines.
 

@@ -112,4 +112,13 @@ pub(crate) trait BottomPaneView: Renderable {
     /// should use this to clear any "waiting" state.
     #[allow(dead_code)]
     fn handle_turn_complete(&mut self) {}
+
+    /// Return the document ID if this view is a document reader that was closed.
+    ///
+    /// Used by `BottomPane` to track which documents have been dismissed so
+    /// that replayed `PresentDocument` events (e.g. after an agent switch) do
+    /// not re-open a reader the user already closed.
+    fn closed_document_id(&self) -> Option<&str> {
+        None
+    }
 }

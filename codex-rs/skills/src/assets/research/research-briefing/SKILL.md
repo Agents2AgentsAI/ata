@@ -26,19 +26,38 @@ Rules:
 - **Citation formatting**: cite as **Author (Year)** in prose. Never put DOIs or arXiv IDs inline in paragraphs — they break reading flow. Collect full references (with IDs) in a References section at the end of the briefing if the user needs them for follow-up.
 - **Never reference the KB in explanations.** Do not say "as summarized in your KB" or "your KB card says." The KB is infrastructure — present content as if you understand the papers directly.
 
-## Phase 0: Source KB Cards
+## Phase 0: Source Material
+
+This skill works best with KB cards, but it can also work without them.
+
+### Path A: KB Available (preferred)
 
 1. Determine `<kb_path>` per the `$kb` skill and verify KB exists.
 2. List all cards per `$kb`.
 3. Filter cards whose tags, titles, or topics relate to the user's question or requested topic.
 4. If related unrequested cards exist, present them: "I also found cards for X, Y — want me to include them in the briefing?"
-5. If no cards match the topic, tell the user: "No KB cards found for this topic. Run `$paper-synthesis` on relevant papers first, then re-run this briefing." The briefing synthesizes from existing KB content — it does not read papers itself.
+5. If no cards match the topic but KB is enabled, tell the user: "No KB cards found for this topic. Run `$paper-synthesis` on relevant papers first, then re-run this briefing." The briefing synthesizes from existing KB content — it does not read papers itself.
 
-## Phase 1: Read and Analyze Cards
+### Path B: No KB, but conversation context available
 
-For each relevant card:
+If KB is disabled but the conversation already contains synthesis output (from `$paper-synthesis` staging files, prior explanations, or user-provided paper details), use that content as source material. Extract the same fields as Phase 1 (core contribution, key result, approach family, tradeoffs, status) from whatever is available.
 
-1. Read the card per `$kb` to get the full content.
+### Path C: No KB, no prior context (cold start)
+
+If KB is disabled and no prior synthesis exists in the conversation, run a lightweight discovery:
+
+1. Use `paper_search` with 2-3 facets from the user's topic (same facet design as `$paper-discovery` Phase 1).
+2. Fetch the top 8-12 results sorted by citation count.
+3. Use the paper abstracts and metadata as source material for the briefing — this produces a shallower briefing than Path A, but still gives the user actionable orientation.
+4. Note in the briefing: "This briefing is based on paper abstracts only. For deeper analysis, run `$paper-synthesis` on papers of interest."
+
+**Path C is a fallback.** The briefing will lack the depth of a KB-sourced briefing — abstracts don't contain method details, specific numbers, or implementation insights. But it still answers "what are my options?" and gives the user a starting point.
+
+## Phase 1: Read and Analyze Source Material
+
+For each relevant card (or paper abstract in Path C):
+
+1. Read the card per `$kb` to get the full content. For Path B, read from conversation context. For Path C, use the paper_search results directly.
 2. Extract:
    - The core contribution (from Summary or Deep Dive — the single most important idea)
    - The key result (one specific number with context)
@@ -50,7 +69,7 @@ For each relevant card:
 
 Group the papers into 2-5 approach families based on their core paradigm. Each approach should have a clear name and a 1-sentence description of the shared strategy.
 
-## Phase 2.5: Read Research Context (Optional)
+## Phase 2.5: Read Research Context (Optional, skip if KB is disabled)
 
 If `<kb_path>/research-context.md` exists, use it to tailor the briefing:
 
@@ -123,13 +142,19 @@ For full technical walkthroughs of any paper above:
 **Markdown formatting:** Always put a blank line before numbered list items (`1.`, `2.`, etc.) and before bullet list items (`-`, `*`). Without a blank line, the markdown parser treats `2.`, `3.`, etc. as plain text instead of list items, so they lose their formatting. This also applies to content after paragraphs, blockquotes, and code blocks.
 
 When the user asks follow-up questions about a specific section, use the most efficient update tool:
-- `append_to_section` — to add new information at the end of a section (most common for follow-up questions)
-- `patch_document_section` — to change specific text within a section (for corrections or targeted edits)
-- `update_document_section` — to fully rewrite a section (only when the entire section needs to change)
+
+- `append_to_section` with `foldable=true` — **preferred for expansion requests** (e.g., "explain more", "go deeper on X"). Adds a collapsible detail block below existing content, preserving scannability. Each foldable block: 3-5 sentences.
+- `append_to_section` (without foldable) — to add genuinely new information at the end of a section.
+- `patch_document_section` — to change specific text within a section (for corrections or targeted edits).
+- `update_document_section` — to fully rewrite a section ONLY when the user asks for a different framing or the section is factually wrong. **Never use this just to add more detail.**
+
+**Critical constraint:** After any follow-up update, the section must still be ≤30 lines of visible (non-folded) content. If a request would push past this limit, use foldable blocks.
 
 Write follow-up answers as straight content — no editorial labels like "(clearer explanation)" or "(expanded)" in headings or topic lines.
 
 ## Post-Briefing Housekeeping
+
+**Skip this entire section if KB is disabled.** When KB is off, do not write journal entries, research-context updates, or spawn `$kb` subagents. The briefing in the reading view is the sole output.
 
 After presenting the briefing, do these:
 
@@ -153,15 +178,27 @@ After presenting the briefing, do these:
 
 **2. Research context detection** — If the user's questions or reactions reveal priorities (e.g., "which of these is fastest at inference?", "I don't need the simulation-only ones"), offer to note it in `research-context.md`. This is especially valuable during briefings because the user is actively deciding what to focus on.
 
+**3. Follow-up Q&A persistence** — When the user exits the reading view and Q&A produced new insights not already in the relevant KB cards, automatically spawn a fire-and-forget `$kb` subagent (do NOT call `wait`) to persist them. Do not ask the user. Include the card IDs and a summary of new insights in the subagent prompt:
+
+> $kb
+>
+> Update KB cards with follow-up insights. Do NOT ask the user — this is automatic.
+> Cards to update: [card-id-1], [card-id-2], ...
+> New insights from Q&A:
+> [For each card: card ID, the question asked, and the substantive answer, 2-4 sentences each]
+>
+> For each card: read it, append insights under `## Discussion Notes` per the update protocol, set `date_updated`, write the card back.
+
 ## Anti-Patterns
 
 - **NEVER write more than 5 sentences per paper.** This is a briefing, not a deep dive. If you're writing multi-paragraph walkthroughs, you're doing cross-paper-report's job.
 - **NEVER mirror the paper's self-assessment of novelty.** Every paper claims to be revolutionary. Your job is to say plainly what it actually does.
 - **NEVER skip the Recommendation section.** The whole point is to help the user decide where to focus. Be opinionated.
-- **NEVER generate the briefing without KB cards.** This skill synthesizes from existing KB content. If cards don't exist, direct the user to `$paper-synthesis` first.
+- **NEVER generate a briefing with zero source material.** If no KB cards, conversation context, or paper search results are available, ask the user for a topic or paper URLs.
 
 ## Graceful Degradation
 
-- **No KB configured**: Present the briefing in chat. Note that a KB path is needed for card-based briefings — without one, the skill cannot source content.
+- **No KB configured**: Use Path B (conversation context) or Path C (paper search). Note in the output that a KB-sourced briefing would be deeper.
 - **Few cards (1-2)**: Still produce the briefing, but note that coverage is thin and suggest adding more papers via `$paper-discovery` or `$paper-synthesis`.
 - **Cards lack depth**: If cards are shallow (abstract-only synthesis), note this in the briefing and suggest re-running `$paper-synthesis` with full PDF access.
+- **Path C paper search returns few results**: Broaden the search facets or note that the topic is niche. A thin briefing is better than no briefing.
