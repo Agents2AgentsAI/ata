@@ -45,10 +45,12 @@ async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -360,10 +362,12 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 

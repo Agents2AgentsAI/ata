@@ -98,10 +98,12 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
             approval_policy: codex_protocol::protocol::AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: test.session_configured.model.clone(),
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 

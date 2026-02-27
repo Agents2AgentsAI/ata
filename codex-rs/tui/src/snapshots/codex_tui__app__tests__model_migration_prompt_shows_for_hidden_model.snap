@@ -1,6 +1,6 @@
 ---
 source: tui/src/app.rs
-assertion_line: 3884
+assertion_line: 4156
 expression: model_migration_copy_to_plain_text(&copy)
 ---
 **Ata just got an upgrade. Introducing gpt-5.3-codex.**

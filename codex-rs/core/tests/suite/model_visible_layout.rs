@@ -96,10 +96,12 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -118,10 +120,12 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             approval_policy: AskForApproval::OnRequest,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
+            feature_flags: None,
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -195,10 +199,12 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -217,10 +223,12 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -322,10 +330,12 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: resumed.session_configured.model.clone(),
+            model_provider: None,
             effort: resumed.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
+            feature_flags: None,
         })
         .await?;
     wait_for_event(&resumed.codex, |event| {

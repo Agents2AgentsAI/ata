@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::RwLock;
 
 use codex_protocol::protocol::SkillScope;
@@ -15,12 +16,11 @@ use crate::config::types::SkillsConfig;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
-use crate::features::Features;
 use crate::skills::SkillLoadOutcome;
+use crate::skills::build_implicit_skill_path_indexes;
 use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
 use crate::skills::loader::skill_roots_from_layer_stack_with_agents;
-use crate::skills::system::install_research_skills;
 use crate::skills::system::install_system_skills;
 
 pub struct SkillsManager {
@@ -32,10 +32,6 @@ impl SkillsManager {
     pub fn new(codex_home: PathBuf) -> Self {
         if let Err(err) = install_system_skills(&codex_home) {
             tracing::error!("failed to install system skills: {err}");
-        }
-
-        if let Err(err) = install_research_skills(&codex_home) {
-            tracing::error!("failed to install research skills: {err}");
         }
 
         Self {
@@ -56,7 +52,10 @@ impl SkillsManager {
             skill_roots_from_layer_stack_with_agents(&config.config_layer_stack, &config.cwd);
         let mut outcome = load_skills_from_roots(roots);
         outcome.disabled_paths = disabled_paths_from_stack(&config.config_layer_stack);
-        disable_ungated_research_skills(&mut outcome, &config.features);
+        let (by_scripts_dir, by_doc_path) =
+            build_implicit_skill_path_indexes(outcome.allowed_skills_for_implicit_invocation());
+        outcome.implicit_skills_by_scripts_dir = Arc::new(by_scripts_dir);
+        outcome.implicit_skills_by_doc_path = Arc::new(by_doc_path);
         let mut cache = match self.cache_by_cwd.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
@@ -132,6 +131,10 @@ impl SkillsManager {
         );
         let mut outcome = load_skills_from_roots(roots);
         outcome.disabled_paths = disabled_paths_from_stack(&config_layer_stack);
+        let (by_scripts_dir, by_doc_path) =
+            build_implicit_skill_path_indexes(outcome.allowed_skills_for_implicit_invocation());
+        outcome.implicit_skills_by_scripts_dir = Arc::new(by_scripts_dir);
+        outcome.implicit_skills_by_doc_path = Arc::new(by_doc_path);
         let mut cache = match self.cache_by_cwd.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
@@ -194,15 +197,6 @@ fn disabled_paths_from_stack(
 
 fn normalize_override_path(path: &Path) -> PathBuf {
     dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-}
-
-/// Disable research skills whose per-category feature flag is not enabled.
-fn disable_ungated_research_skills(outcome: &mut SkillLoadOutcome, features: &Features) {
-    for skill in &outcome.skills {
-        if !features.is_research_skill_enabled(&skill.name) {
-            outcome.disabled_paths.insert(skill.path.clone());
-        }
-    }
 }
 
 fn normalize_extra_user_roots(extra_user_roots: &[PathBuf]) -> Vec<PathBuf> {

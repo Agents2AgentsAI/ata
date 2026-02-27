@@ -55,7 +55,7 @@ The solution is to detect paste-like _bursts_ and buffer them into a single expl
 
 Up/Down recall is handled by `ChatComposerHistory` and merges two sources:
 
-- **Persistent history** (cross-session, fetched from `~/.codex/history.jsonl`): text-only. It
+- **Persistent history** (cross-session, fetched from `~/.ata/history.jsonl`): text-only. It
   does **not** carry text element ranges or image attachments, so recalling one of these entries
   only restores the text.
 - **Local history** (current session): stores the full submission payload, including text

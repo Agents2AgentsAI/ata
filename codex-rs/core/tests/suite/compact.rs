@@ -395,8 +395,8 @@ async fn summarize_context_three_requests_and_instructions() {
     }
 
     assert!(
-        regular_turn_context_count == 3,
-        "expected three regular sampling TurnContext entries in rollout (two user turns + one compaction turn)"
+        regular_turn_context_count == 2,
+        "expected two regular sampling TurnContext entries in rollout"
     );
     assert!(
         saw_compacted_summary,
@@ -1632,10 +1632,12 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: resumed.session_configured.model.clone(),
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await
         .unwrap();
@@ -1721,10 +1723,12 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: previous_model.to_string(),
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await
         .expect("submit first user turn");
@@ -1744,10 +1748,12 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: next_model.to_string(),
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await
         .expect("submit second user turn");
@@ -1853,10 +1859,12 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: previous_model.to_string(),
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await
         .expect("submit pre-resume turn");
@@ -1900,10 +1908,12 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: next_model.to_string(),
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await
         .expect("submit resumed user turn");
@@ -3103,10 +3113,12 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: previous_model.to_string(),
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await
         .expect("submit first user turn");
@@ -3126,10 +3138,12 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: next_model.to_string(),
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await
         .expect("submit second user turn");

@@ -37,17 +37,44 @@ type PreBuildHook = dyn FnOnce(&Path) + Send + 'static;
 /// Cache the resolved `ata` binary path so we don't invoke `cargo build --bin ata`
 /// (via `assert_cmd`/`escargot`) on every single test harness creation.
 static ATA_BIN_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+static ATA_BIN_BUILD_ONCE: OnceLock<()> = OnceLock::new();
 
 /// Returns the cached path to the `ata` binary, resolving it at most once.
 pub fn cached_ata_bin() -> Result<PathBuf, codex_utils_cargo_bin::CargoBinError> {
     ATA_BIN_PATH
-        .get_or_init(|| codex_utils_cargo_bin::cargo_bin("ata").ok())
+        .get_or_init(|| resolve_ata_bin().ok())
         .clone()
         .ok_or_else(|| codex_utils_cargo_bin::CargoBinError::NotFound {
             name: "ata".to_owned(),
             env_keys: vec![],
             fallback: "cached lookup failed".to_owned(),
         })
+}
+
+fn resolve_ata_bin() -> Result<PathBuf, codex_utils_cargo_bin::CargoBinError> {
+    match codex_utils_cargo_bin::cargo_bin("ata") {
+        Ok(path) => Ok(path),
+        Err(
+            codex_utils_cargo_bin::CargoBinError::NotFound { .. }
+            | codex_utils_cargo_bin::CargoBinError::ResolvedPathDoesNotExist { .. },
+        ) => {
+            ensure_ata_bin_built_once();
+            codex_utils_cargo_bin::cargo_bin("ata")
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn ensure_ata_bin_built_once() {
+    let _ = ATA_BIN_BUILD_ONCE.get_or_init(|| {
+        let Ok(repo_root) = codex_utils_cargo_bin::repo_root() else {
+            return;
+        };
+        let _ = std::process::Command::new("cargo")
+            .args(["build", "-p", "codex-cli", "--bin", "ata"])
+            .current_dir(repo_root.join("codex-rs"))
+            .status();
+    });
 }
 
 /// A collection of different ways the model can output an apply_patch call
@@ -230,9 +257,6 @@ impl TestCodexBuilder {
         for hook in self.pre_build_hooks.drain(..) {
             hook(home.path());
         }
-        if let Ok(path) = cached_ata_bin() {
-            config.codex_linux_sandbox_exe = Some(path);
-        }
 
         let mut mutators = vec![];
         swap(&mut self.config_mutators, &mut mutators);
@@ -312,6 +336,8 @@ impl TestCodex {
                 summary: ReasoningSummary::Auto,
                 collaboration_mode: None,
                 personality: None,
+                model_provider: None,
+                feature_flags: None,
             })
             .await?;
 

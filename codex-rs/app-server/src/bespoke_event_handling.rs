@@ -11,6 +11,7 @@ use crate::thread_state::TurnSummary;
 use crate::thread_status::ThreadWatchActiveGuard;
 use crate::thread_status::ThreadWatchManager;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
+use codex_app_server_protocol::AdditionalPermissionProfile as V2AdditionalPermissionProfile;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
@@ -45,6 +46,8 @@ use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::ModelReroutedNotification;
 use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContext;
+use codex_app_server_protocol::NetworkPolicyAmendment as V2NetworkPolicyAmendment;
+use codex_app_server_protocol::NetworkPolicyRuleAction as V2NetworkPolicyRuleAction;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PlanDeltaNotification;
 use codex_app_server_protocol::RawResponseItemCompletedNotification;
@@ -53,6 +56,9 @@ use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::SkillApprovalDecision as V2SkillApprovalDecision;
+use codex_app_server_protocol::SkillRequestApprovalParams;
+use codex_app_server_protocol::SkillRequestApprovalResponse;
 use codex_app_server_protocol::TerminalInteractionNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
@@ -97,6 +103,7 @@ use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
+use codex_protocol::skill_approval::SkillApprovalResponse as CoreSkillApprovalResponse;
 use codex_shell_command::parse_command::shlex_join;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -263,6 +270,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 reason,
                 network_approval_context,
                 proposed_execpolicy_amendment,
+                proposed_network_policy_amendments,
+                additional_permissions,
                 parsed_cmd,
                 ..
             } = ev;
@@ -325,6 +334,15 @@ pub(crate) async fn apply_bespoke_event_handling(
                         };
                     let proposed_execpolicy_amendment_v2 =
                         proposed_execpolicy_amendment.map(V2ExecPolicyAmendment::from);
+                    let proposed_network_policy_amendments_v2 = proposed_network_policy_amendments
+                        .map(|amendments| {
+                            amendments
+                                .into_iter()
+                                .map(V2NetworkPolicyAmendment::from)
+                                .collect()
+                        });
+                    let additional_permissions =
+                        additional_permissions.map(V2AdditionalPermissionProfile::from);
 
                     let params = CommandExecutionRequestApprovalParams {
                         thread_id: conversation_id.to_string(),
@@ -336,7 +354,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                         command,
                         cwd,
                         command_actions,
+                        additional_permissions,
                         proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
+                        proposed_network_policy_amendments: proposed_network_policy_amendments_v2,
                     };
                     let rx = outgoing
                         .send_request(ServerRequestPayload::CommandExecutionRequestApproval(
@@ -421,6 +441,37 @@ pub(crate) async fn apply_bespoke_event_handling(
                 {
                     error!("failed to submit UserInputAnswer: {err}");
                 }
+            }
+        }
+        EventMsg::SkillRequestApproval(request) => {
+            if matches!(api_version, ApiVersion::V2) {
+                let item_id = request.item_id;
+                let skill_name = request.skill_name;
+                let params = SkillRequestApprovalParams {
+                    item_id: item_id.clone(),
+                    skill_name,
+                };
+                let rx = outgoing
+                    .send_request(ServerRequestPayload::SkillRequestApproval(params))
+                    .await;
+                tokio::spawn(async move {
+                    let approved = match rx.await {
+                        Ok(Ok(value)) => {
+                            serde_json::from_value::<SkillRequestApprovalResponse>(value)
+                                .map(|response| {
+                                    matches!(response.decision, V2SkillApprovalDecision::Approve)
+                                })
+                                .unwrap_or(false)
+                        }
+                        _ => false,
+                    };
+                    let _ = conversation
+                        .submit(Op::SkillApproval {
+                            id: item_id,
+                            response: CoreSkillApprovalResponse { approved },
+                        })
+                        .await;
+                });
             }
         }
         EventMsg::DynamicToolCallRequest(request) => {
@@ -1875,6 +1926,20 @@ async fn on_command_execution_request_approval_response(
                     },
                     None,
                 ),
+                CommandExecutionApprovalDecision::ApplyNetworkPolicyAmendment {
+                    network_policy_amendment,
+                } => {
+                    let completion_status = match network_policy_amendment.action {
+                        V2NetworkPolicyRuleAction::Allow => None,
+                        V2NetworkPolicyRuleAction::Deny => Some(CommandExecutionStatus::Declined),
+                    };
+                    (
+                        ReviewDecision::NetworkPolicyAmendment {
+                            network_policy_amendment: network_policy_amendment.into_core(),
+                        },
+                        completion_status,
+                    )
+                }
                 CommandExecutionApprovalDecision::Decline => (
                     ReviewDecision::Denied,
                     Some(CommandExecutionStatus::Declined),
