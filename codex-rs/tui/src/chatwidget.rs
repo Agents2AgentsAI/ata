@@ -3504,6 +3504,27 @@ impl ChatWidget {
         false
     }
 
+    fn clear_model_selection_for_logout(&self) {
+        // Clear the model selection before logout so the next provider gets its default.
+        // Clear both global config and active profile (if any) to ensure the model is fully reset.
+        let mut builder =
+            codex_core::config::edit::ConfigEditsBuilder::new(&self.config.codex_home);
+        if let Some(profile) = self.config.active_profile.as_deref() {
+            builder = builder.with_profile(Some(profile));
+        }
+        if let Err(e) = builder.set_model(None, None, None).apply_blocking() {
+            tracing::error!("failed to clear model on logout: {e}");
+        }
+        if self.config.active_profile.is_some()
+            && let Err(e) =
+                codex_core::config::edit::ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_model(None, None, None)
+                    .apply_blocking()
+        {
+            tracing::error!("failed to clear global model on logout: {e}");
+        }
+    }
+
     fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
@@ -3678,6 +3699,7 @@ impl ChatWidget {
                 self.request_quit_without_confirmation();
             }
             SlashCommand::Logout => {
+                self.clear_model_selection_for_logout();
                 if let Err(e) = self.auth_manager.logout() {
                     tracing::error!("failed to logout: {e}");
                 }
