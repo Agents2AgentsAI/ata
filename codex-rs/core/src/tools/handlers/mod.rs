@@ -1,6 +1,8 @@
 pub(crate) mod agent_jobs;
 pub mod apply_patch;
 pub(crate) mod attach_url_files;
+#[cfg(feature = "data")]
+pub(crate) mod data;
 pub(crate) mod document_reader;
 mod dynamic;
 mod grep_files;
@@ -29,6 +31,8 @@ use crate::sandboxing::normalize_additional_permissions;
 pub use apply_patch::ApplyPatchHandler;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+#[cfg(feature = "data")]
+pub(crate) use data::DataBridgeHandler;
 pub use document_reader::APPEND_TO_SECTION_TOOL;
 pub use document_reader::DocumentCache;
 pub use document_reader::DocumentReaderHandler;
