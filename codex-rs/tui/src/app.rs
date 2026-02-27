@@ -2324,10 +2324,12 @@ impl App {
                                         sandbox_policy: None,
                                         windows_sandbox_level: Some(windows_sandbox_level),
                                         model: None,
+                                        model_provider: None,
                                         effort: None,
                                         summary: None,
                                         collaboration_mode: None,
                                         personality: None,
+                                        feature_flags: None,
                                     },
                                 ));
                                 self.app_event_tx.send(
@@ -2346,10 +2348,12 @@ impl App {
                                         sandbox_policy: Some(preset.sandbox.clone()),
                                         windows_sandbox_level: Some(windows_sandbox_level),
                                         model: None,
+                                        model_provider: None,
                                         effort: None,
                                         summary: None,
                                         collaboration_mode: None,
                                         personality: None,
+                                        feature_flags: None,
                                     },
                                 ));
                                 self.app_event_tx
@@ -2574,10 +2578,12 @@ impl App {
                                 sandbox_policy: None,
                                 windows_sandbox_level: Some(windows_sandbox_level),
                                 model: None,
+                                model_provider: None,
                                 effort: None,
                                 summary: None,
                                 collaboration_mode: None,
                                 personality: None,
+                                feature_flags: None,
                             }));
                     }
                 }
