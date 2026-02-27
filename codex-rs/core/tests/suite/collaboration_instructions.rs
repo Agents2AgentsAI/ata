@@ -170,11 +170,13 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
             approval_policy: test.config.permissions.approval_policy.value(),
             sandbox_policy: test.config.permissions.sandbox_policy.get().clone(),
             model: test.session_configured.model.clone(),
+            model_provider: None,
             effort: None,
             summary: test.config.model_reasoning_summary,
             collaboration_mode: Some(collaboration_mode),
             final_output_json_schema: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -280,11 +282,13 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
             approval_policy: test.config.permissions.approval_policy.value(),
             sandbox_policy: test.config.permissions.sandbox_policy.get().clone(),
             model: test.session_configured.model.clone(),
+            model_provider: None,
             effort: None,
             summary: test.config.model_reasoning_summary,
             collaboration_mode: Some(turn_mode),
             final_output_json_schema: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

@@ -13,6 +13,7 @@ use codex_core::config::ConfigOverrides;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use regex_lite::Regex;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 pub mod apps_test_server;
 pub mod context_snapshot;
@@ -282,7 +283,35 @@ pub fn format_with_current_shell_display_non_login(command: &str) -> String {
 }
 
 pub fn stdio_server_bin() -> Result<String, CargoBinError> {
-    codex_utils_cargo_bin::cargo_bin("test_stdio_server").map(|p| p.to_string_lossy().to_string())
+    match codex_utils_cargo_bin::cargo_bin("test_stdio_server") {
+        Ok(path) => Ok(path.to_string_lossy().to_string()),
+        Err(CargoBinError::NotFound { .. } | CargoBinError::ResolvedPathDoesNotExist { .. }) => {
+            ensure_test_stdio_server_built_once();
+            codex_utils_cargo_bin::cargo_bin("test_stdio_server")
+                .map(|path| path.to_string_lossy().to_string())
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn ensure_test_stdio_server_built_once() {
+    static BUILD_ONCE: OnceLock<()> = OnceLock::new();
+    let _ = BUILD_ONCE.get_or_init(|| {
+        let Ok(repo_root) = codex_utils_cargo_bin::repo_root() else {
+            return;
+        };
+
+        let _ = std::process::Command::new("cargo")
+            .args([
+                "build",
+                "-p",
+                "codex-rmcp-client",
+                "--bin",
+                "test_stdio_server",
+            ])
+            .current_dir(repo_root.join("codex-rs"))
+            .status();
+    });
 }
 
 pub mod fs_wait {

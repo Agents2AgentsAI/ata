@@ -54,10 +54,12 @@ async fn submit_user_turn(
             approval_policy,
             sandbox_policy,
             model: session_model,
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode,
             personality: None,
+            feature_flags: None,
         })
         .await?;
     Ok(())
@@ -133,10 +135,12 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 

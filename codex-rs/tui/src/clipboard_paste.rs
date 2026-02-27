@@ -46,6 +46,7 @@ pub struct PastedImageInfo {
     pub encoded_format: EncodedImageFormat, // Always PNG for now.
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttachmentKind {
     Image,
@@ -53,6 +54,7 @@ pub enum AttachmentKind {
     Unsupported,
 }
 
+#[allow(dead_code)]
 pub fn detect_attachment_kind(path: &Path) -> AttachmentKind {
     if !path.is_file() {
         return AttachmentKind::Unsupported;
