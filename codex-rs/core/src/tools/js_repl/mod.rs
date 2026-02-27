@@ -1360,6 +1360,8 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
+    use std::process::Command;
+    use std::sync::OnceLock;
     use tempfile::tempdir;
 
     #[test]
@@ -1636,10 +1638,33 @@ mod tests {
     }
 
     async fn can_run_js_repl_runtime_tests() -> bool {
-        // These white-box runtime tests are required on macOS. Linux relies on
-        // the codex-linux-sandbox arg0 dispatch path, which is exercised in
-        // integration tests instead.
-        cfg!(target_os = "macos")
+        static SUPPORTED: OnceLock<bool> = OnceLock::new();
+        *SUPPORTED.get_or_init(|| {
+            // These white-box runtime tests are required on macOS. Linux relies
+            // on the codex-linux-sandbox arg0 dispatch path, which is exercised
+            // in integration tests instead.
+            if !cfg!(target_os = "macos") {
+                return false;
+            }
+            let Ok(output) = Command::new("/usr/bin/sandbox-exec")
+                .args(["-p", "(version 1) (allow default)", "/usr/bin/true"])
+                .output()
+            else {
+                eprintln!(
+                    "Skipping js_repl runtime tests: unable to run /usr/bin/sandbox-exec probe."
+                );
+                return false;
+            };
+            if output.status.success() {
+                true
+            } else {
+                eprintln!(
+                    "Skipping js_repl runtime tests: /usr/bin/sandbox-exec probe failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                false
+            }
+        })
     }
     fn write_js_repl_test_package(base: &Path, name: &str, value: &str) -> anyhow::Result<()> {
         let pkg_dir = base.join("node_modules").join(name);
