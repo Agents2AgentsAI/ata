@@ -1,10 +1,12 @@
 use assert_cmd::Command as AssertCommand;
 use codex_core::auth::CODEX_API_KEY_ENV_VAR;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::GitInfo;
 use codex_utils_cargo_bin::find_resource;
 use core_test_support::fs_wait;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::cached_ata_bin;
 use std::time::Duration;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -26,6 +28,10 @@ async fn responses_mode_stream_cli() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
+    // `ata exec` refreshes `/v1/models` to seed its model list.
+    // Provide a hermetic stub so the CLI doesn't block/hang when using a mock provider.
+    let _models_mock =
+        responses::mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
     let repo_root = repo_root();
     let sse = responses::sse(vec![
         responses::ev_response_created("resp-1"),
@@ -36,14 +42,18 @@ async fn responses_mode_stream_cli() {
 
     let home = TempDir::new().unwrap();
     let provider_override = format!(
-        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"responses\" }}",
+        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"OPENAI_API_KEY\", wire_api = \"responses\" }}",
         server.uri()
     );
-    let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
+    let bin = cached_ata_bin().unwrap();
     let mut cmd = AssertCommand::new(bin);
-    cmd.timeout(Duration::from_secs(30));
+    // Allow extra slack when running under parallel test load on developer machines.
+    cmd.timeout(Duration::from_secs(60));
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
+        // Avoid keyring prompts/latency in CI by forcing file-backed auth storage.
+        .arg("-c")
+        .arg("cli_auth_credentials_store=\"file\"")
         .arg("-c")
         .arg(&provider_override)
         .arg("-c")
@@ -52,6 +62,9 @@ async fn responses_mode_stream_cli() {
         .arg(&repo_root)
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
+        // Keep skill discovery hermetic; otherwise `$HOME/.agents/skills` can add
+        // unpredictable latency on developer machines.
+        .env("HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
 
@@ -99,6 +112,9 @@ async fn exec_cli_applies_model_instructions_file() {
     // Start mock server which will capture the request and return a minimal
     // SSE stream for a single turn.
     let server = MockServer::start().await;
+    // `ata exec` refreshes `/v1/models` to seed its model list.
+    let _models_mock =
+        responses::mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
     let sse = concat!(
         "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
@@ -116,16 +132,19 @@ async fn exec_cli_applies_model_instructions_file() {
     // Build a provider override that points at the mock server and instructs
     // Codex to use the Responses API with the dummy env var.
     let provider_override = format!(
-        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"responses\" }}",
+        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"OPENAI_API_KEY\", wire_api = \"responses\" }}",
         server.uri()
     );
 
     let home = TempDir::new().unwrap();
     let repo_root = repo_root();
-    let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
+    let bin = cached_ata_bin().unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
+        // Avoid keyring prompts/latency in CI by forcing file-backed auth storage.
+        .arg("-c")
+        .arg("cli_auth_credentials_store=\"file\"")
         .arg("-c")
         .arg(&provider_override)
         .arg("-c")
@@ -136,6 +155,7 @@ async fn exec_cli_applies_model_instructions_file() {
         .arg(&repo_root)
         .arg("hello?\n");
     cmd.env("CODEX_HOME", home.path())
+        .env("HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
 
@@ -174,7 +194,7 @@ async fn responses_api_stream_cli() {
     let repo_root = repo_root();
 
     let home = TempDir::new().unwrap();
-    let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
+    let bin = cached_ata_bin().unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
@@ -182,6 +202,7 @@ async fn responses_api_stream_cli() {
         .arg(&repo_root)
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
+        .env("HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", fixture)
         .env("OPENAI_BASE_URL", "http://unused.local");
@@ -210,7 +231,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     let repo_root = repo_root();
 
     // 4. Run the codex CLI and invoke `exec`, which is what records a session.
-    let bin = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
+    let bin = cached_ata_bin().unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
@@ -218,6 +239,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .arg(&repo_root)
         .arg(&prompt);
     cmd.env("CODEX_HOME", home.path())
+        .env("HOME", home.path())
         .env(CODEX_API_KEY_ENV_VAR, "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
         // Required for CLI arg parsing even though fixture short-circuits network usage.
@@ -331,7 +353,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     // Second run: resume should update the existing file.
     let marker2 = format!("integration-resume-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
-    let bin2 = codex_utils_cargo_bin::cargo_bin("codex").unwrap();
+    let bin2 = cached_ata_bin().unwrap();
     let mut cmd2 = AssertCommand::new(bin2);
     cmd2.arg("exec")
         .arg("--skip-git-repo-check")
@@ -341,6 +363,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .arg("resume")
         .arg("--last");
     cmd2.env("CODEX_HOME", home.path())
+        .env("HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
         .env("OPENAI_BASE_URL", "http://unused.local");
