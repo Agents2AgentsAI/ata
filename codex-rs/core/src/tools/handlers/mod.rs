@@ -17,6 +17,7 @@ mod request_user_input;
 pub(crate) mod research;
 mod search_tool_bm25;
 mod shell;
+pub(crate) mod team_post;
 mod test_sync;
 pub(crate) mod unified_exec;
 mod view_image;

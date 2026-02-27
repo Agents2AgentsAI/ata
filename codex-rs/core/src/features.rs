@@ -170,6 +170,8 @@ pub enum Feature {
     ReadingView,
     /// Enable knowledge base persistence (cards, journal, research-context).
     ResearchKnowledgeBase,
+    /// Enable cross-session agent coordination channel.
+    Coordination,
 }
 
 impl Feature {
@@ -828,6 +830,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "research_knowledge_base",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::Coordination,
+        key: "coordination",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
 ];
 
