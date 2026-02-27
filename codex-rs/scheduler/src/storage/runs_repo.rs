@@ -145,14 +145,33 @@ pub async fn list_runs(
     Ok(rows)
 }
 
-/// Get a specific run by ID.
+/// Get a specific run by exact ID or unique prefix.
 pub async fn get_run(pool: &SqlitePool, run_id: &str) -> anyhow::Result<Option<RunRecord>> {
+    // Try exact match first.
     let row = sqlx::query_as::<_, RunRecord>("SELECT * FROM runs WHERE id = ?1")
         .bind(run_id)
         .fetch_optional(pool)
         .await
         .context("failed to fetch run")?;
-    Ok(row)
+    if row.is_some() {
+        return Ok(row);
+    }
+
+    // Fall back to prefix match (users often copy the short 8-char ID from history).
+    let pattern = format!("{run_id}%");
+    let rows = sqlx::query_as::<_, RunRecord>("SELECT * FROM runs WHERE id LIKE ?1 LIMIT 2")
+        .bind(&pattern)
+        .fetch_all(pool)
+        .await
+        .context("failed to fetch run by prefix")?;
+
+    match rows.len() {
+        1 => Ok(rows.into_iter().next()),
+        0 => Ok(None),
+        _ => anyhow::bail!(
+            "ambiguous run ID prefix '{run_id}' — matches multiple runs. Use a longer prefix."
+        ),
+    }
 }
 
 /// Check if a job has any currently-running runs.

@@ -111,6 +111,46 @@ pub fn stop_daemon() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Fork and start the scheduler daemon in the background.
+///
+/// The parent process prints the child PID and exits immediately.
+/// The child detaches from the terminal via `setsid()`, redirects
+/// stdio to /dev/null, and runs the scheduler loop.
+pub fn start_daemon_background() -> anyhow::Result<()> {
+    // Pre-flight: check if already running before forking.
+    if let Some(pid) = is_daemon_running()? {
+        anyhow::bail!(
+            "scheduler daemon is already running (PID {pid}). Stop it with `ata scheduler stop`."
+        );
+    }
+
+    #[cfg(unix)]
+    {
+        // Re-exec ourselves with the same arguments minus --daemon, so the
+        // child gets a clean process. We find the current executable path
+        // and pass `scheduler start` (without -d/--daemon).
+        let exe = std::env::current_exe().context("failed to find current executable")?;
+
+        let child = std::process::Command::new(&exe)
+            .args(["scheduler", "start"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .context("failed to spawn background scheduler daemon")?;
+
+        let pid = child.id();
+        println!("Scheduler daemon started in background (PID {pid}).");
+        println!("Use `ata scheduler status` to check, `ata scheduler stop` to stop.");
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        anyhow::bail!("background daemon mode is only supported on Unix");
+    }
+}
+
 /// Start the scheduler daemon in the foreground.
 pub async fn start_daemon() -> anyhow::Result<()> {
     let _pid_guard = PidGuard::acquire()?;

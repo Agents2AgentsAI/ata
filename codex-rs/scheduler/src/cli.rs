@@ -69,12 +69,19 @@ pub struct SchedulerCli {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum SchedulerCommand {
-    /// Start the scheduler daemon (foreground).
-    Start,
+    /// Start the scheduler daemon.
+    Start(SchedulerStartArgs),
     /// Stop the running scheduler daemon.
     Stop,
     /// Show scheduler daemon status.
     Status,
+}
+
+#[derive(Debug, Parser)]
+pub struct SchedulerStartArgs {
+    /// Run the daemon in the background (fork and detach).
+    #[arg(long, short = 'd')]
+    pub daemon: bool,
 }
 
 // ── Dispatch ─────────────────────────────────────────────────────────
@@ -95,7 +102,13 @@ pub async fn run_jobs_command(cli: JobsCli) -> anyhow::Result<()> {
 
 pub async fn run_scheduler_command(cli: SchedulerCli) -> anyhow::Result<()> {
     match cli.command {
-        SchedulerCommand::Start => daemon::start_daemon().await,
+        SchedulerCommand::Start(args) => {
+            if args.daemon {
+                daemon::start_daemon_background()
+            } else {
+                daemon::start_daemon().await
+            }
+        }
         SchedulerCommand::Stop => daemon::stop_daemon(),
         SchedulerCommand::Status => cmd_status(),
     }
