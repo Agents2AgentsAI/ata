@@ -81,7 +81,8 @@
       "description": "Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.",
       "properties": {
         "enabled": {
-          "description": "When `false`, disables analytics across Codex product surfaces in this profile.",
+          "default": false,
+          "description": "When `true`, enables analytics across Codex product surfaces in this profile.",
           "type": "boolean"
         }
       },
@@ -248,7 +249,7 @@
       "description": "Determine where Codex should store CLI auth credentials.",
       "oneOf": [
         {
-          "description": "Persist credentials in CODEX_HOME/auth.json.",
+          "description": "Persist credentials in CODEX_HOME/auth.json with 0600 permissions.",
           "enum": [
             "file"
           ],
@@ -262,7 +263,7 @@
           "type": "string"
         },
         {
-          "description": "Use keyring when available; otherwise, fall back to a file in CODEX_HOME.",
+          "description": "Use keyring when available; otherwise, fall back to a file in CODEX_HOME. More secure - stores credentials in OS keyring. If keyring access fails once, it automatically falls back to file storage for the session to avoid repeated prompts.",
           "enum": [
             "auto"
           ],
@@ -328,6 +329,9 @@
             "connectors": {
               "type": "boolean"
             },
+            "data": {
+              "type": "boolean"
+            },
             "elevated_windows_sandbox": {
               "type": "boolean"
             },
@@ -383,6 +387,24 @@
               "type": "boolean"
             },
             "request_rule": {
+              "type": "boolean"
+            },
+            "research": {
+              "type": "boolean"
+            },
+            "research_hacker_news": {
+              "type": "boolean"
+            },
+            "research_paper_search": {
+              "type": "boolean"
+            },
+            "research_patents": {
+              "type": "boolean"
+            },
+            "research_repo_analysis": {
+              "type": "boolean"
+            },
+            "research_zotero": {
               "type": "boolean"
             },
             "responses_websockets": {
@@ -530,11 +552,27 @@
       },
       "type": "object"
     },
+    "DataToolsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "huggingface_token": {
+          "type": "string"
+        },
+        "kaggle_key": {
+          "type": "string"
+        },
+        "kaggle_username": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "FeedbackConfigToml": {
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "description": "When `false`, disables the feedback flow across Codex product surfaces.",
+          "default": false,
+          "description": "When `true`, enables the feedback upload flow across Codex product surfaces.",
           "type": "boolean"
         }
       },
@@ -569,7 +607,7 @@
     },
     "History": {
       "additionalProperties": false,
-      "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`.",
+      "description": "Settings that govern if and what will be written to `~/.ata/history.jsonl`.",
       "properties": {
         "max_bytes": {
           "description": "If set, the maximum size of the history file in bytes. The oldest entries are dropped once the file exceeds this limit.",
@@ -608,6 +646,16 @@
           "type": "string"
         }
       ]
+    },
+    "KbToml": {
+      "additionalProperties": false,
+      "properties": {
+        "kb_path": {
+          "description": "Path to the knowledge base directory. Defaults to `<codex_home>/knowledge-base`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
     },
     "MemoriesToml": {
       "additionalProperties": false,
@@ -1182,7 +1230,8 @@
         "low",
         "medium",
         "high",
-        "xhigh"
+        "xhigh",
+        "adaptive"
       ],
       "type": "string"
     },
@@ -1226,6 +1275,24 @@
         "rules",
         "sandbox_approval"
       ],
+      "type": "object"
+    },
+    "ResearchToolsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "openalex_email": {
+          "type": "string"
+        },
+        "zotero_group_id": {
+          "type": "string"
+        },
+        "zotero_library_type": {
+          "type": "string"
+        },
+        "zotero_user_id": {
+          "type": "string"
+        }
+      },
       "type": "object"
     },
     "SandboxMode": {
@@ -1492,6 +1559,20 @@
             "responses"
           ],
           "type": "string"
+        },
+        {
+          "description": "Anthropic Messages API at `/v1/messages`.",
+          "enum": [
+            "anthropic_messages"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Google Gemini GenerateContent API.",
+          "enum": [
+            "gemini_generate"
+          ],
+          "type": "string"
         }
       ]
     }
@@ -1566,6 +1647,15 @@
       "description": "Compact prompt used for history compaction.",
       "type": "string"
     },
+    "data": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/DataToolsToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional non-secret data tool settings."
+    },
     "developer_instructions": {
       "default": null,
       "description": "Developer instructions inserted as a `developer` role message.",
@@ -1619,6 +1709,9 @@
           "type": "boolean"
         },
         "connectors": {
+          "type": "boolean"
+        },
+        "data": {
           "type": "boolean"
         },
         "elevated_windows_sandbox": {
@@ -1676,6 +1769,24 @@
           "type": "boolean"
         },
         "request_rule": {
+          "type": "boolean"
+        },
+        "research": {
+          "type": "boolean"
+        },
+        "research_hacker_news": {
+          "type": "boolean"
+        },
+        "research_paper_search": {
+          "type": "boolean"
+        },
+        "research_patents": {
+          "type": "boolean"
+        },
+        "research_repo_analysis": {
+          "type": "boolean"
+        },
+        "research_zotero": {
           "type": "boolean"
         },
         "responses_websockets": {
@@ -1808,6 +1919,15 @@
         }
       ],
       "description": "Optional absolute path to the Node runtime used by `js_repl`."
+    },
+    "kb": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/KbToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional KB settings."
     },
     "log_dir": {
       "allOf": [
@@ -1998,6 +2118,14 @@
         "$ref": "#/definitions/ProjectConfig"
       },
       "type": "object"
+    },
+    "research": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ResearchToolsToml"
+        }
+      ],
+      "description": "Research tools configuration (Zotero, OpenAlex, etc.)."
     },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",
