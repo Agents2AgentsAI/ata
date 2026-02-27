@@ -2960,8 +2960,18 @@ impl Session {
                         history.replace(replacement.clone());
                     } else {
                         let user_messages = collect_user_messages(history.raw_items());
+                        // Preserve the initial-context prefix exactly as it appeared in the
+                        // rollout instead of regenerating from the current model metadata.
+                        let initial_context = history
+                            .raw_items()
+                            .iter()
+                            .take_while(|item| {
+                                !matches!(parse_turn_item(item), Some(TurnItem::UserMessage(_)))
+                            })
+                            .cloned()
+                            .collect();
                         let rebuilt = compact::build_compacted_history(
-                            self.build_initial_context(turn_context).await,
+                            initial_context,
                             &user_messages,
                             &compacted.message,
                         );
