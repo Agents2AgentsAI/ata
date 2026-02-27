@@ -55,10 +55,10 @@ where
 
     #[cfg(test)]
     pub fn expire_entry_for_test(&self, key: &K) {
-        if let Ok(mut cache) = self.cache.lock() {
-            if let Some(entry) = cache.get_mut(key) {
-                entry.force_expired();
-            }
+        if let Ok(mut cache) = self.cache.lock()
+            && let Some(entry) = cache.get_mut(key)
+        {
+            entry.force_expired();
         }
     }
 
@@ -175,7 +175,7 @@ mod tests {
     fn cache_expires_entries() {
         let cache: ResponseCache<String, String> = ResponseCache::new(10);
         let key = "key1".to_string();
-        cache.insert(key.clone(), "value1".to_string(), Duration::from_millis(10));
+        cache.insert(key.clone(), "value1".to_string(), Duration::from_secs(60));
 
         // Should exist immediately
         assert!(cache.get(&key).is_some());

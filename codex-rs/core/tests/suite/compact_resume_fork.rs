@@ -28,7 +28,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
-use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;
 use wiremock::MockServer;
@@ -50,11 +49,10 @@ fn json_fragment(text: &str) -> String {
         .to_string()
 }
 
-fn filter_out_ghost_snapshot_entries(items: &[Value]) -> Vec<Value> {
+fn filter_out_ghost_snapshot_entries(items: &[Value]) -> Vec<&Value> {
     items
         .iter()
         .filter(|item| !is_ghost_snapshot_message(item))
-        .cloned()
         .collect()
 }
 
@@ -178,18 +176,17 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     normalize_compact_prompts(&mut requests);
 
     // input after compact is a prefix of input after resume/fork
-    let input_after_compact = json!(requests[requests.len() - 3]["input"]);
-    let input_after_resume = json!(requests[requests.len() - 2]["input"]);
-    let input_after_fork = json!(requests[requests.len() - 1]["input"]);
-
-    let compact_arr = input_after_compact
-        .as_array()
+    let compact_arr = requests[requests.len() - 3]
+        .get("input")
+        .and_then(Value::as_array)
         .expect("input after compact should be an array");
-    let resume_arr = input_after_resume
-        .as_array()
+    let resume_arr = requests[requests.len() - 2]
+        .get("input")
+        .and_then(Value::as_array)
         .expect("input after resume should be an array");
-    let fork_arr = input_after_fork
-        .as_array()
+    let fork_arr = requests[requests.len() - 1]
+        .get("input")
+        .and_then(Value::as_array)
         .expect("input after fork should be an array");
 
     assert!(
@@ -202,10 +199,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         compact_arr.len() <= fork_arr.len(),
         "after-fork input should have at least as many items as after-compact",
     );
-    assert_eq!(
-        &compact_arr.as_slice()[..compact_arr.len()],
-        &fork_arr[..compact_arr.len()]
-    );
+    assert_eq!(compact_arr, &fork_arr[..compact_arr.len()]);
 
     let first_request_user_texts = json_message_input_texts(&requests[0], "user");
     let first_turn_user_index = first_request_user_texts
@@ -341,16 +335,16 @@ async fn compact_resume_after_second_compaction_preserves_history() {
 
     let mut requests = gather_request_bodies(&request_log);
     normalize_compact_prompts(&mut requests);
-    let input_after_compact = json!(requests[requests.len() - 2]["input"]);
-    let input_after_resume = json!(requests[requests.len() - 1]["input"]);
-
     // test input after compact before resume is the same as input after resume
-    let compact_input_array = input_after_compact
-        .as_array()
+    let compact_input_array = requests[requests.len() - 2]
+        .get("input")
+        .and_then(Value::as_array)
         .expect("input after compact should be an array");
-    let resume_input_array = input_after_resume
-        .as_array()
+    let resume_input_array = requests[requests.len() - 1]
+        .get("input")
+        .and_then(Value::as_array)
         .expect("input after resume should be an array");
+
     let compact_filtered = filter_out_ghost_snapshot_entries(compact_input_array);
     let resume_filtered = filter_out_ghost_snapshot_entries(resume_input_array);
     assert!(
