@@ -67,6 +67,7 @@ members = [
     "codex-research-tools",
     "codex-data-tools",
     "test-macros",
+    "scheduler",
 ]
 resolver = "2"
 
@@ -118,6 +119,7 @@ codex-protocol = { path = "protocol" }
 codex-research-tools = { path = "codex-research-tools" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
+codex-scheduler = { path = "scheduler" }
 codex-secrets = { path = "secrets" }
 codex-shell-command = { path = "shell-command" }
 codex-shell-escalation = { path = "shell-escalation" }
@@ -169,6 +171,7 @@ chrono = "0.4.43"
 clap = "4"
 clap_complete = "4"
 color-eyre = "0.6.3"
+cron = "0.15"
 crossbeam-channel = "0.5.15"
 csv = "1.3.1"
 crossterm = "0.28.1"
