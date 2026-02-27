@@ -1695,6 +1695,15 @@ impl App {
                     }
                     // Allow widgets to process any pending timers before rendering.
                     self.chat_widget.pre_draw_tick();
+                    // Flush deferred history lines once both the overlay and
+                    // reading view are closed so they appear in the scrollback.
+                    if !self.deferred_history_lines.is_empty()
+                        && self.overlay.is_none()
+                        && !self.chat_widget.is_document_reader_active()
+                    {
+                        let lines = std::mem::take(&mut self.deferred_history_lines);
+                        tui.insert_history_lines(lines);
+                    }
                     tui.draw(
                         self.chat_widget.desired_height(tui.terminal.size()?.width),
                         |frame| {
@@ -1976,7 +1985,7 @@ impl App {
                             self.has_emitted_history_lines = true;
                         }
                     }
-                    if self.overlay.is_some() {
+                    if self.overlay.is_some() || self.chat_widget.is_document_reader_active() {
                         self.deferred_history_lines.extend(display);
                     } else {
                         tui.insert_history_lines(display);
