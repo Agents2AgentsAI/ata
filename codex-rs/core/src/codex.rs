@@ -2960,18 +2960,8 @@ impl Session {
                         history.replace(replacement.clone());
                     } else {
                         let user_messages = collect_user_messages(history.raw_items());
-                        // Preserve the initial-context prefix exactly as it appeared in the
-                        // rollout instead of regenerating from the current model metadata.
-                        let initial_context = history
-                            .raw_items()
-                            .iter()
-                            .take_while(|item| {
-                                !matches!(parse_turn_item(item), Some(TurnItem::UserMessage(_)))
-                            })
-                            .cloned()
-                            .collect();
                         let rebuilt = compact::build_compacted_history(
-                            initial_context,
+                            self.build_initial_context(turn_context).await,
                             &user_messages,
                             &compacted.message,
                         );
@@ -9629,37 +9619,11 @@ mod tests {
         let mut live_history = ContextManager::new();
 
         // Use the same turn_context source as record_initial_history so model_info (and thus
-        // personality_spec) matches reconstruction.
+        // initial context) matches reconstruction.
         let reconstruction_turn = session.new_default_turn().await;
-        let mut initial_context = session
+        let initial_context = session
             .build_initial_context(reconstruction_turn.as_ref())
             .await;
-        // Ensure personality_spec is present when Personality is enabled, so expected matches
-        // what reconstruction produces (build_initial_context may omit it when baked into model).
-        if !initial_context.iter().any(|m| {
-            matches!(m, ResponseItem::Message { role, content, .. }
-                if role == "developer"
-                    && content.iter().any(|c| {
-                        matches!(c, ContentItem::InputText { text } if text.contains("<personality_spec>"))
-                    }))
-        })
-            && let Some(p) = reconstruction_turn.personality
-            && session.features.enabled(Feature::Personality)
-            && let Some(personality_message) = reconstruction_turn
-                .model_info
-                .model_messages
-                .as_ref()
-                .and_then(|m| m.get_personality_message(Some(p)).filter(|s| !s.is_empty()))
-        {
-            let msg =
-                DeveloperInstructions::personality_spec_message(personality_message).into();
-            let insert_at = initial_context
-                .iter()
-                .position(|m| matches!(m, ResponseItem::Message { role, .. } if role == "developer"))
-                .map(|i| i + 1)
-                .unwrap_or(0);
-            initial_context.insert(insert_at, msg);
-        }
         for item in &initial_context {
             rollout_items.push(RolloutItem::ResponseItem(item.clone()));
         }
