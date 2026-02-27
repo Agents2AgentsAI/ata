@@ -2875,6 +2875,9 @@ impl ChatWidget {
         widget.prefetch_rate_limits();
         widget
             .bottom_pane
+            .set_history_path(widget.config.codex_home.join("history.jsonl"));
+        widget
+            .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
         widget
             .bottom_pane
@@ -3050,6 +3053,9 @@ impl ChatWidget {
         widget.prefetch_rate_limits();
         widget
             .bottom_pane
+            .set_history_path(widget.config.codex_home.join("history.jsonl"));
+        widget
+            .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
         widget
             .bottom_pane
@@ -3209,6 +3215,9 @@ impl ChatWidget {
         };
 
         widget.prefetch_rate_limits();
+        widget
+            .bottom_pane
+            .set_history_path(widget.config.codex_home.join("history.jsonl"));
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));

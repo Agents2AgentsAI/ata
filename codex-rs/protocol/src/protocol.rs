@@ -834,6 +834,9 @@ impl SandboxPolicy {
                     // it via `mkdir -p` on first use.
                     if codex_home.is_dir() {
                         let kb_dir = codex_home.join("knowledge-base");
+                        // Ensure the knowledge-base directory exists so it is
+                        // available from the very first session.
+                        let _ = std::fs::create_dir_all(&kb_dir);
                         match AbsolutePathBuf::from_absolute_path(&kb_dir) {
                             Ok(kb_path) => {
                                 if !roots.iter().any(|r| r == &kb_path) {
