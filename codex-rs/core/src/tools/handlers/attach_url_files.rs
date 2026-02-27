@@ -158,6 +158,37 @@ impl ToolHandler for AttachUrlFilesHandler {
             ));
         }
 
+        let remaining_budget = {
+            let mut active = session.active_turn.lock().await;
+            let Some(active_turn) = active.as_mut() else {
+                return Err(map_budget_injection_error(
+                    crate::codex::UrlAttachmentInjectionError::NoActiveTurn,
+                ));
+            };
+            let turn_state = active_turn.turn_state.lock().await;
+            let already_used = turn_state.url_attachments_injected();
+            MAX_URLS_PER_TURN.saturating_sub(already_used)
+        };
+
+        if remaining_budget == 0 {
+            return Err(map_budget_injection_error(
+                crate::codex::UrlAttachmentInjectionError::PerTurnLimitExceeded {
+                    attempted: validated_files.len(),
+                    current: MAX_URLS_PER_TURN,
+                    limit: MAX_URLS_PER_TURN,
+                },
+            ));
+        }
+
+        if validated_files.len() > remaining_budget {
+            for attachment in validated_files.drain(remaining_budget..) {
+                warnings.push(format!(
+                    "Skipped {} (per-turn attachment budget exceeded)",
+                    attachment.url.redacted_for_display()
+                ));
+            }
+        }
+
         let supports_url_ingestion =
             provider_transport_capabilities(&turn.provider).supports_file_url_ingestion;
         let mut success_count = 0usize;
@@ -215,37 +246,6 @@ impl ToolHandler for AttachUrlFilesHandler {
                     .map_err(map_budget_injection_error)?;
             }
         } else {
-            let remaining_budget = {
-                let mut active = session.active_turn.lock().await;
-                let Some(active_turn) = active.as_mut() else {
-                    return Err(map_budget_injection_error(
-                        crate::codex::UrlAttachmentInjectionError::NoActiveTurn,
-                    ));
-                };
-                let turn_state = active_turn.turn_state.lock().await;
-                let already_used = turn_state.url_attachments_injected();
-                MAX_URLS_PER_TURN.saturating_sub(already_used)
-            };
-
-            if remaining_budget == 0 {
-                return Err(map_budget_injection_error(
-                    crate::codex::UrlAttachmentInjectionError::PerTurnLimitExceeded {
-                        attempted: validated_files.len(),
-                        current: MAX_URLS_PER_TURN,
-                        limit: MAX_URLS_PER_TURN,
-                    },
-                ));
-            }
-
-            if validated_files.len() > remaining_budget {
-                for attachment in validated_files.drain(remaining_budget..) {
-                    warnings.push(format!(
-                        "Skipped {} (per-turn attachment budget exceeded)",
-                        attachment.url.redacted_for_display()
-                    ));
-                }
-            }
-
             let requests: Vec<UrlDownloadRequest> = validated_files
                 .iter()
                 .map(|attachment| UrlDownloadRequest {
