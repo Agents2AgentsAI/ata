@@ -405,23 +405,18 @@ async fn compact_resume_after_second_compaction_preserves_history() {
 }
 
 fn normalize_line_endings(value: &mut Value) {
-    match value {
-        Value::String(text) => {
-            if text.contains('\r') {
-                *text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut stack = vec![value];
+    while let Some(current) = stack.pop() {
+        match current {
+            Value::String(text) => {
+                if text.contains('\r') {
+                    *text = text.replace("\r\n", "\n").replace('\r', "\n");
+                }
             }
+            Value::Array(items) => stack.extend(items.iter_mut()),
+            Value::Object(map) => stack.extend(map.values_mut()),
+            _ => {}
         }
-        Value::Array(items) => {
-            for item in items {
-                normalize_line_endings(item);
-            }
-        }
-        Value::Object(map) => {
-            for item in map.values_mut() {
-                normalize_line_endings(item);
-            }
-        }
-        _ => {}
     }
 }
 
