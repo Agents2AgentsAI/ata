@@ -4,80 +4,89 @@
 
 When the agent needs the user to set up an external service (Slack webhook, GitHub token, etc.), the user has to manually navigate a web UI. We investigated whether Playwright (via MCP) could automate this — clicking through the setup flow on behalf of the user.
 
-## What We Tried
+## Solution: Playwright MCP Extension Mode
 
-We have Playwright MCP tools available (`browser_navigate`, `browser_click`, `browser_snapshot`, `browser_run_code`, etc.). We tried navigating to `https://api.slack.com/apps` to create a Slack app.
+Playwright MCP supports an `--extension` flag that uses a **Chrome extension bridge** to connect to the user's real browser. This gives the agent full Playwright API access (navigate, click, fill, screenshot, evaluate) with the user's authenticated sessions — no sandboxed browser, no CDP port, no Chrome restart.
 
-## What Happened
+### How it works
 
-Playwright opened its **own sandboxed Chromium browser**. The Slack page said:
+1. User installs the **Playwright MCP Bridge** Chrome extension (one-time)
+2. Playwright MCP server is configured with `--extension` flag
+3. When browser tools are called, Playwright connects via the extension to the user's running Chrome
+4. The agent operates in the user's actual browser context — logged into Slack, GitHub, Google, etc.
+
+### Configuration
+
+Playwright MCP is configured as an MCP server in ATA's config (`~/.ata/config.toml`):
+
+```toml
+[mcp_servers.playwright]
+command = "npx"
+args = ["@playwright/mcp@latest", "--extension"]
+```
+
+When ATA starts (including `ata exec` for scheduled jobs), it connects to Playwright MCP and gains tools like `mcp__playwright__browser_navigate`, `mcp__playwright__browser_click`, `mcp__playwright__browser_snapshot`, etc.
+
+### One-time setup
+
+The user must install the **Playwright MCP Bridge** Chrome extension:
+https://chromewebstore.google.com/detail/playwright-mcp-bridge/mmlmfjhmonkocbjadbfplnigmagldckm
+
+This extension bridges Playwright into the user's real Chrome. Without it, Playwright falls back to a sandboxed Chromium with no authenticated sessions.
+
+## What We Tried Before (and Why It Failed)
+
+Before finding extension mode, we tried default Playwright (sandboxed Chromium). The Slack page said:
 
 > "You'll need to sign in to your Slack account to create an application."
 
-The user was not logged in because Playwright's browser is completely isolated from the user's actual browser.
+The user was not logged in because Playwright's default browser is completely isolated.
 
-## Why It Can't Work
+### Why other approaches fail
 
 | Approach | Why It Fails |
 |---|---|
-| **Playwright default** | Opens sandboxed Chromium with no cookies/auth. User is not logged into anything. |
-| **Playwright + Chrome profile** | Chrome locks its profile directory while running (`~/Library/Application Support/Google/Chrome/Default/`). Two Chrome instances cannot share one profile — the second will crash or corrupt session data. |
-| **Playwright + copy of Chrome profile** | Copying a locked profile gives an inconsistent snapshot. Slack auth cookies are short-lived and may not survive the copy. |
-| **Playwright + Chrome remote debugging** | Requires Chrome to have been launched with `--remote-debugging-port=<port>`. Normal user Chrome isn't started this way. We can't retroactively enable it on a running browser. |
-| **Cookie extraction** | Chrome encrypts cookies via macOS Keychain (`CryptoAPI` / `v10` prefix). Decrypting them requires either: (1) Keychain access prompt (user interaction), or (2) the Keychain encryption key (requires root or user password). Even if extracted, injecting them into Playwright's different browser storage format is fragile. |
+| **Playwright default** | Opens sandboxed Chromium with no cookies/auth. |
+| **CDP (`--remote-debugging-port`)** | Chrome 136+ requires a separate `--user-data-dir` for CDP, so you get a clean profile with no sessions. This was a deliberate security change to prevent cookie theft. |
+| **Playwright + Chrome profile copy** | Chrome locks its profile directory. Copying a locked profile gives inconsistent snapshots. |
+| **Cookie extraction** | Chrome encrypts cookies via macOS Keychain. Decrypting requires Keychain access or the encryption key. |
 
-## The Right Solution
+### Why extension mode works where CDP doesn't
 
-Use `open <url>` (macOS) or `xdg-open <url>` (Linux) to open the URL in the user's **default browser**. This is the correct approach because:
+Chrome 136 blocked CDP on the default profile as a security measure against malware. But the extension API is Chrome's *intended* mechanism for browser automation — it's audited, sandboxed by Chrome's extension security model, and doesn't expose raw debugging protocol access. The Playwright MCP Bridge extension communicates with the MCP server over a local channel, and executes actions via Chrome's `chrome.scripting` and `chrome.tabs` APIs.
 
-1. **Already authenticated** — the user's default browser already has active sessions for Slack, GitHub, Google, etc.
-2. **Zero setup** — no installation, no configuration, no profile copying.
-3. **One command** — `open "https://api.slack.com/apps?new_app=1"` opens the exact page they need.
+## Fallback: Manual Flow
 
-Combined with providing a copy-pasteable manifest (for Slack) or pre-filled URL parameters (for GitHub tokens), this minimizes the user's manual effort to 3-4 clicks.
-
-### Concrete example: Slack webhook setup
+If extension mode is not available (extension not installed, non-Chrome browser), fall back to `open <url>` + minimal manual steps:
 
 ```sh
-# Agent runs this — Chrome opens the right page
 open "https://api.slack.com/apps?new_app=1"
 ```
 
-Agent provides:
-```yaml
-display_information:
-  name: My Alert Bot
-  description: Posts alerts to Slack
-features:
-  bot_user:
-    display_name: My Alert Bot
-    always_online: false
-oauth_config:
-  scopes:
-    bot:
-      - incoming-webhook
-settings:
-  org_deploy_enabled: false
-  socket_mode_enabled: false
-  token_rotation_enabled: false
+Provide a ready-to-paste manifest and limit user actions to 3-4 steps max. See the job-manager skill for the full least-friction pattern.
+
+## macOS Alternative: AppleScript
+
+On macOS, Chrome supports `execute javascript` via AppleScript as a zero-install fallback:
+
+```bash
+# Navigate
+osascript -e 'tell application "Google Chrome" to set URL of active tab of front window to "https://example.com"'
+
+# Execute JS
+osascript -e 'tell application "Google Chrome" to execute javascript "document.title" in active tab of front window'
 ```
 
-User does: paste manifest, click Create, Add Webhook, pick channel, copy URL, paste back. **4 actions total.**
+Requires one-time opt-in: Chrome → View → Developer → "Allow JavaScript from Apple Events".
 
-## When Playwright IS Useful
+This gives full JS execution in the user's authenticated Chrome without any extension or CDP. Useful as a fallback when the Playwright extension isn't installed.
 
-Playwright MCP is still valuable for:
-- **Web scraping** — fetching data from public pages (no auth needed)
-- **Testing** — validating that a web UI or API endpoint returns expected content
-- **Form automation on public sites** — filling out forms that don't require login
-- **Screenshots** — capturing the state of a page for debugging or documentation
+## Automation Capability Tiers
 
-It's the wrong tool when you need the user's **existing browser session**.
+| Tier | Method | Setup | Capabilities | Platform |
+|---|---|---|---|---|
+| **1 (best)** | Playwright MCP `--extension` | Install Chrome extension | Full Playwright API, screenshots, selectors, waiting | Cross-platform |
+| **2** | AppleScript `execute javascript` | Enable JS from Apple Events | JS execution, navigation, form filling | macOS only |
+| **3** | `open <url>` + manual steps | None | Opens page, user does the rest | Cross-platform |
 
-## Future Possibilities
-
-1. **Slack CLI** — `slack create --manifest manifest.yaml` can create apps entirely from the terminal if the user has the Slack CLI installed. Worth checking with `which slack` before falling back to browser flow.
-
-2. **Chrome CDP via launched profile** — if the user is willing to restart Chrome with `--remote-debugging-port=9222`, Playwright could connect to their actual browser session. But this is disruptive and not practical for casual use.
-
-3. **Browser extension** — a browser extension could bridge between the agent and the user's browser, receiving instructions via local WebSocket and performing actions in the authenticated context. This is a large engineering effort but would fully solve the problem.
+The agent should try tier 1 first, fall back to tier 2 on macOS, and use tier 3 as a last resort.

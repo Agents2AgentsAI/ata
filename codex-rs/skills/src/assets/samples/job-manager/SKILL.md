@@ -281,29 +281,47 @@ When a user asks you to schedule something:
 
 When a job needs to interact with an external service (Slack, email, webhooks, etc.), **always minimize user friction**. Follow this principle: do everything you can locally, and for the part that requires the user, give them the most automated single-step option first.
 
-### Least-friction-first principle
+### Browser automation (preferred)
 
-WRONG approach (too many manual steps):
-> 1. Go to slack.com  2. Click this  3. Click that  4. Toggle this  5. Click more things...
+Playwright MCP is configured with `--extension` mode, which connects to the **user's real Chrome** via the Playwright MCP Bridge extension. This means the agent can automate authenticated browser flows — the user's Slack, GitHub, Google sessions are all available.
 
-RIGHT approach (one copy-paste + a few clicks):
-> I'll open the setup page in your browser. Paste this manifest, click Create, copy the URL.
+**When to use browser automation:**
+- Setting up Slack apps/webhooks
+- Creating GitHub tokens
+- Any multi-step web UI flow where the user is already logged in
+
+**How to use it:**
+
+Playwright MCP is configured in `~/.ata/config.toml` as `[mcp_servers.playwright]`. The agent has access to tools prefixed with `mcp__playwright__`:
+
+1. Use `mcp__playwright__browser_navigate` to open the service URL
+2. Use `mcp__playwright__browser_snapshot` to see the current page state
+3. Use `mcp__playwright__browser_click`, `mcp__playwright__browser_fill_form`, `mcp__playwright__browser_evaluate` to interact
+4. The user watches their Chrome as the agent clicks through the flow
+
+**If extension mode is not available** (extension not installed), the tools will fall back to launching a sandboxed browser. If that happens, fall back to the manual approach below.
+
+### Fallback: manual with least-friction
+
+If browser automation isn't available, minimize manual steps:
 
 Rules:
-1. **Always offer to open URLs in the user's browser** using `open <url>` (macOS) or `xdg-open <url>` (Linux). Their default browser is already authenticated — no login needed.
+1. **Open URLs in the user's browser** using `open <url>` (macOS) or `xdg-open <url>` (Linux). Their default browser is already authenticated.
 2. **Provide app manifests / config files** that can be pasted in one shot, instead of step-by-step UI walkthroughs.
 3. **Never give more than 4-5 user-facing steps.** If you're writing more, you're not automating enough.
 4. **Do all local work silently** — write config files, set permissions, wire scripts — then present only what the user must do manually.
 
-### Slack webhook setup (standard pattern)
+### Slack webhook setup
 
-When a job needs to post to Slack:
+**Automated (with Playwright extension):**
+1. `browser_navigate` to `https://api.slack.com/apps?new_app=1`
+2. Select "From a manifest" → paste the YAML manifest via `browser_fill_form`
+3. Click through creation, enable Incoming Webhooks, add to workspace
+4. Extract the webhook URL from the page via `browser_evaluate`
+5. Store it securely and wire it into the job — zero user effort
 
-1. Open the page for them:
-   ```sh
-   open "https://api.slack.com/apps?new_app=1"
-   ```
-
+**Manual fallback:**
+1. `open "https://api.slack.com/apps?new_app=1"`
 2. Give them a ready-to-paste app manifest:
    ```yaml
    display_information:
@@ -322,17 +340,13 @@ When a job needs to post to Slack:
      socket_mode_enabled: false
      token_rotation_enabled: false
    ```
-
 3. Tell them: "Create from manifest → Incoming Webhooks → Add → pick channel → copy URL → paste here"
-
-4. Once they paste the URL, store it securely and wire it into the job — all locally, silently.
-
-Total user effort: paste manifest, 3 clicks, paste URL back. That's the target.
+4. Once they paste the URL, store it securely and wire it into the job.
 
 ### Other services
 
-Apply the same pattern:
-- **GitHub tokens**: `open "https://github.com/settings/tokens/new?scopes=repo&description=ata-job"` — pre-filled scope
+Apply the same automation-first pattern:
+- **GitHub tokens**: automate via Playwright, or fallback to `open "https://github.com/settings/tokens/new?scopes=repo&description=ata-job"` with pre-filled scope
 - **API keys**: offer to store in `~/.ata/secrets/` with locked permissions
 - **Email**: check if `sendmail`/`msmtp` is configured before suggesting external services
 
