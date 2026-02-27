@@ -1,6 +1,6 @@
 ---
 name: kb
-description: Knowledge Base operations for card-based research knowledge management. Use when reading, writing, searching, updating, or managing KB cards and files. Also use when persisting conversation insights back to cards (the update protocol). Other research skills reference this skill via $kb for KB operations.
+description: Knowledge Base operations for card-based research knowledge management. Use when reading, writing, searching, updating, resetting, or managing KB cards and files. Also handles "reset KB", "clear KB", and "wipe KB" — immediately resets to empty state without asking questions. Other research skills reference this skill via $kb for KB operations.
 metadata:
   short-description: Knowledge base card operations
 policy:
@@ -161,6 +161,20 @@ Optionally create an empty `index.json`:
 }
 ```
 
+## Reset / Clear KB
+
+**IMMEDIATE ACTION — no clarifying questions.** When the user asks to "clear the KB", "reset the KB", "wipe the KB", or similar, execute ALL steps below without asking what they mean:
+
+1. Count existing cards first (for the confirmation message): `ls $HOME/.ata/knowledge-base/cards/`
+2. Remove all card files: `exec_command("cd $HOME/.ata/knowledge-base && find cards topics briefings explanations assets staging -type f -delete 2>/dev/null; find cards topics briefings explanations assets staging -mindepth 1 -type d -delete 2>/dev/null; true")`
+3. Reset `$HOME/.ata/knowledge-base/index.json` — write: `{"tag_taxonomy": [], "topics": {}}`
+4. Reset `$HOME/.ata/knowledge-base/research-journal.md` — write: `# Research Journal\n`
+5. **Keep** `research-context.md` unchanged — it contains user preferences, not card data.
+
+Confirm completion: "Reset complete. Deleted N cards. research-context.md preserved."
+
+The user should NOT need to specify what "reset" means. Reset = return KB to initial empty state. Always.
+
 ## index.json
 
 The index tracks tag taxonomy and topic staleness:
@@ -232,7 +246,7 @@ Multiple insights on the same day go under the same date header.
 
 ### What NOT to Update
 
-- **Do not modify Summary, Architecture, Training Pipeline, or Deep Dive sections.** Those represent the original synthesis. Discussion Notes supplement, not replace.
+- **Do not modify the original synthesis sections** (Problem & Motivation, Core Method, Results, Limitations & Connections). Those represent the original synthesis. Discussion Notes supplement, not replace.
 - Exception: if the user explicitly asks to correct a section, modify it and note the correction in Discussion Notes.
 
 ### Bulk Update
@@ -247,17 +261,6 @@ During updates, watch for signals that express research preferences (not paper-s
 - "I've decided to go with VQ-VAE tokenization" → key decision
 
 Offer to update `<kb_path>/research-context.md` in addition to the card update. If the file doesn't exist, create it with sections: Project, Priorities, Not Interested In, Framings That Work, Key Decisions Made.
-
-### Clear KB
-
-When the user asks to "clear the KB", "reset the KB", or "wipe the KB", do all of the following without asking clarifying questions:
-
-1. Delete all content: `rm -rf <kb_path>/cards/* <kb_path>/topics/* <kb_path>/briefings/* <kb_path>/explanations/* <kb_path>/assets/* <kb_path>/staging/*`
-2. Reset `<kb_path>/index.json` to: `{"tag_taxonomy": [], "topics": {}}`
-3. Clear `<kb_path>/research-journal.md` to: `# Research Journal\n`
-4. **Keep** `<kb_path>/research-context.md` — it contains user preferences, not card data.
-
-Confirm completion with a count of deleted cards and a note that research-context.md was preserved.
 
 ## Graceful Degradation
 

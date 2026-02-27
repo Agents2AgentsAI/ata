@@ -13,6 +13,7 @@
 //!
 //! Some UI is time-based rather than input-based, such as the transient "press again to quit"
 //! hint. The pane schedules redraws so those hints can expire even when the UI is otherwise idle.
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::app_event::ConnectorsSnapshot;
@@ -42,6 +43,7 @@ use std::time::Duration;
 
 mod app_link_view;
 mod approval_overlay;
+pub(crate) mod document_reader;
 mod multi_select_picker;
 mod request_user_input;
 mod status_line_setup;
@@ -74,6 +76,7 @@ mod file_search_popup;
 mod footer;
 mod list_selection_view;
 mod prompt_args;
+mod research_tools_view;
 mod skill_popup;
 mod skills_toggle_view;
 mod slash_commands;
@@ -96,6 +99,7 @@ mod paste_burst;
 mod pending_thread_approvals;
 pub mod popup_consts;
 mod queued_user_messages;
+mod reverse_search;
 mod scroll_state;
 mod selection_popup_common;
 mod textarea;
@@ -140,6 +144,8 @@ pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
+pub(crate) use research_tools_view::ResearchToolsView;
+pub(crate) use research_tools_view::build_research_tool_items;
 
 /// Pane displayed in the lower half of the chat UI.
 ///
@@ -177,6 +183,10 @@ pub(crate) struct BottomPane {
     pending_thread_approvals: PendingThreadApprovals,
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
+    /// Document IDs whose reading views were closed by the user. Used to
+    /// prevent replayed `PresentDocument` events from re-opening a reader
+    /// after an agent switch round-trip.
+    closed_document_ids: HashSet<String>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -228,6 +238,7 @@ impl BottomPane {
             animations_enabled,
             context_window_percent: None,
             context_window_used_tokens: None,
+            closed_document_ids: HashSet::new(),
         }
     }
 
@@ -242,6 +253,11 @@ impl BottomPane {
     pub fn set_image_paste_enabled(&mut self, enabled: bool) {
         self.composer.set_image_paste_enabled(enabled);
         self.request_redraw();
+    }
+
+    /// Set the path to `history.jsonl` for reverse search (`Ctrl+R`).
+    pub fn set_history_path(&mut self, path: PathBuf) {
+        self.composer.set_history_path(path);
     }
 
     pub fn set_connectors_snapshot(&mut self, snapshot: Option<ConnectorsSnapshot>) {
@@ -381,7 +397,7 @@ impl BottomPane {
             };
 
             if ctrl_c_completed {
-                self.view_stack.pop();
+                self.pop_view();
                 self.on_active_view_complete();
                 if let Some(next_view) = self.view_stack.last()
                     && next_view.is_in_paste_burst()
@@ -389,6 +405,11 @@ impl BottomPane {
                     self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
                 }
             } else if view_complete {
+                for v in &self.view_stack {
+                    if let Some(doc_id) = v.closed_document_id() {
+                        self.closed_document_ids.insert(doc_id.to_owned());
+                    }
+                }
                 self.view_stack.clear();
                 self.on_active_view_complete();
             } else if view_in_paste_burst {
@@ -403,6 +424,7 @@ impl BottomPane {
             if key_event.code == KeyCode::Esc
                 && self.is_task_running
                 && !self.composer.popup_active()
+                && !self.composer.is_reverse_search_active()
                 && let Some(status) = &self.status
             {
                 // Send Op::Interrupt
@@ -434,7 +456,7 @@ impl BottomPane {
             let event = view.on_ctrl_c();
             if matches!(event, CancellationEvent::Handled) {
                 if view.is_complete() {
-                    self.view_stack.pop();
+                    self.pop_view();
                     self.on_active_view_complete();
                 }
                 self.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')));
@@ -444,7 +466,7 @@ impl BottomPane {
         } else if self.composer_is_empty() {
             CancellationEvent::NotHandled
         } else {
-            self.view_stack.pop();
+            self.pop_view();
             self.clear_composer_for_ctrl_c();
             self.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')));
             self.request_redraw();
@@ -752,7 +774,7 @@ impl BottomPane {
             return false;
         }
 
-        self.view_stack.pop();
+        self.pop_view();
         let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
         self.push_view(Box::new(view));
         true
@@ -815,7 +837,10 @@ impl BottomPane {
     /// overlays or popups and not running a task. This is the safe context to
     /// use Esc-Esc for backtracking from the main view.
     pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
-        !self.is_task_running && self.view_stack.is_empty() && !self.composer.popup_active()
+        !self.is_task_running
+            && self.view_stack.is_empty()
+            && !self.composer.popup_active()
+            && !self.composer.is_reverse_search_active()
     }
 
     /// Return true when no popups or modal views are active, regardless of task state.
@@ -883,6 +908,31 @@ impl BottomPane {
             Some("Answer the questions to continue.".to_string()),
         );
         self.push_view(Box::new(modal));
+    }
+
+    /// Pop the top view off the stack, recording any closed document ID so
+    /// replayed `PresentDocument` events won't re-open it.
+    fn pop_view(&mut self) -> Option<Box<dyn BottomPaneView>> {
+        let view = self.view_stack.pop();
+        if let Some(ref v) = view
+            && let Some(doc_id) = v.closed_document_id()
+        {
+            self.closed_document_ids.insert(doc_id.to_owned());
+        }
+        view
+    }
+
+    /// Returns a reference to the set of document IDs that were closed by the
+    /// user.  Used to transfer state when the `ChatWidget` is recreated during
+    /// agent/thread switching.
+    pub(crate) fn closed_document_ids(&self) -> &HashSet<String> {
+        &self.closed_document_ids
+    }
+
+    /// Seed previously-closed document IDs so replayed `PresentDocument` events
+    /// are suppressed for documents the user already dismissed.
+    pub(crate) fn set_closed_document_ids(&mut self, ids: HashSet<String>) {
+        self.closed_document_ids = ids;
     }
 
     fn on_active_view_complete(&mut self) {
@@ -1075,6 +1125,10 @@ impl Renderable for BottomPane {
         self.as_renderable().cursor_pos(area)
     }
 }
+
+// Document reader forwarding methods (fork-specific, kept in a separate file
+// to reduce merge conflicts with upstream).
+include!("document_reader_ext.rs");
 
 #[cfg(test)]
 mod tests {

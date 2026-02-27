@@ -393,6 +393,12 @@ pub(crate) struct ChatComposer {
     windows_degraded_sandbox_active: bool,
     status_line_value: Option<Line<'static>>,
     status_line_enabled: bool,
+    /// Active reverse-search session (`Ctrl+R`).
+    reverse_search: Option<super::reverse_search::ReverseSearch>,
+    /// Text that was in the composer before reverse search was activated.
+    pre_search_text: Option<String>,
+    /// Path to `history.jsonl`, set once after construction.
+    history_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -499,6 +505,9 @@ impl ChatComposer {
             windows_degraded_sandbox_active: false,
             status_line_value: None,
             status_line_enabled: false,
+            reverse_search: None,
+            pre_search_text: None,
+            history_path: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -2670,6 +2679,9 @@ impl ChatComposer {
 
     /// Handle key event when no popup is visible.
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        if let Some(result) = self.try_reverse_search_key(key_event) {
+            return result;
+        }
         if let Some((result, redraw)) = self.handle_remote_image_selection_key(&key_event) {
             return (result, redraw);
         }
@@ -3193,6 +3205,9 @@ impl ChatComposer {
     }
 
     fn custom_footer_height(&self) -> Option<u16> {
+        if self.is_reverse_search_active() {
+            return Some(1);
+        }
         if self.footer_flash_visible() {
             return Some(1);
         }
@@ -4040,9 +4055,14 @@ fn find_next_mention_token_range(text: &str, token: &str, from: usize) -> Option
     None
 }
 
+include!("chat_composer_reverse_search.rs");
+
 impl Renderable for ChatComposer {
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        if !self.input_enabled || self.selected_remote_image_index.is_some() {
+        if !self.input_enabled
+            || self.selected_remote_image_index.is_some()
+            || self.is_reverse_search_active()
+        {
             return None;
         }
 
@@ -4244,7 +4264,9 @@ impl ChatComposer {
                         .unwrap_or(can_show_left_and_context)
                 };
 
-                if let Some((summary_left, _)) = single_line_layout {
+                if self.try_render_reverse_search_footer(hint_rect, buf) {
+                    // Reverse search rendered its own footer.
+                } else if let Some((summary_left, _)) = single_line_layout {
                     match summary_left {
                         SummaryLeft::Default => {
                             if status_line_active {
@@ -4300,7 +4322,10 @@ impl ChatComposer {
                     );
                 }
 
-                if show_right && let Some(line) = &right_line {
+                if show_right
+                    && !self.is_reverse_search_active()
+                    && let Some(line) = &right_line
+                {
                     render_context_right(hint_rect, buf, line);
                 }
             }
@@ -6253,6 +6278,34 @@ mod tests {
                 None => panic!("no selected command for '/res'"),
             },
             _ => panic!("slash popup not active after typing '/res'"),
+        }
+    }
+
+    #[test]
+    fn slash_popup_research_first_for_re_logic() {
+        use super::super::command_popup::CommandItem;
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        type_chars_humanlike(&mut composer, &['/', 'r', 'e']);
+
+        match &composer.active_popup {
+            ActivePopup::Command(popup) => match popup.selected_item() {
+                Some(CommandItem::Builtin(cmd)) => {
+                    assert_eq!(cmd.command(), "research")
+                }
+                Some(CommandItem::UserPrompt(_)) => {
+                    panic!("unexpected prompt selected for '/re'")
+                }
+                None => panic!("no selected command for '/re'"),
+            },
+            _ => panic!("slash popup not active after typing '/re'"),
         }
     }
 

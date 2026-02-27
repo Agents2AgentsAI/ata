@@ -55,7 +55,7 @@ Before diving into full technical detail, each card explanation should establish
 
 ## Prerequisites
 
-Determine `<kb_path>` per the `$kb` skill (default `~/.ata/knowledge-base` unless configured otherwise).
+Determine `<kb_path>` per the `$kb` skill (default `~/.ata/knowledge-base` unless configured otherwise). **If KB is disabled** (no `$kb` skill available), this skill can still work if card content is provided directly in the conversation (e.g., from staging files or previous synthesis output). Skip all KB reads/writes and work from conversation context.
 
 ## Scale Detection
 
@@ -65,6 +65,8 @@ After reading all requested cards, check the count:
 - **Large-set mode** (> 12 cards): Jump to the **Large-Set Synthesis** section at the end of this document. Do NOT attempt standard Phases 1–2 for large sets — producing 800+ words per card for 20+ papers in a single agent pass will collapse into shallow summaries that violate the depth contract. The large-set workflow uses clustering and parallel subagents to preserve per-card depth at scale.
 
 ## Phase 0: Related Card Discovery
+
+**Skip this phase entirely if KB is disabled.** Work only from content already in the conversation context.
 
 After reading the requested cards but before writing explanations, check whether the KB contains other cards that are topically relevant and would strengthen the report.
 
@@ -80,7 +82,7 @@ This step prevents narrow reports that miss important context available in the K
 
 ## Phase 1: Deep Technical Explanation of Each Card
 
-Read all requested cards per `$kb` (or list + read all cards when the user says "all" or refers to a broad set).
+Read all requested cards per `$kb` (or list + read all cards when the user says "all" or refers to a broad set). **If KB is disabled**, use card content from the conversation context (e.g., staging file output from synthesis subagents).
 
 ### Coverage-First Principle
 
@@ -166,7 +168,7 @@ Supporting cards do NOT need: full stage-by-stage walkthroughs, Details blocks, 
 
 ## Phase 2: Cross-Card Comparative Synthesis
 
-**Research context awareness:** Before writing the comparison, read `<kb_path>/research-context.md` (if it exists). If the user has documented priorities (e.g., "inference latency matters most"), frame comparative dimensions around those priorities — lead with the dimensions the user cares about, de-emphasize dimensions they've marked as unimportant.
+**Research context awareness (skip if KB is disabled):** Before writing the comparison, read `<kb_path>/research-context.md` (if it exists). If the user has documented priorities (e.g., "inference latency matters most"), frame comparative dimensions around those priorities — lead with the dimensions the user cares about, de-emphasize dimensions they've marked as unimportant.
 
 Produce this phase when 2 or more cards are involved. Skip for single-card requests.
 
@@ -230,13 +232,19 @@ This gives each focal paper 55-90 lines total across 2-3 navigable sections — 
 **Markdown formatting:** Always put a blank line before numbered list items (`1.`, `2.`, etc.) and before bullet list items (`-`, `*`). Without a blank line, the markdown parser treats `2.`, `3.`, etc. as plain text instead of list items, so they lose their formatting. This also applies to content after paragraphs, blockquotes, and code blocks.
 
 When the user asks follow-up questions about a specific section, use the most efficient update tool:
-- `append_to_section` — to add new information at the end of a section (most common for follow-up questions)
-- `patch_document_section` — to change specific text within a section (for corrections or targeted edits)
-- `update_document_section` — to fully rewrite a section (only when the entire section needs to change)
+
+- `append_to_section` with `foldable=true` — **preferred for expansion requests** (e.g., "explain more", "go deeper on X"). Adds a collapsible detail block below existing content, preserving scannability. Each foldable block: 3-5 sentences.
+- `append_to_section` (without foldable) — to add genuinely new information at the end of a section.
+- `patch_document_section` — to change specific text within a section (for corrections or targeted edits).
+- `update_document_section` — to fully rewrite a section ONLY when the user asks for a different framing or the section is factually wrong. **Never use this just to add more detail.**
+
+**Critical constraint:** After any follow-up update, the section must still be ≤40 lines of visible (non-folded) content. If a request would push past this limit, use foldable blocks.
 
 Write follow-up answers as straight content — no editorial labels like "(clearer explanation)" or "(expanded)" in headings or topic lines.
 
 ## Post-Report Housekeeping
+
+**Skip this entire section if KB is disabled.** When KB is off, do not write journal entries, research-context updates, or spawn `$kb` subagents for follow-up persistence. The reading view report is the sole output.
 
 After the report is complete (both reading view + PDF delivered), do these:
 
@@ -259,6 +267,17 @@ After the report is complete (both reading view + PDF delivered), do these:
 ```
 
 **2. Research context detection** — During the report interaction and follow-ups, watch for preference signals. If the user focuses on specific comparison dimensions ("I really care about the latency comparison"), asks to skip sections, or responds well to particular framings, offer briefly to note it in `research-context.md`. Never block the interaction on this.
+
+**3. Follow-up Q&A persistence** — When the user exits the reading view and Q&A produced new insights not already in the relevant KB cards, automatically spawn a fire-and-forget `$kb` subagent (do NOT call `wait`) to persist them. Do not ask the user. Include the card IDs and a summary of new insights in the subagent prompt:
+
+> $kb
+>
+> Update KB cards with follow-up insights. Do NOT ask the user — this is automatic.
+> Cards to update: [card-id-1], [card-id-2], ...
+> New insights from Q&A:
+> [For each card: card ID, the question asked, and the substantive answer, 2-4 sentences each]
+>
+> For each card: read it, append insights under `## Discussion Notes` per the update protocol, set `date_updated`, write the card back.
 
 ## Completion Checklist
 

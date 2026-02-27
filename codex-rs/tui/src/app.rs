@@ -622,6 +622,11 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
+    /// Per-thread set of document IDs whose reading views were closed.
+    ///
+    /// Persisted here so the state survives `ChatWidget` recreation during
+    /// agent/thread switches (the `BottomPane` is recreated from scratch).
+    thread_closed_document_ids: HashMap<ThreadId, HashSet<String>>,
 }
 
 #[derive(Default)]
@@ -1122,6 +1127,15 @@ impl App {
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = Some(receiver);
 
+        // Preserve closed-document-reader state so replayed PresentDocument
+        // events don't re-open readers the user already dismissed.
+        if let Some(prev_id) = previous_thread_id {
+            let closed = self.chat_widget.closed_document_ids().clone();
+            if !closed.is_empty() {
+                self.thread_closed_document_ids.insert(prev_id, closed);
+            }
+        }
+
         let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
         let codex_op_tx = if let Some(thread) = live_thread {
             crate::chatwidget::spawn_op_forwarder(thread)
@@ -1130,6 +1144,11 @@ impl App {
             tx
         };
         self.chat_widget = ChatWidget::new_with_op_sender(init, codex_op_tx);
+
+        // Restore closed-document IDs for the target thread before replay.
+        if let Some(closed) = self.thread_closed_document_ids.get(&thread_id) {
+            self.chat_widget.set_closed_document_ids(closed.clone());
+        }
 
         self.reset_for_thread_switch(tui)?;
         self.replay_thread_snapshot(snapshot);
@@ -1514,6 +1533,7 @@ impl App {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            thread_closed_document_ids: HashMap::new(),
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -1675,6 +1695,15 @@ impl App {
                     }
                     // Allow widgets to process any pending timers before rendering.
                     self.chat_widget.pre_draw_tick();
+                    // Flush deferred history lines once both the overlay and
+                    // reading view are closed so they appear in the scrollback.
+                    if !self.deferred_history_lines.is_empty()
+                        && self.overlay.is_none()
+                        && !self.chat_widget.is_document_reader_active()
+                    {
+                        let lines = std::mem::take(&mut self.deferred_history_lines);
+                        tui.insert_history_lines(lines);
+                    }
                     tui.draw(
                         self.chat_widget.desired_height(tui.terminal.size()?.width),
                         |frame| {
@@ -1693,6 +1722,79 @@ impl App {
             }
         }
         Ok(AppRunControl::Continue)
+    }
+
+    async fn apply_feature_flag_updates(&mut self, updates: Vec<(Feature, bool)>) {
+        if updates.is_empty() {
+            return;
+        }
+        let _windows_sandbox_changed = updates.iter().any(|(feature, _)| {
+            matches!(
+                feature,
+                Feature::WindowsSandbox | Feature::WindowsSandboxElevated
+            )
+        });
+        let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
+            .with_profile(self.active_profile.as_deref());
+        for (feature, enabled) in &updates {
+            let feature_key = feature.key();
+            if *enabled {
+                // Update the in-memory configs.
+                self.config.features.enable(*feature);
+                self.chat_widget.set_feature_enabled(*feature, true);
+                builder = builder.set_feature_enabled(feature_key, true);
+            } else {
+                // Update the in-memory configs.
+                self.config.features.disable(*feature);
+                self.chat_widget.set_feature_enabled(*feature, false);
+                if feature.default_enabled() {
+                    builder = builder.set_feature_enabled(feature_key, false);
+                } else {
+                    // If the feature already default to `false`, we drop the key
+                    // in the config file so that the user does not miss the feature
+                    // once it gets globally released.
+                    builder = builder.with_edits(vec![ConfigEdit::ClearPath {
+                        segments: vec!["features".to_string(), feature_key.to_string()],
+                    }]);
+                }
+            }
+        }
+
+        // Notify core so changes take effect without restart.
+        let feature_flags: BTreeMap<String, bool> = updates
+            .iter()
+            .map(|(feature, enabled)| (feature.key().to_string(), *enabled))
+            .collect();
+
+        #[cfg(target_os = "windows")]
+        let windows_sandbox_level = if _windows_sandbox_changed {
+            Some(WindowsSandboxLevel::from_config(&self.config))
+        } else {
+            None
+        };
+        #[cfg(not(target_os = "windows"))]
+        let windows_sandbox_level = None;
+
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                windows_sandbox_level,
+                model: None,
+                model_provider: None,
+                effort: None,
+                summary: None,
+                collaboration_mode: None,
+                personality: None,
+                feature_flags: Some(feature_flags),
+            }));
+
+        if let Err(err) = builder.apply().await {
+            tracing::error!(error = %err, "failed to persist feature flags");
+            self.chat_widget
+                .add_error_message(format!("Failed to update experimental features: {err}"));
+        }
     }
 
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
@@ -1883,7 +1985,7 @@ impl App {
                             self.has_emitted_history_lines = true;
                         }
                     }
-                    if self.overlay.is_some() {
+                    if self.overlay.is_some() || self.chat_widget.is_document_reader_active() {
                         self.deferred_history_lines.extend(display);
                     } else {
                         tui.insert_history_lines(display);
@@ -2304,10 +2406,12 @@ impl App {
                                         sandbox_policy: None,
                                         windows_sandbox_level: Some(windows_sandbox_level),
                                         model: None,
+                                        model_provider: None,
                                         effort: None,
                                         summary: None,
                                         collaboration_mode: None,
                                         personality: None,
+                                        feature_flags: None,
                                     },
                                 ));
                                 self.app_event_tx.send(
@@ -2326,10 +2430,12 @@ impl App {
                                         sandbox_policy: Some(preset.sandbox.clone()),
                                         windows_sandbox_level: Some(windows_sandbox_level),
                                         model: None,
+                                        model_provider: None,
                                         effort: None,
                                         summary: None,
                                         collaboration_mode: None,
                                         personality: None,
+                                        feature_flags: None,
                                     },
                                 ));
                                 self.app_event_tx
@@ -2509,64 +2615,7 @@ impl App {
                 }
             }
             AppEvent::UpdateFeatureFlags { updates } => {
-                if updates.is_empty() {
-                    return Ok(AppRunControl::Continue);
-                }
-                let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
-                    matches!(
-                        feature,
-                        Feature::WindowsSandbox | Feature::WindowsSandboxElevated
-                    )
-                });
-                let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_profile(self.active_profile.as_deref());
-                for (feature, enabled) in &updates {
-                    let feature_key = feature.key();
-                    if *enabled {
-                        // Update the in-memory configs.
-                        self.config.features.enable(*feature);
-                        self.chat_widget.set_feature_enabled(*feature, true);
-                        builder = builder.set_feature_enabled(feature_key, true);
-                    } else {
-                        // Update the in-memory configs.
-                        self.config.features.disable(*feature);
-                        self.chat_widget.set_feature_enabled(*feature, false);
-                        if feature.default_enabled() {
-                            builder = builder.set_feature_enabled(feature_key, false);
-                        } else {
-                            // If the feature already default to `false`, we drop the key
-                            // in the config file so that the user does not miss the feature
-                            // once it gets globally released.
-                            builder = builder.with_edits(vec![ConfigEdit::ClearPath {
-                                segments: vec!["features".to_string(), feature_key.to_string()],
-                            }]);
-                        }
-                    }
-                }
-                if windows_sandbox_changed {
-                    #[cfg(target_os = "windows")]
-                    {
-                        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
-                        self.app_event_tx
-                            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                                cwd: None,
-                                approval_policy: None,
-                                sandbox_policy: None,
-                                windows_sandbox_level: Some(windows_sandbox_level),
-                                model: None,
-                                effort: None,
-                                summary: None,
-                                collaboration_mode: None,
-                                personality: None,
-                            }));
-                    }
-                }
-                if let Err(err) = builder.apply().await {
-                    tracing::error!(error = %err, "failed to persist feature flags");
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to update experimental features: {err}"
-                    ));
-                }
+                self.apply_feature_flag_updates(updates).await;
             }
             AppEvent::SkipNextWorldWritableScan => {
                 self.windows_sandbox.skip_world_writable_scan_once = true;
@@ -3882,6 +3931,7 @@ mod tests {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            thread_closed_document_ids: HashMap::new(),
         }
     }
 
@@ -3941,6 +3991,7 @@ mod tests {
                 primary_thread_id: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
+                thread_closed_document_ids: HashMap::new(),
             },
             rx,
             op_rx,
@@ -4175,6 +4226,66 @@ mod tests {
             app.config.model_reasoning_effort,
             Some(ReasoningEffortConfig::High)
         );
+    }
+
+    #[tokio::test]
+    async fn apply_feature_flag_updates_emits_override_with_feature_flags() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let initial_hn = app.config.features.enabled(Feature::ResearchHackerNews);
+        let target_hn = !initial_hn;
+
+        app.apply_feature_flag_updates(vec![
+            (Feature::ResearchHackerNews, target_hn),
+            (Feature::Research, false),
+        ])
+        .await;
+
+        assert_eq!(
+            app.config.features.enabled(Feature::ResearchHackerNews),
+            target_hn
+        );
+        assert_eq!(app.config.features.enabled(Feature::Research), false);
+
+        let mut emitted_feature_flags = None;
+        let mut emitted_windows_sandbox_level = None;
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::CodexOp(Op::OverrideTurnContext {
+                feature_flags: Some(flags),
+                windows_sandbox_level,
+                ..
+            }) = event
+            {
+                emitted_windows_sandbox_level = Some(windows_sandbox_level);
+                emitted_feature_flags = Some(flags);
+                break;
+            }
+        }
+
+        let feature_flags =
+            emitted_feature_flags.expect("expected OverrideTurnContext with feature flags");
+        assert_eq!(
+            feature_flags.get(Feature::ResearchHackerNews.key()),
+            Some(&target_hn)
+        );
+        assert_eq!(feature_flags.get(Feature::Research.key()), Some(&false));
+        #[cfg(target_os = "windows")]
+        let _ = emitted_windows_sandbox_level;
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(emitted_windows_sandbox_level, Some(None));
+    }
+
+    #[tokio::test]
+    async fn apply_feature_flag_updates_empty_updates_is_noop() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let initial_hn = app.config.features.enabled(Feature::ResearchHackerNews);
+
+        app.apply_feature_flag_updates(Vec::new()).await;
+
+        assert_eq!(
+            app.config.features.enabled(Feature::ResearchHackerNews),
+            initial_hn
+        );
+        assert_eq!(app_event_rx.try_recv().is_err(), true);
     }
 
     #[tokio::test]

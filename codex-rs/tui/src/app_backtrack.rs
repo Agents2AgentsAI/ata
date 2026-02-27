@@ -238,7 +238,8 @@ impl App {
     pub(crate) fn close_transcript_overlay(&mut self, tui: &mut tui::Tui) {
         let _ = tui.leave_alt_screen();
         let was_backtrack = self.backtrack.overlay_preview_active;
-        if !self.deferred_history_lines.is_empty() {
+        if !self.deferred_history_lines.is_empty() && !self.chat_widget.is_document_reader_active()
+        {
             let lines = std::mem::take(&mut self.deferred_history_lines);
             tui.insert_history_lines(lines);
         }

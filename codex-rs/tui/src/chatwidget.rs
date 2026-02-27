@@ -48,6 +48,7 @@ use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
+use codex_core::auth::PROVIDER_OPENAI;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintResult;
@@ -212,9 +213,11 @@ use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
 use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
+use crate::bottom_pane::ResearchToolsView;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
+use crate::bottom_pane::build_research_tool_items;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
@@ -1226,6 +1229,18 @@ impl ChatWidget {
         self.bottom_pane.set_skills(skills);
     }
 
+    /// Returns the set of document IDs whose reading views were closed by the
+    /// user.  Used by `App` to transfer state across `ChatWidget` recreations.
+    pub(crate) fn closed_document_ids(&self) -> &std::collections::HashSet<String> {
+        self.bottom_pane.closed_document_ids()
+    }
+
+    /// Seed closed document IDs from a previous `ChatWidget` so replayed
+    /// `PresentDocument` events are suppressed for already-dismissed documents.
+    pub(crate) fn set_closed_document_ids(&mut self, ids: std::collections::HashSet<String>) {
+        self.bottom_pane.set_closed_document_ids(ids);
+    }
+
     pub(crate) fn open_feedback_note(
         &mut self,
         category: crate::app_event::FeedbackCategory,
@@ -1267,6 +1282,9 @@ impl ChatWidget {
     }
 
     fn on_agent_message(&mut self, message: String) {
+        if self.is_suppressing_streaming_for_reader() {
+            return;
+        }
         // If we have a stream_controller, then the final agent message is redundant and will be a
         // duplicate of what has already been streamed.
         if self.stream_controller.is_none() && !message.is_empty() {
@@ -1278,6 +1296,9 @@ impl ChatWidget {
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
+        if self.is_suppressing_streaming_for_reader() {
+            return;
+        }
         self.handle_streaming_delta(delta);
     }
 
@@ -1349,6 +1370,10 @@ impl ChatWidget {
         // (between **/**) as the chunk header. Show this header as status.
         self.reasoning_buffer.push_str(&delta);
 
+        if self.is_suppressing_streaming_for_reader() {
+            return;
+        }
+
         if self.unified_exec_wait_streak.is_some() {
             // Unified exec waiting should take precedence over reasoning-derived status headers.
             self.request_redraw();
@@ -1367,7 +1392,7 @@ impl ChatWidget {
     fn on_agent_reasoning_final(&mut self) {
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
-        if !self.full_reasoning_buffer.is_empty() {
+        if !self.full_reasoning_buffer.is_empty() && !self.is_suppressing_streaming_for_reader() {
             let cell =
                 history_cell::new_reasoning_summary_block(self.full_reasoning_buffer.clone());
             self.add_boxed_history(cell);
@@ -1453,6 +1478,9 @@ impl ChatWidget {
         self.agent_turn_running = false;
         self.turn_sleep_inhibitor.set_turn_running(false);
         self.update_task_running_state();
+        // Notify the active bottom pane view (e.g. document reader) that the
+        // turn ended so it can clear any stale "waiting" state.
+        self.bottom_pane.notify_turn_complete();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
@@ -2878,6 +2906,9 @@ impl ChatWidget {
         widget.prefetch_rate_limits();
         widget
             .bottom_pane
+            .set_history_path(widget.config.codex_home.join("history.jsonl"));
+        widget
+            .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
@@ -3055,6 +3086,9 @@ impl ChatWidget {
         widget.prefetch_rate_limits();
         widget
             .bottom_pane
+            .set_history_path(widget.config.codex_home.join("history.jsonl"));
+        widget
+            .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
@@ -3219,6 +3253,9 @@ impl ChatWidget {
         };
 
         widget.prefetch_rate_limits();
+        widget
+            .bottom_pane
+            .set_history_path(widget.config.codex_home.join("history.jsonl"));
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
@@ -3467,6 +3504,27 @@ impl ChatWidget {
         false
     }
 
+    fn clear_model_selection_for_logout(&self) {
+        // Clear the model selection before logout so the next provider gets its default.
+        // Clear both global config and active profile (if any) to ensure the model is fully reset.
+        let mut builder =
+            codex_core::config::edit::ConfigEditsBuilder::new(&self.config.codex_home);
+        if let Some(profile) = self.config.active_profile.as_deref() {
+            builder = builder.with_profile(Some(profile));
+        }
+        if let Err(e) = builder.set_model(None, None, None).apply_blocking() {
+            tracing::error!("failed to clear model on logout: {e}");
+        }
+        if self.config.active_profile.is_some()
+            && let Err(e) =
+                codex_core::config::edit::ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_model(None, None, None)
+                    .apply_blocking()
+        {
+            tracing::error!("failed to clear global model on logout: {e}");
+        }
+    }
+
     fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
@@ -3634,10 +3692,14 @@ impl ChatWidget {
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
             }
+            SlashCommand::Research => {
+                self.open_research_popup();
+            }
             SlashCommand::Quit | SlashCommand::Exit => {
                 self.request_quit_without_confirmation();
             }
             SlashCommand::Logout => {
+                self.clear_model_selection_for_logout();
                 if let Err(e) = self.auth_manager.logout() {
                     tracing::error!("failed to logout: {e}");
                 }
@@ -4370,6 +4432,10 @@ impl ChatWidget {
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
+            EventMsg::PresentDocument(ev) => self.on_present_document(ev, from_replay),
+            EventMsg::UpdateDocumentSection(ev) => self.on_update_document_section(ev),
+            EventMsg::AppendDocumentSection(ev) => self.on_append_document_section(ev),
+            EventMsg::PatchDocumentSection(ev) => self.on_patch_document_section(ev),
             EventMsg::ExecApprovalRequest(ev) => {
                 // For replayed events, synthesize an empty id (these should not occur).
                 self.on_exec_approval_request(id.unwrap_or_default(), ev)
@@ -4488,10 +4554,6 @@ impl ChatWidget {
                     self.on_agent_message_item_completed(item);
                 }
             }
-            EventMsg::PresentDocument(_)
-            | EventMsg::UpdateDocumentSection(_)
-            | EventMsg::AppendDocumentSection(_)
-            | EventMsg::PatchDocumentSection(_) => {}
         }
 
         if !from_replay && self.agent_turn_running {
@@ -5086,11 +5148,35 @@ impl ChatWidget {
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
-        let models = self.models_manager.try_list_models().ok()?;
+        let models = self
+            .filter_model_presets_for_current_provider(self.models_manager.try_list_models().ok()?);
         models
             .iter()
             .find(|preset| preset.show_in_picker && preset.model == NUDGE_MODEL_SLUG)
             .cloned()
+    }
+
+    fn filter_model_presets_for_current_provider(
+        &self,
+        presets: Vec<ModelPreset>,
+    ) -> Vec<ModelPreset> {
+        let current_provider = self.config.model_provider_id.as_str();
+        let current_model = self.current_model().to_string();
+        let has_provider_specific_presets = presets
+            .iter()
+            .any(|preset| preset.provider_id.as_deref() == Some(current_provider));
+
+        presets
+            .into_iter()
+            .filter(|preset| match preset.provider_id.as_deref() {
+                Some(provider_id) => provider_id == current_provider,
+                None => {
+                    current_provider == PROVIDER_OPENAI
+                        || !has_provider_specific_presets
+                        || preset.model == current_model
+                }
+            })
+            .collect()
     }
 
     fn rate_limit_switch_prompt_hidden(&self) -> bool {
@@ -5215,6 +5301,7 @@ impl ChatWidget {
                 return;
             }
         };
+        let presets = self.filter_model_presets_for_current_provider(presets);
         self.open_model_popup_with_presets(presets);
     }
 
@@ -6003,6 +6090,12 @@ impl ChatWidget {
             .collect();
 
         let view = ExperimentalFeaturesView::new(features, self.app_event_tx.clone());
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_research_popup(&mut self) {
+        let items = build_research_tool_items(&self.config.features);
+        let view = ResearchToolsView::new(items, self.app_event_tx.clone());
         self.bottom_pane.show_view(Box::new(view));
     }
 
@@ -7897,6 +7990,10 @@ async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Vec<RateLimitSn
         }
     }
 }
+
+// Document reader integration (fork-specific, kept in a separate file to reduce
+// merge conflicts with upstream).
+include!("chatwidget_document_reader.rs");
 
 #[cfg(test)]
 pub(crate) fn show_review_commit_picker_with_entries(

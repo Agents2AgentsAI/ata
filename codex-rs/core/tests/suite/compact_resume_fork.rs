@@ -19,6 +19,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_test_macros::large_stack_test;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -28,7 +29,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
-use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;
 use wiremock::MockServer;
@@ -50,11 +50,10 @@ fn json_fragment(text: &str) -> String {
         .to_string()
 }
 
-fn filter_out_ghost_snapshot_entries(items: &[Value]) -> Vec<Value> {
+fn filter_out_ghost_snapshot_entries(items: &[Value]) -> Vec<&Value> {
     items
         .iter()
         .filter(|item| !is_ghost_snapshot_message(item))
-        .cloned()
         .collect()
 }
 
@@ -136,7 +135,7 @@ fn normalize_compact_prompts(requests: &mut [Value]) {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 /// Scenario: compact an initial conversation, resume it, fork one turn back, and
 /// ensure the model-visible history matches expectations at each request.
 async fn compact_resume_and_fork_preserve_model_history_view() {
@@ -178,18 +177,17 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     normalize_compact_prompts(&mut requests);
 
     // input after compact is a prefix of input after resume/fork
-    let input_after_compact = json!(requests[requests.len() - 3]["input"]);
-    let input_after_resume = json!(requests[requests.len() - 2]["input"]);
-    let input_after_fork = json!(requests[requests.len() - 1]["input"]);
-
-    let compact_arr = input_after_compact
-        .as_array()
+    let compact_arr = requests[requests.len() - 3]
+        .get("input")
+        .and_then(Value::as_array)
         .expect("input after compact should be an array");
-    let resume_arr = input_after_resume
-        .as_array()
+    let resume_arr = requests[requests.len() - 2]
+        .get("input")
+        .and_then(Value::as_array)
         .expect("input after resume should be an array");
-    let fork_arr = input_after_fork
-        .as_array()
+    let fork_arr = requests[requests.len() - 1]
+        .get("input")
+        .and_then(Value::as_array)
         .expect("input after fork should be an array");
 
     assert!(
@@ -202,10 +200,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         compact_arr.len() <= fork_arr.len(),
         "after-fork input should have at least as many items as after-compact",
     );
-    assert_eq!(
-        &compact_arr.as_slice()[..compact_arr.len()],
-        &fork_arr[..compact_arr.len()]
-    );
+    assert_eq!(compact_arr, &fork_arr[..compact_arr.len()]);
 
     let first_request_user_texts = json_message_input_texts(&requests[0], "user");
     let first_turn_user_index = first_request_user_texts
@@ -291,7 +286,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     assert_eq!(requests.len(), 5);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 /// Scenario: after the forked branch is compacted, resuming again should reuse
 /// the compacted history and only append the new user message.
 async fn compact_resume_after_second_compaction_preserves_history() {
@@ -341,16 +336,16 @@ async fn compact_resume_after_second_compaction_preserves_history() {
 
     let mut requests = gather_request_bodies(&request_log);
     normalize_compact_prompts(&mut requests);
-    let input_after_compact = json!(requests[requests.len() - 2]["input"]);
-    let input_after_resume = json!(requests[requests.len() - 1]["input"]);
-
     // test input after compact before resume is the same as input after resume
-    let compact_input_array = input_after_compact
-        .as_array()
+    let compact_input_array = requests[requests.len() - 2]
+        .get("input")
+        .and_then(Value::as_array)
         .expect("input after compact should be an array");
-    let resume_input_array = input_after_resume
-        .as_array()
+    let resume_input_array = requests[requests.len() - 1]
+        .get("input")
+        .and_then(Value::as_array)
         .expect("input after resume should be an array");
+
     let compact_filtered = filter_out_ghost_snapshot_entries(compact_input_array);
     let resume_filtered = filter_out_ghost_snapshot_entries(resume_input_array);
     assert!(
@@ -405,23 +400,18 @@ async fn compact_resume_after_second_compaction_preserves_history() {
 }
 
 fn normalize_line_endings(value: &mut Value) {
-    match value {
-        Value::String(text) => {
-            if text.contains('\r') {
-                *text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut stack = vec![value];
+    while let Some(current) = stack.pop() {
+        match current {
+            Value::String(text) => {
+                if text.contains('\r') {
+                    *text = text.replace("\r\n", "\n").replace('\r', "\n");
+                }
             }
+            Value::Array(items) => stack.extend(items.iter_mut()),
+            Value::Object(map) => stack.extend(map.values_mut()),
+            _ => {}
         }
-        Value::Array(items) => {
-            for item in items {
-                normalize_line_endings(item);
-            }
-        }
-        Value::Object(map) => {
-            for item in map.values_mut() {
-                normalize_line_endings(item);
-            }
-        }
-        _ => {}
     }
 }
 

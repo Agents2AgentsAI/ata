@@ -16,10 +16,12 @@ use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
 use codex_core::CodexAuth;
+use codex_core::config::CONFIG_TOML_FILE;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintError;
+use codex_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
 use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::RequirementSource;
@@ -1826,6 +1828,18 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
         s.push('\n');
     }
     s
+}
+
+fn read_config_toml(codex_home: &std::path::Path) -> TomlValue {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    match std::fs::read_to_string(config_path) {
+        Ok(raw) if !raw.trim().is_empty() => toml::from_str(&raw).expect("parse config"),
+        Ok(_) => TomlValue::Table(Default::default()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            TomlValue::Table(Default::default())
+        }
+        Err(err) => panic!("failed to read config.toml: {err}"),
+    }
 }
 
 fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {
@@ -4378,6 +4392,51 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
 }
 
 #[tokio::test]
+async fn research_slash_command_opens_popup_and_saves_updates() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let initial_paper_search = chat
+        .config_ref()
+        .features
+        .enabled(Feature::ResearchPaperSearch);
+
+    chat.bottom_pane
+        .set_composer_text("/research".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Research tools"),
+        "expected research popup after /research, got: {popup}"
+    );
+
+    // Toggle the initially selected item (Paper Search), then save.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let mut updates = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::UpdateFeatureFlags {
+            updates: event_updates,
+        } = event
+        {
+            updates = Some(event_updates);
+            break;
+        }
+    }
+    let updates = updates.expect("expected UpdateFeatureFlags event from /research popup");
+    let research_update = updates
+        .iter()
+        .find(|(feature, _)| *feature == Feature::Research)
+        .map(|(_, enabled)| *enabled);
+    assert_eq!(research_update, Some(false));
+    let paper_search_update = updates
+        .iter()
+        .find(|(feature, _)| *feature == Feature::ResearchPaperSearch)
+        .map(|(_, enabled)| *enabled);
+    assert_eq!(paper_search_update, Some(!initial_paper_search));
+}
+
+#[tokio::test]
 async fn plan_slash_command_switches_to_plan_mode() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
@@ -4663,6 +4722,75 @@ async fn slash_quit_requests_exit() {
     chat.dispatch_command(SlashCommand::Quit);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+}
+
+#[tokio::test]
+async fn slash_logout_clears_global_model_selection_before_exit() {
+    let codex_home = tempdir().expect("tmpdir");
+    ConfigEditsBuilder::new(codex_home.path())
+        .set_model(
+            Some("claude-sonnet-4-20250514"),
+            None,
+            Some("anthropic".to_string()),
+        )
+        .apply_blocking()
+        .expect("persist model selection");
+
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.codex_home = codex_home.path().to_path_buf();
+
+    chat.dispatch_command(SlashCommand::Logout);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+
+    let config = read_config_toml(codex_home.path());
+    let table = config.as_table().expect("config table");
+    assert_eq!(table.contains_key("model"), false);
+    assert_eq!(table.contains_key("model_provider"), false);
+    assert_eq!(table.contains_key("model_reasoning_effort"), false);
+}
+
+#[tokio::test]
+async fn slash_logout_clears_profile_and_global_model_selection_before_exit() {
+    let codex_home = tempdir().expect("tmpdir");
+    ConfigEditsBuilder::new(codex_home.path())
+        .set_model(Some("gemini-2.5-pro"), None, Some("gemini".to_string()))
+        .apply_blocking()
+        .expect("persist global model selection");
+    ConfigEditsBuilder::new(codex_home.path())
+        .with_profile(Some("work"))
+        .set_model(
+            Some("claude-sonnet-4-20250514"),
+            None,
+            Some("anthropic".to_string()),
+        )
+        .apply_blocking()
+        .expect("persist profile model selection");
+
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.codex_home = codex_home.path().to_path_buf();
+    chat.config.active_profile = Some("work".to_string());
+
+    chat.dispatch_command(SlashCommand::Logout);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+
+    let config = read_config_toml(codex_home.path());
+    let table = config.as_table().expect("config table");
+    assert_eq!(table.contains_key("model"), false);
+    assert_eq!(table.contains_key("model_provider"), false);
+    assert_eq!(table.contains_key("model_reasoning_effort"), false);
+
+    if let Some(profile_table) = table
+        .get("profiles")
+        .and_then(toml::Value::as_table)
+        .and_then(|profiles| profiles.get("work"))
+        .and_then(toml::Value::as_table)
+    {
+        assert_eq!(profile_table.contains_key("model"), false);
+        assert_eq!(profile_table.contains_key("model_provider"), false);
+        assert_eq!(profile_table.contains_key("model_reasoning_effort"), false);
+    }
 }
 
 #[tokio::test]
@@ -5953,6 +6081,69 @@ async fn model_selection_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("model_selection_popup", popup);
+}
+
+#[tokio::test]
+async fn model_selection_popup_scopes_to_current_provider() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("claude-sonnet-4-6")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.model_provider_id = "anthropic".to_string();
+    chat.open_model_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("claude-sonnet-4-6"),
+        "expected anthropic model in popup:\n{popup}"
+    );
+    assert!(
+        !popup.contains("gpt-5.2-codex"),
+        "expected openai model to be excluded:\n{popup}"
+    );
+    assert!(
+        !popup.contains("gemini-3-pro-preview"),
+        "expected gemini model to be excluded:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn provider_model_filter_keeps_untagged_models_for_custom_provider() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("custom-current")).await;
+    chat.config.model_provider_id = "custom-provider".to_string();
+
+    let preset = |slug: &str, provider_id: Option<&str>| ModelPreset {
+        id: slug.to_string(),
+        model: slug.to_string(),
+        display_name: slug.to_string(),
+        description: format!("{slug} description"),
+        default_reasoning_effort: ReasoningEffortConfig::Medium,
+        supported_reasoning_efforts: vec![ReasoningEffortPreset {
+            effort: ReasoningEffortConfig::Medium,
+            description: "medium".to_string(),
+        }],
+        supports_personality: false,
+        is_default: false,
+        upgrade: None,
+        show_in_picker: true,
+        supported_in_api: true,
+        input_modalities: default_input_modalities(),
+        provider_id: provider_id.map(ToString::to_string),
+    };
+
+    let presets = vec![
+        preset("custom-current", None),
+        preset("custom-fallback", None),
+        preset("claude-sonnet-4-6", Some("anthropic")),
+    ];
+
+    let filtered = chat.filter_model_presets_for_current_provider(presets);
+
+    assert_eq!(
+        filtered,
+        vec![
+            preset("custom-current", None),
+            preset("custom-fallback", None),
+        ]
+    );
 }
 
 #[tokio::test]

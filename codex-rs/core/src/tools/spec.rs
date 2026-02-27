@@ -1805,14 +1805,16 @@ pub(crate) fn build_specs_with_toolkits(
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
 
-    builder.push_spec(PRESENT_DOCUMENT_TOOL.clone());
-    builder.push_spec(UPDATE_DOCUMENT_SECTION_TOOL.clone());
-    builder.push_spec(APPEND_TO_SECTION_TOOL.clone());
-    builder.push_spec(PATCH_DOCUMENT_SECTION_TOOL.clone());
-    builder.register_handler("present_reading_view", document_reader_handler.clone());
-    builder.register_handler("update_document_section", document_reader_handler.clone());
-    builder.register_handler("append_to_section", document_reader_handler.clone());
-    builder.register_handler("patch_document_section", document_reader_handler);
+    if config.features.enabled(Feature::ReadingView) {
+        builder.push_spec(PRESENT_DOCUMENT_TOOL.clone());
+        builder.push_spec(UPDATE_DOCUMENT_SECTION_TOOL.clone());
+        builder.push_spec(APPEND_TO_SECTION_TOOL.clone());
+        builder.push_spec(PATCH_DOCUMENT_SECTION_TOOL.clone());
+        builder.register_handler("present_reading_view", document_reader_handler.clone());
+        builder.register_handler("update_document_section", document_reader_handler.clone());
+        builder.register_handler("append_to_section", document_reader_handler.clone());
+        builder.register_handler("patch_document_section", document_reader_handler);
+    }
 
     if config.js_repl_enabled {
         builder.push_spec(create_js_repl_tool());
@@ -2257,7 +2259,8 @@ mod tests {
         // Enable individual sub-features but NOT ResearchPaperSearch.
         let mut features = Features::with_defaults();
         features.enable(Feature::ResearchHackerNews);
-        // Do NOT enable Feature::Research or Feature::ResearchPaperSearch.
+        features.disable(Feature::ResearchPaperSearch);
+        // Do NOT enable Feature::Research.
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,

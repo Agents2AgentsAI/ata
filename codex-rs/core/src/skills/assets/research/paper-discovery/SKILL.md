@@ -199,39 +199,19 @@ The same rule applies to both explore mode and discovery mode output.
 
 When in doubt, err on the side of brevity. The reading view is for orientation — deep analysis belongs in `$paper-synthesis`.
 
-Use **4 sections** in the reading view:
+Choose section headings that fit the topic. A typical outline:
 
 ```
 ## The Landscape
-
-[2-3 short paragraphs. What is this field about? Main challenges and paradigms.
-Cite as Author (Year) — no IDs inline.]
-
 ## Approaches
-
-#### 1. [Approach Name]
-**Key idea**: [1-2 sentences]
-**Papers**: [Paper] ([Year]), [Paper] ([Year])
-**Tradeoff**: [1 sentence]
-
-#### 2. [Approach Name]
-...
-
-## Reading Plan (Top 10)
-
-**Never show `$paper-synthesis` commands** — they are not actionable in the TUI. Just list the papers, then end with "Proceeding to synthesize the top 5..."
-
-1. **[Title]** — [Authors] ([Year])
-2. **[Title]** — [Authors] ([Year])
-...
-
-Proceeding to synthesize the top 5 papers...
-
+## Key Insights
+## Reading Plan
 ## Open Questions
-
-- [question 1]
-- [question 2]
 ```
+
+But adapt freely — a narrow topic might need only 3 sections, a broad one might need 6. The only hard rule: **no section may exceed 40 lines** (one terminal screen). If a section grows past that, split it.
+
+**Never show `$paper-synthesis` commands** — they are not actionable in the TUI. Just list papers, then end with "Proceeding to synthesize the top 5..."
 
 ### Explore Mode Graceful Degradation
 
@@ -269,7 +249,7 @@ Deduplicate by DOI → arXiv → title fuzzy match. Filter out papers already in
 
 ### Discovery Phase 4: Present
 
-Use the same 4-section reading view format as explore mode: Landscape, Approaches, Reading Plan (top 10), Open Questions. Same section length rules apply.
+Use the same reading view format as explore mode. Choose sections that fit the content — no fixed count. Same section length rules apply (≤ 40 lines each).
 
 ## Post-Discovery Housekeeping
 
@@ -298,7 +278,7 @@ After presenting the discovery report, do these:
 
 ## Presentation
 
-Use the same outline → fill pattern described in Explore Phase 4. Use 4 sections: `"## The Landscape\n\n## Approaches\n\n## Reading Plan (Top 10)\n\n## Open Questions"`.
+Use the same outline → fill pattern described in Explore Phase 4. Choose sections that fit the content (no fixed count, ≤ 40 lines each).
 
 **Phase 1 (Outline):** IMMEDIATELY call `present_reading_view` with headings-only content.
 **Phase 2 (Fill):** Fill sections sequentially via `update_document_section`.

@@ -95,10 +95,15 @@ pub(super) fn render_section_loading(
 ///
 /// When `streaming_status` is `Some("generating 3/8...")`, it is rendered dim
 /// italic after the title (replaces the "thinking..." position).
+///
+/// The right side shows `◀ 3/7: Section Title ▶` with arrow indicators for
+/// available navigation directions.  The section heading is truncated if needed
+/// to fit the available width.
 pub(super) fn header_line(
     title: &str,
     section_num: usize,
     section_count: usize,
+    section_heading: &str,
     waiting: bool,
     streaming_status: Option<&str>,
     width: u16,
@@ -117,8 +122,34 @@ pub(super) fn header_line(
     } else {
         title.to_string()
     };
-    let right = format!("{section_num}/{section_count}");
+
+    // Build section nav: ◀ 3/7: Heading ▶
+    let has_prev = section_num > 1;
+    let has_next = section_num < section_count;
+    let left_arrow = if has_prev { "◀ " } else { "  " };
+    let right_arrow = if has_next { " ▶" } else { "  " };
+    let nav_prefix = format!("{left_arrow}{section_num}/{section_count}");
+    let nav_prefix_width = unicode_width::UnicodeWidthStr::width(nav_prefix.as_str());
+    let arrow_width = unicode_width::UnicodeWidthStr::width(right_arrow);
+
     let left_width = unicode_width::UnicodeWidthStr::width(left.as_str());
+    // Minimum 2 chars padding between left and right parts.
+    let available_for_right = inner_width.saturating_sub(left_width).saturating_sub(2);
+
+    // Determine how much space the section heading can use.
+    let heading_budget = available_for_right
+        .saturating_sub(nav_prefix_width)
+        .saturating_sub(arrow_width)
+        .saturating_sub(2); // ": " separator
+
+    let heading_part = if !section_heading.is_empty() && heading_budget >= 4 {
+        let truncated = truncate_str(section_heading, heading_budget);
+        format!(": {truncated}")
+    } else {
+        String::new()
+    };
+
+    let right = format!("{nav_prefix}{heading_part}{right_arrow}");
     let right_width = unicode_width::UnicodeWidthStr::width(right.as_str());
     let padding = inner_width
         .saturating_sub(left_width)
@@ -138,6 +169,30 @@ pub(super) fn header_line(
     spans.push(" │".dim());
 
     Line::from(spans)
+}
+
+/// Truncate a string to fit within `max_width` display columns, appending "…"
+/// if it was shortened.
+fn truncate_str(s: &str, max_width: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    let w = UnicodeWidthStr::width(s);
+    if w <= max_width {
+        return s.to_string();
+    }
+    // Leave room for the ellipsis character.
+    let budget = max_width.saturating_sub(1);
+    let mut result = String::new();
+    let mut used = 0;
+    for ch in s.chars() {
+        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + cw > budget {
+            break;
+        }
+        result.push(ch);
+        used += cw;
+    }
+    result.push('\u{2026}'); // …
+    result
 }
 
 /// Build the top border with rounded corners.
@@ -177,6 +232,7 @@ pub(super) fn separator_with_indicator(width: u16, label: &str) -> Line<'static>
 }
 
 /// Build the keyboard hints line shown below the content area.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn hints_line(
     composer_focused: bool,
     search_focused: bool,
@@ -184,9 +240,16 @@ pub(super) fn hints_line(
     visual_mode: bool,
     has_folds: bool,
     pending_quit: bool,
+    line_number_input: Option<&str>,
     width: u16,
 ) -> Line<'static> {
-    let hints: Vec<Span<'static>> = if pending_quit {
+    let hints: Vec<Span<'static>> = if let Some(input) = line_number_input {
+        vec![
+            ":".cyan().bold(),
+            Span::from(input.to_string()).cyan(),
+            "  (type line number, Enter to jump, Esc to cancel)".dim(),
+        ]
+    } else if pending_quit {
         vec![
             "Close reading view? ".magenta(),
             "q/y".magenta().bold(),
@@ -205,19 +268,19 @@ pub(super) fn hints_line(
         ]
     } else if composer_focused {
         vec![
-            "Tab".dim().bold(),
-            ": content".dim(),
-            " | ".dim(),
             "Enter".dim().bold(),
             ": send".dim(),
             " | ".dim(),
             "Esc".dim().bold(),
-            ": back".dim(),
+            ": back to reading".dim(),
         ]
     } else if visual_mode {
         vec![
             "hjkl".dim().bold(),
             ": select".dim(),
+            " | ".dim(),
+            "Enter".dim().bold(),
+            ": explain".dim(),
             " | ".dim(),
             "Tab".dim().bold(),
             ": ask about".dim(),
@@ -241,35 +304,28 @@ pub(super) fn hints_line(
         ]
     } else {
         let mut h = vec![
-            "hjkl".dim().bold(),
-            ": move".dim(),
+            "↑↓/jk".dim().bold(),
+            ": scroll".dim(),
             " | ".dim(),
             "n/p".dim().bold(),
-            ": section".dim(),
+            ": next/prev section".dim(),
         ];
         if has_folds {
-            h.extend([
-                " | ".dim(),
-                "Space".dim().bold(),
-                ": collapse/expand".dim(),
-                " | ".dim(),
-                "[]".dim().bold(),
-                ": jump".dim(),
-            ]);
+            h.extend([" | ".dim(), "Space".dim().bold(), ": toggle fold".dim()]);
         }
         h.extend([
             " | ".dim(),
             "v".dim().bold(),
-            ": select".dim(),
-            " | ".dim(),
-            "gx".dim().bold(),
-            ": open link".dim(),
+            ": select text".dim(),
             " | ".dim(),
             "Tab".dim().bold(),
-            ": ask".dim(),
+            ": ask question".dim(),
+            " | ".dim(),
+            "?".dim().bold(),
+            ": help".dim(),
             " | ".dim(),
             "q".dim().bold(),
-            ": done".dim(),
+            ": close".dim(),
         ]);
         h
     };
@@ -313,6 +369,46 @@ pub(super) fn bordered_line(inner: Line<'static>, width: u16, updated: bool) -> 
     } else {
         spans.push("│ ".dim());
     }
+    spans.extend(inner);
+    if pad > 0 {
+        spans.push(Span::from(" ".repeat(pad)));
+    }
+    if updated {
+        spans.push(" │".green());
+    } else {
+        spans.push(" │".dim());
+    }
+    Line::from(spans)
+}
+
+/// Wrap a content line with side borders and a line number gutter.
+///
+/// The line number occupies 4 columns (right-aligned) + 1 separator, e.g. `  42│`.
+pub(super) fn bordered_line_numbered(
+    inner: Line<'static>,
+    width: u16,
+    updated: bool,
+    line_num: usize,
+) -> Line<'static> {
+    let gutter = format!("{line_num:>4}\u{2502}");
+    let gutter_width = 5; // "NNNN│"
+    let inner_width: usize = inner
+        .spans
+        .iter()
+        .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
+    let pad = (width as usize)
+        .saturating_sub(4) // "│ " + " │"
+        .saturating_sub(gutter_width)
+        .saturating_sub(inner_width);
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(inner.spans.len() + 5);
+    if updated {
+        spans.push("│ ".green());
+    } else {
+        spans.push("│ ".dim());
+    }
+    spans.push(Span::from(gutter).dim());
     spans.extend(inner);
     if pad > 0 {
         spans.push(Span::from(" ".repeat(pad)));
@@ -741,6 +837,131 @@ pub(super) fn adjust_line_for_folds(
         }
     }
     pre_fold_line.saturating_sub(adjustment)
+}
+
+/// Build the lines for the help overlay showing all keybindings.
+/// Build the combined help overlay lines: tutorial intro + keyboard shortcuts.
+///
+/// When `section_count` is provided, the welcome header shows the section count
+/// (used for the first-time tutorial). Otherwise the header is just "Reading View Help".
+pub(super) fn help_overlay_lines(width: u16, section_count: Option<usize>) -> Vec<Line<'static>> {
+    let inner = (width as usize).saturating_sub(4);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let sep = "─".repeat(inner);
+    let push_section = |lines: &mut Vec<Line<'static>>, title: &str| {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            "  ".into(),
+            Span::from(title.to_string()).cyan().bold(),
+        ]));
+        lines.push(Line::from(format!("  {sep}")).dim());
+    };
+
+    let push_binding = |lines: &mut Vec<Line<'static>>, keys: &str, desc: &str| {
+        let key_col_w = 18;
+        let padded_keys = format!("{keys:>key_col_w$}");
+        lines.push(Line::from(vec![
+            Span::from(padded_keys).bold(),
+            "   ".into(),
+            Span::from(desc.to_string()).dim(),
+        ]));
+    };
+
+    // --- Intro section ---
+    lines.push(Line::from(""));
+    if let Some(count) = section_count {
+        lines.push(Line::from(vec![
+            "  ".into(),
+            "Welcome to Reading View".magenta().bold(),
+        ]));
+        lines.push(Line::from(""));
+        lines.push(Line::from(
+            format!("  Your explanation has {count} sections that you can").dim(),
+        ));
+        lines.push(Line::from("  navigate through one at a time.".dim()));
+    } else {
+        lines.push(Line::from(vec![
+            "  ".into(),
+            "Reading View Help".magenta().bold(),
+        ]));
+    }
+
+    // --- How it works ---
+    push_section(&mut lines, "Getting around");
+    lines.push(Line::from(
+        "  Use ↑↓ or j/k to scroll within a section".dim(),
+    ));
+    lines.push(Line::from(
+        "  Press n/p to go to the next or previous section".dim(),
+    ));
+
+    push_section(&mut lines, "Ask about anything");
+    lines.push(Line::from(
+        "  Select text with v, then press Enter to explain it".dim(),
+    ));
+    lines.push(Line::from("  Or press Tab to type your own question".dim()));
+
+    push_section(&mut lines, "Search");
+    lines.push(Line::from("  Press / to search within the document".dim()));
+
+    // --- Full keyboard reference ---
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        "  ".into(),
+        "All Keyboard Shortcuts".magenta().bold(),
+    ]));
+    lines.push(Line::from(""));
+
+    push_section(&mut lines, "Navigation");
+    push_binding(&mut lines, "j / ↓", "Scroll down one line");
+    push_binding(&mut lines, "k / ↑", "Scroll up one line");
+    push_binding(&mut lines, "Ctrl+d / Ctrl+u", "Half-page down / up");
+    push_binding(&mut lines, "Ctrl+f / Ctrl+b", "Full-page down / up");
+    push_binding(&mut lines, "gg", "Jump to top of section");
+    push_binding(&mut lines, "G", "Jump to end of section");
+    push_binding(&mut lines, "n", "Next section");
+    push_binding(&mut lines, "p", "Previous section");
+
+    push_section(&mut lines, "Text Selection");
+    push_binding(&mut lines, "v", "Start character selection");
+    push_binding(&mut lines, "V", "Start line selection");
+    push_binding(&mut lines, "Enter", "Explain selected text");
+    push_binding(&mut lines, "Tab", "Ask about selected text");
+    push_binding(&mut lines, "Esc", "Cancel selection");
+
+    push_section(&mut lines, "Questions");
+    push_binding(&mut lines, "Tab", "Open question composer");
+    push_binding(&mut lines, "Enter", "Send question");
+    push_binding(&mut lines, "Esc", "Back to reading");
+
+    push_section(&mut lines, "Search");
+    push_binding(&mut lines, "/", "Start search");
+    push_binding(&mut lines, "n / N", "Next / previous match");
+    push_binding(&mut lines, "Esc", "Clear search");
+
+    push_section(&mut lines, "Folds");
+    push_binding(&mut lines, "Space", "Toggle fold at cursor");
+    push_binding(&mut lines, "[ / ]", "Jump to prev / next fold");
+    push_binding(&mut lines, "zM / zR", "Collapse / expand all");
+
+    push_section(&mut lines, "Other");
+    push_binding(&mut lines, "w / b", "Word forward / backward");
+    push_binding(&mut lines, "h / l", "Cursor left / right");
+    push_binding(&mut lines, "gx", "Open link at cursor");
+    push_binding(&mut lines, "?", "Toggle this help");
+    push_binding(&mut lines, "q", "Close reading view");
+
+    lines.push(Line::from(""));
+    let dismiss = if section_count.is_some() {
+        "  j/k to scroll | q to start reading"
+    } else {
+        "  j/k to scroll | q to dismiss"
+    };
+    lines.push(Line::from(dismiss.dim().italic()));
+    lines.push(Line::from(""));
+
+    lines
 }
 
 fn replace_italic_with_underline(lines: &mut [Line<'static>]) {
