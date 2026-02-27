@@ -3608,6 +3608,190 @@
           "type": "object"
         },
         {
+          "description": "Agent presented a long document in sectioned reading mode.",
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            },
+            "document_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "present_document"
+              ],
+              "title": "PresentDocumentEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "content",
+            "document_id",
+            "title",
+            "turn_id",
+            "type"
+          ],
+          "title": "PresentDocumentEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Agent updated a section of a document currently in reading mode.",
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            },
+            "document_id": {
+              "type": "string"
+            },
+            "section_index": {
+              "format": "uint",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "update_document_section"
+              ],
+              "title": "UpdateDocumentSectionEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "content",
+            "document_id",
+            "section_index",
+            "turn_id",
+            "type"
+          ],
+          "title": "UpdateDocumentSectionEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Agent appended content to a section of a document in reading mode.",
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            },
+            "document_id": {
+              "type": "string"
+            },
+            "foldable": {
+              "default": false,
+              "description": "Whether the appended content should be collapsible.",
+              "type": "boolean"
+            },
+            "section_index": {
+              "format": "uint",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "summary": {
+              "default": null,
+              "description": "Short summary shown when the fold is collapsed.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "append_document_section"
+              ],
+              "title": "AppendDocumentSectionEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "content",
+            "document_id",
+            "section_index",
+            "turn_id",
+            "type"
+          ],
+          "title": "AppendDocumentSectionEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Agent patched (find-and-replace) a section of a document in reading mode.",
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "document_id": {
+              "type": "string"
+            },
+            "foldable": {
+              "default": false,
+              "description": "Whether the patched content should be collapsible.",
+              "type": "boolean"
+            },
+            "new_text": {
+              "type": "string"
+            },
+            "old_text": {
+              "type": "string"
+            },
+            "section_index": {
+              "format": "uint",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "summary": {
+              "default": null,
+              "description": "Short summary shown when the fold is collapsed.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "patch_document_section"
+              ],
+              "title": "PatchDocumentSectionEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "document_id",
+            "new_text",
+            "old_text",
+            "section_index",
+            "turn_id",
+            "type"
+          ],
+          "title": "PatchDocumentSectionEventMsg",
+          "type": "object"
+        },
+        {
           "properties": {
             "reason": {
               "$ref": "#/definitions/TurnAbortReason"
@@ -7156,6 +7340,26 @@
             ],
             "title": "ChatgptAccount",
             "type": "object"
+          },
+          {
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "gemini"
+                ],
+                "title": "GeminiAccountType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "email",
+              "type"
+            ],
+            "title": "GeminiAccount",
+            "type": "object"
           }
         ]
       },
@@ -8914,6 +9118,47 @@
           },
           {
             "properties": {
+              "file_data": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "file_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "filename": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mime_type": {
+                "description": "MIME type for the file. Stored internally for provider adapters (Anthropic, Gemini) that need it when converting to their native format. Skipped during serialization because the OpenAI Responses API does not accept this field on `input_file` blocks; the MIME type is already embedded in the `file_data` data-URI.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "input_file"
+                ],
+                "title": "InputFileContentItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "InputFileContentItem",
+            "type": "object"
+          },
+          {
+            "properties": {
               "text": {
                 "type": "string"
               },
@@ -8930,6 +9175,39 @@
               "type"
             ],
             "title": "OutputTextContentItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "filename": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mime_type": {
+                "description": "MIME type for provider adapters or tools that need a type hint. Not part of the stable public wire shape.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "url_file"
+                ],
+                "title": "UrlFileContentItemType",
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "url"
+            ],
+            "title": "UrlFileContentItem",
             "type": "object"
           }
         ]
@@ -9493,11 +9771,15 @@
               }
             ]
           },
+          "requiresGeminiAuth": {
+            "type": "boolean"
+          },
           "requiresOpenaiAuth": {
             "type": "boolean"
           }
         },
         "required": [
+          "requiresGeminiAuth",
           "requiresOpenaiAuth"
         ],
         "title": "GetAccountResponse",
@@ -9778,6 +10060,22 @@
             "type": "object"
           },
           {
+            "properties": {
+              "type": {
+                "enum": [
+                  "gemini"
+                ],
+                "title": "Geminiv2::LoginAccountParamsType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "Geminiv2::LoginAccountParams",
+            "type": "object"
+          },
+          {
             "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE. The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.",
             "properties": {
               "accessToken": {
@@ -9856,6 +10154,31 @@
               "type"
             ],
             "title": "Chatgptv2::LoginAccountResponse",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "authUrl": {
+                "description": "URL the client should open in a browser to initiate the OAuth flow.",
+                "type": "string"
+              },
+              "loginId": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "gemini"
+                ],
+                "title": "Geminiv2::LoginAccountResponseType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "authUrl",
+              "loginId",
+              "type"
+            ],
+            "title": "Geminiv2::LoginAccountResponse",
             "type": "object"
           },
           {
@@ -10703,7 +11026,8 @@
           "low",
           "medium",
           "high",
-          "xhigh"
+          "xhigh",
+          "adaptive"
         ],
         "type": "string"
       },
@@ -11158,6 +11482,13 @@
               },
               "name": {
                 "type": "string"
+              },
+              "thought_signature": {
+                "description": "Gemini thought signature for multi-turn reasoning. Must be preserved and passed back in subsequent requests.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "type": {
                 "enum": [
