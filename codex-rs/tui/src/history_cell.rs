@@ -1,4 +1,4 @@
-//! Transcript/history cells for the Ata TUI.
+//! Transcript/history cells for the Codex TUI.
 //!
 //! A `HistoryCell` is the unit of display in the conversation UI, representing both committed
 //! transcript entries and, transiently, an in-flight active cell that can mutate in place while
@@ -78,8 +78,6 @@ use std::time::Instant;
 use tracing::error;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
-
-const DISPLAY_STARTUP_TIPS: bool = false;
 
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
@@ -505,7 +503,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         } else {
             line![
                 "See ",
-                "https://github.com/Agents2AgentsAI/ata".cyan().underlined(),
+                "https://github.com/openai/codex".cyan().underlined(),
                 " for installation options."
             ]
         };
@@ -520,7 +518,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             update_instruction,
             "",
             "See full release notes:",
-            "https://github.com/Agents2AgentsAI/ata/releases/latest"
+            "https://github.com/openai/codex/releases/latest"
                 .cyan()
                 .underlined(),
         ];
@@ -787,6 +785,7 @@ pub fn new_approval_decision_cell(
     command: Vec<String>,
     decision: codex_protocol::protocol::ReviewDecision,
 ) -> Box<dyn HistoryCell> {
+    use codex_protocol::protocol::NetworkPolicyRuleAction;
     use codex_protocol::protocol::ReviewDecision::*;
 
     let (symbol, summary): (Span<'static>, Vec<Span<'static>>) = match decision {
@@ -830,6 +829,29 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
+        NetworkPolicyAmendment {
+            network_policy_amendment,
+        } => match network_policy_amendment.action {
+            NetworkPolicyRuleAction::Allow => (
+                "✔ ".green(),
+                vec![
+                    "You ".into(),
+                    "persisted".bold(),
+                    " Codex network access to ".into(),
+                    Span::from(network_policy_amendment.host).dim(),
+                ],
+            ),
+            NetworkPolicyRuleAction::Deny => (
+                "✗ ".red(),
+                vec![
+                    "You ".into(),
+                    "denied".bold(),
+                    " codex network access to ".into(),
+                    Span::from(network_policy_amendment.host).dim(),
+                    " and saved that rule".into(),
+                ],
+            ),
+        },
         Denied => {
             let snippet = Span::from(exec_snippet(&command)).dim();
             (
@@ -1020,14 +1042,16 @@ pub(crate) fn new_session_info(
     event: SessionConfiguredEvent,
     is_first_event: bool,
     auth_plan: Option<PlanType>,
-    effective_reasoning_effort: Option<ReasoningEffortConfig>,
 ) -> SessionInfoCell {
-    let SessionConfiguredEvent { model, .. } = event;
+    let SessionConfiguredEvent {
+        model,
+        reasoning_effort,
+        ..
+    } = event;
     // Header box rendered as history (so it appears at the very top)
-    let header = SessionHeaderHistoryCell::new_with_style(
+    let header = SessionHeaderHistoryCell::new(
         model.clone(),
-        Style::default(),
-        effective_reasoning_effort,
+        reasoning_effort,
         config.cwd.clone(),
         CODEX_CLI_VERSION,
     );
@@ -1043,7 +1067,7 @@ pub(crate) fn new_session_info(
             Line::from(vec![
                 "  ".into(),
                 "/init".into(),
-                " - create an AGENTS.md file with instructions for Ata".dim(),
+                " - create an AGENTS.md file with instructions for Codex".dim(),
             ]),
             Line::from(vec![
                 "  ".into(),
@@ -1053,7 +1077,7 @@ pub(crate) fn new_session_info(
             Line::from(vec![
                 "  ".into(),
                 "/permissions".into(),
-                " - choose what Ata is allowed to do".dim(),
+                " - choose what Codex is allowed to do".dim(),
             ]),
             Line::from(vec![
                 "  ".into(),
@@ -1069,8 +1093,7 @@ pub(crate) fn new_session_info(
 
         parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
     } else {
-        if DISPLAY_STARTUP_TIPS
-            && config.show_tooltips
+        if config.show_tooltips
             && let Some(tooltips) = tooltips::get_tooltip(auth_plan).map(TooltipHistoryCell::new)
         {
             parts.push(Box::new(tooltips));
@@ -1112,6 +1135,21 @@ pub(crate) struct SessionHeaderHistoryCell {
 }
 
 impl SessionHeaderHistoryCell {
+    pub(crate) fn new(
+        model: String,
+        reasoning_effort: Option<ReasoningEffortConfig>,
+        directory: PathBuf,
+        version: &'static str,
+    ) -> Self {
+        Self::new_with_style(
+            model,
+            Style::default(),
+            reasoning_effort,
+            directory,
+            version,
+        )
+    }
+
     pub(crate) fn new_with_style(
         model: String,
         model_style: Style,
@@ -1176,10 +1214,10 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
 
-        // Title line rendered inside the box: ">_ Agents2Agents Ata (vX)"
+        // Title line rendered inside the box: ">_ OpenAI Codex (vX)"
         let title_spans: Vec<Span<'static>> = vec![
             Span::from(">_ ").dim(),
-            Span::from("Agents2Agents Ata").bold(),
+            Span::from("OpenAI Codex").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{})", self.version)).dim(),
         ];
@@ -1195,11 +1233,10 @@ impl HistoryCell for SessionHeaderHistoryCell {
             label_width = label_width
         );
         let reasoning_label = self.reasoning_label();
-        let model_value = self.model.clone();
         let model_spans: Vec<Span<'static>> = {
             let mut spans = vec![
                 Span::from(format!("{model_label} ")).dim(),
-                Span::styled(model_value, self.model_style),
+                Span::styled(self.model.clone(), self.model_style),
             ];
             if let Some(reasoning) = reasoning_label {
                 spans.push(Span::from(" "));
@@ -1644,7 +1681,7 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
         "  • No MCP servers configured.".italic().into(),
         Line::from(vec![
             "    See the ".into(),
-            "\u{1b}]8;;https://github.com/Agents2AgentsAI/ata/blob/main/docs/config.md#connecting-to-mcp-servers\u{7}MCP docs\u{1b}]8;;\u{7}"
+            "\u{1b}]8;;https://developers.openai.com/codex/mcp\u{7}MCP docs\u{1b}]8;;\u{7}"
                 .underlined(),
             " to configure them.".into(),
         ])
@@ -2152,56 +2189,6 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
     PlainHistoryCell { lines }
 }
 
-// ---------------------------------------------------------------------------
-// DocumentCell — collapsed transcript entry for a document reading session.
-// ---------------------------------------------------------------------------
-
-#[derive(Debug)]
-pub(crate) struct DocumentCell {
-    pub(crate) title: String,
-    pub(crate) section_headings: Vec<String>,
-    pub(crate) final_content: String,
-}
-
-pub(crate) fn new_document_cell(
-    title: String,
-    section_headings: Vec<String>,
-    final_content: String,
-) -> DocumentCell {
-    DocumentCell {
-        title,
-        section_headings,
-        final_content,
-    }
-}
-
-impl HistoryCell for DocumentCell {
-    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        let section_count = self.section_headings.len();
-        vec![
-            vec![
-                "\u{2022} ".dim(),
-                "Agent showed document: ".dim(),
-                self.title.clone().into(),
-                format!(" ({section_count} sections)").dim(),
-            ]
-            .into(),
-            "    Ask the agent to reopen it if needed."
-                .dim()
-                .italic()
-                .into(),
-        ]
-    }
-
-    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines = self.display_lines(width);
-        lines.push(Line::from(""));
-        let wrap_width = width.saturating_sub(2).max(1) as usize;
-        append_markdown(&self.final_content, Some(wrap_width), &mut lines);
-        lines
-    }
-}
-
 pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<dyn HistoryCell> {
     let full_reasoning_buffer = full_reasoning_buffer.trim();
     if let Some(open) = full_reasoning_buffer.find("**") {
@@ -2475,24 +2462,6 @@ mod tests {
             meta: None,
         }))
         .expect("resource link content should serialize")
-    }
-
-    #[test]
-    fn collab_spawn_end_errored_snapshot() {
-        let cell =
-            crate::multi_agents::spawn_end(codex_protocol::protocol::CollabAgentSpawnEndEvent {
-                call_id: "call_123".to_string(),
-                sender_thread_id: codex_protocol::ThreadId::new(),
-                new_thread_id: None,
-                prompt: "You are helping me improve RepoMaster (arXiv:2505.21577).".to_string(),
-                status: codex_protocol::protocol::AgentStatus::Errored(
-                    "collab manager unavailable".to_string(),
-                ),
-                new_agent_nickname: None,
-                new_agent_role: None,
-            });
-        let rendered = render_transcript(&cell).join("\n");
-        insta::assert_snapshot!(rendered);
     }
 
     #[test]
@@ -3188,55 +3157,10 @@ mod tests {
         insta::assert_snapshot!(rendered);
     }
 
-    #[tokio::test]
-    async fn session_info_hides_tooltip_snapshot() {
-        let mut config = test_config().await;
-        config.cwd = std::path::PathBuf::from("/repo");
-
-        let event = SessionConfiguredEvent {
-            session_id: codex_protocol::ThreadId::new(),
-            forked_from_id: None,
-            thread_name: None,
-            model: "actual-model".to_string(),
-            model_provider_id: "test-provider".to_string(),
-            approval_policy: codex_protocol::protocol::AskForApproval::Never,
-            sandbox_policy: codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
-            cwd: std::path::PathBuf::from("/repo"),
-            reasoning_effort: None,
-            history_log_id: 0,
-            history_entry_count: 0,
-            initial_messages: None,
-            network_proxy: None,
-            rollout_path: None,
-        };
-
-        let cell = new_session_info(
-            &config,
-            "requested-model",
-            event,
-            false,
-            Some(PlanType::Plus),
-            None,
-        );
-        let rendered = render_lines(&cell.display_lines(100))
-            .into_iter()
-            .filter(|line| {
-                line.contains("Tip:")
-                    || line.contains("model changed:")
-                    || line.contains("requested:")
-                    || line.contains("used:")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        insta::assert_snapshot!(rendered);
-    }
-
     #[test]
     fn session_header_includes_reasoning_level_when_present() {
-        let cell = SessionHeaderHistoryCell::new_with_style(
+        let cell = SessionHeaderHistoryCell::new(
             "gpt-4o".to_string(),
-            Style::default(),
             Some(ReasoningEffortConfig::High),
             std::env::temp_dir(),
             "test",

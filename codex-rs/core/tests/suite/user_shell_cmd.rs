@@ -177,10 +177,12 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: fixture.session_configured.model.clone(),
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 

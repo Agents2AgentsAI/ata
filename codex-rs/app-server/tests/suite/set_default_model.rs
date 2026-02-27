@@ -43,6 +43,7 @@ async fn set_default_model_persists_overrides() -> Result<()> {
     assert_eq!(
         ConfigToml {
             model: Some("gpt-4.1".to_string()),
+            model_provider: Some("openai".to_string()),
             model_reasoning_effort: None,
             ..Default::default()
         },

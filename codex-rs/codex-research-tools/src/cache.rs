@@ -74,9 +74,6 @@ enum SharedError {
         tool: &'static str,
         reason: String,
     },
-    NotImplemented {
-        tool: &'static str,
-    },
     InvalidInput(String),
     RateLimiterClosed {
         api: ResearchApi,
@@ -109,7 +106,6 @@ impl SharedError {
                 tool,
                 reason: reason.clone(),
             },
-            ResearchError::NotImplemented { tool } => Self::NotImplemented { tool },
             ResearchError::InvalidInput(message) => Self::InvalidInput(message.clone()),
             ResearchError::RateLimiterClosed { api } => Self::RateLimiterClosed { api: *api },
             ResearchError::Timeout { api, timeout_ms } => Self::Timeout {
@@ -145,7 +141,6 @@ impl SharedError {
     fn into_research_error(self) -> ResearchError {
         match self {
             Self::NotConfigured { tool, reason } => ResearchError::NotConfigured { tool, reason },
-            Self::NotImplemented { tool } => ResearchError::NotImplemented { tool },
             Self::InvalidInput(message) => ResearchError::InvalidInput(message),
             Self::RateLimiterClosed { api } => ResearchError::RateLimiterClosed { api },
             Self::Timeout { api, timeout_ms } => ResearchError::Timeout { api, timeout_ms },

@@ -1012,11 +1012,13 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
             approval_policy: config.permissions.approval_policy.value(),
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             model: session_configured.model.clone(),
+            model_provider: None,
             effort: Some(ReasoningEffort::Low),
             summary: config.model_reasoning_summary,
             collaboration_mode: Some(collaboration_mode),
             final_output_json_schema: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 

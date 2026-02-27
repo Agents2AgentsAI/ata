@@ -88,6 +88,8 @@ pub enum Feature {
     ShellZshFork,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
+    /// Allow requesting additional filesystem permissions while staying sandboxed.
+    RequestPermissions,
     /// Allow the model to request web searches that fetch live content.
     WebSearchRequest,
     /// Allow the model to request web searches that fetch cached content.
@@ -135,12 +137,19 @@ pub enum Feature {
     SkillMcpDependencyInstall,
     /// Prompt for missing skill env var dependencies.
     SkillEnvVarDependencyPrompt,
+    /// Emit skill approval test prompts/events.
+    SkillApproval,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
     /// Enable collaboration modes (Plan, Default).
+    /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
     CollaborationModes,
     /// Enable personality selection in the TUI.
     Personality,
+    /// Enable voice transcription in the TUI composer.
+    VoiceTranscription,
+    /// Enable experimental realtime voice conversation mode in the TUI.
+    RealtimeConversation,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
     /// Use the Responses API WebSocket transport for OpenAI by default.
@@ -576,12 +585,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Sqlite,
         key: "sqlite",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::MemoryTool,
-        key: "memory_tool",
+        key: "memories",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -594,6 +603,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RequestPermissions,
+        key: "request_permissions",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -707,6 +722,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::SkillApproval,
+        key: "skill_approval",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Steer,
         key: "steer",
         stage: Stage::Stable,
@@ -715,7 +736,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CollaborationModes,
         key: "collaboration_modes",
-        stage: Stage::Stable,
+        stage: Stage::Removed,
         default_enabled: true,
     },
     FeatureSpec {
@@ -725,9 +746,25 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::VoiceTranscription,
+        key: "voice_transcription",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RealtimeConversation,
+        key: "realtime_conversation",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::PreventIdleSleep,
         key: "prevent_idle_sleep",
-        stage: if cfg!(target_os = "macos") {
+        stage: if cfg!(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows"
+        )) {
             Stage::Experimental {
                 name: "Prevent sleep while running",
                 menu_description: "Keep your computer awake while Ata is running a thread.",
@@ -868,10 +905,9 @@ mod tests {
     fn default_enabled_features_are_stable() {
         for spec in FEATURES {
             if spec.default_enabled {
-                assert_eq!(
-                    spec.stage,
-                    Stage::Stable,
-                    "feature `{}` is enabled by default but is not stable ({:?})",
+                assert!(
+                    matches!(spec.stage, Stage::Stable | Stage::Removed),
+                    "feature `{}` is enabled by default but is not stable/removed ({:?})",
                     spec.key,
                     spec.stage
                 );

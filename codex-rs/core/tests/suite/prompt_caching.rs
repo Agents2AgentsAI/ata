@@ -95,12 +95,14 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
             config.model = Some("gpt-5.1-codex-max".to_string());
-            // Keep tool expectations stable when the default web_search mode changes.
+            // Keep tool expectations stable when defaults change.
             config
                 .web_search_mode
                 .set(WebSearchMode::Cached)
                 .expect("test web_search_mode should satisfy constraints");
             config.features.enable(Feature::CollaborationModes);
+            config.features.disable(Feature::ResearchPaperSearch);
+            config.features.disable(Feature::ResearchHackerNews);
         })
         .build(&server)
         .await?;
@@ -645,11 +647,13 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
             approval_policy: AskForApproval::Never,
             sandbox_policy: new_policy.clone(),
             model: "o3".to_string(),
+            model_provider: None,
             effort: Some(ReasoningEffort::High),
             summary: ReasoningSummary::Detailed,
             collaboration_mode: None,
             final_output_json_schema: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -760,11 +764,13 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             approval_policy: default_approval_policy,
             sandbox_policy: default_sandbox_policy.clone(),
             model: default_model.clone(),
+            model_provider: None,
             effort: default_effort,
             summary: default_summary,
             collaboration_mode: None,
             final_output_json_schema: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -779,11 +785,13 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             approval_policy: default_approval_policy,
             sandbox_policy: default_sandbox_policy.clone(),
             model: default_model.clone(),
+            model_provider: None,
             effort: default_effort,
             summary: default_summary,
             collaboration_mode: None,
             final_output_json_schema: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -868,11 +876,13 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             approval_policy: default_approval_policy,
             sandbox_policy: default_sandbox_policy.clone(),
             model: default_model,
+            model_provider: None,
             effort: default_effort,
             summary: default_summary,
             collaboration_mode: None,
             final_output_json_schema: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -887,11 +897,13 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: "o3".to_string(),
+            model_provider: None,
             effort: Some(ReasoningEffort::High),
             summary: ReasoningSummary::Detailed,
             collaboration_mode: None,
             final_output_json_schema: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

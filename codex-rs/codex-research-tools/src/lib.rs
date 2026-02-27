@@ -15,8 +15,6 @@ use std::sync::Arc;
 
 use cache::ResponseCache;
 use config::ResearchConfig;
-#[allow(unused_imports)]
-use error::ResearchError;
 use error::Result;
 use http_client::HttpClient;
 use paper_id::PaperIdResolver;
@@ -78,9 +76,7 @@ pub struct ResearchToolkit {
     cache: ResponseCache,
     paper_ids: PaperIdResolver,
     config: ResearchConfig,
-    #[cfg(feature = "patents")]
     epo_auth: Option<clients::epo_auth::EpoAuthManager>,
-    #[cfg(feature = "zotero")]
     zotero_started: tokio::sync::OnceCell<()>,
 }
 
@@ -96,7 +92,6 @@ impl ResearchToolkit {
             config.tool_timeout,
         );
 
-        #[cfg(feature = "patents")]
         let epo_auth = match (&config.epo_consumer_key, &config.epo_consumer_secret) {
             (Some(key), Some(secret)) => Some(clients::epo_auth::EpoAuthManager::new(
                 key.clone(),
@@ -111,9 +106,7 @@ impl ResearchToolkit {
             cache: ResponseCache::new(config.cache_max_entries),
             paper_ids: PaperIdResolver,
             config,
-            #[cfg(feature = "patents")]
             epo_auth,
-            #[cfg(feature = "zotero")]
             zotero_started: tokio::sync::OnceCell::new(),
         }
     }
@@ -138,13 +131,11 @@ impl ResearchToolkit {
         &self.paper_ids
     }
 
-    #[cfg(feature = "patents")]
     #[must_use]
     pub(crate) fn epo_auth(&self) -> Option<&clients::epo_auth::EpoAuthManager> {
         self.epo_auth.as_ref()
     }
 
-    #[cfg(feature = "zotero")]
     pub(crate) async fn ensure_zotero_running(&self) -> error::Result<()> {
         self.zotero_started
             .get_or_try_init(|| tools::zotero::ensure_running::ensure_zotero_running_impl(self))
@@ -173,29 +164,14 @@ impl ResearchToolkit {
         true
     }
 
-    #[cfg(feature = "paper_search")]
     pub async fn paper_search(&self, params: PaperSearchParams) -> Result<SearchResult> {
         tools::paper_search::paper_search(self, params).await
     }
 
-    #[cfg(not(feature = "paper_search"))]
-    pub async fn paper_search(&self, _params: PaperSearchParams) -> Result<SearchResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "paper_search",
-        })
-    }
-
-    #[cfg(feature = "paper_search")]
     pub async fn paper_get(&self, id: &str) -> Result<PaperDetail> {
         tools::paper_search::paper_get(self, id).await
     }
 
-    #[cfg(not(feature = "paper_search"))]
-    pub async fn paper_get(&self, _id: &str) -> Result<PaperDetail> {
-        Err(ResearchError::NotImplemented { tool: "paper_get" })
-    }
-
-    #[cfg(feature = "paper_search")]
     pub async fn paper_citations(
         &self,
         id: &str,
@@ -204,18 +180,6 @@ impl ResearchToolkit {
         tools::paper_search::paper_citations(self, id, params).await
     }
 
-    #[cfg(not(feature = "paper_search"))]
-    pub async fn paper_citations(
-        &self,
-        _id: &str,
-        _params: PaginationParams,
-    ) -> Result<CitationResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "paper_citations",
-        })
-    }
-
-    #[cfg(feature = "paper_search")]
     pub async fn paper_references(
         &self,
         id: &str,
@@ -224,18 +188,6 @@ impl ResearchToolkit {
         tools::paper_search::paper_references(self, id, params).await
     }
 
-    #[cfg(not(feature = "paper_search"))]
-    pub async fn paper_references(
-        &self,
-        _id: &str,
-        _params: PaginationParams,
-    ) -> Result<CitationResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "paper_references",
-        })
-    }
-
-    #[cfg(feature = "paper_search")]
     pub async fn paper_recommendations(
         &self,
         params: PaperRecommendationParams,
@@ -243,41 +195,14 @@ impl ResearchToolkit {
         tools::paper_search::paper_recommendations(self, params).await
     }
 
-    #[cfg(not(feature = "paper_search"))]
-    pub async fn paper_recommendations(
-        &self,
-        _params: PaperRecommendationParams,
-    ) -> Result<RecommendationResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "paper_recommendations",
-        })
-    }
-
-    #[cfg(feature = "zotero")]
     pub async fn zotero_search(&self, params: ZoteroSearchParams) -> Result<ZoteroSearchResult> {
         tools::zotero::zotero_search(self, params).await
     }
 
-    #[cfg(not(feature = "zotero"))]
-    pub async fn zotero_search(&self, _params: ZoteroSearchParams) -> Result<ZoteroSearchResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "zotero_search",
-        })
-    }
-
-    #[cfg(feature = "zotero")]
     pub async fn zotero_get_tags(&self, params: ZoteroTagsParams) -> Result<ZoteroTagsResult> {
         tools::zotero::zotero_get_tags(self, params).await
     }
 
-    #[cfg(not(feature = "zotero"))]
-    pub async fn zotero_get_tags(&self, _params: ZoteroTagsParams) -> Result<ZoteroTagsResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "zotero_get_tags",
-        })
-    }
-
-    #[cfg(feature = "zotero")]
     pub async fn zotero_get_recent(
         &self,
         params: ZoteroRecentParams,
@@ -285,17 +210,6 @@ impl ResearchToolkit {
         tools::zotero::zotero_get_recent(self, params).await
     }
 
-    #[cfg(not(feature = "zotero"))]
-    pub async fn zotero_get_recent(
-        &self,
-        _params: ZoteroRecentParams,
-    ) -> Result<ZoteroSearchResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "zotero_get_recent",
-        })
-    }
-
-    #[cfg(feature = "zotero")]
     pub async fn zotero_advanced_search(
         &self,
         params: ZoteroAdvancedSearchParams,
@@ -303,29 +217,10 @@ impl ResearchToolkit {
         tools::zotero::zotero_advanced_search(self, params).await
     }
 
-    #[cfg(not(feature = "zotero"))]
-    pub async fn zotero_advanced_search(
-        &self,
-        _params: ZoteroAdvancedSearchParams,
-    ) -> Result<ZoteroAdvancedSearchResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "zotero_advanced_search",
-        })
-    }
-
-    #[cfg(feature = "zotero")]
     pub async fn zotero_grep_text(&self, params: ZoteroGrepParams) -> Result<ZoteroGrepResult> {
         tools::zotero::zotero_grep_text(self, params).await
     }
 
-    #[cfg(not(feature = "zotero"))]
-    pub async fn zotero_grep_text(&self, _params: ZoteroGrepParams) -> Result<ZoteroGrepResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "zotero_grep_text",
-        })
-    }
-
-    #[cfg(feature = "zotero")]
     pub async fn zotero_search_notes(
         &self,
         params: ZoteroSearchNotesParams,
@@ -333,29 +228,10 @@ impl ResearchToolkit {
         tools::zotero::zotero_search_notes(self, params).await
     }
 
-    #[cfg(not(feature = "zotero"))]
-    pub async fn zotero_search_notes(
-        &self,
-        _params: ZoteroSearchNotesParams,
-    ) -> Result<ZoteroSearchNotesResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "zotero_search_notes",
-        })
-    }
-
-    #[cfg(feature = "zotero")]
     pub async fn zotero_get_item(&self, params: ZoteroItemParams) -> Result<ZoteroItemDetail> {
         tools::zotero::zotero_get_item(self, params).await
     }
 
-    #[cfg(not(feature = "zotero"))]
-    pub async fn zotero_get_item(&self, _params: ZoteroItemParams) -> Result<ZoteroItemDetail> {
-        Err(ResearchError::NotImplemented {
-            tool: "zotero_get_item",
-        })
-    }
-
-    #[cfg(feature = "zotero")]
     pub async fn zotero_get_item_citation(
         &self,
         params: ZoteroCitationParams,
@@ -363,17 +239,6 @@ impl ResearchToolkit {
         tools::zotero::zotero_get_item_citation(self, params).await
     }
 
-    #[cfg(not(feature = "zotero"))]
-    pub async fn zotero_get_item_citation(
-        &self,
-        _params: ZoteroCitationParams,
-    ) -> Result<ZoteroCitationResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "zotero_get_item_citation",
-        })
-    }
-
-    #[cfg(feature = "zotero")]
     pub async fn zotero_get_fulltext(
         &self,
         params: ZoteroItemParams,
@@ -381,29 +246,10 @@ impl ResearchToolkit {
         tools::zotero::zotero_get_fulltext(self, params).await
     }
 
-    #[cfg(not(feature = "zotero"))]
-    pub async fn zotero_get_fulltext(
-        &self,
-        _params: ZoteroItemParams,
-    ) -> Result<ZoteroFullTextResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "zotero_get_fulltext",
-        })
-    }
-
-    #[cfg(feature = "zotero")]
     pub async fn zotero_get_notes(&self, params: ZoteroItemParams) -> Result<ZoteroNotesResult> {
         tools::zotero::zotero_get_notes(self, params).await
     }
 
-    #[cfg(not(feature = "zotero"))]
-    pub async fn zotero_get_notes(&self, _params: ZoteroItemParams) -> Result<ZoteroNotesResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "zotero_get_notes",
-        })
-    }
-
-    #[cfg(feature = "zotero")]
     pub async fn zotero_get_annotations(
         &self,
         params: ZoteroAnnotationsParams,
@@ -411,17 +257,6 @@ impl ResearchToolkit {
         tools::zotero::zotero_get_annotations(self, params).await
     }
 
-    #[cfg(not(feature = "zotero"))]
-    pub async fn zotero_get_annotations(
-        &self,
-        _params: ZoteroAnnotationsParams,
-    ) -> Result<ZoteroAnnotationsResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "zotero_get_annotations",
-        })
-    }
-
-    #[cfg(feature = "zotero")]
     pub async fn zotero_get_attachments(
         &self,
         params: ZoteroItemParams,
@@ -429,17 +264,6 @@ impl ResearchToolkit {
         tools::zotero::zotero_get_attachments(self, params).await
     }
 
-    #[cfg(not(feature = "zotero"))]
-    pub async fn zotero_get_attachments(
-        &self,
-        _params: ZoteroItemParams,
-    ) -> Result<ZoteroAttachmentsResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "zotero_get_attachments",
-        })
-    }
-
-    #[cfg(feature = "zotero")]
     pub async fn zotero_search_by_tag(
         &self,
         params: ZoteroTagSearchParams,
@@ -447,17 +271,6 @@ impl ResearchToolkit {
         tools::zotero::zotero_search_by_tag(self, params).await
     }
 
-    #[cfg(not(feature = "zotero"))]
-    pub async fn zotero_search_by_tag(
-        &self,
-        _params: ZoteroTagSearchParams,
-    ) -> Result<ZoteroSearchResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "zotero_search_by_tag",
-        })
-    }
-
-    #[cfg(feature = "zotero")]
     pub async fn zotero_get_collections(
         &self,
         params: ZoteroCollectionsParams,
@@ -465,17 +278,6 @@ impl ResearchToolkit {
         tools::zotero::zotero_get_collections(self, params).await
     }
 
-    #[cfg(not(feature = "zotero"))]
-    pub async fn zotero_get_collections(
-        &self,
-        _params: ZoteroCollectionsParams,
-    ) -> Result<ZoteroCollectionsResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "zotero_get_collections",
-        })
-    }
-
-    #[cfg(feature = "zotero")]
     pub async fn zotero_list_groups(
         &self,
         params: ZoteroListGroupsParams,
@@ -483,17 +285,6 @@ impl ResearchToolkit {
         tools::zotero::zotero_list_groups(self, params).await
     }
 
-    #[cfg(not(feature = "zotero"))]
-    pub async fn zotero_list_groups(
-        &self,
-        _params: ZoteroListGroupsParams,
-    ) -> Result<ZoteroGroupsResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "zotero_list_groups",
-        })
-    }
-
-    #[cfg(feature = "zotero")]
     pub async fn zotero_get_collection_items(
         &self,
         params: ZoteroCollectionItemsParams,
@@ -501,17 +292,6 @@ impl ResearchToolkit {
         tools::zotero::zotero_get_collection_items(self, params).await
     }
 
-    #[cfg(not(feature = "zotero"))]
-    pub async fn zotero_get_collection_items(
-        &self,
-        _params: ZoteroCollectionItemsParams,
-    ) -> Result<ZoteroSearchResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "zotero_get_collection_items",
-        })
-    }
-
-    #[cfg(feature = "repo_analysis")]
     pub async fn repo_clone_and_summarize(
         &self,
         repo_url: &str,
@@ -520,18 +300,6 @@ impl ResearchToolkit {
         tools::repo_analysis::repo_clone_and_summarize(self, repo_url, branch).await
     }
 
-    #[cfg(not(feature = "repo_analysis"))]
-    pub async fn repo_clone_and_summarize(
-        &self,
-        _repo_url: &str,
-        _branch: Option<&str>,
-    ) -> Result<RepoSummary> {
-        Err(ResearchError::NotImplemented {
-            tool: "repo_clone_and_summarize",
-        })
-    }
-
-    #[cfg(feature = "repo_analysis")]
     pub async fn repo_find_models(
         &self,
         repo_url: &str,
@@ -540,30 +308,10 @@ impl ResearchToolkit {
         tools::repo_analysis::repo_find_models(self, repo_url, framework).await
     }
 
-    #[cfg(not(feature = "repo_analysis"))]
-    pub async fn repo_find_models(
-        &self,
-        _repo_url: &str,
-        _framework: Option<&str>,
-    ) -> Result<Vec<ModelDefinition>> {
-        Err(ResearchError::NotImplemented {
-            tool: "repo_find_models",
-        })
-    }
-
-    #[cfg(feature = "repo_analysis")]
     pub async fn repo_extract_requirements(&self, repo_url: &str) -> Result<RepoRequirements> {
         tools::repo_analysis::repo_extract_requirements(self, repo_url).await
     }
 
-    #[cfg(not(feature = "repo_analysis"))]
-    pub async fn repo_extract_requirements(&self, _repo_url: &str) -> Result<RepoRequirements> {
-        Err(ResearchError::NotImplemented {
-            tool: "repo_extract_requirements",
-        })
-    }
-
-    #[cfg(feature = "repo_analysis")]
     pub async fn repo_find_entrypoints(
         &self,
         repo_url: &str,
@@ -572,18 +320,6 @@ impl ResearchToolkit {
         tools::repo_analysis::repo_find_entrypoints(self, repo_url, task_hint).await
     }
 
-    #[cfg(not(feature = "repo_analysis"))]
-    pub async fn repo_find_entrypoints(
-        &self,
-        _repo_url: &str,
-        _task_hint: Option<&str>,
-    ) -> Result<Vec<RepoEntrypoint>> {
-        Err(ResearchError::NotImplemented {
-            tool: "repo_find_entrypoints",
-        })
-    }
-
-    #[cfg(feature = "repo_analysis")]
     pub async fn repo_extract_io_shapes(
         &self,
         repo_url: &str,
@@ -592,54 +328,18 @@ impl ResearchToolkit {
         tools::repo_analysis::repo_extract_io_shapes(self, repo_url, model_class).await
     }
 
-    #[cfg(not(feature = "repo_analysis"))]
-    pub async fn repo_extract_io_shapes(
-        &self,
-        _repo_url: &str,
-        _model_class: Option<&str>,
-    ) -> Result<Vec<RepoIoShape>> {
-        Err(ResearchError::NotImplemented {
-            tool: "repo_extract_io_shapes",
-        })
-    }
-
-    #[cfg(feature = "repo_analysis")]
     pub async fn repo_get_health(&self, repo_url: &str) -> Result<RepoHealth> {
         tools::repo_analysis::repo_get_health(self, repo_url).await
     }
 
-    #[cfg(not(feature = "repo_analysis"))]
-    pub async fn repo_get_health(&self, _repo_url: &str) -> Result<RepoHealth> {
-        Err(ResearchError::NotImplemented {
-            tool: "repo_get_health",
-        })
-    }
-
-    #[cfg(feature = "repo_analysis")]
     pub async fn repo_find_export_paths(&self, repo_url: &str) -> Result<Vec<RepoExportPath>> {
         tools::repo_analysis::repo_find_export_paths(self, repo_url).await
     }
 
-    #[cfg(not(feature = "repo_analysis"))]
-    pub async fn repo_find_export_paths(&self, _repo_url: &str) -> Result<Vec<RepoExportPath>> {
-        Err(ResearchError::NotImplemented {
-            tool: "repo_find_export_paths",
-        })
-    }
-
-    #[cfg(feature = "repo_analysis")]
     pub async fn repo_extract_config_schema(&self, repo_url: &str) -> Result<Vec<ConfigSchema>> {
         tools::repo_analysis::repo_extract_config_schema(self, repo_url).await
     }
 
-    #[cfg(not(feature = "repo_analysis"))]
-    pub async fn repo_extract_config_schema(&self, _repo_url: &str) -> Result<Vec<ConfigSchema>> {
-        Err(ResearchError::NotImplemented {
-            tool: "repo_extract_config_schema",
-        })
-    }
-
-    #[cfg(feature = "repo_analysis")]
     pub async fn repo_diff_requirements(
         &self,
         repo_url: &str,
@@ -648,58 +348,19 @@ impl ResearchToolkit {
         tools::repo_analysis::repo_diff_requirements(self, repo_url, local_requirements_path).await
     }
 
-    #[cfg(not(feature = "repo_analysis"))]
-    pub async fn repo_diff_requirements(
-        &self,
-        _repo_url: &str,
-        _local_requirements_path: &str,
-    ) -> Result<RequirementsDiff> {
-        Err(ResearchError::NotImplemented {
-            tool: "repo_diff_requirements",
-        })
-    }
-
-    #[cfg(feature = "hackernews")]
     pub async fn hn_search(&self, params: HnSearchParams) -> Result<HnSearchResult> {
         tools::hackernews::hn_search(self, params).await
     }
 
-    #[cfg(not(feature = "hackernews"))]
-    pub async fn hn_search(&self, _params: HnSearchParams) -> Result<HnSearchResult> {
-        Err(ResearchError::NotImplemented { tool: "hn_search" })
-    }
-
-    #[cfg(feature = "hackernews")]
     pub async fn hn_get_thread(&self, params: HnGetThreadParams) -> Result<HnThread> {
         tools::hackernews::hn_get_thread(self, params).await
     }
 
-    #[cfg(not(feature = "hackernews"))]
-    pub async fn hn_get_thread(&self, _params: HnGetThreadParams) -> Result<HnThread> {
-        Err(ResearchError::NotImplemented {
-            tool: "hn_get_thread",
-        })
-    }
-
-    #[cfg(feature = "patents")]
     pub async fn patent_search(&self, params: PatentSearchParams) -> Result<PatentSearchResult> {
         tools::patents::patent_search(self, params).await
     }
 
-    #[cfg(not(feature = "patents"))]
-    pub async fn patent_search(&self, _params: PatentSearchParams) -> Result<PatentSearchResult> {
-        Err(ResearchError::NotImplemented {
-            tool: "patent_search",
-        })
-    }
-
-    #[cfg(feature = "patents")]
     pub async fn patent_get(&self, params: PatentGetParams) -> Result<PatentDetail> {
         tools::patents::patent_get(self, params).await
-    }
-
-    #[cfg(not(feature = "patents"))]
-    pub async fn patent_get(&self, _params: PatentGetParams) -> Result<PatentDetail> {
-        Err(ResearchError::NotImplemented { tool: "patent_get" })
     }
 }

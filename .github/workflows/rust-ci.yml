@@ -487,6 +487,10 @@ jobs:
       - name: Set up MSVC dev environment
         if: ${{ runner.os == 'Windows' }}
         uses: ilammy/msvc-dev-cmd@v1
+      - name: Set up Node.js for js_repl tests
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: codex-rs/node-version.txt
       - name: Install Linux build dependencies
         if: ${{ runner.os == 'Linux' }}
         shell: bash

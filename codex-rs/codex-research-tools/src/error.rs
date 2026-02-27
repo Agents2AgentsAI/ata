@@ -8,9 +8,6 @@ pub enum ResearchError {
     #[error("tool '{tool}' is not configured: {reason}")]
     NotConfigured { tool: &'static str, reason: String },
 
-    #[error("tool '{tool}' is not implemented yet")]
-    NotImplemented { tool: &'static str },
-
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
@@ -67,7 +64,6 @@ impl ResearchError {
             | Self::HttpMessage { .. } => true,
             Self::Upstream { status, .. } => is_retryable_upstream_status(*status),
             Self::NotConfigured { .. }
-            | Self::NotImplemented { .. }
             | Self::InvalidInput(_)
             | Self::Parse { .. }
             | Self::InternalPanic

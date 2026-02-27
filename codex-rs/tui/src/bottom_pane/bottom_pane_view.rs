@@ -73,6 +73,7 @@ pub(crate) trait BottomPaneView: Renderable {
     }
 
     /// Forward a document section update (full replace) to this view (no-op by default).
+    #[allow(dead_code)]
     fn handle_document_section_update(
         &mut self,
         _document_id: &str,
@@ -82,6 +83,7 @@ pub(crate) trait BottomPaneView: Renderable {
     }
 
     /// Forward a document section append to this view (no-op by default).
+    #[allow(dead_code)]
     fn handle_document_section_append(
         &mut self,
         _document_id: &str,
@@ -93,6 +95,7 @@ pub(crate) trait BottomPaneView: Renderable {
     }
 
     /// Forward a document section patch (find-and-replace) to this view (no-op by default).
+    #[allow(dead_code)]
     fn handle_document_section_patch(
         &mut self,
         _document_id: &str,
@@ -107,6 +110,7 @@ pub(crate) trait BottomPaneView: Renderable {
     /// Notify this view that the agent turn has completed. Views that wait for
     /// tool calls (e.g. document reader waiting for `update_document_section`)
     /// should use this to clear any "waiting" state.
+    #[allow(dead_code)]
     fn handle_turn_complete(&mut self) {}
 
     /// Return the document ID if this view is a document reader that was closed.
