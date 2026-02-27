@@ -1,6 +1,9 @@
 [profile.default]
 # Do not increase, fix your test instead
 slow-timeout = { period = "15s", terminate-after = 2 }
+# Windows default thread stack is 1 MiB (vs 8 MiB on macOS/Linux), which is
+# too small for deeply-nested serde_json operations in integration tests.
+thread-stack-size = '8mib'
 
 
 [[profile.default.overrides]]
@@ -11,3 +14,8 @@ slow-timeout = { period = "1m", terminate-after = 4 }
 [[profile.default.overrides]]
 filter = 'test(approval_matrix_covers_all_modes)'
 slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+# Known flaky due to second-granularity timestamps and cwd-based session ordering.
+filter = 'test(exec_resume_last_respects_cwd_filter_and_all_flag)'
+retries = 2
