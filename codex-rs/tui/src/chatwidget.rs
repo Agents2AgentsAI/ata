@@ -48,6 +48,7 @@ use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
+use codex_core::auth::PROVIDER_OPENAI;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintResult;
@@ -5125,11 +5126,35 @@ impl ChatWidget {
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
-        let models = self.models_manager.try_list_models().ok()?;
+        let models = self
+            .filter_model_presets_for_current_provider(self.models_manager.try_list_models().ok()?);
         models
             .iter()
             .find(|preset| preset.show_in_picker && preset.model == NUDGE_MODEL_SLUG)
             .cloned()
+    }
+
+    fn filter_model_presets_for_current_provider(
+        &self,
+        presets: Vec<ModelPreset>,
+    ) -> Vec<ModelPreset> {
+        let current_provider = self.config.model_provider_id.as_str();
+        let current_model = self.current_model().to_string();
+        let has_provider_specific_presets = presets
+            .iter()
+            .any(|preset| preset.provider_id.as_deref() == Some(current_provider));
+
+        presets
+            .into_iter()
+            .filter(|preset| match preset.provider_id.as_deref() {
+                Some(provider_id) => provider_id == current_provider,
+                None => {
+                    current_provider == PROVIDER_OPENAI
+                        || !has_provider_specific_presets
+                        || preset.model == current_model
+                }
+            })
+            .collect()
     }
 
     fn rate_limit_switch_prompt_hidden(&self) -> bool {
@@ -5254,6 +5279,7 @@ impl ChatWidget {
                 return;
             }
         };
+        let presets = self.filter_model_presets_for_current_provider(presets);
         self.open_model_popup_with_presets(presets);
     }
 
