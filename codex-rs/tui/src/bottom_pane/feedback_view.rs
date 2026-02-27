@@ -30,6 +30,16 @@ use super::textarea::TextAreaState;
 const BASE_BUG_ISSUE_URL: &str =
     "https://github.com/Agents2AgentsAI/ata/issues/new?template=2-bug-report.yml";
 
+/// The target audience for feedback follow-up instructions.
+///
+/// This is used strictly for messaging/links after feedback upload completes. It
+/// must not change feedback upload behavior itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FeedbackAudience {
+    OpenAiEmployee,
+    External,
+}
+
 /// Minimal input overlay to collect an optional feedback note, then upload
 /// both logs and rollout with classification + metadata.
 pub(crate) struct FeedbackNoteView {
@@ -38,6 +48,7 @@ pub(crate) struct FeedbackNoteView {
     rollout_path: Option<PathBuf>,
     app_event_tx: AppEventSender,
     include_logs: bool,
+    feedback_audience: FeedbackAudience,
 
     // UI state
     textarea: TextArea,
@@ -52,6 +63,7 @@ impl FeedbackNoteView {
         rollout_path: Option<PathBuf>,
         app_event_tx: AppEventSender,
         include_logs: bool,
+        feedback_audience: FeedbackAudience,
     ) -> Self {
         Self {
             category,
@@ -59,6 +71,7 @@ impl FeedbackNoteView {
             rollout_path,
             app_event_tx,
             include_logs,
+            feedback_audience,
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
             complete: false,
@@ -96,7 +109,8 @@ impl FeedbackNoteView {
                 } else {
                     "• Feedback recorded (no logs)."
                 };
-                let issue_url = issue_url_for_category(self.category, &thread_id);
+                let issue_url =
+                    issue_url_for_category(self.category, &thread_id, self.feedback_audience);
                 let mut lines = vec![Line::from(match issue_url.as_ref() {
                     Some(_) => format!("{prefix} Please open an issue using the following URL:"),
                     None => format!("{prefix} Thanks for the feedback!"),
@@ -343,7 +357,11 @@ fn feedback_classification(category: FeedbackCategory) -> &'static str {
     }
 }
 
-fn issue_url_for_category(category: FeedbackCategory, thread_id: &str) -> Option<String> {
+fn issue_url_for_category(
+    category: FeedbackCategory,
+    thread_id: &str,
+    _feedback_audience: FeedbackAudience,
+) -> Option<String> {
     match category {
         FeedbackCategory::Bug
         | FeedbackCategory::BadResult
@@ -540,7 +558,14 @@ mod tests {
         let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
-        FeedbackNoteView::new(category, snapshot, None, tx, true)
+        FeedbackNoteView::new(
+            category,
+            snapshot,
+            None,
+            tx,
+            true,
+            FeedbackAudience::External,
+        )
     }
 
     #[test]
@@ -580,19 +605,42 @@ mod tests {
 
     #[test]
     fn issue_url_available_for_bug_bad_result_safety_check_and_other() {
-        let bug_url = issue_url_for_category(FeedbackCategory::Bug, "thread-1");
+        let bug_url = issue_url_for_category(
+            FeedbackCategory::Bug,
+            "thread-1",
+            FeedbackAudience::External,
+        );
         let expected_url = format!("{BASE_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20thread-1");
         assert_eq!(bug_url.as_deref(), Some(expected_url.as_str()));
 
-        let bad_result_url = issue_url_for_category(FeedbackCategory::BadResult, "thread-2");
+        let bad_result_url = issue_url_for_category(
+            FeedbackCategory::BadResult,
+            "thread-2",
+            FeedbackAudience::External,
+        );
         assert!(bad_result_url.is_some());
 
-        let other_url = issue_url_for_category(FeedbackCategory::Other, "thread-3");
+        let other_url = issue_url_for_category(
+            FeedbackCategory::Other,
+            "thread-3",
+            FeedbackAudience::External,
+        );
         assert!(other_url.is_some());
 
-        let safety_check_url = issue_url_for_category(FeedbackCategory::SafetyCheck, "thread-4");
+        let safety_check_url = issue_url_for_category(
+            FeedbackCategory::SafetyCheck,
+            "thread-4",
+            FeedbackAudience::External,
+        );
         assert!(safety_check_url.is_some());
 
-        assert!(issue_url_for_category(FeedbackCategory::GoodResult, "t").is_none());
+        assert!(
+            issue_url_for_category(
+                FeedbackCategory::GoodResult,
+                "t",
+                FeedbackAudience::External
+            )
+            .is_none()
+        );
     }
 }

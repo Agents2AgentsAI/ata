@@ -48,10 +48,12 @@ async fn openai_model_header_mismatch_emits_warning_event_and_warning_item() -> 
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: REQUESTED_MODEL.to_string(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -145,10 +147,12 @@ async fn response_model_field_mismatch_emits_warning_when_header_matches_request
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: REQUESTED_MODEL.to_string(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -229,10 +233,12 @@ async fn openai_model_header_mismatch_only_emits_one_warning_per_turn() -> Resul
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: REQUESTED_MODEL.to_string(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -277,10 +283,12 @@ async fn openai_model_header_casing_only_mismatch_does_not_warn() -> Result<()> 
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: REQUESTED_MODEL.to_string(),
+            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 

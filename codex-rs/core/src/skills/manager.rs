@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::RwLock;
 
 use codex_protocol::protocol::SkillScope;
@@ -15,12 +16,11 @@ use crate::config::types::SkillsConfig;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
-use crate::features::Features;
 use crate::skills::SkillLoadOutcome;
+use crate::skills::build_implicit_skill_path_indexes;
 use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
 use crate::skills::loader::skill_roots_from_layer_stack_with_agents;
-use crate::skills::system::install_research_skills;
 use crate::skills::system::install_system_skills;
 
 pub struct SkillsManager {
@@ -34,10 +34,6 @@ impl SkillsManager {
             tracing::error!("failed to install system skills: {err}");
         }
 
-        if let Err(err) = install_research_skills(&codex_home) {
-            tracing::error!("failed to install research skills: {err}");
-        }
-
         Self {
             codex_home,
             cache_by_cwd: RwLock::new(HashMap::new()),
@@ -49,27 +45,23 @@ impl SkillsManager {
     pub fn skills_for_config(&self, config: &Config) -> SkillLoadOutcome {
         let cwd = &config.cwd;
         if let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
-            return with_research_feature_gates(outcome, &config.features);
+            return outcome;
         }
 
         let roots =
             skill_roots_from_layer_stack_with_agents(&config.config_layer_stack, &config.cwd);
         let mut outcome = load_skills_from_roots(roots);
         outcome.disabled_paths = disabled_paths_from_stack(&config.config_layer_stack);
+        let (by_scripts_dir, by_doc_path) =
+            build_implicit_skill_path_indexes(outcome.allowed_skills_for_implicit_invocation());
+        outcome.implicit_skills_by_scripts_dir = Arc::new(by_scripts_dir);
+        outcome.implicit_skills_by_doc_path = Arc::new(by_doc_path);
         let mut cache = match self.cache_by_cwd.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
         cache.insert(cwd.to_path_buf(), outcome.clone());
-        with_research_feature_gates(outcome, &config.features)
-    }
-
-    fn cache_outcome_for_cwd(&self, cwd: &Path, outcome: SkillLoadOutcome) {
-        let mut cache = match self.cache_by_cwd.write() {
-            Ok(cache) => cache,
-            Err(err) => err.into_inner(),
-        };
-        cache.insert(cwd.to_path_buf(), outcome);
+        outcome
     }
 
     pub async fn skills_for_cwd(&self, cwd: &Path, force_reload: bool) -> SkillLoadOutcome {
@@ -139,7 +131,15 @@ impl SkillsManager {
         );
         let mut outcome = load_skills_from_roots(roots);
         outcome.disabled_paths = disabled_paths_from_stack(&config_layer_stack);
-        self.cache_outcome_for_cwd(cwd, outcome.clone());
+        let (by_scripts_dir, by_doc_path) =
+            build_implicit_skill_path_indexes(outcome.allowed_skills_for_implicit_invocation());
+        outcome.implicit_skills_by_scripts_dir = Arc::new(by_scripts_dir);
+        outcome.implicit_skills_by_doc_path = Arc::new(by_doc_path);
+        let mut cache = match self.cache_by_cwd.write() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        cache.insert(cwd.to_path_buf(), outcome.clone());
         outcome
     }
 
@@ -199,23 +199,6 @@ fn normalize_override_path(path: &Path) -> PathBuf {
     dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn with_research_feature_gates(
-    mut outcome: SkillLoadOutcome,
-    features: &Features,
-) -> SkillLoadOutcome {
-    disable_ungated_research_skills(&mut outcome, features);
-    outcome
-}
-
-/// Disable research skills whose per-category feature flag is not enabled.
-fn disable_ungated_research_skills(outcome: &mut SkillLoadOutcome, features: &Features) {
-    for skill in &outcome.skills {
-        if !features.is_research_skill_enabled(&skill.name) {
-            outcome.disabled_paths.insert(skill.path.clone());
-        }
-    }
-}
-
 fn normalize_extra_user_roots(extra_user_roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut normalized: Vec<PathBuf> = extra_user_roots
         .iter()
@@ -231,7 +214,6 @@ mod tests {
     use super::*;
     use crate::config::ConfigBuilder;
     use crate::config::ConfigOverrides;
-    use crate::features::Feature;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::PathBuf;
@@ -274,51 +256,6 @@ mod tests {
         let outcome2 = skills_manager.skills_for_config(&cfg);
         assert_eq!(outcome2.errors, outcome1.errors);
         assert_eq!(outcome2.skills, outcome1.skills);
-    }
-
-    #[tokio::test]
-    async fn skills_for_config_reapplies_research_gates_on_cache_hit() {
-        let codex_home = tempfile::tempdir().expect("tempdir");
-        let cwd = tempfile::tempdir().expect("tempdir");
-
-        let mut cfg = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .harness_overrides(ConfigOverrides {
-                cwd: Some(cwd.path().to_path_buf()),
-                ..Default::default()
-            })
-            .build()
-            .await
-            .expect("defaults for test should always succeed");
-
-        let skills_manager = SkillsManager::new(codex_home.path().to_path_buf());
-        write_user_skill(
-            &codex_home,
-            "hn",
-            "hn-synthesis",
-            "hacker news synthesis test skill",
-        );
-
-        cfg.features.disable(Feature::Research);
-        cfg.features.disable(Feature::ResearchHackerNews);
-        let outcome_disabled = skills_manager.skills_for_config(&cfg);
-        let hn_skill_path = outcome_disabled
-            .skills
-            .iter()
-            .find(|skill| skill.name == "hn-synthesis")
-            .map(|skill| skill.path.clone())
-            .expect("hn-synthesis skill should be discovered");
-        assert!(
-            outcome_disabled.disabled_paths.contains(&hn_skill_path),
-            "hn-synthesis should be disabled when ResearchHackerNews is disabled"
-        );
-
-        cfg.features.enable(Feature::ResearchHackerNews);
-        let outcome_enabled = skills_manager.skills_for_config(&cfg);
-        assert!(
-            !outcome_enabled.disabled_paths.contains(&hn_skill_path),
-            "hn-synthesis should be enabled when ResearchHackerNews is enabled"
-        );
     }
 
     #[tokio::test]

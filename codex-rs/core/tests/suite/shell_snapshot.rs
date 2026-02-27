@@ -52,10 +52,16 @@ async fn wait_for_snapshot(codex_home: &Path) -> Result<PathBuf> {
     let snapshot_dir = codex_home.join("shell_snapshots");
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if let Ok(mut entries) = fs::read_dir(&snapshot_dir).await
-            && let Some(entry) = entries.next_entry().await?
-        {
-            return Ok(entry.path());
+        if let Ok(mut entries) = fs::read_dir(&snapshot_dir).await {
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
+                let Some(extension) = path.extension().and_then(|ext| ext.to_str()) else {
+                    continue;
+                };
+                if extension == "sh" || extension == "ps1" {
+                    return Ok(path);
+                }
+            }
         }
 
         if Instant::now() >= deadline {
@@ -155,10 +161,12 @@ async fn run_snapshot_command_with_options(
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -241,10 +249,12 @@ async fn run_shell_command_snapshot_with_options(
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -310,10 +320,12 @@ async fn run_tool_turn_on_harness(
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 
@@ -534,10 +546,12 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
+            model_provider: None,
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
+            feature_flags: None,
         })
         .await?;
 

@@ -158,6 +158,37 @@ impl ToolHandler for AttachUrlFilesHandler {
             ));
         }
 
+        let remaining_budget = {
+            let mut active = session.active_turn.lock().await;
+            let Some(active_turn) = active.as_mut() else {
+                return Err(map_budget_injection_error(
+                    crate::codex::UrlAttachmentInjectionError::NoActiveTurn,
+                ));
+            };
+            let turn_state = active_turn.turn_state.lock().await;
+            let already_used = turn_state.url_attachments_injected();
+            MAX_URLS_PER_TURN.saturating_sub(already_used)
+        };
+
+        if remaining_budget == 0 {
+            return Err(map_budget_injection_error(
+                crate::codex::UrlAttachmentInjectionError::PerTurnLimitExceeded {
+                    attempted: validated_files.len(),
+                    current: MAX_URLS_PER_TURN,
+                    limit: MAX_URLS_PER_TURN,
+                },
+            ));
+        }
+
+        if validated_files.len() > remaining_budget {
+            for attachment in validated_files.drain(remaining_budget..) {
+                warnings.push(format!(
+                    "Skipped {} (per-turn attachment budget exceeded)",
+                    attachment.url.redacted_for_display()
+                ));
+            }
+        }
+
         let supports_url_ingestion =
             provider_transport_capabilities(&turn.provider).supports_file_url_ingestion;
         let mut success_count = 0usize;
@@ -215,37 +246,6 @@ impl ToolHandler for AttachUrlFilesHandler {
                     .map_err(map_budget_injection_error)?;
             }
         } else {
-            let remaining_budget = {
-                let mut active = session.active_turn.lock().await;
-                let Some(active_turn) = active.as_mut() else {
-                    return Err(map_budget_injection_error(
-                        crate::codex::UrlAttachmentInjectionError::NoActiveTurn,
-                    ));
-                };
-                let turn_state = active_turn.turn_state.lock().await;
-                let already_used = turn_state.url_attachments_injected();
-                MAX_URLS_PER_TURN.saturating_sub(already_used)
-            };
-
-            if remaining_budget == 0 {
-                return Err(map_budget_injection_error(
-                    crate::codex::UrlAttachmentInjectionError::PerTurnLimitExceeded {
-                        attempted: validated_files.len(),
-                        current: MAX_URLS_PER_TURN,
-                        limit: MAX_URLS_PER_TURN,
-                    },
-                ));
-            }
-
-            if validated_files.len() > remaining_budget {
-                for attachment in validated_files.drain(remaining_budget..) {
-                    warnings.push(format!(
-                        "Skipped {} (per-turn attachment budget exceeded)",
-                        attachment.url.redacted_for_display()
-                    ));
-                }
-            }
-
             let requests: Vec<UrlDownloadRequest> = validated_files
                 .iter()
                 .map(|attachment| UrlDownloadRequest {
@@ -718,10 +718,7 @@ mod tests {
         ];
         for (mode, label) in modes_that_register {
             let mut builder = ToolRegistryBuilder::new();
-            let config = ToolsConfig {
-                web_search_mode: mode,
-                ..minimal_tools_config()
-            };
+            let config = minimal_tools_config_with_search(mode);
             register_attach_url_files(&mut builder, &config);
             let (specs, _) = builder.build();
             assert!(
@@ -731,10 +728,7 @@ mod tests {
         }
 
         let mut builder = ToolRegistryBuilder::new();
-        let config = ToolsConfig {
-            web_search_mode: Some(WebSearchMode::Disabled),
-            ..minimal_tools_config()
-        };
+        let config = minimal_tools_config_with_search(Some(WebSearchMode::Disabled));
         register_attach_url_files(&mut builder, &config);
         let (specs, _) = builder.build();
         assert!(
@@ -791,20 +785,21 @@ mod tests {
         assert!(pending.is_empty(), "no pending input for rejected PDF");
     }
 
-    fn minimal_tools_config() -> ToolsConfig {
-        ToolsConfig {
-            shell_type: codex_protocol::openai_models::ConfigShellToolType::Disabled,
-            apply_patch_tool_type: None,
-            web_search_mode: None,
-            agent_roles: BTreeMap::new(),
-            search_tool: false,
-            collab_tools: false,
-            collaboration_modes_tools: false,
-            js_repl_enabled: false,
-            js_repl_tools_only: false,
-            experimental_supported_tools: Vec::new(),
-            allow_login_shell: false,
-            features: crate::features::Features::with_defaults(),
-        }
+    fn minimal_tools_config_with_search(web_search_mode: Option<WebSearchMode>) -> ToolsConfig {
+        use crate::config::test_config;
+        use crate::models_manager::manager::ModelsManager;
+        use crate::tools::spec::ToolsConfigParams;
+        use codex_protocol::protocol::SessionSource;
+
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let features = crate::features::Features::with_defaults();
+        ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode,
+            session_source: SessionSource::Cli,
+        })
     }
 }

@@ -3,6 +3,7 @@ use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
 use clap_complete::generate;
+use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
@@ -10,13 +11,11 @@ use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
 use codex_cli::WindowsCommand;
 use codex_cli::login::read_api_key_from_stdin;
-use codex_cli::login::run_list_providers;
 use codex_cli::login::run_login_status;
+use codex_cli::login::run_login_with_api_key;
 use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::login::run_login_with_device_code;
-use codex_cli::login::run_login_with_provider_api_key;
-use codex_cli::login::run_login_with_provider_oauth;
-use codex_cli::login::run_logout_provider;
+use codex_cli::login::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_exec::Cli as ExecCli;
 use codex_exec::Command as ExecCommand;
@@ -38,12 +37,10 @@ mod app_cmd;
 #[cfg(target_os = "macos")]
 mod desktop_app;
 mod mcp_cmd;
-mod research;
 #[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
-use crate::research::ResearchArgs;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -58,13 +55,12 @@ use codex_core::terminal::TerminalName;
 /// If no subcommand is specified, options will be forwarded to the interactive CLI.
 #[derive(Debug, Parser)]
 #[clap(
-    name = "ata",
     author,
     version,
     // If a sub‑command is given, ignore requirements of the default args.
     subcommand_negates_reqs = true,
     // The executable is sometimes invoked via a platform‑specific name like
-    // `codex-x86_64-unknown-linux-musl`, but the help output should always use
+    // `ata-x86_64-unknown-linux-musl`, but the help output should always use
     // the generic `ata` command name that users run.
     bin_name = "ata",
     override_usage = "ata [OPTIONS] [PROMPT]\n       ata [OPTIONS] <COMMAND> [ARGS]"
@@ -91,9 +87,6 @@ enum Subcommand {
 
     /// Run a code review non-interactively.
     Review(ReviewArgs),
-
-    /// Run a structured multi-phase research workflow.
-    Research(ResearchArgs),
 
     /// Manage login.
     Login(LoginCommand),
@@ -273,12 +266,6 @@ struct LoginCommand {
     with_api_key: bool,
 
     #[arg(
-        long = "with-oauth",
-        help = "Use OAuth login flow for the selected provider (currently gemini only)"
-    )]
-    with_oauth: bool,
-
-    #[arg(
         long = "api-key",
         value_name = "API_KEY",
         help = "(deprecated) Previously accepted the API key directly; now exits with guidance to use --with-api-key",
@@ -288,10 +275,6 @@ struct LoginCommand {
 
     #[arg(long = "device-auth")]
     use_device_code: bool,
-
-    /// Provider to configure (openai, anthropic, gemini). Defaults to openai.
-    #[arg(long = "provider", short = 'P', value_name = "PROVIDER")]
-    provider: Option<String>,
 
     /// EXPERIMENTAL: Use custom OAuth issuer base URL (advanced)
     /// Override the OAuth issuer base URL (advanced)
@@ -310,18 +293,12 @@ struct LoginCommand {
 enum LoginSubcommand {
     /// Show login status.
     Status,
-    /// List all configured providers.
-    List,
 }
 
 #[derive(Debug, Parser)]
 struct LogoutCommand {
     #[clap(skip)]
     config_overrides: CliConfigOverrides,
-
-    /// Provider to logout (openai, anthropic, gemini). If not specified, logs out all providers.
-    #[arg(value_name = "PROVIDER")]
-    provider: Option<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -338,6 +315,24 @@ struct AppServerCommand {
         default_value = codex_app_server::AppServerTransport::DEFAULT_LISTEN_URL
     )]
     listen: codex_app_server::AppServerTransport,
+
+    /// Controls whether analytics are enabled by default.
+    ///
+    /// Analytics are disabled by default for app-server. Users have to explicitly opt in
+    /// via the `analytics` section in the config.toml file.
+    ///
+    /// However, for first-party use cases like the VSCode IDE extension, we default analytics
+    /// to be enabled by default by setting this flag. Users can still opt out by setting this
+    /// in their config.toml:
+    ///
+    /// ```toml
+    /// [analytics]
+    /// enabled = false
+    /// ```
+    ///
+    /// See https://developers.openai.com/codex/config-advanced/#metrics for more details.
+    #[arg(long = "analytics-default-enabled")]
+    analytics_default_enabled: bool,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -549,18 +544,13 @@ fn stage_str(stage: codex_core::features::Stage) -> &'static str {
 }
 
 fn main() -> anyhow::Result<()> {
-    arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
-        // Run wrapper mode only after arg0 dispatch so `codex-linux-sandbox`
-        // invocations don't get misclassified as zsh exec-wrapper calls.
-        if codex_core::maybe_run_zsh_exec_wrapper_mode()? {
-            return Ok(());
-        }
-        cli_main(codex_linux_sandbox_exe).await?;
+    arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
+        cli_main(arg0_paths).await?;
         Ok(())
     })
 }
 
-async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
+async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
@@ -578,7 +568,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 &mut interactive.config_overrides,
                 root_config_overrides.clone(),
             );
-            let exit_info = run_interactive_tui(interactive, codex_linux_sandbox_exe).await?;
+            let exit_info = run_interactive_tui(interactive, arg0_paths.clone()).await?;
             handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
@@ -586,7 +576,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
+            codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
         }
         Some(Subcommand::Review(review_args)) => {
             let mut exec_cli = ExecCli::try_parse_from(["ata", "exec"])?;
@@ -595,19 +585,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
-        }
-        Some(Subcommand::Research(research_args)) => {
-            research::run(
-                research_args,
-                interactive,
-                &root_config_overrides,
-                codex_linux_sandbox_exe,
-            )
-            .await?;
+            codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
         }
         Some(Subcommand::McpServer) => {
-            codex_mcp_server::run_main(codex_linux_sandbox_exe, root_config_overrides).await?;
+            codex_mcp_server::run_main(arg0_paths.clone(), root_config_overrides).await?;
         }
         Some(Subcommand::Mcp(mut mcp_cli)) => {
             // Propagate any root-level config overrides (e.g. `-c key=value`).
@@ -618,9 +599,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             None => {
                 let transport = app_server_cli.listen;
                 codex_app_server::run_main_with_transport(
-                    codex_linux_sandbox_exe,
+                    arg0_paths.clone(),
                     root_config_overrides,
                     codex_core::config_loader::LoaderOverrides::default(),
+                    app_server_cli.analytics_default_enabled,
                     transport,
                 )
                 .await?;
@@ -661,7 +643,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 all,
                 config_overrides,
             );
-            let exit_info = run_interactive_tui(interactive, codex_linux_sandbox_exe).await?;
+            let exit_info = run_interactive_tui(interactive, arg0_paths.clone()).await?;
             handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Fork(ForkCommand {
@@ -678,7 +660,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 all,
                 config_overrides,
             );
-            let exit_info = run_interactive_tui(interactive, codex_linux_sandbox_exe).await?;
+            let exit_info = run_interactive_tui(interactive, arg0_paths.clone()).await?;
             handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
@@ -690,20 +672,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 Some(LoginSubcommand::Status) => {
                     run_login_status(login_cli.config_overrides).await;
                 }
-                Some(LoginSubcommand::List) => {
-                    run_list_providers(login_cli.config_overrides).await;
-                }
                 None => {
-                    let auth_mode_count = login_cli.use_device_code as u8
-                        + login_cli.with_api_key as u8
-                        + login_cli.with_oauth as u8;
-                    if auth_mode_count > 1 {
-                        eprintln!(
-                            "Choose only one login mode: --device-auth, --with-api-key, or --with-oauth."
-                        );
-                        std::process::exit(1);
-                    }
-
                     if login_cli.use_device_code {
                         run_login_with_device_code(
                             login_cli.config_overrides,
@@ -718,18 +687,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                         std::process::exit(1);
                     } else if login_cli.with_api_key {
                         let api_key = read_api_key_from_stdin();
-                        run_login_with_provider_api_key(
-                            login_cli.config_overrides,
-                            api_key,
-                            login_cli.provider,
-                        )
-                        .await;
-                    } else if login_cli.with_oauth {
-                        run_login_with_provider_oauth(
-                            login_cli.config_overrides,
-                            login_cli.provider,
-                        )
-                        .await;
+                        run_login_with_api_key(login_cli.config_overrides, api_key).await;
                     } else {
                         run_login_with_chatgpt(login_cli.config_overrides).await;
                     }
@@ -741,7 +699,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 &mut logout_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            run_logout_provider(logout_cli.config_overrides, logout_cli.provider).await;
+            run_logout(logout_cli.config_overrides).await;
         }
         Some(Subcommand::Completion(completion_cli)) => {
             print_completion(completion_cli);
@@ -751,7 +709,8 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 &mut cloud_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            codex_cloud_tasks::run_main(cloud_cli, codex_linux_sandbox_exe).await?;
+            codex_cloud_tasks::run_main(cloud_cli, arg0_paths.codex_linux_sandbox_exe.clone())
+                .await?;
         }
         Some(Subcommand::Sandbox(sandbox_args)) => match sandbox_args.cmd {
             SandboxCommand::Macos(mut seatbelt_cli) => {
@@ -761,7 +720,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 );
                 codex_cli::debug_sandbox::run_command_under_seatbelt(
                     seatbelt_cli,
-                    codex_linux_sandbox_exe,
+                    arg0_paths.codex_linux_sandbox_exe.clone(),
                 )
                 .await?;
             }
@@ -772,7 +731,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 );
                 codex_cli::debug_sandbox::run_command_under_landlock(
                     landlock_cli,
-                    codex_linux_sandbox_exe,
+                    arg0_paths.codex_linux_sandbox_exe.clone(),
                 )
                 .await?;
             }
@@ -783,7 +742,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 );
                 codex_cli::debug_sandbox::run_command_under_windows(
                     windows_cli,
-                    codex_linux_sandbox_exe,
+                    arg0_paths.codex_linux_sandbox_exe.clone(),
                 )
                 .await?;
             }
@@ -930,7 +889,7 @@ fn prepend_config_flags(
 
 async fn run_interactive_tui(
     mut interactive: TuiCli,
-    codex_linux_sandbox_exe: Option<PathBuf>,
+    arg0_paths: Arg0DispatchPaths,
 ) -> std::io::Result<AppExitInfo> {
     if let Some(prompt) = interactive.prompt.take() {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
@@ -955,7 +914,7 @@ async fn run_interactive_tui(
         }
     }
 
-    codex_tui::run_main(interactive, codex_linux_sandbox_exe).await
+    codex_tui::run_main(interactive, arg0_paths).await
 }
 
 fn confirm(prompt: &str) -> std::io::Result<bool> {
@@ -1150,6 +1109,34 @@ mod tests {
         assert_eq!(args.prompt.as_deref(), Some("2+2"));
     }
 
+    #[test]
+    fn exec_resume_accepts_output_last_message_flag_after_subcommand() {
+        let cli = MultitoolCli::try_parse_from([
+            "ata",
+            "exec",
+            "resume",
+            "session-123",
+            "-o",
+            "/tmp/resume-output.md",
+            "re-review",
+        ])
+        .expect("parse should succeed");
+
+        let Some(Subcommand::Exec(exec)) = cli.subcommand else {
+            panic!("expected exec subcommand");
+        };
+        let Some(codex_exec::Command::Resume(args)) = exec.command else {
+            panic!("expected exec resume");
+        };
+
+        assert_eq!(
+            exec.last_message_file,
+            Some(std::path::PathBuf::from("/tmp/resume-output.md"))
+        );
+        assert_eq!(args.session_id.as_deref(), Some("session-123"));
+        assert_eq!(args.prompt.as_deref(), Some("re-review"));
+    }
+
     fn app_server_from_args(args: &[&str]) -> AppServerCommand {
         let cli = MultitoolCli::try_parse_from(args).expect("parse");
         let Subcommand::AppServer(app_server) = cli.subcommand.expect("app-server present") else {
@@ -1192,12 +1179,19 @@ mod tests {
     fn format_exit_messages_includes_resume_hint_without_color() {
         let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"), None);
         let lines = format_exit_messages(exit_info, false);
+        let expected_resume_cmd = codex_core::util::resume_command(
+            None,
+            Some(
+                ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000")
+                    .expect("valid thread id"),
+            ),
+        )
+        .expect("resume command should exist");
         assert_eq!(
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run ata resume 123e4567-e89b-12d3-a456-426614174000"
-                    .to_string(),
+                format!("To continue this session, run {expected_resume_cmd}"),
             ]
         );
     }
@@ -1217,11 +1211,13 @@ mod tests {
             Some("my-thread"),
         );
         let lines = format_exit_messages(exit_info, false);
+        let expected_resume_cmd = codex_core::util::resume_command(Some("my-thread"), None)
+            .expect("resume command should exist");
         assert_eq!(
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run ata resume my-thread".to_string(),
+                format!("To continue this session, run {expected_resume_cmd}"),
             ]
         );
     }
@@ -1379,12 +1375,20 @@ mod tests {
     }
 
     #[test]
-    fn app_server_defaults_to_stdio_transport() {
+    fn app_server_analytics_default_disabled_without_flag() {
         let app_server = app_server_from_args(["ata", "app-server"].as_ref());
+        assert!(!app_server.analytics_default_enabled);
         assert_eq!(
             app_server.listen,
             codex_app_server::AppServerTransport::Stdio
         );
+    }
+
+    #[test]
+    fn app_server_analytics_default_enabled_with_flag() {
+        let app_server =
+            app_server_from_args(["ata", "app-server", "--analytics-default-enabled"].as_ref());
+        assert!(app_server.analytics_default_enabled);
     }
 
     #[test]
