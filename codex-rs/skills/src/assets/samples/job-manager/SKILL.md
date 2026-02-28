@@ -24,7 +24,9 @@ Each job fires by spawning `ata exec --full-auto --ephemeral` as a subprocess. T
 
 ## CLI Commands
 
-All job management uses the `ata` CLI. Run these via the shell tool.
+All job management uses the `ata` CLI.
+
+**CRITICAL: Always run `ata` directly (e.g. `ata jobs list`, `ata jobs run <name>`). NEVER use `cargo run -p codex-cli` — it recompiles the binary, is extremely slow, and bypasses the installed daemon. The `ata` command is already available in PATH.**
 
 ### Job management
 
@@ -44,9 +46,25 @@ All job management uses the `ata` CLI. Run these via the shell tool.
 
 | Command | What it does |
 |---|---|
-| `ata scheduler start` | Start the daemon (foreground) |
+| `ata scheduler install` | Install daemon as a launchd service (macOS). One-time setup. |
+| `ata scheduler uninstall` | Remove daemon from launchd |
+| `ata scheduler start` | Start the daemon (foreground, for debugging) |
+| `ata scheduler start -d` | Start the daemon in the background via launchd |
 | `ata scheduler stop` | Graceful stop via PID |
 | `ata scheduler status` | Check if daemon is running |
+
+### Sandbox and daemon delegation
+
+**Important**: When running inside an ata session (which is sandboxed), you **cannot** start the daemon or run jobs directly. The sandbox blocks network access for child processes.
+
+Instead, `ata jobs run <name>` automatically delegates to the daemon if it is running:
+- It inserts a pending run into the database
+- The daemon (running outside the sandbox via launchd) picks it up and executes it
+- The CLI polls until the job completes and shows the result
+
+If the daemon is not running, `ata jobs run` will warn you and attempt direct execution (which will fail inside a sandbox). Tell the user to run `ata scheduler install` from their terminal (outside ata) to set up the daemon.
+
+**Do NOT run `ata scheduler start` from inside an ata session** — it will fail or create a sandboxed daemon that can't reach the network.
 
 ## Job TOML Format
 
@@ -251,11 +269,13 @@ Standard 5-field Unix cron is supported:
 When a user asks you to schedule something:
 
 1. **Understand what they want**: the task, frequency, and any delivery/output requirements.
-2. **Create the TOML file** by writing directly to `~/.ata/jobs/<job-name>.toml`. Use the format above.
-3. **Validate** by running `ata jobs show <job-name>` to confirm it parses correctly.
-4. **Test** by running `ata jobs run <job-name>` to verify it works.
-5. **Start the daemon** if not running: check with `ata scheduler status`, start with `ata scheduler start`.
+2. **Check daemon status**: run `ata scheduler status`. If not running, tell the user to run `ata scheduler install` from their terminal (outside this session). Do NOT attempt to start it yourself from inside a sandboxed session.
+3. **Create the TOML file** by writing directly to `~/.ata/jobs/<job-name>.toml`. Use the format above.
+4. **Validate** by running `ata jobs show <job-name>` to confirm it parses correctly.
+5. **Test** by running `ata jobs run <job-name>` to verify it works. If the daemon is running, this delegates to it automatically.
 6. **Confirm** to the user: show them the schedule, next run time, and how to check results.
+
+**CRITICAL: NEVER run job scripts, curl commands, or any job logic directly from inside this session.** You are inside a sandbox — network access, browser automation, and external API calls will all fail or hang. **Always use `ata jobs run <name>`** to test jobs. This delegates execution to the daemon which runs outside the sandbox.
 
 ### Choosing the schedule type
 

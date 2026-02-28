@@ -160,7 +160,13 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .with_filter(env_filter);
 
     let sandbox_mode = if full_auto {
-        Some(SandboxMode::WorkspaceWrite)
+        // If an explicit sandbox mode was provided via -s, respect it.
+        // Otherwise default to WorkspaceWrite for --full-auto.
+        Some(
+            sandbox_mode_cli_arg
+                .map(Into::<SandboxMode>::into)
+                .unwrap_or(SandboxMode::WorkspaceWrite),
+        )
     } else if dangerously_bypass_approvals_and_sandbox {
         Some(SandboxMode::DangerFullAccess)
     } else {

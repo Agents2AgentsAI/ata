@@ -7,11 +7,26 @@ use crate::engine::run_scheduler;
 use crate::storage::db::SchedulerDb;
 
 const DEFAULT_MAX_CONCURRENT: usize = 4;
+const LAUNCHD_LABEL: &str = "com.ata.scheduler";
 
 /// Path to the PID file (`~/.ata/scheduler/scheduler.pid`).
 fn pid_file_path() -> anyhow::Result<PathBuf> {
     let home = codex_utils_home_dir::find_codex_home().map_err(|e| anyhow::anyhow!(e))?;
     Ok(home.join("scheduler").join("scheduler.pid"))
+}
+
+/// Path to the launchd plist file.
+fn plist_path() -> anyhow::Result<PathBuf> {
+    let home = codex_utils_home_dir::find_codex_home().map_err(|e| anyhow::anyhow!(e))?;
+    Ok(home
+        .join("scheduler")
+        .join(format!("{LAUNCHD_LABEL}.plist")))
+}
+
+/// Check if the launchd plist is installed.
+pub fn is_launchd_installed() -> anyhow::Result<bool> {
+    let plist = plist_path()?;
+    Ok(plist.exists())
 }
 
 /// RAII guard that writes the PID file on creation and removes it on drop.
@@ -57,11 +72,24 @@ impl Drop for PidGuard {
 }
 
 /// Check if a process with the given PID is alive.
+///
+/// Uses `kill(pid, 0)` which returns:
+/// - `0` if the process exists and we can signal it
+/// - `-1` with `EPERM` if the process exists but we lack permission (e.g. inside sandbox)
+/// - `-1` with `ESRCH` if the process does not exist
+///
+/// Both success and EPERM mean the process is alive.
 fn is_process_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        // Signal 0 checks for process existence without sending a signal.
-        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+        let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        if ret == 0 {
+            return true;
+        }
+        // EPERM means the process exists but we can't signal it
+        // (happens inside Seatbelt sandbox for launchd-owned processes).
+        let err = std::io::Error::last_os_error();
+        err.raw_os_error() == Some(libc::EPERM)
     }
     #[cfg(not(unix))]
     {
@@ -111,43 +139,210 @@ pub fn stop_daemon() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Fork and start the scheduler daemon in the background.
+/// Start the scheduler daemon in the background via launchd.
 ///
-/// The parent process prints the child PID and exits immediately.
-/// The child detaches from the terminal via `setsid()`, redirects
-/// stdio to /dev/null, and runs the scheduler loop.
+/// Requires `ata scheduler install` to have been run first. Uses
+/// `launchctl kickstart` which works even from inside a Seatbelt sandbox
+/// because launchd starts the daemon independently of the calling process.
 pub fn start_daemon_background() -> anyhow::Result<()> {
-    // Pre-flight: check if already running before forking.
+    // Pre-flight: check if already running before starting.
     if let Some(pid) = is_daemon_running()? {
         anyhow::bail!(
             "scheduler daemon is already running (PID {pid}). Stop it with `ata scheduler stop`."
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     {
-        // Re-exec ourselves with the same arguments minus --daemon, so the
-        // child gets a clean process. We find the current executable path
-        // and pass `scheduler start` (without -d/--daemon).
-        let exe = std::env::current_exe().context("failed to find current executable")?;
+        let plist = plist_path()?;
+        if !plist.exists() {
+            anyhow::bail!("scheduler is not installed. Run `ata scheduler install` first.");
+        }
 
-        let child = std::process::Command::new(&exe)
-            .args(["scheduler", "start"])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .context("failed to spawn background scheduler daemon")?;
+        let uid = unsafe { libc::getuid() };
+        let status = std::process::Command::new("launchctl")
+            .args(["kickstart", "-k", &format!("gui/{uid}/{LAUNCHD_LABEL}")])
+            .status()
+            .context("failed to run launchctl kickstart")?;
 
-        let pid = child.id();
-        println!("Scheduler daemon started in background (PID {pid}).");
-        println!("Use `ata scheduler status` to check, `ata scheduler stop` to stop.");
+        if status.success() {
+            println!("Scheduler daemon started via launchd.");
+            println!("Use `ata scheduler status` to check, `ata scheduler stop` to stop.");
+        } else {
+            anyhow::bail!(
+                "launchctl kickstart failed (exit {}). Try `ata scheduler uninstall` then `ata scheduler install`.",
+                status.code().unwrap_or(-1)
+            );
+        }
         Ok(())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(target_os = "macos"))]
     {
-        anyhow::bail!("background daemon mode is only supported on Unix");
+        anyhow::bail!(
+            "background daemon mode requires macOS launchd. Run `ata scheduler install` first."
+        );
+    }
+}
+
+/// Install the scheduler daemon as a launchd service (macOS only).
+///
+/// Writes a plist to `~/.ata/scheduler/com.ata.scheduler.plist` and registers
+/// it with `launchctl bootstrap`. After installation, the daemon will be
+/// automatically started by launchd and kept alive across reboots.
+pub fn install_launchd() -> anyhow::Result<()> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        anyhow::bail!("launchd installation is only supported on macOS");
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let plist = plist_path()?;
+        let home = codex_utils_home_dir::find_codex_home().map_err(|e| anyhow::anyhow!(e))?;
+        let log_path = home.join("scheduler").join("daemon.log");
+        let uid = unsafe { libc::getuid() };
+
+        // Idempotent: if already loaded, bootout first so we can re-bootstrap
+        // with a potentially updated plist (e.g. new binary path).
+        let bootout = std::process::Command::new("launchctl")
+            .args(["bootout", &format!("gui/{uid}/{LAUNCHD_LABEL}")])
+            .output();
+        if bootout.is_ok_and(|o| o.status.success()) {
+            // Wait for the old daemon process to fully exit before re-bootstrapping.
+            // launchctl bootout returns before the process is gone.
+            for _ in 0..20 {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                if is_daemon_running()?.is_none() {
+                    break;
+                }
+            }
+        }
+
+        let exe = std::env::current_exe().context("failed to find current executable")?;
+        let exe_str = exe.display().to_string();
+        let log_str = log_path.display().to_string();
+        let workdir = home.join("scheduler").join("workdir");
+
+        if let Some(parent) = plist.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::create_dir_all(&workdir)?;
+
+        let workdir_str = workdir.display().to_string();
+
+        // Capture the current PATH so the daemon (and its ata exec children)
+        // can find npx, node, and other tools needed by MCP servers.
+        let path_env = std::env::var("PATH").unwrap_or_default();
+        let home_env = std::env::var("HOME").unwrap_or_default();
+
+        let plist_content = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{LAUNCHD_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{exe_str}</string>
+        <string>scheduler</string>
+        <string>start</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{workdir_str}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{path_env}</string>
+        <key>HOME</key>
+        <string>{home_env}</string>
+    </dict>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{log_str}</string>
+    <key>StandardErrorPath</key>
+    <string>{log_str}</string>
+</dict>
+</plist>
+"#
+        );
+
+        std::fs::write(&plist, &plist_content)
+            .with_context(|| format!("failed to write plist at {}", plist.display()))?;
+
+        let status = std::process::Command::new("launchctl")
+            .args([
+                "bootstrap",
+                &format!("gui/{uid}"),
+                &plist.display().to_string(),
+            ])
+            .status()
+            .context("failed to run launchctl bootstrap")?;
+
+        if !status.success() {
+            let code = status.code().unwrap_or(-1);
+            anyhow::bail!("launchctl bootstrap failed (exit {code})");
+        }
+
+        // Kickstart immediately — bootstrap loads the plist but launchd may
+        // throttle the initial start if a previous instance crashed.
+        let kick = std::process::Command::new("launchctl")
+            .args(["kickstart", &format!("gui/{uid}/{LAUNCHD_LABEL}")])
+            .status();
+        if let Ok(s) = kick {
+            if !s.success() {
+                eprintln!(
+                    "warning: launchctl kickstart exited with code {}",
+                    s.code().unwrap_or(-1)
+                );
+            }
+        }
+
+        println!("Scheduler daemon installed and started via launchd.");
+        println!("Plist: {}", plist.display());
+        println!("Logs:  {}", log_path.display());
+
+        Ok(())
+    }
+}
+
+/// Uninstall the scheduler daemon from launchd (macOS only).
+///
+/// Runs `launchctl bootout` to stop and deregister the service, then
+/// removes the plist file.
+pub fn uninstall_launchd() -> anyhow::Result<()> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        anyhow::bail!("launchd uninstallation is only supported on macOS");
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let plist = plist_path()?;
+
+        let uid = unsafe { libc::getuid() };
+        let status = std::process::Command::new("launchctl")
+            .args(["bootout", &format!("gui/{uid}/{LAUNCHD_LABEL}")])
+            .status()
+            .context("failed to run launchctl bootout")?;
+
+        if !status.success() {
+            let code = status.code().unwrap_or(-1);
+            // Exit code 3 means the service wasn't loaded — that's fine.
+            if code != 3 {
+                eprintln!("warning: launchctl bootout exited with code {code}");
+            }
+        }
+
+        if plist.exists() {
+            std::fs::remove_file(&plist)?;
+            println!("Removed plist at {}", plist.display());
+        }
+
+        println!("Scheduler daemon uninstalled from launchd.");
+        Ok(())
     }
 }
 

@@ -75,6 +75,10 @@ pub enum SchedulerCommand {
     Stop,
     /// Show scheduler daemon status.
     Status,
+    /// Install the scheduler as a launchd service (macOS).
+    Install,
+    /// Uninstall the scheduler from launchd (macOS).
+    Uninstall,
 }
 
 #[derive(Debug, Parser)]
@@ -111,6 +115,8 @@ pub async fn run_scheduler_command(cli: SchedulerCli) -> anyhow::Result<()> {
         }
         SchedulerCommand::Stop => daemon::stop_daemon(),
         SchedulerCommand::Status => cmd_status(),
+        SchedulerCommand::Install => daemon::install_launchd(),
+        SchedulerCommand::Uninstall => daemon::uninstall_launchd(),
     }
 }
 
@@ -314,35 +320,125 @@ async fn cmd_run(name: &str) -> anyhow::Result<()> {
     let runs_dir = home.join("scheduler").join("runs");
 
     // Ensure the job exists in the DB (the runs table has a FK to jobs).
-    if jobs_repo::get_job(db.pool(), name).await?.is_none() {
-        let now = chrono::Utc::now().timestamp();
-        let serialized = toml::to_string(&def).unwrap_or_default();
-        let hash = {
-            use std::hash::Hash;
-            use std::hash::Hasher;
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            serialized.hash(&mut hasher);
-            format!("{:016x}", hasher.finish())
-        };
-        let job_record = jobs_repo::JobRecord {
-            id: name.to_string(),
-            definition_hash: hash,
-            enabled: def.enabled,
-            paused: false,
-            created_at: now,
-            updated_at: now,
-            last_run_at: None,
-            next_run_at: None,
-            run_count: 0,
-            consecutive_failures: 0,
-        };
-        jobs_repo::upsert_job(db.pool(), &job_record).await?;
-    }
+    ensure_job_in_db(&db, name, &def).await?;
 
     let run_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp();
 
-    // Insert run record.
+    // If the daemon is running, delegate execution to it via SQLite IPC.
+    // This allows `ata jobs run` to work from inside a sandboxed session.
+    if daemon::is_daemon_running()?.is_some() {
+        // Insert run as "pending" — the daemon will pick it up.
+        let run_record = runs_repo::RunRecord {
+            id: run_id.clone(),
+            job_id: name.to_string(),
+            status: "pending".to_string(),
+            attempt: 1,
+            started_at: now,
+            finished_at: None,
+            duration_ms: None,
+            output_path: Some(runs_dir.join(format!("{run_id}.md")).display().to_string()),
+            output_preview: None,
+            error_message: None,
+            trigger_data: None,
+            delivery_results: None,
+        };
+        runs_repo::insert_run(db.pool(), &run_record).await?;
+
+        let output_path = runs_dir.join(format!("{run_id}.md"));
+
+        println!(
+            "Submitted job '{name}' (run {}), waiting for daemon...",
+            &run_id[..8]
+        );
+
+        // Poll until the run reaches a terminal status, tailing the output file
+        // in real time so the user can see progress.
+        let mut bytes_read: u64 = 0;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+            // Tail the output file if it exists and has new content.
+            if output_path.exists() {
+                if let Ok(metadata) = tokio::fs::metadata(&output_path).await {
+                    let file_len = metadata.len();
+                    if file_len > bytes_read {
+                        if let Ok(contents) = tokio::fs::read(&output_path).await {
+                            let new_bytes = &contents[bytes_read as usize..];
+                            if let Ok(text) = std::str::from_utf8(new_bytes) {
+                                print!("{text}");
+                            }
+                            bytes_read = file_len;
+                        }
+                    }
+                }
+            }
+
+            let run = runs_repo::get_run(db.pool(), &run_id).await?;
+            match run {
+                Some(r) => {
+                    let status = crate::storage::RunStatus::from_str_lossy(&r.status);
+                    if status.is_terminal() {
+                        // Flush any remaining output.
+                        if output_path.exists() {
+                            if let Ok(contents) = tokio::fs::read(&output_path).await {
+                                if (contents.len() as u64) > bytes_read {
+                                    let new_bytes = &contents[bytes_read as usize..];
+                                    if let Ok(text) = std::str::from_utf8(new_bytes) {
+                                        print!("{text}");
+                                    }
+                                }
+                            }
+                        }
+                        println!();
+                        match status {
+                            crate::storage::RunStatus::Success => {
+                                let dur = r.duration_ms.unwrap_or(0);
+                                println!("Job '{name}' completed successfully in {dur}ms.");
+                            }
+                            _ => {
+                                eprintln!("Job '{name}' finished with status: {status}");
+                                if let Some(err) = &r.error_message {
+                                    eprintln!("Error: {err}");
+                                }
+                            }
+                        }
+                        return Ok(());
+                    }
+                }
+                None => {
+                    anyhow::bail!("run '{run_id}' disappeared from database");
+                }
+            }
+        }
+    }
+
+    // No daemon running — try to start it if installed, otherwise warn and execute directly.
+    if daemon::is_launchd_installed()? {
+        // Plist exists but daemon isn't running — try to kickstart it.
+        eprintln!("Scheduler daemon is not running. Attempting to start via launchd...");
+        match daemon::start_daemon_background() {
+            Ok(()) => {
+                // Give daemon a moment to start and write PID file.
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                if daemon::is_daemon_running()?.is_some() {
+                    // Daemon is now running — delegate to it.
+                    return Box::pin(cmd_run(name)).await;
+                }
+                eprintln!("warning: daemon started but not yet responding. Running job directly.");
+            }
+            Err(e) => {
+                eprintln!("warning: failed to start daemon: {e:#}");
+                eprintln!("Running job directly (may fail inside a sandbox).");
+            }
+        }
+    } else {
+        eprintln!(
+            "warning: scheduler daemon is not installed. Run `ata scheduler install` from outside this session."
+        );
+        eprintln!("Attempting direct execution (will fail inside a sandbox)...");
+    }
+
     let run_record = runs_repo::RunRecord {
         id: run_id.clone(),
         job_id: name.to_string(),
@@ -390,6 +486,39 @@ async fn cmd_run(name: &str) -> anyhow::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Ensure a job definition exists in the DB (the runs table has a FK to jobs).
+async fn ensure_job_in_db(
+    db: &SchedulerDb,
+    name: &str,
+    def: &crate::job::JobDefinition,
+) -> anyhow::Result<()> {
+    if jobs_repo::get_job(db.pool(), name).await?.is_none() {
+        let now = chrono::Utc::now().timestamp();
+        let serialized = toml::to_string(def).unwrap_or_default();
+        let hash = {
+            use std::hash::Hash;
+            use std::hash::Hasher;
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            serialized.hash(&mut hasher);
+            format!("{:016x}", hasher.finish())
+        };
+        let job_record = jobs_repo::JobRecord {
+            id: name.to_string(),
+            definition_hash: hash,
+            enabled: def.enabled,
+            paused: false,
+            created_at: now,
+            updated_at: now,
+            last_run_at: None,
+            next_run_at: None,
+            run_count: 0,
+            consecutive_failures: 0,
+        };
+        jobs_repo::upsert_job(db.pool(), &job_record).await?;
+    }
     Ok(())
 }
 

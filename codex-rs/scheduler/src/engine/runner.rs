@@ -65,10 +65,18 @@ pub async fn execute_job(
     cmd.arg("exec")
         .arg("--full-auto")
         .arg("--json")
-        .arg("--ephemeral");
+        .arg("--ephemeral")
+        .arg("--skip-git-repo-check");
 
     if let Some(cwd) = &def.task.cwd {
         cmd.arg("--cd").arg(cwd);
+    } else {
+        // Default to scheduler workdir so jobs don't write files into
+        // random directories (launchd sets cwd to / by default).
+        let home = codex_utils_home_dir::find_codex_home().map_err(|e| anyhow::anyhow!(e))?;
+        let workdir = home.join("scheduler").join("workdir");
+        tokio::fs::create_dir_all(&workdir).await?;
+        cmd.arg("--cd").arg(&workdir);
     }
     if let Some(model) = &def.task.config.model {
         cmd.arg("-m").arg(model);
