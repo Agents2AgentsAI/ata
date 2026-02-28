@@ -5,6 +5,7 @@
 When you need the user to interact with an external service (Slack, GitHub, cloud providers, etc.), always lead with the lowest-friction option. Do not give step-by-step UI walkthroughs when a single copy-paste or CLI command exists.
 
 Rules:
+
 1. **Open URLs in their browser** — use `open <url>` (macOS) or `xdg-open <url>` (Linux). Their default browser is already authenticated to most services, so no login needed.
 2. **Provide manifests / config files** that can be pasted in one shot, not step-by-step click instructions.
 3. **Check for CLI tools first** — many services have CLIs (`slack`, `gh`, `gcloud`, `aws`) that can do setup from the terminal with zero browser interaction. Run `which <tool>` before falling back to browser-based flows.
