@@ -216,6 +216,109 @@ async fn fire_job(
     drop(job_guard);
 }
 
+/// Execute a triggered job (submitted via CLI `ata jobs run` while daemon is running).
+/// Unlike `fire_job`, this reuses an existing run record instead of creating a new one.
+async fn fire_triggered_job(
+    db: &SchedulerDb,
+    guard: &ConcurrencyGuard,
+    run: &runs_repo::RunRecord,
+    def: &JobDefinition,
+    runs_dir: &PathBuf,
+) {
+    let job_id = &run.job_id;
+
+    // Overlap check.
+    let job_guard = match guard
+        .try_acquire(job_id, def.execution.skip_if_running)
+        .await
+    {
+        Some(g) => g,
+        None => {
+            tracing::info!(
+                "skipping triggered run '{}': job '{job_id}' already running",
+                &run.id[..8]
+            );
+            let now = Utc::now().timestamp();
+            let _ = runs_repo::finish_run(
+                db.pool(),
+                &run.id,
+                RunStatus::Skipped,
+                now,
+                0,
+                None,
+                Some("skipped: job already running"),
+            )
+            .await;
+            return;
+        }
+    };
+
+    // Atomically claim: pending → running.
+    match runs_repo::set_run_status(db.pool(), &run.id, RunStatus::Pending, RunStatus::Running)
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => {
+            // Another tick already claimed this run.
+            return;
+        }
+        Err(e) => {
+            tracing::error!("failed to claim triggered run '{}': {e:#}", &run.id[..8]);
+            return;
+        }
+    }
+
+    tracing::info!(
+        "executing triggered run '{}' for job '{job_id}'",
+        &run.id[..8]
+    );
+
+    // Execute.
+    let result = runner::execute_job(db, &run.id, job_id, def, runs_dir).await;
+
+    let finished_at = Utc::now().timestamp();
+
+    match result {
+        Ok(run_result) => {
+            if let Err(e) = runs_repo::finish_run(
+                db.pool(),
+                &run.id,
+                run_result.status,
+                finished_at,
+                run_result.duration_ms,
+                run_result.output_preview.as_deref(),
+                run_result.error_message.as_deref(),
+            )
+            .await
+            {
+                tracing::error!("failed to finish triggered run '{}': {e:#}", &run.id[..8]);
+            }
+
+            let success = run_result.status == RunStatus::Success;
+            let next = compute_next_run(def);
+            let _ =
+                jobs_repo::update_after_run(db.pool(), job_id, finished_at, next, success).await;
+        }
+        Err(e) => {
+            tracing::error!("triggered run '{}' execution error: {e:#}", &run.id[..8]);
+            let _ = runs_repo::finish_run(
+                db.pool(),
+                &run.id,
+                RunStatus::Failed,
+                finished_at,
+                0,
+                None,
+                Some(&format!("{e:#}")),
+            )
+            .await;
+            let next = compute_next_run(def);
+            let _ = jobs_repo::update_after_run(db.pool(), job_id, finished_at, next, false).await;
+        }
+    }
+
+    drop(job_guard);
+}
+
 /// Main scheduler loop. Ticks every second, checks for due jobs, fires them.
 pub async fn run_scheduler(
     db: SchedulerDb,
@@ -255,6 +358,54 @@ pub async fn run_scheduler(
                         tokio::spawn(async move {
                             fire_job(&db_clone, &guard_clone, &job_id, &def, &runs_dir).await;
                         });
+                    }
+                }
+
+                // Pick up pending runs submitted by sandboxed CLI sessions.
+                let pending = match runs_repo::get_pending_triggers(db.pool()).await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::error!("failed to fetch pending triggers: {e:#}");
+                        Vec::new()
+                    }
+                };
+                if !pending.is_empty() {
+                    // Reload defs on-demand so newly created jobs are found
+                    // immediately (the user may have just created the TOML).
+                    if let Ok(fresh) = load_all_defs() {
+                        if fresh.len() != defs.len() {
+                            defs = fresh;
+                            let _ = sync_jobs(&db, &defs).await;
+                        }
+                    }
+                }
+                for run in pending {
+                    if let Some(def) = defs.get(&run.job_id) {
+                        let db_clone = db.clone();
+                        let guard_clone = Arc::clone(&guard);
+                        let def = def.clone();
+                        let runs_dir = runs_dir.clone();
+                        let run = run.clone();
+                        tokio::spawn(async move {
+                            fire_triggered_job(&db_clone, &guard_clone, &run, &def, &runs_dir).await;
+                        });
+                    } else {
+                        tracing::warn!(
+                            "pending run '{}' references unknown job '{}', marking failed",
+                            &run.id[..8],
+                            run.job_id
+                        );
+                        let now = Utc::now().timestamp();
+                        let _ = runs_repo::finish_run(
+                            db.pool(),
+                            &run.id,
+                            RunStatus::Failed,
+                            now,
+                            0,
+                            None,
+                            Some(&format!("unknown job '{}'", run.job_id)),
+                        )
+                        .await;
                     }
                 }
             }

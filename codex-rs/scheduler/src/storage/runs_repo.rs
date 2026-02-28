@@ -184,6 +184,36 @@ pub async fn has_running_run(pool: &SqlitePool, job_id: &str) -> anyhow::Result<
     Ok(row.is_some_and(|(count,)| count > 0))
 }
 
+/// Fetch runs with status='pending' for the daemon to pick up.
+/// These are runs submitted by sandboxed CLI sessions via `ata jobs run`.
+pub async fn get_pending_triggers(pool: &SqlitePool) -> anyhow::Result<Vec<RunRecord>> {
+    let rows = sqlx::query_as::<_, RunRecord>(
+        "SELECT * FROM runs WHERE status = 'pending' ORDER BY started_at LIMIT 10",
+    )
+    .fetch_all(pool)
+    .await
+    .context("failed to fetch pending triggers")?;
+    Ok(rows)
+}
+
+/// Atomically transition a run from one status to another.
+/// Returns true if the row was updated (i.e. the run was in the expected state).
+pub async fn set_run_status(
+    pool: &SqlitePool,
+    run_id: &str,
+    from: RunStatus,
+    to: RunStatus,
+) -> anyhow::Result<bool> {
+    let result = sqlx::query("UPDATE runs SET status = ?1 WHERE id = ?2 AND status = ?3")
+        .bind(to.as_str())
+        .bind(run_id)
+        .bind(from.as_str())
+        .execute(pool)
+        .await
+        .context("failed to set run status")?;
+    Ok(result.rows_affected() > 0)
+}
+
 /// Prune old runs older than `before_timestamp`.
 pub async fn prune_runs(pool: &SqlitePool, before_timestamp: i64) -> anyhow::Result<u64> {
     let result = sqlx::query("DELETE FROM runs WHERE finished_at IS NOT NULL AND finished_at < ?1")
