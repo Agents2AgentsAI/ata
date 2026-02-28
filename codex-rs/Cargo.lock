@@ -1834,6 +1834,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-elevenlabs"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "codex-utils-rustls-provider",
+ "futures",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+]
+
+[[package]]
 name = "codex-exec"
 version = "0.0.0"
 dependencies = [
@@ -2388,6 +2404,7 @@ dependencies = [
  "codex-cli",
  "codex-cloud-requirements",
  "codex-core",
+ "codex-elevenlabs",
  "codex-feedback",
  "codex-file-search",
  "codex-login",

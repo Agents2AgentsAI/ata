@@ -2905,6 +2905,60 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
             }
+            // ─── Voice mode events ───────────────────────────────────────
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModePttTimeoutCheck => {
+                self.chat_widget.check_ptt_timeout();
+                tui.frame_requester().schedule_frame();
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeMeterTick { text } => {
+                self.chat_widget.on_voice_meter_tick(text);
+                tui.frame_requester().schedule_frame();
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeTtsAudioChunk { pcm } => {
+                self.chat_widget.on_voice_tts_audio_chunk(pcm);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeTtsFinished => {
+                self.chat_widget.on_voice_tts_finished();
+                tui.frame_requester().schedule_frame();
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeTranscriptionComplete { text } => {
+                self.chat_widget.on_voice_transcription_complete(text);
+                tui.frame_requester().schedule_frame();
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeTranscriptionFailed { error } => {
+                self.chat_widget.on_voice_transcription_failed(error);
+                tui.frame_requester().schedule_frame();
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::PersistVoiceModeEnabled(enabled) => {
+                let edit = codex_core::config::edit::voice_mode_enabled_edit(enabled);
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([edit])
+                    .apply()
+                    .await
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist voice mode enabled state"
+                    );
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeInterruptTts => {
+                self.chat_widget.on_voice_interrupt_tts();
+                tui.frame_requester().schedule_frame();
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeNarrateSection { text } => {
+                self.chat_widget.on_voice_narrate_section(text);
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::StatusLineSetup { items } => {
                 let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
                 let edit = codex_core::config::edit::status_line_items_edit(&ids);
@@ -3300,7 +3354,11 @@ impl App {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
-                if self.chat_widget.is_normal_backtrack_mode()
+                // When voice TTS is playing, route Esc to chatwidget first so it
+                // can interrupt playback before backtrack or other Esc handling.
+                if self.chat_widget.is_voice_speaking() {
+                    self.chat_widget.handle_key_event(key_event);
+                } else if self.chat_widget.is_normal_backtrack_mode()
                     && self.chat_widget.composer_is_empty()
                 {
                     self.handle_backtrack_esc_key(tui);

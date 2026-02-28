@@ -264,6 +264,8 @@ use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
 mod realtime;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+pub(crate) mod voice_mode;
 use self::realtime::RealtimeConversationUiState;
 use self::realtime::RenderedUserMessageEvent;
 use crate::mention_codec::LinkedMention;
@@ -676,6 +678,8 @@ pub(crate) struct ChatWidget {
     external_editor_state: ExternalEditorState,
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    voice_mode_state: Option<voice_mode::VoiceModeState>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -713,6 +717,9 @@ pub(crate) struct UserMessage {
     remote_image_urls: Vec<String>,
     text_elements: Vec<TextElement>,
     mention_bindings: Vec<MentionBinding>,
+    /// When true, the voice mode instruction prefix is injected into the
+    /// model-facing input (but not shown in the chat display or history).
+    voice_input: bool,
 }
 
 impl From<String> for UserMessage {
@@ -724,6 +731,7 @@ impl From<String> for UserMessage {
             // Plain text conversion has no UI element ranges.
             text_elements: Vec::new(),
             mention_bindings: Vec::new(),
+            voice_input: false,
         }
     }
 }
@@ -737,6 +745,7 @@ impl From<&str> for UserMessage {
             // Plain text conversion has no UI element ranges.
             text_elements: Vec::new(),
             mention_bindings: Vec::new(),
+            voice_input: false,
         }
     }
 }
@@ -764,6 +773,7 @@ pub(crate) fn create_initial_user_message(
             remote_image_urls: Vec::new(),
             text_elements,
             mention_bindings: Vec::new(),
+            voice_input: false,
         })
     }
 }
@@ -779,6 +789,7 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         local_images,
         remote_image_urls,
         mention_bindings,
+        voice_input,
     } = message;
     if local_images.is_empty() {
         return UserMessage {
@@ -787,6 +798,7 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
             local_images,
             remote_image_urls,
             mention_bindings,
+            voice_input,
         };
     }
 
@@ -843,6 +855,7 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         remote_image_urls,
         text_elements: rebuilt_elements,
         mention_bindings,
+        voice_input,
     }
 }
 
@@ -1296,6 +1309,13 @@ impl ChatWidget {
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
+        // When voice mode is active, the parser strips <voice> tags from the
+        // display text and routes tagged content to TTS.
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        let delta = self
+            .on_voice_mode_agent_delta(&delta)
+            .unwrap_or(delta);
+
         if self.is_suppressing_streaming_for_reader() {
             return;
         }
@@ -1436,6 +1456,9 @@ impl ChatWidget {
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        self.on_voice_mode_turn_complete();
+
         if let Some(message) = last_agent_message.as_ref()
             && !message.trim().is_empty()
         {
@@ -1867,6 +1890,7 @@ impl ChatWidget {
             local_images: self.bottom_pane.composer_local_images(),
             remote_image_urls: self.bottom_pane.remote_image_urls(),
             mention_bindings: self.bottom_pane.composer_mention_bindings(),
+            voice_input: false,
         };
 
         let mut to_merge: Vec<UserMessage> = self.queued_user_messages.drain(..).collect();
@@ -1883,6 +1907,7 @@ impl ChatWidget {
             local_images: Vec::new(),
             remote_image_urls: Vec::new(),
             mention_bindings: Vec::new(),
+            voice_input: false,
         };
         let mut combined_offset = 0usize;
         let total_remote_images = to_merge
@@ -1922,6 +1947,7 @@ impl ChatWidget {
             remote_image_urls,
             text_elements,
             mention_bindings,
+            voice_input: _,
         } = user_message;
         let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
         self.set_remote_image_urls(remote_image_urls);
@@ -2901,6 +2927,8 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            voice_mode_state: None,
         };
 
         widget.prefetch_rate_limits();
@@ -2937,6 +2965,28 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
+
+        // Auto-enable voice mode if persisted in config.
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        {
+            if widget.config.features.enabled(Feature::VoiceMode) {
+                let voice_config = widget
+                    .config
+                    .config_layer_stack
+                    .effective_config()
+                    .as_table()
+                    .and_then(|t| t.get("voice_mode"))
+                    .and_then(|v| {
+                        v.clone()
+                            .try_into::<codex_core::config::types::VoiceModeToml>()
+                            .ok()
+                    })
+                    .unwrap_or_default();
+                if voice_config.enabled == Some(true) {
+                    widget.toggle_voice_mode();
+                }
+            }
+        }
 
         widget
     }
@@ -3081,6 +3131,8 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            voice_mode_state: None,
         };
 
         widget.prefetch_rate_limits();
@@ -3250,6 +3302,8 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            voice_mode_state: None,
         };
 
         widget.prefetch_rate_limits();
@@ -3337,6 +3391,56 @@ impl ChatWidget {
                 }
                 return;
             }
+            // Ctrl+M: toggle voice mode.
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'m') => {
+                self.toggle_voice_mode();
+                return;
+            }
+            // Esc: interrupt TTS when voice mode is speaking.
+            // First Esc stops speech; subsequent Esc follows normal behaviour.
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            KeyEvent {
+                code: KeyCode::Esc,
+                kind: KeyEventKind::Press,
+                ..
+            } if self.is_voice_speaking() => {
+                self.on_voice_interrupt_tts();
+                return;
+            }
+            // Space: push-to-talk (PTT) when voice mode is active.
+            // Intercept before the input_enabled guard so PTT works during agent turns.
+            // Skip interception when the main composer has text (user is typing).
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            KeyEvent {
+                code: KeyCode::Char(' '),
+                kind,
+                modifiers,
+                ..
+            } if modifiers.is_empty()
+                && self
+                    .voice_mode_state
+                    .as_ref()
+                    .is_some_and(|s| s.is_active())
+                && !self.is_main_composer_typing() =>
+            {
+                match kind {
+                    KeyEventKind::Press => self.on_ptt_press(),
+                    KeyEventKind::Release => {
+                        if let Some(ref mut s) = self.voice_mode_state {
+                            s.key_release_supported = true;
+                        }
+                        self.on_ptt_release();
+                    }
+                    KeyEventKind::Repeat => self.on_ptt_repeat(),
+                }
+                return; // Don't pass Space to composer.
+            }
             other if other.kind == KeyEventKind::Press => {
                 self.bottom_pane.clear_quit_shortcut_hint();
                 self.quit_shortcut_expires_at = None;
@@ -3385,6 +3489,7 @@ impl ChatWidget {
                         mention_bindings: self
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
+                        voice_input: false,
                     };
                     let Some(user_message) =
                         self.maybe_defer_user_message_for_realtime(user_message)
@@ -3425,6 +3530,7 @@ impl ChatWidget {
                         mention_bindings: self
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
+                        voice_input: false,
                     };
                     let Some(user_message) =
                         self.maybe_defer_user_message_for_realtime(user_message)
@@ -3597,6 +3703,17 @@ impl ChatWidget {
                 } else {
                     self.start_realtime_conversation();
                 }
+            }
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            SlashCommand::Voice => {
+                self.toggle_voice_mode();
+            }
+            #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
+            SlashCommand::Voice => {
+                self.add_info_message(
+                    "Voice mode is not available in this build.".to_string(),
+                    None,
+                );
             }
             SlashCommand::Personality => {
                 self.open_personality_popup();
@@ -3900,6 +4017,7 @@ impl ChatWidget {
                     remote_image_urls,
                     text_elements: prepared_elements,
                     mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
+                    voice_input: false,
                 };
                 if self.is_session_configured() {
                     self.reasoning_buffer.clear();
@@ -4050,7 +4168,20 @@ impl ChatWidget {
             remote_image_urls,
             text_elements,
             mention_bindings,
+            voice_input,
         } = user_message;
+
+        // Check if voice mode is active so we prepend voice instructions
+        // (for TTS) even on typed messages — but do NOT flip `voice_input`
+        // to true, since that flag controls the 🎙️ display icon.
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        let voice_mode_active = self
+            .voice_mode_state
+            .as_ref()
+            .is_some_and(|s| s.is_active());
+        #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
+        let voice_mode_active = false;
+
         if text.is_empty() && local_images.is_empty() && remote_image_urls.is_empty() {
             return;
         }
@@ -4100,6 +4231,28 @@ impl ChatWidget {
         }
 
         if !text.is_empty() {
+            // For voice input (or typed messages when voice mode is active),
+            // prepend the voice mode instruction so the model wraps spoken
+            // content in <voice> tags for TTS. NOT shown in chat display.
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            if voice_input || voice_mode_active {
+                let model_text = format!(
+                    "{}{}",
+                    crate::chatwidget::voice_mode::VOICE_MODE_INSTRUCTION,
+                    &text,
+                );
+                items.push(UserInput::Text {
+                    text: model_text,
+                    text_elements: text_elements.clone(),
+                });
+            } else {
+                items.push(UserInput::Text {
+                    text: text.clone(),
+                    text_elements: text_elements.clone(),
+                });
+            }
+
+            #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
             items.push(UserInput::Text {
                 text: text.clone(),
                 text_elements: text_elements.clone(),
@@ -4242,15 +4395,21 @@ impl ChatWidget {
                 .into_iter()
                 .map(|img| img.path)
                 .collect::<Vec<_>>();
+            // Prefix voice input with 🎙️ in the display prompt.
+            let display_text = if voice_input {
+                format!("🎙️ {text}")
+            } else {
+                text.clone()
+            };
             self.last_rendered_user_message_event =
                 Some(Self::rendered_user_message_event_from_parts(
-                    text.clone(),
+                    display_text.clone(),
                     text_elements.clone(),
                     local_image_paths.clone(),
                     remote_image_urls.clone(),
                 ));
             self.add_to_history(history_cell::new_user_prompt(
-                text,
+                display_text,
                 text_elements,
                 local_image_paths,
                 remote_image_urls,
@@ -7401,6 +7560,7 @@ impl ChatWidget {
             remote_image_urls: Vec::new(),
             text_elements: Vec::new(),
             mention_bindings: Vec::new(),
+            voice_input: false,
         };
         if should_queue {
             self.queue_user_message(user_message);
@@ -7414,6 +7574,13 @@ impl ChatWidget {
     /// In this state Esc-Esc backtracking is enabled.
     pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
         self.bottom_pane.is_normal_backtrack_mode()
+    }
+
+    /// True when the main chat composer is focused (no modal/view active) and
+    /// has text — indicating the user is actively typing. Used to avoid
+    /// intercepting Space for PTT while the user types.
+    fn is_main_composer_typing(&self) -> bool {
+        self.bottom_pane.no_modal_or_popup_active() && !self.bottom_pane.composer_is_empty()
     }
 
     pub(crate) fn insert_str(&mut self, text: &str) {

@@ -527,6 +527,36 @@ impl RealtimeAudioPlayer {
             guard.clear();
         }
     }
+
+    /// Enqueue raw PCM i16 samples directly (no base64 decoding).
+    /// Used by the voice mode pipeline where audio arrives as native PCM.
+    pub(crate) fn enqueue_pcm(&self, pcm: &[i16], sample_rate: u32, channels: u16) {
+        if pcm.is_empty() || sample_rate == 0 || channels == 0 {
+            return;
+        }
+        let converted = convert_pcm16_for_output(
+            pcm,
+            sample_rate,
+            channels,
+            self.output_sample_rate,
+            self.output_channels,
+        );
+        if converted.is_empty() {
+            return;
+        }
+        if let Ok(mut guard) = self.queue.lock() {
+            guard.extend(converted);
+        }
+    }
+
+    /// Returns true when the playback queue is empty.
+    #[allow(dead_code)]
+    pub(crate) fn is_idle(&self) -> bool {
+        self.queue
+            .lock()
+            .map(|guard| guard.is_empty())
+            .unwrap_or(true)
+    }
 }
 
 fn build_output_stream(
@@ -710,6 +740,11 @@ fn encode_wav_normalized(audio: &RecordedAudio) -> Result<Vec<u8>, String> {
         .finalize()
         .map_err(|_| "failed to finalize wav".to_string())?;
     Ok(wav_bytes)
+}
+
+/// Public wrapper around `encode_wav_normalized` for use by voice mode STT.
+pub(crate) fn encode_wav_for_voice_mode(audio: &RecordedAudio) -> Result<Vec<u8>, String> {
+    encode_wav_normalized(audio)
 }
 
 fn normalize_chatgpt_base_url(input: &str) -> String {

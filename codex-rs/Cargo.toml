@@ -66,6 +66,7 @@ members = [
     "codex-experimental-api-macros",
     "codex-research-tools",
     "codex-data-tools",
+    "codex-elevenlabs",
     "test-macros",
 ]
 resolver = "2"
@@ -98,6 +99,7 @@ codex-cloud-requirements = { path = "cloud-requirements" }
 codex-config = { path = "config" }
 codex-core = { path = "core" }
 codex-data-tools = { path = "codex-data-tools" }
+codex-elevenlabs = { path = "codex-elevenlabs" }
 codex-exec = { path = "exec" }
 codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }

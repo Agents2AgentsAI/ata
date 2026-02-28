@@ -86,6 +86,9 @@ struct FoldRegion {
     summary: String,
     /// Whether this fold is currently collapsed.
     collapsed: bool,
+    /// Whether this fold was created from a voice mode interaction.
+    /// When true, a speaker icon is shown next to the fold summary.
+    voice: bool,
 }
 
 /// A single section of a document (split on `## ` headings).
@@ -244,6 +247,10 @@ pub(crate) struct DocumentReaderView {
     /// When `Some`, the user pressed `:` and is typing a line number.
     /// Line numbers are shown on the left margin while active.
     line_number_input: Option<String>,
+
+    /// Voice mode status text (e.g. "Recording...", "Speaking...").
+    /// Set by ChatWidget via the `set_voice_status` trait method.
+    voice_status: Option<String>,
 }
 
 impl DocumentReaderView {
@@ -294,7 +301,7 @@ impl DocumentReaderView {
             None
         };
 
-        Self {
+        let view = Self {
             document_id,
             title,
             sections,
@@ -326,7 +333,12 @@ impl DocumentReaderView {
             show_tutorial: !has_seen_tutorial(),
             tutorial_scroll: Cell::new(0),
             line_number_input: None,
-        }
+            voice_status: None,
+        };
+        // Auto-narrate the first section on open (if voice mode is active,
+        // ChatWidget will pick it up; otherwise it's a no-op).
+        view.narrate_current_section_if_voice();
+        view
     }
 
     /// If the resolved section is the one currently being viewed, dismiss
@@ -437,6 +449,7 @@ impl DocumentReaderView {
                     end: section.content.len(),
                     summary: fold_summary,
                     collapsed: false,
+                    voice: self.voice_status.is_some(),
                 });
             }
 
@@ -571,6 +584,7 @@ impl DocumentReaderView {
                             end: fold_end,
                             summary: fold_summary,
                             collapsed: false,
+                            voice: self.voice_status.is_some(),
                         });
                     }
                 }
@@ -614,25 +628,58 @@ impl DocumentReaderView {
 
     fn next_section(&mut self) {
         if self.current_section + 1 < self.sections.len() {
+            self.interrupt_tts_if_needed();
             self.clear_updated_flag();
             self.current_section += 1;
             self.scroll_offset.set(0);
             self.cursor_line = 0;
             self.cursor_col = 0;
             self.visited_sections.insert(self.current_section);
+            self.narrate_current_section_if_voice();
         }
     }
 
     fn prev_section(&mut self) {
         if self.current_section > 0 {
+            self.interrupt_tts_if_needed();
             self.clear_updated_flag();
             self.current_section -= 1;
             self.scroll_offset.set(0);
             self.cursor_line = 0;
             self.cursor_col = 0;
             self.visited_sections.insert(self.current_section);
+            self.narrate_current_section_if_voice();
         }
     }
+
+    /// Interrupt TTS if voice mode is speaking (user navigated away).
+    #[cfg(not(target_os = "linux"))]
+    fn interrupt_tts_if_needed(&self) {
+        self.app_event_tx
+            .send(AppEvent::VoiceModeInterruptTts);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn interrupt_tts_if_needed(&self) {}
+
+    /// Emit a narrate event for the current section so voice mode can TTS it.
+    /// The document reader doesn't know whether voice mode is active — ChatWidget
+    /// filters based on voice state.
+    #[cfg(not(target_os = "linux"))]
+    fn narrate_current_section_if_voice(&self) {
+        if let Some(section) = self.sections.get(self.current_section) {
+            let text = if section.heading.is_empty() {
+                section.content.clone()
+            } else {
+                format!("{}. {}", section.heading, section.content)
+            };
+            self.app_event_tx
+                .send(AppEvent::VoiceModeNarrateSection { text });
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn narrate_current_section_if_voice(&self) {}
 
     fn clear_updated_flag(&mut self) {
         if let Some(section) = self.sections.get_mut(self.current_section)
@@ -906,6 +953,7 @@ impl DocumentReaderView {
         *self.textarea_state.borrow_mut() = TextAreaState::default();
         // Keep composer focused — it will render the question + spinner while pending.
     }
+
 
     fn input_height(&self, width: u16) -> u16 {
         let max_h = (self.last_content_height.get() / 3).max(4);
@@ -1375,7 +1423,7 @@ impl DocumentReaderView {
                     self.clear_search();
                 }
             }
-            KeyCode::Char(' ') => {
+            KeyCode::Char('f') => {
                 self.toggle_fold_at_cursor();
             }
             KeyCode::Char(']') => {
@@ -2087,6 +2135,34 @@ impl BottomPaneView for DocumentReaderView {
         }
     }
 
+    fn voice_context(&self) -> Option<super::bottom_pane_view::ReadingViewVoiceContext> {
+        let section = self.sections.get(self.current_section)?;
+        let heading = section.heading.clone();
+
+        // Only include selection if the user is actively in visual select mode.
+        let active_selection = if self.visual_select.is_some() {
+            self.selection_context.clone()
+        } else {
+            None
+        };
+
+        Some(super::bottom_pane_view::ReadingViewVoiceContext {
+            title: self.title.clone(),
+            document_id: self.document_id.clone(),
+            section_index: self.current_section,
+            heading,
+            selection: active_selection,
+        })
+    }
+
+    fn set_voice_status(&mut self, status: Option<String>) {
+        self.voice_status = status;
+    }
+
+    fn is_composer_focused(&self) -> bool {
+        self.focus == ReaderFocus::Composer
+    }
+
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         self.exit_reading_mode();
         CancellationEvent::Handled
@@ -2394,6 +2470,24 @@ impl Renderable for DocumentReaderView {
                 } else {
                     section.rendered_lines(inner_width)
                 };
+
+                // When voice mode is active, prepend a speaker icon to the
+                // heading line so the user can see this section is being narrated.
+                if self.voice_status.is_some()
+                    && !section.heading.is_empty()
+                    && !raw_lines.is_empty()
+                {
+                    let first = &raw_lines[0];
+                    // Only add the icon if it's not already there (e.g. from
+                    // a recently_updated heading which starts with "✓").
+                    let first_text: String =
+                        first.spans.iter().map(|sp| sp.content.as_ref()).collect();
+                    if !first_text.starts_with('\u{1F50A}') {
+                        let mut new_spans = vec![Span::from("\u{1F50A} ")];
+                        new_spans.extend(first.spans.clone());
+                        raw_lines[0] = Line::from(new_spans);
+                    }
+                }
 
                 // On the first section, append a table of contents listing
                 // all section headings so the user knows the full structure.
@@ -2752,6 +2846,7 @@ impl Renderable for DocumentReaderView {
             current_has_folds,
             self.pending_quit,
             self.line_number_input.as_deref(),
+            self.voice_status.as_deref(),
             w,
         );
         Paragraph::new(hints).render(
@@ -3413,6 +3508,9 @@ mod tests {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
+
+        // Drain any events emitted during construction (e.g. narrate).
+        while rx.try_recv().is_ok() {}
 
         view.focus = ReaderFocus::Composer;
         // Submit without typing anything.
