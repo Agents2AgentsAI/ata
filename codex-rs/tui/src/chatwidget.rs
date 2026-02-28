@@ -7058,29 +7058,29 @@ impl ChatWidget {
 
         // Read job TOML files from ~/.ata/jobs/.
         let mut job_lines = Vec::new();
-        if jobs_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(&jobs_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("toml") {
-                        let name = path
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("?")
-                            .to_string();
-                        // Quick parse to get enabled status.
-                        let enabled = std::fs::read_to_string(&path)
-                            .ok()
-                            .and_then(|contents| {
-                                contents
-                                    .lines()
-                                    .find(|l| l.starts_with("enabled"))
-                                    .map(|l| l.contains("true"))
-                            })
-                            .unwrap_or(true);
-                        let status = if enabled { "enabled" } else { "disabled" };
-                        job_lines.push(format!("  {name:<20} {status}"));
-                    }
+        if jobs_dir.exists()
+            && let Ok(entries) = std::fs::read_dir(&jobs_dir)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("toml") {
+                    let name = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("?")
+                        .to_string();
+                    // Quick parse to get enabled status.
+                    let enabled = std::fs::read_to_string(&path)
+                        .ok()
+                        .and_then(|contents| {
+                            contents
+                                .lines()
+                                .find(|l| l.starts_with("enabled"))
+                                .map(|l| l.contains("true"))
+                        })
+                        .unwrap_or(true);
+                    let status = if enabled { "enabled" } else { "disabled" };
+                    job_lines.push(format!("  {name:<20} {status}"));
                 }
             }
         }
