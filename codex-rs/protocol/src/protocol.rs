@@ -877,22 +877,22 @@ impl SandboxPolicy {
                 // Include the scheduler directories under codex home
                 // (e.g. ~/.ata/jobs/ and ~/.ata/scheduler/) so that
                 // sandboxed commands can manage scheduled jobs.
-                if let Ok(codex_home) = codex_utils_home_dir::find_codex_home() {
-                    if codex_home.is_dir() {
-                        for subdir in &["jobs", "scheduler"] {
-                            let dir = codex_home.join(subdir);
-                            let _ = std::fs::create_dir_all(&dir);
-                            match AbsolutePathBuf::from_absolute_path(&dir) {
-                                Ok(path) => {
-                                    if !roots.iter().any(|r| r == &path) {
-                                        roots.push(path);
-                                    }
+                if let Ok(codex_home) = codex_utils_home_dir::find_codex_home()
+                    && codex_home.is_dir()
+                {
+                    for subdir in &["jobs", "scheduler"] {
+                        let dir = codex_home.join(subdir);
+                        let _ = std::fs::create_dir_all(&dir);
+                        match AbsolutePathBuf::from_absolute_path(&dir) {
+                            Ok(path) => {
+                                if !roots.iter().any(|r| r == &path) {
+                                    roots.push(path);
                                 }
-                                Err(e) => {
-                                    error!(
-                                        "Ignoring scheduler dir {dir:?} for sandbox writable root: {e}",
-                                    );
-                                }
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Ignoring scheduler dir {dir:?} for sandbox writable root: {e}",
+                                );
                             }
                         }
                     }
