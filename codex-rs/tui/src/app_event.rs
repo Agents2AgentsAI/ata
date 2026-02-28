@@ -396,6 +396,53 @@ pub(crate) enum AppEvent {
     SyntaxThemeSelected {
         name: String,
     },
+
+    // ─── Voice mode events ───────────────────────────────────────────────
+    /// PTT timeout check — for terminals that don't emit key release events.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModePttTimeoutCheck,
+
+    /// TTS audio chunk received from ElevenLabs (24kHz mono i16 PCM).
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeTtsAudioChunk {
+        pcm: Vec<i16>,
+    },
+
+    /// Live volume meter tick during PTT recording.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeMeterTick {
+        text: String,
+    },
+
+    /// TTS playback finished — transition back to Idle.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeTtsFinished,
+
+    /// Voice mode STT transcription completed.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeTranscriptionComplete {
+        text: String,
+    },
+
+    /// Voice mode STT transcription failed.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeTranscriptionFailed {
+        error: String,
+    },
+
+    /// Persist voice mode enabled state to config file.
+    #[cfg(not(target_os = "linux"))]
+    PersistVoiceModeEnabled(bool),
+
+    /// Interrupt TTS playback (e.g. user navigated away in reading view).
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeInterruptTts,
+
+    /// Auto-narrate a reading view section via TTS when voice mode is active.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeNarrateSection {
+        text: String,
+    },
 }
 
 /// The exit strategy requested by the UI layer.

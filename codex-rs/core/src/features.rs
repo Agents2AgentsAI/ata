@@ -170,6 +170,8 @@ pub enum Feature {
     ReadingView,
     /// Enable knowledge base persistence (cards, journal, research-context).
     ResearchKnowledgeBase,
+    /// Enable voice mode in the TUI (mic → STT → agent → TTS → speaker).
+    VoiceMode,
 }
 
 impl Feature {
@@ -828,6 +830,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "research_knowledge_base",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::VoiceMode,
+        key: "voice_mode",
+        stage: Stage::Experimental {
+            name: "Voice Mode",
+            menu_description: "mic → STT → agent → TTS → speaker",
+            announcement: "Voice Mode is now enabled. Press Ctrl+M or use /voice to toggle.",
+        },
+        default_enabled: false,
     },
 ];
 

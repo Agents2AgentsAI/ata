@@ -241,6 +241,7 @@ pub(super) fn hints_line(
     has_folds: bool,
     pending_quit: bool,
     line_number_input: Option<&str>,
+    voice_status: Option<&str>,
     width: u16,
 ) -> Line<'static> {
     let hints: Vec<Span<'static>> = if let Some(input) = line_number_input {
@@ -303,26 +304,29 @@ pub(super) fn hints_line(
             ": done".dim(),
         ]
     } else {
-        let mut h = vec![
+        let mut h: Vec<Span<'static>> = Vec::new();
+        // Voice mode status is additive — shown before the normal hints.
+        if let Some(vs) = voice_status {
+            h.push(Span::from(vs.to_string()).cyan().bold());
+            h.push(" | ".dim());
+        }
+        h.extend([
             "↑↓/jk".dim().bold(),
             ": scroll".dim(),
             " | ".dim(),
             "n/p".dim().bold(),
-            ": next/prev section".dim(),
-        ];
+            ": section".dim(),
+        ]);
         if has_folds {
-            h.extend([" | ".dim(), "Space".dim().bold(), ": toggle fold".dim()]);
+            h.extend([" | ".dim(), "f".dim().bold(), ": fold".dim()]);
         }
         h.extend([
             " | ".dim(),
             "v".dim().bold(),
-            ": select text".dim(),
+            ": select".dim(),
             " | ".dim(),
             "Tab".dim().bold(),
-            ": ask question".dim(),
-            " | ".dim(),
-            "?".dim().bold(),
-            ": help".dim(),
+            ": ask".dim(),
             " | ".dim(),
             "q".dim().bold(),
             ": close".dim(),
@@ -717,6 +721,7 @@ pub(super) fn apply_folds(
         end_line: usize, // exclusive
         summary: String,
         collapsed: bool,
+        voice: bool,
     }
 
     let mut line_folds: Vec<LineFold> = Vec::new();
@@ -734,6 +739,7 @@ pub(super) fn apply_folds(
                 end_line,
                 summary: fold.summary.clone(),
                 collapsed: fold.collapsed,
+                voice: fold.voice,
             });
         }
     }
@@ -755,10 +761,11 @@ pub(super) fn apply_folds(
             && lf.collapsed
         {
             // Emit a single collapsed summary line.
+            let voice_icon = if lf.voice { "\u{1F50A} " } else { "" };
             out.push(Line::from(vec![
                 "┊ ".dim().cyan(),
                 "[+] ".dim().cyan(),
-                lf.summary.clone().dim().cyan(),
+                Span::from(format!("{voice_icon}{}", lf.summary)).dim().cyan(),
             ]));
             skip_until = lf.end_line;
             continue;
@@ -769,10 +776,11 @@ pub(super) fn apply_folds(
             .iter()
             .find(|f| !f.collapsed && f.start_line == i)
         {
+            let voice_icon = if lf.voice { "\u{1F50A} " } else { "" };
             out.push(Line::from(vec![
                 "┊ ".dim().cyan(),
                 "[-] ".dim().cyan(),
-                lf.summary.clone().dim().cyan(),
+                Span::from(format!("{voice_icon}{}", lf.summary)).dim().cyan(),
             ]));
         }
 
@@ -941,7 +949,7 @@ pub(super) fn help_overlay_lines(width: u16, section_count: Option<usize>) -> Ve
     push_binding(&mut lines, "Esc", "Clear search");
 
     push_section(&mut lines, "Folds");
-    push_binding(&mut lines, "Space", "Toggle fold at cursor");
+    push_binding(&mut lines, "f", "Toggle fold at cursor");
     push_binding(&mut lines, "[ / ]", "Jump to prev / next fold");
     push_binding(&mut lines, "zM / zR", "Collapse / expand all");
 

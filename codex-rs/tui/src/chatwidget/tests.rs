@@ -1110,6 +1110,7 @@ async fn queued_restore_with_remote_images_keeps_local_placeholder_mapping() {
         remote_image_urls: remote_image_urls.clone(),
         text_elements: text_elements.clone(),
         mention_bindings: Vec::new(),
+        voice_input: false,
     });
 
     assert_eq!(chat.bottom_pane.composer_text(), text);
@@ -1155,6 +1156,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
         remote_image_urls: Vec::new(),
         text_elements: first_elements,
         mention_bindings: Vec::new(),
+        voice_input: false,
     });
     chat.queued_user_messages.push_back(UserMessage {
         text: second_text,
@@ -1165,6 +1167,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
         remote_image_urls: Vec::new(),
         text_elements: second_elements,
         mention_bindings: Vec::new(),
+        voice_input: false,
     });
     chat.refresh_queued_user_messages();
 
@@ -1235,6 +1238,7 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
         remote_image_urls: Vec::new(),
         text_elements: Vec::new(),
         mention_bindings: Vec::new(),
+        voice_input: false,
     });
     chat.refresh_queued_user_messages();
 
@@ -1297,6 +1301,7 @@ async fn remap_placeholders_uses_attachment_labels() {
         local_images: attachments,
         remote_image_urls: vec!["https://example.com/a.png".to_string()],
         mention_bindings: Vec::new(),
+        voice_input: false,
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
@@ -1363,6 +1368,7 @@ async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
         local_images: attachments,
         remote_image_urls: Vec::new(),
         mention_bindings: Vec::new(),
+        voice_input: false,
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
@@ -1727,6 +1733,8 @@ async fn make_chatwidget_manual(
         status_line_branch_lookup_complete: false,
         external_editor_state: ExternalEditorState::Closed,
         realtime_conversation: RealtimeConversationUiState::default(),
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        voice_mode_state: None,
         last_rendered_user_message_event: None,
     };
     widget.set_model(&resolved_model);

@@ -53,6 +53,7 @@ pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
 pub(crate) use request_user_input::RequestUserInputOverlay;
 mod bottom_pane_view;
+pub(crate) use bottom_pane_view::ReadingViewVoiceContext;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LocalImageAttachment {
@@ -552,6 +553,15 @@ impl BottomPane {
     ) {
         self.composer.set_input_enabled(enabled, placeholder);
         self.request_redraw();
+    }
+
+    pub(crate) fn set_placeholder_text(&mut self, placeholder: String) {
+        self.composer.set_placeholder_text(placeholder);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_force_hide_cursor(&mut self, hide: bool) {
+        self.composer.set_force_hide_cursor(hide);
     }
 
     pub(crate) fn clear_composer_for_ctrl_c(&mut self) {

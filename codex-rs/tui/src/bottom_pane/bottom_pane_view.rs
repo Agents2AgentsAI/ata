@@ -5,6 +5,20 @@ use crossterm::event::KeyEvent;
 
 use super::CancellationEvent;
 
+/// Context extracted from a reading view for voice mode integration.
+///
+/// When voice mode is active and the user is in a document reader, this struct
+/// carries the current reading context so the agent can provide reading-view-aware
+/// explanations rather than generic voice responses.
+#[derive(Debug, Clone)]
+pub(crate) struct ReadingViewVoiceContext {
+    pub(crate) title: String,
+    pub(crate) document_id: String,
+    pub(crate) section_index: usize,
+    pub(crate) heading: String,
+    pub(crate) selection: Option<String>,
+}
+
 /// Trait implemented by every view that can be shown in the bottom pane.
 pub(crate) trait BottomPaneView: Renderable {
     /// Handle a key event while the view is active. A redraw is always
@@ -120,5 +134,25 @@ pub(crate) trait BottomPaneView: Renderable {
     /// not re-open a reader the user already closed.
     fn closed_document_id(&self) -> Option<&str> {
         None
+    }
+
+    /// Return reading view context for voice mode, if this view is a document reader.
+    ///
+    /// When voice mode is active and the user speaks, the chat widget checks this
+    /// method to determine whether to use reading-view-aware voice instructions.
+    fn voice_context(&self) -> Option<ReadingViewVoiceContext> {
+        None
+    }
+
+    /// Update the voice mode status text displayed in this view's status area.
+    /// Only meaningful for views that show a voice indicator (e.g. document reader).
+    fn set_voice_status(&mut self, _status: Option<String>) {}
+
+    /// Return `true` when this view's internal composer/text-input has keyboard focus.
+    ///
+    /// Used by voice mode to skip PTT interception when the user is typing in
+    /// a view's embedded composer (e.g., the document reader's question input).
+    fn is_composer_focused(&self) -> bool {
+        false
     }
 }

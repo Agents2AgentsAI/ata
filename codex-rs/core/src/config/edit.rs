@@ -64,6 +64,14 @@ pub fn syntax_theme_edit(name: &str) -> ConfigEdit {
     }
 }
 
+/// Produces a config edit that sets `[voice_mode] enabled = <bool>`.
+pub fn voice_mode_enabled_edit(enabled: bool) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec!["voice_mode".to_string(), "enabled".to_string()],
+        value: value(enabled),
+    }
+}
+
 pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
     let mut array = toml_edit::Array::new();
     for item in items {

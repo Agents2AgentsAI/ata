@@ -119,4 +119,33 @@ impl BottomPane {
             self.request_redraw();
         }
     }
+
+    /// Return reading view context for voice mode integration.
+    ///
+    /// When the active view is a document reader, this extracts the current
+    /// section context so voice transcriptions can be routed with
+    /// reading-view-aware instructions.
+    pub(crate) fn reading_view_voice_context(
+        &self,
+    ) -> Option<bottom_pane_view::ReadingViewVoiceContext> {
+        self.view_stack.last().and_then(|v| v.voice_context())
+    }
+
+    /// Returns `true` when the active view's embedded composer has keyboard focus.
+    ///
+    /// Used by voice mode to skip PTT interception so Space types into the
+    /// composer immediately instead of starting voice recording.
+    pub(crate) fn is_view_composer_focused(&self) -> bool {
+        self.view_stack
+            .last()
+            .is_some_and(|v| v.is_composer_focused())
+    }
+
+    /// Update the voice mode status text in the active document reader.
+    pub(crate) fn set_document_reader_voice_status(&mut self, status: Option<String>) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.set_voice_status(status);
+            self.request_redraw();
+        }
+    }
 }
