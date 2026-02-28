@@ -44,16 +44,16 @@ The user was not logged in because Playwright's default browser is completely is
 
 ### Why other approaches fail
 
-| Approach | Why It Fails |
-|---|---|
-| **Playwright default** | Opens sandboxed Chromium with no cookies/auth. |
-| **CDP (`--remote-debugging-port`)** | Chrome 136+ requires a separate `--user-data-dir` for CDP, so you get a clean profile with no sessions. This was a deliberate security change to prevent cookie theft. |
-| **Playwright + Chrome profile copy** | Chrome locks its profile directory. Copying a locked profile gives inconsistent snapshots. |
-| **Cookie extraction** | Chrome encrypts cookies via macOS Keychain. Decrypting requires Keychain access or the encryption key. |
+| Approach                             | Why It Fails                                                                                                                                                           |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Playwright default**               | Opens sandboxed Chromium with no cookies/auth.                                                                                                                         |
+| **CDP (`--remote-debugging-port`)**  | Chrome 136+ requires a separate `--user-data-dir` for CDP, so you get a clean profile with no sessions. This was a deliberate security change to prevent cookie theft. |
+| **Playwright + Chrome profile copy** | Chrome locks its profile directory. Copying a locked profile gives inconsistent snapshots.                                                                             |
+| **Cookie extraction**                | Chrome encrypts cookies via macOS Keychain. Decrypting requires Keychain access or the encryption key.                                                                 |
 
 ### Why extension mode works where CDP doesn't
 
-Chrome 136 blocked CDP on the default profile as a security measure against malware. But the extension API is Chrome's *intended* mechanism for browser automation — it's audited, sandboxed by Chrome's extension security model, and doesn't expose raw debugging protocol access. The Playwright MCP Bridge extension communicates with the MCP server over a local channel, and executes actions via Chrome's `chrome.scripting` and `chrome.tabs` APIs.
+Chrome 136 blocked CDP on the default profile as a security measure against malware. But the extension API is Chrome's _intended_ mechanism for browser automation — it's audited, sandboxed by Chrome's extension security model, and doesn't expose raw debugging protocol access. The Playwright MCP Bridge extension communicates with the MCP server over a local channel, and executes actions via Chrome's `chrome.scripting` and `chrome.tabs` APIs.
 
 ## Fallback: Manual Flow
 
@@ -81,12 +81,32 @@ Requires one-time opt-in: Chrome → View → Developer → "Allow JavaScript fr
 
 This gives full JS execution in the user's authenticated Chrome without any extension or CDP. Useful as a fallback when the Playwright extension isn't installed.
 
+## Verified: Slack Webhook Setup (Full Automation)
+
+This flow has been tested end-to-end and works:
+
+1. `browser_navigate` → `https://api.slack.com/apps?new_app=1`
+2. Select "From a manifest" tab
+3. **CodeMirror gotcha**: Slack's manifest editor uses CodeMirror, not a plain `<textarea>`. Direct `locator('textarea').click()` fails because the CodeMirror overlay intercepts pointer events. Use `browser_run_code` with `page.evaluate()`:
+   ```js
+   const cmEl = document.querySelector(".CodeMirror");
+   cmEl.CodeMirror.setValue(manifestJson);
+   cmEl.CodeMirror.focus();
+   ```
+4. Click Next → review summary → Create
+5. Navigate to Incoming Webhooks → Add New Webhook
+6. Select channel from dropdown → Allow
+7. Extract webhook URL via `browser_evaluate` on the URL input element
+8. Store in `~/.ata/secrets/` and wire into job config
+
+Total time: ~2.5 minutes. Zero user interaction required.
+
 ## Automation Capability Tiers
 
-| Tier | Method | Setup | Capabilities | Platform |
-|---|---|---|---|---|
-| **1 (best)** | Playwright MCP `--extension` | Install Chrome extension | Full Playwright API, screenshots, selectors, waiting | Cross-platform |
-| **2** | AppleScript `execute javascript` | Enable JS from Apple Events | JS execution, navigation, form filling | macOS only |
-| **3** | `open <url>` + manual steps | None | Opens page, user does the rest | Cross-platform |
+| Tier         | Method                           | Setup                       | Capabilities                                         | Platform       |
+| ------------ | -------------------------------- | --------------------------- | ---------------------------------------------------- | -------------- |
+| **1 (best)** | Playwright MCP `--extension`     | Install Chrome extension    | Full Playwright API, screenshots, selectors, waiting | Cross-platform |
+| **2**        | AppleScript `execute javascript` | Enable JS from Apple Events | JS execution, navigation, form filling               | macOS only     |
+| **3**        | `open <url>` + manual steps      | None                        | Opens page, user does the rest                       | Cross-platform |
 
 The agent should try tier 1 first, fall back to tier 2 on macOS, and use tier 3 as a last resort.
