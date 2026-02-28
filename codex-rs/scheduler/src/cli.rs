@@ -359,19 +359,16 @@ async fn cmd_run(name: &str) -> anyhow::Result<()> {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
             // Tail the output file if it exists and has new content.
-            if output_path.exists() {
-                if let Ok(metadata) = tokio::fs::metadata(&output_path).await {
-                    let file_len = metadata.len();
-                    if file_len > bytes_read {
-                        if let Ok(contents) = tokio::fs::read(&output_path).await {
-                            let new_bytes = &contents[bytes_read as usize..];
-                            if let Ok(text) = std::str::from_utf8(new_bytes) {
-                                print!("{text}");
-                            }
-                            bytes_read = file_len;
-                        }
-                    }
+            if output_path.exists()
+                && let Ok(metadata) = tokio::fs::metadata(&output_path).await
+                && metadata.len() > bytes_read
+                && let Ok(contents) = tokio::fs::read(&output_path).await
+            {
+                let new_bytes = &contents[bytes_read as usize..];
+                if let Ok(text) = std::str::from_utf8(new_bytes) {
+                    print!("{text}");
                 }
+                bytes_read = metadata.len();
             }
 
             let run = runs_repo::get_run(db.pool(), &run_id).await?;
@@ -380,14 +377,13 @@ async fn cmd_run(name: &str) -> anyhow::Result<()> {
                     let status = crate::storage::RunStatus::from_str_lossy(&r.status);
                     if status.is_terminal() {
                         // Flush any remaining output.
-                        if output_path.exists() {
-                            if let Ok(contents) = tokio::fs::read(&output_path).await {
-                                if (contents.len() as u64) > bytes_read {
-                                    let new_bytes = &contents[bytes_read as usize..];
-                                    if let Ok(text) = std::str::from_utf8(new_bytes) {
-                                        print!("{text}");
-                                    }
-                                }
+                        if output_path.exists()
+                            && let Ok(contents) = tokio::fs::read(&output_path).await
+                            && (contents.len() as u64) > bytes_read
+                        {
+                            let new_bytes = &contents[bytes_read as usize..];
+                            if let Ok(text) = std::str::from_utf8(new_bytes) {
+                                print!("{text}");
                             }
                         }
                         println!();

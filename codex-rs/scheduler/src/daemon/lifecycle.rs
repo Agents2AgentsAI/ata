@@ -291,13 +291,13 @@ pub fn install_launchd() -> anyhow::Result<()> {
         let kick = std::process::Command::new("launchctl")
             .args(["kickstart", &format!("gui/{uid}/{LAUNCHD_LABEL}")])
             .status();
-        if let Ok(s) = kick {
-            if !s.success() {
-                eprintln!(
-                    "warning: launchctl kickstart exited with code {}",
-                    s.code().unwrap_or(-1)
-                );
-            }
+        if let Ok(s) = kick
+            && !s.success()
+        {
+            eprintln!(
+                "warning: launchctl kickstart exited with code {}",
+                s.code().unwrap_or(-1)
+            );
         }
 
         println!("Scheduler daemon installed and started via launchd.");

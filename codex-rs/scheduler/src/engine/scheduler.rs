@@ -372,11 +372,11 @@ pub async fn run_scheduler(
                 if !pending.is_empty() {
                     // Reload defs on-demand so newly created jobs are found
                     // immediately (the user may have just created the TOML).
-                    if let Ok(fresh) = load_all_defs() {
-                        if fresh.len() != defs.len() {
-                            defs = fresh;
-                            let _ = sync_jobs(&db, &defs).await;
-                        }
+                    if let Ok(fresh) = load_all_defs()
+                        && fresh.len() != defs.len()
+                    {
+                        defs = fresh;
+                        let _ = sync_jobs(&db, &defs).await;
                     }
                 }
                 for run in pending {
