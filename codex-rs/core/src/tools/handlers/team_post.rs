@@ -106,6 +106,13 @@ impl ToolHandler for TeamPostHandler {
         {
             Ok(()) => {
                 self.last_post_at.store(now, Ordering::Relaxed);
+                // Also post to relay (best-effort, fire-and-forget).
+                #[cfg(feature = "relay")]
+                if let Some(relay) = session.services.coordination.relay() {
+                    let _ = relay
+                        .post_message(&session_id, &args.message, args.message_type.as_deref())
+                        .await;
+                }
                 Ok(ToolOutput::Function {
                     body: FunctionCallOutputBody::Text(
                         "Message posted to coordination channel.".to_string(),

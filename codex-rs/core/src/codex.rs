@@ -1411,6 +1411,7 @@ impl Session {
                 &config.codex_home,
                 &session_configuration.cwd,
                 &conversation_id.to_string(),
+                config.coordination.as_ref(),
             )
             .await
         } else {

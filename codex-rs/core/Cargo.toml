@@ -120,6 +120,7 @@ zip = { workspace = true }
 [features]
 deterministic_process_ids = []
 data = ["dep:codex-data-tools"]
+relay = ["codex-coordination/relay"]
 research = []
 test-support = []
 

@@ -11,6 +11,10 @@ use codex_protocol::models::ResponseItem;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+#[cfg(feature = "relay")]
+use codex_coordination::relay_client::RelayClient;
+
+use crate::config::CoordinationToml;
 use crate::git_info::get_git_repo_root;
 
 const INSTRUCTIONS: &str = include_str!("../templates/coordination/instructions.md");
@@ -28,6 +32,8 @@ pub(crate) struct Handle {
 struct HandleInner {
     db: Arc<CoordinationDb>,
     cancel: CancellationToken,
+    #[cfg(feature = "relay")]
+    relay: Option<Arc<RelayClient>>,
 }
 
 impl Handle {
@@ -37,8 +43,15 @@ impl Handle {
     }
 
     /// Initialize coordination: open DB, register session, start heartbeat.
-    /// Returns a disabled handle if anything goes wrong.
-    pub async fn init(codex_home: &Path, cwd: &Path, session_id: &str) -> Self {
+    /// When a relay URL is configured, also registers with the remote relay
+    /// and starts a relay heartbeat. Returns a disabled handle if anything
+    /// goes wrong.
+    pub async fn init(
+        codex_home: &Path,
+        cwd: &Path,
+        session_id: &str,
+        #[allow(unused_variables)] coordination_config: Option<&CoordinationToml>,
+    ) -> Self {
         let cancel = CancellationToken::new();
         let db = match CoordinationDb::open(codex_home).await {
             Ok(db) => Arc::new(db),
@@ -67,7 +80,31 @@ impl Handle {
             warn!("failed to register coordination session: {e}");
         }
 
-        // Heartbeat loop — cancelled via the stored token.
+        // --- Relay setup (behind feature flag) ---
+        // Default to localhost:7800 when no explicit relay_url is configured.
+        // The TUI auto-starts a relay server on this port, so this enables
+        // local agent coordination with zero configuration.
+        #[cfg(feature = "relay")]
+        let relay = {
+            let relay_opt = match compute_project_id(cwd).await {
+                Some(project_id) => {
+                    let url = coordination_config
+                        .and_then(|c| c.relay_url.clone())
+                        .unwrap_or_else(|| "http://127.0.0.1:7800".to_string());
+                    let secret = coordination_config.and_then(|c| c.relay_secret.clone());
+                    let relay = Arc::new(RelayClient::new(url, secret, project_id));
+                    // Best-effort register.
+                    let _ = relay
+                        .register_session(session_id, branch.as_deref(), None)
+                        .await;
+                    Some(relay)
+                }
+                None => None,
+            };
+            relay_opt
+        };
+
+        // Local heartbeat loop — cancelled via the stored token.
         let hb_db = Arc::clone(&db);
         let hb_sid = session_id.to_string();
         let hb_cancel = cancel.child_token();
@@ -87,14 +124,44 @@ impl Handle {
             }
         });
 
+        // Relay heartbeat (separate task, 60s interval).
+        #[cfg(feature = "relay")]
+        if let Some(ref relay) = relay {
+            let r = Arc::clone(relay);
+            let sid = session_id.to_string();
+            let relay_cancel = cancel.child_token();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                loop {
+                    tokio::select! {
+                        _ = relay_cancel.cancelled() => break,
+                        _ = interval.tick() => {
+                            let _ = r.heartbeat(&sid).await;
+                        }
+                    }
+                }
+            });
+        }
+
         Self {
-            inner: Some(HandleInner { db, cancel }),
+            inner: Some(HandleInner {
+                db,
+                cancel,
+                #[cfg(feature = "relay")]
+                relay,
+            }),
         }
     }
 
     /// Borrow the underlying DB (used by `team_post` tool handler).
     pub fn db(&self) -> Option<&Arc<CoordinationDb>> {
         self.inner.as_ref().map(|i| &i.db)
+    }
+
+    /// Borrow the relay client (used by `team_post` tool handler).
+    #[cfg(feature = "relay")]
+    pub fn relay(&self) -> Option<&Arc<RelayClient>> {
+        self.inner.as_ref().and_then(|i| i.relay.as_ref())
     }
 
     /// Developer instructions to inject into the initial context.
@@ -110,6 +177,10 @@ impl Handle {
             inner.cancel.cancel();
             if let Err(e) = inner.db.deregister_session(session_id).await {
                 warn!("failed to deregister coordination session: {e}");
+            }
+            #[cfg(feature = "relay")]
+            if let Some(ref relay) = inner.relay {
+                let _ = relay.deregister_session(session_id).await;
             }
         }
     }
@@ -136,11 +207,16 @@ impl Handle {
             if let Err(e) = inner.db.update_description(session_id, &truncated).await {
                 warn!("failed to update coordination session description: {e}");
             }
+            #[cfg(feature = "relay")]
+            if let Some(ref relay) = inner.relay {
+                let _ = relay.update_description(session_id, &truncated).await;
+            }
         }
     }
 
     /// Build coordination context if peer state changed. Returns `None` when
     /// coordination is disabled or nothing changed since the last call.
+    #[allow(unused_mut)] // peers/messages are mutated only with the relay feature
     pub async fn build_if_changed(
         &self,
         tracker: &mut CoordinationTracker,
@@ -150,20 +226,55 @@ impl Handle {
         let inner = self.inner.as_ref()?;
         let repo_path = resolve_repo_path(cwd).await;
 
-        let peers = match inner.db.active_sessions(&repo_path).await {
+        let mut peers = match inner.db.active_sessions(&repo_path).await {
             Ok(p) => p,
             Err(e) => {
                 warn!("coordination active_sessions query failed: {e}");
                 return None;
             }
         };
-        let messages = match inner.db.recent_messages(&repo_path).await {
+        let mut messages = match inner.db.recent_messages(&repo_path).await {
             Ok(m) => m,
             Err(e) => {
                 warn!("coordination recent_messages query failed: {e}");
                 return None;
             }
         };
+
+        // Merge relay peers and messages (deduplicate by session_id for peers,
+        // relay messages use negative IDs to avoid collisions with local IDs).
+        #[cfg(feature = "relay")]
+        if let Some(ref relay) = inner.relay {
+            if let Ok(relay_peers) = relay.active_sessions().await {
+                let local_ids: std::collections::HashSet<String> =
+                    peers.iter().map(|s| s.session_id.clone()).collect();
+                for rp in relay_peers {
+                    if !local_ids.contains(&rp.session_id) {
+                        peers.push(CoordinationSession {
+                            repo_path: repo_path.clone(),
+                            ..rp
+                        });
+                    }
+                }
+            }
+            if let Ok(relay_msgs) = relay.recent_messages(None).await {
+                // Use negative relay message IDs to avoid collisions.
+                let local_sigs: std::collections::HashSet<(String, i64)> = messages
+                    .iter()
+                    .map(|m| (m.session_id.clone(), m.created_at))
+                    .collect();
+                for rm in relay_msgs {
+                    let sig = (rm.session_id.clone(), rm.created_at);
+                    if !local_sigs.contains(&sig) {
+                        messages.push(CoordinationMessage {
+                            id: -rm.id, // negative to distinguish relay msgs
+                            repo_path: repo_path.clone(),
+                            ..rm
+                        });
+                    }
+                }
+            }
+        }
 
         // Fingerprint: sorted peer IDs (excluding self) + latest peer message ID.
         let mut cur_peer_ids: Vec<String> = peers
@@ -237,6 +348,17 @@ async fn resolve_repo_path(cwd: &Path) -> String {
         .to_string()
 }
 
+/// Compute a project ID by hashing the normalized `git remote get-url origin`.
+/// Returns `None` if the repo has no remote (local-only coordination).
+#[cfg(feature = "relay")]
+async fn compute_project_id(cwd: &Path) -> Option<String> {
+    codex_coordination::compute_project_id(cwd).await
+}
+
+fn agent_name(session_id: &str) -> String {
+    codex_coordination::agent_name(session_id)
+}
+
 // ---------------------------------------------------------------------------
 // CoordinationContext (XML serialization + ResponseItem conversion)
 // ---------------------------------------------------------------------------
@@ -258,8 +380,8 @@ impl CoordinationContext {
             .collect();
 
         let mut peer_labels: HashMap<&str, String> = HashMap::new();
-        for (i, p) in peers.iter().enumerate() {
-            peer_labels.insert(&p.session_id, format!("peer-{}", i + 1));
+        for p in &peers {
+            peer_labels.insert(&p.session_id, agent_name(&p.session_id));
         }
 
         let mut latest_msg_by_peer: HashMap<&str, &str> = HashMap::new();
@@ -276,15 +398,14 @@ impl CoordinationContext {
             for p in &peers {
                 let label = &peer_labels[p.session_id.as_str()];
                 let branch = p.branch.as_deref().unwrap_or("unknown");
-                let desc = p.description.as_deref().unwrap_or("no description");
                 if let Some(latest) = latest_msg_by_peer.get(p.session_id.as_str()) {
                     let summary: String = latest.chars().take(120).collect();
                     lines.push(format!(
-                        "    <peer id=\"{label}\" branch=\"{branch}\" task=\"{desc}\" latest=\"{summary}\" />"
+                        "    <peer id=\"{label}\" branch=\"{branch}\" latest=\"{summary}\" />"
                     ));
                 } else {
                     lines.push(format!(
-                        "    <peer id=\"{label}\" branch=\"{branch}\" task=\"{desc}\" />"
+                        "    <peer id=\"{label}\" branch=\"{branch}\" />"
                     ));
                 }
             }

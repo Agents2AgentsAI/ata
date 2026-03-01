@@ -3751,6 +3751,9 @@ impl ChatWidget {
             SlashCommand::Ps => {
                 self.add_ps_output();
             }
+            SlashCommand::Team => {
+                self.add_team_output(String::new());
+            }
             SlashCommand::Clean => {
                 self.clean_background_terminals();
             }
@@ -3901,6 +3904,10 @@ impl ChatWidget {
                         user_facing_hint: None,
                     },
                 });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::Team => {
+                self.add_team_output(trimmed.to_string());
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
@@ -4991,6 +4998,23 @@ impl ChatWidget {
             })
             .collect();
         self.add_to_history(history_cell::new_unified_exec_processes_output(processes));
+    }
+
+    fn add_team_output(&mut self, args: String) {
+        let codex_home = self.config.codex_home.clone();
+        let cwd = self.config.cwd.clone();
+        let tx = self.app_event_tx.clone();
+        let my_session_id = self.thread_id.map(|t| t.to_string());
+        tokio::spawn(async move {
+            let lines =
+                match build_team_lines(&codex_home, &cwd, &args, my_session_id.as_deref()).await {
+                    Ok(lines) => lines,
+                    Err(e) => vec![Line::from(
+                        format!("Failed to query coordination: {e}").red(),
+                    )],
+                };
+            tx.send(AppEvent::TeamResult(lines));
+        });
     }
 
     fn clean_background_terminals(&mut self) {
@@ -7985,6 +8009,148 @@ pub(crate) fn show_review_commit_picker_with_entries(
         search_placeholder: Some("Type to search commits".to_string()),
         ..Default::default()
     });
+}
+
+// ---------------------------------------------------------------------------
+// /team command — coordination visibility
+// ---------------------------------------------------------------------------
+
+/// Derive a stable, human-readable name from a session ID.
+///
+/// Uses 3 bytes from the UUID to index into adjective x color x animal word
+/// lists (64 x 64 x 64 = 262,144 combinations), producing names like
+/// "swift-amber-falcon". The name is deterministic: the same session_id
+/// always yields the same name.
+fn coordination_agent_name(session_id: &str) -> String {
+    codex_coordination::agent_name(session_id)
+}
+
+async fn build_team_lines(
+    codex_home: &std::path::Path,
+    cwd: &std::path::Path,
+    args: &str,
+    my_session_id: Option<&str>,
+) -> anyhow::Result<Vec<Line<'static>>> {
+    use codex_coordination::CoordinationDb;
+    use ratatui::style::Modifier;
+    use ratatui::style::Style;
+    use ratatui::text::Span;
+
+    let db = CoordinationDb::open(codex_home).await?;
+    let repo_path = codex_core::git_info::get_git_common_dir(cwd)
+        .await
+        .or_else(|| codex_core::git_info::get_git_repo_root(cwd))
+        .unwrap_or_else(|| cwd.to_path_buf())
+        .to_string_lossy()
+        .to_string();
+
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let dim = Style::default().add_modifier(Modifier::DIM);
+
+    let trimmed = args.trim();
+    let show_messages = trimmed.starts_with("messages") || trimmed.starts_with("msgs");
+
+    if show_messages {
+        // Parse optional agent filter: `/team messages <name>`
+        let filter_name = trimmed
+            .strip_prefix("messages")
+            .or_else(|| trimmed.strip_prefix("msgs"))
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
+        let messages = db.recent_messages(&repo_path).await?;
+        let sessions = db.active_sessions(&repo_path).await?;
+
+        // Build session_id → agent name map.
+        let name_map: std::collections::HashMap<String, String> = sessions
+            .iter()
+            .map(|s| (s.session_id.clone(), coordination_agent_name(&s.session_id)))
+            .collect();
+
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from(Span::styled("Coordination Messages", bold)));
+        lines.push(Line::default());
+
+        let filtered: Vec<_> = messages
+            .iter()
+            .filter(|m| {
+                if let Some(ref filter) = filter_name {
+                    let agent = name_map
+                        .get(&m.session_id)
+                        .cloned()
+                        .unwrap_or_else(|| coordination_agent_name(&m.session_id));
+                    agent.starts_with(filter.as_str())
+                } else {
+                    true
+                }
+            })
+            .collect();
+
+        if filtered.is_empty() {
+            let msg = if filter_name.is_some() {
+                "  No messages found for that agent."
+            } else {
+                "  No recent messages."
+            };
+            lines.push(Line::from(Span::styled(msg, dim)));
+        } else {
+            for m in filtered {
+                let agent = name_map
+                    .get(&m.session_id)
+                    .cloned()
+                    .unwrap_or_else(|| coordination_agent_name(&m.session_id));
+                let is_you = my_session_id == Some(m.session_id.as_str());
+                let label = if is_you {
+                    format!("(you) {agent}")
+                } else {
+                    agent
+                };
+                lines.push(Line::from(vec![
+                    Span::raw("  ["),
+                    Span::styled(label, bold),
+                    Span::raw("] "),
+                    Span::styled(format!("{}: ", m.message_type), dim),
+                    Span::raw(m.message.clone()),
+                ]));
+            }
+        }
+        Ok(lines)
+    } else {
+        // Agents mode (default, or explicit `/team agents`).
+        let sessions = db.active_sessions(&repo_path).await?;
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from(Span::styled("Coordination Agents", bold)));
+        lines.push(Line::default());
+
+        if sessions.is_empty() {
+            lines.push(Line::from(Span::styled("  No active agents.", dim)));
+        } else {
+            for s in &sessions {
+                let name = coordination_agent_name(&s.session_id);
+                let is_you = my_session_id == Some(s.session_id.as_str());
+                let branch = s.branch.as_deref().unwrap_or("—");
+                let desc = s.description.as_deref().unwrap_or("");
+
+                let name_display = if is_you {
+                    format!("(you) {name}")
+                } else {
+                    name
+                };
+
+                let mut spans = vec![
+                    Span::raw("  "),
+                    Span::styled(format!("{name_display:<34}"), bold),
+                    Span::raw(format!(" {branch:<20}")),
+                ];
+                if !desc.is_empty() {
+                    spans.push(Span::styled(format!(" \"{desc}\""), dim));
+                }
+                lines.push(Line::from(spans));
+            }
+        }
+        Ok(lines)
+    }
 }
 
 #[cfg(test)]
