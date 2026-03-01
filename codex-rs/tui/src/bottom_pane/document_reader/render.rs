@@ -305,11 +305,6 @@ pub(super) fn hints_line(
         ]
     } else {
         let mut h: Vec<Span<'static>> = Vec::new();
-        // Voice mode status is additive — shown before the normal hints.
-        if let Some(vs) = voice_status {
-            h.push(Span::from(vs.to_string()).cyan().bold());
-            h.push(" | ".dim());
-        }
         h.extend([
             "↑↓/jk".dim().bold(),
             ": scroll".dim(),
@@ -317,6 +312,9 @@ pub(super) fn hints_line(
             "n/p".dim().bold(),
             ": section".dim(),
         ]);
+        if voice_status.is_some() {
+            h.extend([" | ".dim(), "r".dim().bold(), ": read".dim()]);
+        }
         if has_folds {
             h.extend([" | ".dim(), "f".dim().bold(), ": fold".dim()]);
         }
@@ -382,6 +380,23 @@ pub(super) fn bordered_line(inner: Line<'static>, width: u16, updated: bool) -> 
     } else {
         spans.push(" │".dim());
     }
+    Line::from(spans)
+}
+
+/// Render a text string inside card borders (for status lines).
+pub(super) fn bordered_text_line(text: &str, width: u16) -> Line<'static> {
+    let text_width = unicode_width::UnicodeWidthStr::width(text);
+    let pad = (width as usize)
+        .saturating_sub(4) // "│ " + " │"
+        .saturating_sub(text_width);
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(4);
+    spans.push("│ ".dim());
+    spans.push(Span::from(text.to_string()).cyan().bold());
+    if pad > 0 {
+        spans.push(Span::from(" ".repeat(pad)));
+    }
+    spans.push(" │".dim());
     Line::from(spans)
 }
 
@@ -490,6 +505,59 @@ pub(super) fn apply_char_selection(
         if extra > 0 {
             new_spans.push(Span::from(" ".repeat(extra)).on_dark_gray());
         }
+    }
+
+    Line::from(new_spans)
+}
+
+/// Apply bold+underline highlight to a character range within a rendered line.
+///
+/// Used for word-level karaoke during narration.  The highlighted word gets
+/// bold+underline added to its existing style; all other spans keep their
+/// original formatting (bold, italic, colors, etc.) untouched.
+pub(super) fn apply_word_highlight(
+    line: Line<'static>,
+    start_col: usize,
+    end_col: usize,
+) -> Line<'static> {
+    use ratatui::style::Modifier;
+
+    let hl = Modifier::BOLD | Modifier::UNDERLINED;
+    let mut new_spans: Vec<Span<'static>> = Vec::new();
+    let mut char_pos = 0usize;
+
+    for span in line.spans {
+        let span_text: &str = span.content.as_ref();
+        let span_start = char_pos;
+        let span_end = span_start + span_text.len();
+        let base_style = span.style;
+
+        if span_end <= start_col || span_start >= end_col {
+            // Entirely outside highlight.
+            new_spans.push(span);
+        } else {
+            // Partially or fully inside highlight — split.
+            let local_start = start_col.saturating_sub(span_start);
+            let local_end = end_col.saturating_sub(span_start).min(span_text.len());
+
+            if local_start > 0 {
+                new_spans.push(Span::styled(
+                    span_text[..local_start].to_string(),
+                    base_style,
+                ));
+            }
+            new_spans.push(Span::styled(
+                span_text[local_start..local_end].to_string(),
+                base_style.add_modifier(hl),
+            ));
+            if local_end < span_text.len() {
+                new_spans.push(Span::styled(
+                    span_text[local_end..].to_string(),
+                    base_style,
+                ));
+            }
+        }
+        char_pos = span_end;
     }
 
     Line::from(new_spans)

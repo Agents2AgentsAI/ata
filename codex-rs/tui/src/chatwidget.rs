@@ -680,6 +680,10 @@ pub(crate) struct ChatWidget {
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
     #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     voice_mode_state: Option<voice_mode::VoiceModeState>,
+    /// Voice response cells stashed during karaoke playback.
+    /// Flushed to history when the karaoke overlay finishes.
+    #[cfg(not(target_os = "linux"))]
+    deferred_voice_cells: Vec<Box<dyn HistoryCell>>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -2929,6 +2933,8 @@ impl ChatWidget {
             last_rendered_user_message_event: None,
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
             voice_mode_state: None,
+            #[cfg(not(target_os = "linux"))]
+            deferred_voice_cells: Vec::new(),
         };
 
         widget.prefetch_rate_limits();
@@ -3133,6 +3139,8 @@ impl ChatWidget {
             last_rendered_user_message_event: None,
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
             voice_mode_state: None,
+            #[cfg(not(target_os = "linux"))]
+            deferred_voice_cells: Vec::new(),
         };
 
         widget.prefetch_rate_limits();
@@ -3304,6 +3312,8 @@ impl ChatWidget {
             last_rendered_user_message_event: None,
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
             voice_mode_state: None,
+            #[cfg(not(target_os = "linux"))]
+            deferred_voice_cells: Vec::new(),
         };
 
         widget.prefetch_rate_limits();
@@ -4117,7 +4127,24 @@ impl ChatWidget {
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.active_cell.take() {
             self.needs_final_message_separator = true;
+            // During voice karaoke, stash the cell instead of sending it to
+            // history immediately — the karaoke overlay is showing this content.
+            // Non-voice cells (tool outputs, exec results) are never the active
+            // cell at this point; they flow through InsertHistoryCell normally.
+            #[cfg(not(target_os = "linux"))]
+            if self.is_voice_speaking() {
+                self.deferred_voice_cells.push(active);
+                return;
+            }
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
+        }
+    }
+
+    /// Flush any voice cells that were deferred during karaoke playback.
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn flush_deferred_voice_cells(&mut self) {
+        for cell in self.deferred_voice_cells.drain(..) {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
         }
     }
 
@@ -7985,13 +8012,17 @@ impl ChatWidget {
         // During TTS karaoke playback, the karaoke renderable replaces the
         // active cell visually (the same text is shown with word-level
         // highlighting). Skip the active cell to avoid duplicate text.
+        // When the document reader is active, karaoke is rendered inside
+        // the reader's content area instead, so skip the overlay entirely.
         #[cfg(not(target_os = "linux"))]
         let karaoke_active = {
             let width = self
                 .last_rendered_width
                 .get()
                 .unwrap_or(80) as u16;
-            if let Some(lines) = self.voice_karaoke_lines(width) {
+            if self.bottom_pane.is_document_reader_active() {
+                false
+            } else if let Some(lines) = self.voice_karaoke_lines(width) {
                 if !lines.is_empty() {
                     // Push an empty flex=1 spacer in place of the active cell.
                     flex.push(1, RenderableItem::Owned(Box::new(())));

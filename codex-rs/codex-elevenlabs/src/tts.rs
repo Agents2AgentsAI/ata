@@ -170,10 +170,13 @@ impl TtsStream {
                                         Ok(bytes) => {
                                             let pcm = bytes_to_pcm_i16(&bytes);
                                             if !pcm.is_empty() {
-                                                // Prefer normalizedAlignment, fall back to alignment.
+                                                // Prefer per-chunk alignment over normalizedAlignment.
+                                                // normalizedAlignment has session-absolute timestamps,
+                                                // but our consumer accumulates cumulative_ms from PCM
+                                                // duration, so per-chunk (relative) times are needed.
                                                 let alignment = resp
-                                                    .normalized_alignment
-                                                    .or(resp.alignment);
+                                                    .alignment
+                                                    .or(resp.normalized_alignment);
                                                 let chunk = TtsChunk { pcm, alignment };
                                                 if audio_tx.send(chunk).await.is_err() {
                                                     trace!("TTS audio receiver dropped");

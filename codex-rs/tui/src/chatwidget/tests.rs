@@ -1736,6 +1736,8 @@ async fn make_chatwidget_manual(
         #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
         voice_mode_state: None,
         last_rendered_user_message_event: None,
+        #[cfg(not(target_os = "linux"))]
+        deferred_voice_cells: Vec::new(),
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
