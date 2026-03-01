@@ -127,6 +127,26 @@ impl CoordinationDb {
         Ok(())
     }
 
+    /// Fetch messages with `id > since_id` for a repo, in ascending order.
+    /// Used by the watcher to poll only new messages.
+    pub async fn messages_since(
+        &self,
+        repo_path: &str,
+        since_id: i64,
+    ) -> anyhow::Result<Vec<CoordinationMessage>> {
+        let rows: Vec<CoordinationMessage> = sqlx::query_as(
+            "SELECT id, session_id, repo_path, message, message_type, created_at
+             FROM messages
+             WHERE repo_path = ? AND id > ?
+             ORDER BY id ASC",
+        )
+        .bind(repo_path)
+        .bind(since_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// Fetch recent messages for a repo, newest last.
     pub async fn recent_messages(
         &self,
@@ -234,6 +254,40 @@ mod tests {
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].message, "hello world");
         assert_eq!(msgs[1].message_type, "intent");
+    }
+
+    #[tokio::test]
+    async fn messages_since_returns_only_new() {
+        let (db, _dir) = temp_db().await;
+        db.register_session("s1", "/repo", None, None)
+            .await
+            .expect("register");
+        db.post_message("s1", "/repo", "first", None)
+            .await
+            .expect("post");
+        db.post_message("s1", "/repo", "second", None)
+            .await
+            .expect("post");
+        db.post_message("s1", "/repo", "third", None)
+            .await
+            .expect("post");
+
+        let all = db.messages_since("/repo", 0).await.expect("since 0");
+        assert_eq!(all.len(), 3);
+
+        let after_first = db
+            .messages_since("/repo", all[0].id)
+            .await
+            .expect("since first");
+        assert_eq!(after_first.len(), 2);
+        assert_eq!(after_first[0].message, "second");
+        assert_eq!(after_first[1].message, "third");
+
+        let after_last = db
+            .messages_since("/repo", all[2].id)
+            .await
+            .expect("since last");
+        assert_eq!(after_last.len(), 0);
     }
 
     #[tokio::test]

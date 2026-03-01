@@ -48,6 +48,7 @@ pub enum SlashCommand {
     Feedback,
     Rollout,
     Ps,
+    Team,
     Clean,
     Clear,
     Personality,
@@ -84,6 +85,7 @@ impl SlashCommand {
             SlashCommand::Statusline => "configure which items appear in the status line",
             SlashCommand::Theme => "choose a syntax highlighting theme",
             SlashCommand::Ps => "list background terminals",
+            SlashCommand::Team => "list coordination agents and messages",
             SlashCommand::Clean => "stop all background terminals",
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
@@ -123,6 +125,7 @@ impl SlashCommand {
                 | SlashCommand::Rename
                 | SlashCommand::Plan
                 | SlashCommand::SandboxReadRoot
+                | SlashCommand::Team
         )
     }
 
@@ -168,6 +171,7 @@ impl SlashCommand {
             SlashCommand::Realtime => true,
             SlashCommand::Collab => true,
             SlashCommand::Agent => true,
+            SlashCommand::Team => true,
             SlashCommand::Statusline => false,
             SlashCommand::Theme => false,
         }
