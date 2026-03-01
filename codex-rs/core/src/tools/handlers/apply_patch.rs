@@ -108,9 +108,14 @@ impl ToolHandler for ApplyPatchHandler {
         let command = vec!["apply_patch".to_string(), patch_input.clone()];
         match codex_apply_patch::maybe_parse_apply_patch_verified(&command, &cwd) {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+                #[cfg(feature = "lsp")]
+                let lsp_file_paths = file_paths_for_action(&changes);
                 match apply_patch::apply_patch(turn.as_ref(), changes).await {
                     InternalApplyPatchInvocation::Output(item) => {
-                        let content = item?;
+                        #[allow(unused_mut)]
+                        let mut content = item?;
+                        #[cfg(feature = "lsp")]
+                        append_lsp_diagnostics(&session, &lsp_file_paths, &mut content).await;
                         Ok(ToolOutput::Function {
                             body: FunctionCallOutputBody::Text(content),
                             success: Some(true),
@@ -164,7 +169,10 @@ impl ToolHandler for ApplyPatchHandler {
                             &call_id,
                             Some(&tracker),
                         );
-                        let content = emitter.finish(event_ctx, out).await?;
+                        #[allow(unused_mut)]
+                        let mut content = emitter.finish(event_ctx, out).await?;
+                        #[cfg(feature = "lsp")]
+                        append_lsp_diagnostics(&session, &lsp_file_paths, &mut content).await;
                         Ok(ToolOutput::Function {
                             body: FunctionCallOutputBody::Text(content),
                             success: Some(true),
@@ -391,6 +399,23 @@ It is important to remember:
             additional_properties: Some(false.into()),
         },
     })
+}
+
+/// Append LSP diagnostic errors to the output of a successful patch.
+#[cfg(feature = "lsp")]
+async fn append_lsp_diagnostics(
+    session: &Session,
+    paths: &[AbsolutePathBuf],
+    content: &mut String,
+) {
+    if let Some(ref lsp) = session.services.lsp_feedback {
+        for p in paths {
+            let diag = lsp.touch_and_collect_errors(p.as_path()).await;
+            if !diag.is_empty() {
+                content.push_str(&diag);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1405,6 +1405,25 @@ impl Session {
                 (None, None)
             };
 
+        // Initialize LSP feedback if the feature is enabled.
+        #[cfg(feature = "lsp")]
+        let lsp_feedback = if config.features.enabled(Feature::Lsp) {
+            use crate::tools::lsp_feedback::LspFeedback;
+            let servers: std::collections::HashMap<String, codex_lsp_client::LspServerConfig> =
+                codex_lsp_client::builtin_servers::builtin_servers()
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v))
+                    .collect();
+            let registry = Arc::new(codex_lsp_client::ServerRegistry::new(
+                servers,
+                session_configuration.cwd.clone(),
+                None,
+            ));
+            Some(Arc::new(LspFeedback::new(registry)))
+        } else {
+            None
+        };
+
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
             // instance. It will be replaced with one created via
@@ -1462,6 +1481,8 @@ impl Session {
                 config.codex_home.clone(),
                 config.cli_auth_credentials_store_mode,
             ),
+            #[cfg(feature = "lsp")]
+            lsp_feedback,
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
@@ -5952,8 +5973,16 @@ async fn built_tools(
             connectors::filter_codex_apps_tools_by_policy(selected_mcp_tools, &turn_context.config);
     }
 
+    // Clone tools_config and inject session-scoped LSP registry if available.
+    #[allow(unused_mut)]
+    let mut tools_config = turn_context.tools_config.clone();
+    #[cfg(feature = "lsp")]
+    if let Some(ref fb) = sess.services.lsp_feedback {
+        tools_config.lsp_registry = Some(Arc::clone(&fb.registry));
+    }
+
     Ok(Arc::new(ToolRouter::from_config_with_toolkits(
-        &turn_context.tools_config,
+        &tools_config,
         has_mcp_servers.then(|| {
             mcp_tools
                 .into_iter()
@@ -8805,6 +8834,8 @@ mod tests {
                 config.codex_home.clone(),
                 config.cli_auth_credentials_store_mode,
             ),
+            #[cfg(feature = "lsp")]
+            lsp_feedback: None,
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
@@ -8971,6 +9002,8 @@ mod tests {
                 config.codex_home.clone(),
                 config.cli_auth_credentials_store_mode,
             ),
+            #[cfg(feature = "lsp")]
+            lsp_feedback: None,
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
