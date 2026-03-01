@@ -26,6 +26,10 @@ use std::task::Context;
 use std::task::Poll;
 
 use crossterm::event::Event;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
+use crossterm::event::MouseEventKind;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
 use tokio_stream::Stream;
@@ -255,6 +259,15 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                 self.terminal_focused.store(false, Ordering::Relaxed);
                 None
             }
+            // Translate mouse scroll into arrow key events so existing key
+            // handlers (reading view, pager, etc.) scroll without needing a
+            // new TuiEvent variant, keeping upstream merge conflict surface small.
+            Event::Mouse(me) if me.kind == MouseEventKind::ScrollUp => Some(TuiEvent::Key(
+                KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+            )),
+            Event::Mouse(me) if me.kind == MouseEventKind::ScrollDown => Some(TuiEvent::Key(
+                KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            )),
             _ => None,
         }
     }
