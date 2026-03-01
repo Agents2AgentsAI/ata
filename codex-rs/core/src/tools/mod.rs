@@ -2,6 +2,8 @@ pub mod context;
 pub mod events;
 pub(crate) mod file_injection;
 pub(crate) mod handlers;
+#[cfg(feature = "lsp")]
+pub(crate) mod lsp_feedback;
 pub mod js_repl;
 pub(crate) mod network_approval;
 pub mod orchestrator;

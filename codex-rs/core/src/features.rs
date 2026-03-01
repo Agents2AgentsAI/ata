@@ -172,6 +172,8 @@ pub enum Feature {
     ResearchKnowledgeBase,
     /// Enable the background job scheduler for running skills on cron/event triggers.
     Scheduler,
+    /// Enable Language Server Protocol integration for diagnostics and code intelligence.
+    Lsp,
 }
 
 impl Feature {
@@ -835,6 +837,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::Scheduler,
         key: "scheduler",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Lsp,
+        key: "lsp",
+        stage: Stage::Experimental {
+            name: "LSP Integration",
+            menu_description: "Enable Language Server Protocol integration for diagnostics and code intelligence queries.",
+            announcement: "NEW: LSP integration provides real-time diagnostics and code navigation. Enable in /experimental!",
+        },
         default_enabled: false,
     },
 ];

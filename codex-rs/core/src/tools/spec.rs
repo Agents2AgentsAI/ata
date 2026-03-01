@@ -76,6 +76,9 @@ pub(crate) struct ToolsConfig {
     pub agent_jobs_worker_tools: bool,
     /// Per-category research feature flags for filtering research tools.
     pub features: Features,
+    /// LSP server registry for code intelligence (feature-gated).
+    #[cfg(feature = "lsp")]
+    pub lsp_registry: Option<Arc<codex_lsp_client::ServerRegistry>>,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -160,6 +163,8 @@ impl ToolsConfig {
             agent_jobs_tools: include_agent_jobs,
             agent_jobs_worker_tools,
             features: (*features).clone(),
+            #[cfg(feature = "lsp")]
+            lsp_registry: None,
         }
     }
 
@@ -2048,6 +2053,18 @@ pub(crate) fn build_specs_with_toolkits(
                     );
                 }
             }
+        }
+    }
+
+    #[cfg(feature = "lsp")]
+    if config.features.enabled(Feature::Lsp) {
+        if let Some(lsp_registry) = &config.lsp_registry {
+            use crate::tools::handlers::lsp::{LspToolHandler, create_lsp_tool};
+            let lsp_handler = Arc::new(LspToolHandler {
+                registry: Arc::clone(lsp_registry),
+            });
+            builder.push_spec_with_parallel_support(create_lsp_tool(), true);
+            builder.register_handler("lsp", lsp_handler);
         }
     }
 

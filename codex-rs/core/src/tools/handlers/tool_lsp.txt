@@ -1,0 +1,16 @@
+Use the `lsp` tool to query Language Server Protocol servers for code intelligence.
+
+Available operations:
+- goToDefinition: Navigate to the definition of a symbol at a given position.
+- findReferences: Find all references to a symbol at a given position.
+- hover: Get hover information (type info, docs) for a symbol at a given position.
+- documentSymbol: List all symbols in a file (functions, classes, variables, etc.).
+- workspaceSymbol: Search for symbols across the entire workspace by name.
+- goToImplementation: Navigate to the implementation of an interface/trait at a given position.
+- prepareCallHierarchy: Get the call hierarchy item at a given position (preparation step for incoming/outgoing calls).
+- incomingCalls: Find all callers of a function (requires a prepareCallHierarchy item).
+- outgoingCalls: Find all functions called by a function (requires a prepareCallHierarchy item).
+
+For position-based operations, provide `file` (absolute path), `line` (1-based), and `character` (1-based).
+For workspaceSymbol, provide `query` (search string).
+For incomingCalls/outgoingCalls, first call prepareCallHierarchy, then pass the returned item.
