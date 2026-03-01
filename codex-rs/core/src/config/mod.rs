@@ -108,6 +108,11 @@ pub use permissions::PermissionsToml;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
 
+/// Well-known prefix for provider-fallback warnings in `startup_warnings`.
+/// The TUI checks for this prefix to force the login screen when a fallback
+/// to the openai provider occurs (cached tokens are likely stale/absent).
+pub const MODEL_PROVIDER_FALLBACK_PREFIX: &str = "Model provider fallback:";
+
 pub use codex_git::GhostSnapshotConfig;
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
@@ -1839,8 +1844,9 @@ impl Config {
                     format!("Model provider `{model_provider_id}` not found")
                 };
                 tracing::warn!("{warning}; falling back to openai");
-                startup_warnings
-                    .push(format!("{warning}. Falling back to the default openai provider."));
+                startup_warnings.push(format!(
+                    "{MODEL_PROVIDER_FALLBACK_PREFIX} {warning}. Using the default openai provider."
+                ));
                 model_provider_id = "openai".to_string();
                 model_providers
                     .get("openai")
@@ -5482,8 +5488,9 @@ trust_level = "trusted"
             config
                 .startup_warnings
                 .iter()
-                .any(|w| w.contains(OLLAMA_CHAT_PROVIDER_REMOVED_ERROR)),
-            "expected startup warning about ollama-chat removal, got: {:?}",
+                .any(|w| w.starts_with(MODEL_PROVIDER_FALLBACK_PREFIX)
+                    && w.contains(OLLAMA_CHAT_PROVIDER_REMOVED_ERROR)),
+            "expected startup warning with fallback prefix about ollama-chat removal, got: {:?}",
             config.startup_warnings,
         );
 
@@ -5508,8 +5515,9 @@ trust_level = "trusted"
             config
                 .startup_warnings
                 .iter()
-                .any(|w| w.contains("github-copilot")),
-            "expected startup warning mentioning the unknown provider, got: {:?}",
+                .any(|w| w.starts_with(MODEL_PROVIDER_FALLBACK_PREFIX)
+                    && w.contains("github-copilot")),
+            "expected startup warning with fallback prefix mentioning the unknown provider, got: {:?}",
             config.startup_warnings,
         );
 

@@ -1052,6 +1052,16 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
         return false;
     }
 
+    // Force login when provider fell back to openai — cached tokens are likely
+    // stale/absent for the new provider (whether stored in auth.json or keyring).
+    if config
+        .startup_warnings
+        .iter()
+        .any(|w| w.starts_with(codex_core::config::MODEL_PROVIDER_FALLBACK_PREFIX))
+    {
+        return true;
+    }
+
     login_status == LoginStatus::NotAuthenticated
 }
 
@@ -1353,6 +1363,47 @@ trust_level = "untrusted"
 
         let cwd = read_session_cwd(&rollout_path).await.expect("expected cwd");
         assert_eq!(cwd, session_cwd);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn login_screen_shown_on_provider_fallback() -> std::io::Result<()> {
+        use codex_core::auth::AuthMode;
+
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        // Simulate provider fallback warning
+        config.startup_warnings.push(format!(
+            "{} Model provider `github-copilot` not found. Using the default openai provider.",
+            codex_core::config::MODEL_PROVIDER_FALLBACK_PREFIX
+        ));
+
+        // Even with a cached auth mode, fallback should force login screen
+        assert!(
+            should_show_login_screen(LoginStatus::AuthMode(AuthMode::ApiKey), &config),
+            "login screen should be forced after provider fallback"
+        );
+        // Also true when not authenticated
+        assert!(
+            should_show_login_screen(LoginStatus::NotAuthenticated, &config),
+            "login screen should be forced after provider fallback (not authenticated)"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn login_screen_not_shown_when_authenticated_without_fallback() -> std::io::Result<()> {
+        use codex_core::auth::AuthMode;
+
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+
+        assert!(
+            !should_show_login_screen(LoginStatus::AuthMode(AuthMode::ApiKey), &config),
+            "login screen should not be shown when authenticated and no fallback"
+        );
         Ok(())
     }
 }
