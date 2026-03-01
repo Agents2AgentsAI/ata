@@ -61,4 +61,7 @@ pub(crate) struct SessionServices {
     pub(crate) state_db: Option<StateDbHandle>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
+    /// LSP diagnostic feedback (feature-gated).
+    #[cfg(feature = "lsp")]
+    pub(crate) lsp_feedback: Option<Arc<crate::tools::lsp_feedback::LspFeedback>>,
 }

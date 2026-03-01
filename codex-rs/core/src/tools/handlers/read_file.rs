@@ -99,7 +99,12 @@ impl ToolHandler for ReadFileHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation {
+            #[cfg(feature = "lsp")]
+            session,
+            payload,
+            ..
+        } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -146,6 +151,13 @@ impl ToolHandler for ReadFileHandler {
                 indentation::read_block(&path, offset, limit, indentation).await?
             }
         };
+
+        // Warm up LSP client for this file (fire-and-forget, no diagnostics wait).
+        #[cfg(feature = "lsp")]
+        if let Some(ref lsp) = session.services.lsp_feedback {
+            lsp.touch_nowait(&path).await;
+        }
+
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(collected.join("\n")),
             success: Some(true),

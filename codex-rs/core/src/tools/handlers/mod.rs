@@ -46,8 +46,6 @@ pub use grep_files::GrepFilesHandler;
 pub use js_repl::JsReplHandler;
 pub use js_repl::JsReplResetHandler;
 pub use list_dir::ListDirHandler;
-#[cfg(feature = "lsp")]
-pub(crate) use lsp::LspToolHandler;
 pub use mcp::McpHandler;
 pub use mcp_resource::McpResourceHandler;
 pub use multi_agents::MultiAgentHandler;

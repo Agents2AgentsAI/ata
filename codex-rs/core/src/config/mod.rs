@@ -1219,7 +1219,6 @@ pub struct ConfigToml {
     pub data: Option<DataToolsToml>,
 
     /// LSP server integration configuration.
-    #[cfg(feature = "lsp")]
     #[serde(default)]
     pub lsp: Option<crate::config::types::LspConfig>,
 

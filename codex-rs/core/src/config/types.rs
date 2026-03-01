@@ -1164,12 +1164,11 @@ mod tests {
 }
 
 // ---------------------------------------------------------------------------
-// LSP Configuration (feature = "lsp")
+// LSP Configuration
 // ---------------------------------------------------------------------------
 
 /// Top-level LSP configuration: either a simple boolean (disabled) or a map of
 /// per-server overrides.
-#[cfg(feature = "lsp")]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(untagged)]
 pub enum LspConfig {
@@ -1180,7 +1179,6 @@ pub enum LspConfig {
 }
 
 /// Per-server override in config.toml. Either just disable or provide full config.
-#[cfg(feature = "lsp")]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(untagged)]
 pub enum LspServerConfigToml {
