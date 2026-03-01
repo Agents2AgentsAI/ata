@@ -18,7 +18,7 @@ use error::WorkspaceError;
 
 /// Workspace management CLI.
 #[derive(Debug, Parser)]
-#[clap(name = "workspace", visible_alias = "ws")]
+#[clap(name = "workspace")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
