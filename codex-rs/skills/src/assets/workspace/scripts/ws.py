@@ -212,6 +212,35 @@ def _bump_version(manifest: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Helpers — path safety (matches Rust path_spec.rs:safe_join)
+# ---------------------------------------------------------------------------
+
+
+def _validate_path_suffix(suffix: str) -> None:
+    """Reject path suffixes that attempt traversal."""
+    if not suffix:
+        return
+    if os.path.isabs(suffix):
+        _die(f"path suffix must be relative, got: {suffix}")
+    for component in suffix.replace("\\", "/").split("/"):
+        if component == "..":
+            _die(f"path suffix must not contain '..': {suffix}")
+
+
+def _safe_join(root: str, suffix: str) -> str:
+    """Join root + suffix and verify result stays under root."""
+    _validate_path_suffix(suffix)
+    if not suffix:
+        return root
+    joined = os.path.join(root, suffix)
+    real_root = os.path.realpath(root)
+    real_joined = os.path.realpath(joined)
+    if not real_joined.startswith(real_root + os.sep) and real_joined != real_root:
+        _die(f"resolved path escapes workspace root: {suffix}")
+    return joined
+
+
+# ---------------------------------------------------------------------------
 # Helpers — misc
 # ---------------------------------------------------------------------------
 
@@ -227,6 +256,39 @@ def _now() -> int:
 
 def _make_id(prefix: str) -> str:
     return f"{prefix}-{_now()}-{uuid.uuid4().hex}"
+
+
+def _new_manifest(workspace_id: str, name: str) -> dict:
+    """Build a fresh workspace manifest."""
+    now = _now()
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "id": workspace_id,
+        "name": name,
+        "createdAt": now,
+        "updatedAt": now,
+        "manifestVersion": 1,
+        "repos": [],
+        "runs": [],
+        "papers": [],
+        "datasets": [],
+        "artifacts": [],
+        "links": [],
+        "snapshots": [],
+        "indexes": [],
+        "policies": {
+            "defaultClone": {
+                "depth": 1,
+                "singleBranch": True,
+                "noTags": True,
+                "filter": "blob:limit=1m",
+                "submodules": "none",
+                "lfs": "auto",
+            }
+        },
+        "knowledgeBase": {"path": "knowledge-base"},
+        "labels": {},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -273,24 +335,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     for sub in INIT_DIRS:
         os.makedirs(os.path.join(root, sub), exist_ok=True)
 
-    now = _now()
-    manifest = {
-        "schemaVersion": SCHEMA_VERSION,
-        "id": workspace_id,
-        "name": name,
-        "createdAt": now,
-        "updatedAt": now,
-        "manifestVersion": 1,
-        "repos": [],
-        "runs": [],
-        "papers": [],
-        "datasets": [],
-        "artifacts": [],
-        "links": [],
-        "snapshots": [],
-        "indexes": [],
-    }
-    _write_manifest(workspace_id, manifest)
+    _write_manifest(workspace_id, _new_manifest(workspace_id, name))
     print(workspace_id)
 
 
@@ -404,12 +449,21 @@ def cmd_audit(args: argparse.Namespace) -> None:
     except json.JSONDecodeError as exc:
         _die(f"invalid JSON: {exc}")
 
+    # Build audit actor with optional session/thread context
+    actor = {"kind": "agent"}
+    session_id = os.environ.get("CODEX_SESSION_ID")
+    thread_id = os.environ.get("CODEX_THREAD_ID")
+    if session_id:
+        actor["sessionId"] = session_id
+    if thread_id:
+        actor["threadId"] = thread_id
+
     # Build full audit entry with envelope fields
     full_entry = {
         "schemaVersion": 1,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "workspaceId": wid,
-        "actor": {"kind": "agent"},
+        "actor": actor,
         "op": entry.get("op", "unknown"),
         "status": entry.get("status", "success"),
         "targets": entry.get("targets", []),
@@ -462,8 +516,7 @@ def cmd_resolve(args: argparse.Namespace) -> None:
             _die("@ws requires a workspace id: @ws/<id>[/path]")
         target_wid = parts[1]
         suffix = parts[2] if len(parts) > 2 else ""
-        resolved = os.path.join(workspace_root(target_wid), suffix)
-        print(resolved)
+        print(_safe_join(workspace_root(target_wid), suffix))
         return
 
     # @run/<run_id>/path...
@@ -471,8 +524,10 @@ def cmd_resolve(args: argparse.Namespace) -> None:
         parts = rest.split("/", 2)
         if len(parts) < 2:
             _die("@run requires a run id: @run/<id>[/path]")
-        suffix = "/".join(parts[1:])
-        print(os.path.join(root, "runs", suffix))
+        run_id = parts[1]
+        suffix = parts[2] if len(parts) > 2 else ""
+        run_root = os.path.join(root, "runs", run_id)
+        print(_safe_join(run_root, suffix))
         return
 
     # @notes/path...
@@ -483,33 +538,33 @@ def cmd_resolve(args: argparse.Namespace) -> None:
         else:
             first = suffix.split("/")[0]
             if first in NOTES_CATEGORIES:
-                print(os.path.join(root, "notes", suffix))
+                print(_safe_join(os.path.join(root, "notes"), suffix))
             else:
-                print(os.path.join(root, "notes", "workspace", suffix))
+                print(_safe_join(os.path.join(root, "notes", "workspace"), suffix))
         return
 
     # @kb/path...
     if rest.startswith("kb"):
         suffix = rest[len("kb") :].lstrip("/")
-        print(os.path.join(root, "knowledge-base", suffix))
+        print(_safe_join(os.path.join(root, "knowledge-base"), suffix))
         return
 
     # @cache/path...
     if rest.startswith("cache"):
         suffix = rest[len("cache") :].lstrip("/")
-        print(os.path.join(root, "cache", suffix))
+        print(_safe_join(os.path.join(root, "cache"), suffix))
         return
 
     # @artifacts/<id>/path...
     if rest.startswith("artifacts/"):
         suffix = rest[len("artifacts/") :]
-        print(os.path.join(root, "artifacts", suffix))
+        print(_safe_join(os.path.join(root, "artifacts"), suffix))
         return
 
     # @index/<id>/path...
     if rest.startswith("index/"):
         suffix = rest[len("index/") :]
-        print(os.path.join(root, "indexes", suffix))
+        print(_safe_join(os.path.join(root, "indexes"), suffix))
         return
 
     # @<alias>/path... — repo alias
@@ -518,7 +573,7 @@ def cmd_resolve(args: argparse.Namespace) -> None:
     if alias in RESERVED_ALIASES:
         _die(f"'{alias}' is a reserved alias")
     suffix = parts[1] if len(parts) > 1 else ""
-    print(os.path.join(root, "repos", alias, suffix))
+    print(_safe_join(os.path.join(root, "repos", alias), suffix))
 
 
 # ---------------------------------------------------------------------------
@@ -526,12 +581,25 @@ def cmd_resolve(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _ensure_global_workspace() -> None:
+    """Create the global workspace if it doesn't exist yet."""
+    wid = "global"
+    if os.path.isfile(manifest_path(wid)):
+        return
+    root = workspace_root(wid)
+    for sub in INIT_DIRS:
+        os.makedirs(os.path.join(root, sub), exist_ok=True)
+    _write_manifest(wid, _new_manifest(wid, "global"))
+
+
 def _resolve_workspace(args: argparse.Namespace) -> str:
     """Resolve workspace ID: explicit --workspace > 'global' fallback."""
     wid = getattr(args, "workspace", None)
     if wid:
         return wid
-    return "global"
+    wid = "global"
+    _ensure_global_workspace()
+    return wid
 
 
 # ---------------------------------------------------------------------------
