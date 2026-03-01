@@ -3786,6 +3786,9 @@ impl ChatWidget {
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
+            SlashCommand::Jobs => {
+                self.add_jobs_output();
+            }
             SlashCommand::Apps => {
                 self.add_connectors_output();
             }
@@ -7082,6 +7085,70 @@ impl ChatWidget {
         } else {
             self.submit_op(Op::ListMcpTools);
         }
+    }
+
+    pub(crate) fn add_jobs_output(&mut self) {
+        let jobs_dir = self.config.codex_home.join("jobs");
+        let pid_path = self.config.codex_home.join("scheduler.pid");
+
+        // Check daemon status from PID file.
+        let daemon_status = if pid_path.exists() {
+            match std::fs::read_to_string(&pid_path) {
+                Ok(pid_str) => {
+                    let pid_str = pid_str.trim();
+                    format!("Scheduler daemon: running (PID {pid_str})")
+                }
+                Err(_) => "Scheduler daemon: unknown (cannot read PID file)".to_string(),
+            }
+        } else {
+            "Scheduler daemon: not running".to_string()
+        };
+
+        // Read job TOML files from ~/.ata/jobs/.
+        let mut job_lines = Vec::new();
+        if jobs_dir.exists()
+            && let Ok(entries) = std::fs::read_dir(&jobs_dir)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("toml") {
+                    let name = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("?")
+                        .to_string();
+                    // Quick parse to get enabled status.
+                    let enabled = std::fs::read_to_string(&path)
+                        .ok()
+                        .and_then(|contents| {
+                            contents
+                                .lines()
+                                .find(|l| l.starts_with("enabled"))
+                                .map(|l| l.contains("true"))
+                        })
+                        .unwrap_or(true);
+                    let status = if enabled { "enabled" } else { "disabled" };
+                    job_lines.push(format!("  {name:<20} {status}"));
+                }
+            }
+        }
+
+        let message = if job_lines.is_empty() {
+            format!(
+                "{daemon_status}\n\nNo jobs found. Ask me to set up a scheduled job, or run `ata jobs create <name>` in the terminal."
+            )
+        } else {
+            let count = job_lines.len();
+            let job_list = job_lines.join("\n");
+            format!(
+                "{daemon_status}\n\n{count} job(s):\n{job_list}\n\nUse `ata jobs show <name>` or `ata jobs history <name>` for details."
+            )
+        };
+
+        self.add_info_message(
+            message,
+            Some("Tip: ask me to create, modify, or run a scheduled job.".to_string()),
+        );
     }
 
     pub(crate) fn add_connectors_output(&mut self) {

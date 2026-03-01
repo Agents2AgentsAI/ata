@@ -240,6 +240,9 @@ pub(crate) struct DocumentReaderView {
     show_tutorial: bool,
     /// Scroll offset for the tutorial overlay (when content doesn't fit).
     tutorial_scroll: Cell<usize>,
+    /// Tracks whether Enter was pressed once in the tutorial overlay so that a
+    /// second consecutive Enter dismisses it (users may not know about Esc).
+    tutorial_pending_enter: bool,
 
     /// When `Some`, the user pressed `:` and is typing a line number.
     /// Line numbers are shown on the left margin while active.
@@ -325,6 +328,7 @@ impl DocumentReaderView {
             help_scroll: Cell::new(0),
             show_tutorial: !has_seen_tutorial(),
             tutorial_scroll: Cell::new(0),
+            tutorial_pending_enter: false,
             line_number_input: None,
         }
     }
@@ -1008,13 +1012,27 @@ impl DocumentReaderView {
                         if self.show_tutorial {
                             self.show_tutorial = false;
                             self.tutorial_scroll.set(0);
+                            self.tutorial_pending_enter = false;
                             mark_tutorial_seen();
                         } else {
                             self.show_help = false;
                             self.help_scroll.set(0);
                         }
                     }
-                    _ => {} // consume all other keys (don't dismiss)
+                    KeyCode::Enter if self.show_tutorial => {
+                        if self.tutorial_pending_enter {
+                            self.show_tutorial = false;
+                            self.tutorial_scroll.set(0);
+                            self.tutorial_pending_enter = false;
+                            mark_tutorial_seen();
+                        } else {
+                            self.tutorial_pending_enter = true;
+                        }
+                    }
+                    _ => {
+                        // Reset pending enter on any other key.
+                        self.tutorial_pending_enter = false;
+                    }
                 }
             }
             return;

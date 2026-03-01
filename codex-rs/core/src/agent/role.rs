@@ -218,9 +218,11 @@ When YOU wait for the `awaiter` agent to be done, use the largest possible timeo
     pub(super) fn config_file_contents(path: &Path) -> Option<&'static str> {
         const EXPLORER: &str = include_str!("builtins/explorer.toml");
         const AWAITER: &str = include_str!("builtins/awaiter.toml");
+        const SYNTHESIZER: &str = include_str!("builtins/synthesizer.toml");
         match path.to_str()? {
             "explorer.toml" => Some(EXPLORER),
             "awaiter.toml" => Some(AWAITER),
+            "synthesizer.toml" => Some(SYNTHESIZER),
             _ => None,
         }
     }
@@ -515,7 +517,10 @@ writable_roots = ["./sandbox-root"]
     }
 
     #[test]
-    fn built_in_config_file_contents_resolves_explorer_only() {
+    fn built_in_config_file_contents_resolves_known_roles() {
+        assert!(built_in::config_file_contents(Path::new("explorer.toml")).is_some());
+        assert!(built_in::config_file_contents(Path::new("awaiter.toml")).is_some());
+        assert!(built_in::config_file_contents(Path::new("synthesizer.toml")).is_some());
         assert_eq!(
             built_in::config_file_contents(Path::new("missing.toml")),
             None
