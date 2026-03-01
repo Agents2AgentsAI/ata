@@ -38,6 +38,7 @@ codex-rmcp-client = { workspace = true }
 codex-scheduler = { workspace = true }
 codex-stdio-to-uds = { workspace = true }
 codex-tui = { workspace = true }
+codex-workspace = { workspace = true }
 libc = { workspace = true }
 owo-colors = { workspace = true }
 regex-lite = { workspace = true }

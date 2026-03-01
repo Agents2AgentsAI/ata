@@ -1560,6 +1560,7 @@ dependencies = [
  "codex-utils-cargo-bin",
  "codex-utils-cli",
  "codex-windows-sandbox",
+ "codex-workspace",
  "libc",
  "owo-colors",
  "predicates",
@@ -2261,7 +2262,7 @@ dependencies = [
 
 [[package]]
 name = "codex-scheduler"
-version = "0.105.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2681,6 +2682,23 @@ dependencies = [
  "windows 0.58.0",
  "windows-sys 0.52.0",
  "winres",
+]
+
+[[package]]
+name = "codex-workspace"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "libc",
+ "pretty_assertions",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]

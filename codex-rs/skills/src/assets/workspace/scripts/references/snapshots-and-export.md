@@ -5,20 +5,19 @@
 Captures the current manifest state for later comparison or rollback.
 
 ```bash
-WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
+WS_ROOT=$(ata workspace resolve '@ws' --workspace "$WID" | sed 's|/$||')
 SNAP_ID=$(python3 -c "import uuid,time; print(f'snap-{int(time.time())}-{uuid.uuid4().hex}')")
 SNAP_PATH="notes/workspace/snapshots/$SNAP_ID.json"
 cp "$WS_ROOT/workspace.json" "$WS_ROOT/$SNAP_PATH"
-python3 $WS mutate --workspace "$WID" \
-  ".snapshots += [{\"id\":\"$SNAP_ID\",\"path\":\"$SNAP_PATH\"}]"
-python3 $WS audit --workspace "$WID" \
+ata workspace add-entry --collection snapshots --json "{\"id\":\"$SNAP_ID\",\"path\":\"$SNAP_PATH\"}" --workspace "$WID"
+ata workspace audit --workspace "$WID" \
   '{"op":"snapshot_create","targets":[{"type":"snapshot","id":"'"$SNAP_ID"'"}]}'
 ```
 
 ## List Snapshots
 
 ```bash
-python3 $WS read --workspace "$WID" | jq '.snapshots[] | {id, path}'
+ata workspace read --workspace "$WID" | jq '.snapshots[] | {id, path}'
 ```
 
 ## Restore Snapshot
@@ -30,7 +29,7 @@ Restore is **additive** — it never deletes existing repos.
 - `alias_conflict_mode`: `skip`, `fail` (default)
 
 ```bash
-WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
+WS_ROOT=$(ata workspace resolve '@ws' --workspace "$WID" | sed 's|/$||')
 SNAP_PATH="<snapshot_path>"  # e.g. notes/workspace/snapshots/snap-XXX.json
 
 jq -c '.repos[]' "$WS_ROOT/$SNAP_PATH" | while read -r REPO; do
@@ -38,7 +37,7 @@ jq -c '.repos[]' "$WS_ROOT/$SNAP_PATH" | while read -r REPO; do
   PIN_SHA=$(echo "$REPO" | jq -r '.pin.pinnedSha // empty')
 
   # Skip if alias already exists
-  if python3 $WS read --workspace "$WID" | jq -e ".repos[] | select(.alias == \"$ALIAS\")" >/dev/null 2>&1; then
+  if ata workspace read --workspace "$WID" | jq -e ".repos[] | select(.alias == \"$ALIAS\")" >/dev/null 2>&1; then
     echo "skip: alias '$ALIAS' already exists" >&2; continue
   fi
 
@@ -48,11 +47,10 @@ jq -c '.repos[]' "$WS_ROOT/$SNAP_PATH" | while read -r REPO; do
     git -C "$WS_ROOT/repos/$ALIAS" checkout "$PIN_SHA" 2>/dev/null || true
   fi
 
-  python3 $WS mutate --workspace "$WID" \
-    ".repos = [.repos[] | if .alias == \"$ALIAS\" then .pin = $(echo "$REPO" | jq '.pin') else . end]"
+  ata workspace repo-pin --alias "$ALIAS" --sha "$PIN_SHA" --workspace "$WID"
 done
 
-python3 $WS audit --workspace "$WID" \
+ata workspace audit --workspace "$WID" \
   '{"op":"snapshot_restore","targets":[{"type":"snapshot","id":"'"$SNAP_ID"'"}]}'
 ```
 
@@ -68,11 +66,11 @@ Configurable export with mode controls:
 | Repos | `none`, `bundles` | `none` |
 
 ```bash
-WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
+WS_ROOT=$(ata workspace resolve '@ws' --workspace "$WID" | sed 's|/$||')
 BUNDLE_PATH="/tmp/$WID-export.tar.gz"
 
 # Sanitize URLs before export
-python3 $WS read --workspace "$WID" | \
+ata workspace read --workspace "$WID" | \
   jq '.repos = [.repos[] | .remoteUrl = (.remoteUrl | split("?")[0])]' \
   > "/tmp/$WID-export-manifest.json"
 
@@ -84,10 +82,10 @@ echo "Exported to: $BUNDLE_PATH"
 ## Import Workspace Bundle
 
 ```bash
-NEW_WID=$(python3 $WS init "Imported Project")
-NEW_ROOT=$(python3 $WS resolve '@ws' --workspace "$NEW_WID" | sed 's|/$||')
+NEW_WID=$(ata workspace init "Imported Project")
+NEW_ROOT=$(ata workspace resolve '@ws' --workspace "$NEW_WID" | sed 's|/$||')
 tar -xzf "$BUNDLE_PATH" -C "$NEW_ROOT"
-python3 $WS mutate --workspace "$NEW_WID" ".id = \"$NEW_WID\""
+ata workspace set-field --path id --value '"$NEW_WID"' --workspace "$NEW_WID"
 echo "Imported as: $NEW_WID"
 ```
 

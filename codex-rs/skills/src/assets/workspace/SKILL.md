@@ -17,40 +17,45 @@ Workspaces organize multi-repo work, execution runs, and research resources unde
 
 ## Prerequisites
 
-Required: `python3`, `jq`, `git`. The helper script:
-
-```
-WS="<skill_dir>/scripts/ws.py"
-```
+Required: `git`. The `ata` binary is already in PATH.
 
 ## Containment Rules
 
-- **ALWAYS** use `python3 $WS resolve '@spec'` for workspace paths — never construct paths manually
-- **ALWAYS** use `python3 $WS check-host <url>` before any clone operation
-- **ALWAYS** use `python3 $WS mutate` for manifest changes (atomic lock + version bump)
-- **ALWAYS** audit significant operations via `python3 $WS audit`
-- For repo cloning, prefer the thick command `python3 $WS repo-clone <url> <alias>` which enforces all of the above
+- **ALWAYS** use `ata workspace resolve '@spec'` for workspace paths — never construct paths manually
+- **ALWAYS** use `ata workspace check-host <url>` before any clone operation
+- **ALWAYS** use typed mutation commands (e.g. `repo-pin`, `add-entry`, `set-field`) for manifest changes (atomic lock + version bump)
+- **ALWAYS** audit significant operations via `ata workspace audit`
+- For repo cloning, prefer the thick command `ata workspace repo-clone <url> <alias>` which enforces all of the above
 
 ## Command Reference
 
 | Command | Description |
 |---------|-------------|
-| `python3 $WS init <name>` | Create workspace, print ID |
-| `python3 $WS list` | List workspaces as JSON |
-| `python3 $WS read [--workspace ID]` | Print manifest JSON |
-| `python3 $WS mutate '<jq>' [--workspace ID] [--expect-version N]` | Atomic lock + jq + version bump |
-| `python3 $WS select <id>` | Set active workspace (session-aware) |
-| `python3 $WS delete <id>` | Remove workspace tree |
-| `python3 $WS resolve '<@spec>' [--workspace ID]` | Resolve @-path to absolute path |
-| `python3 $WS check-host <url> [--workspace ID]` | Validate URL + host allowlist |
-| `python3 $WS audit '<json>' [--workspace ID]` | Append audit entry |
-| `python3 $WS audit-query [--workspace ID] [--since TS] [--until TS] [--ops OPS] [--limit N]` | Query audit log |
-| `python3 $WS run-locked --level <lvl> [--target-id ID] -- <cmd>` | Run under fine-grained lock |
-| `python3 $WS mirror-path <url>` | Print shared mirror cache path |
-| **`python3 $WS repo-clone <url> <alias> [--workspace ID] [--full]`** | **Full repo_add: validate + clone + register + audit** |
-| **`python3 $WS run-setup <name> --source-alias <alias> [--strategy S] [--workspace ID]`** | **Full run creation: dirs + materialize + register + audit** |
-| `python3 $WS recipe <operation>` | Print step-by-step recipe for an operation |
-| `python3 $WS recipe list` | List all available recipes |
+| `ata workspace init <name>` | Create workspace, print ID |
+| `ata workspace list` | List workspaces as JSON |
+| `ata workspace read [--workspace ID]` | Print manifest JSON |
+| `ata workspace select <id>` | Set active workspace (session-aware) |
+| `ata workspace delete <id>` | Remove workspace tree |
+| `ata workspace resolve '<@spec>' [--workspace ID]` | Resolve @-path to absolute path |
+| `ata workspace check-host <url> [--workspace ID]` | Validate URL + host allowlist |
+| `ata workspace audit '<json>' [--workspace ID]` | Append audit entry |
+| `ata workspace audit-query [--workspace ID] [--since TS] [--until TS] [--ops OPS] [--limit N]` | Query audit log |
+| `ata workspace run-locked --level <lvl> [--target-id ID] -- <cmd>` | Run under fine-grained lock |
+| `ata workspace mirror-path <url>` | Print shared mirror cache path |
+| **`ata workspace repo-clone <url> <alias> [--workspace ID] [--full]`** | **Full repo_add: validate + clone + register + audit** |
+| **`ata workspace run-setup <name> --source-alias <alias> [--strategy S] [--workspace ID]`** | **Full run creation: dirs + materialize + register + audit** |
+| `ata workspace repo-update-state --alias X --head-sha Y [--head-ref Z] [--workspace ID]` | Update repo HEAD state |
+| `ata workspace repo-pin --alias X --sha Y [--workspace ID]` | Pin repo to SHA |
+| `ata workspace repo-unpin --alias X [--workspace ID]` | Unpin repo (tracking mode) |
+| `ata workspace repo-remove --alias X [--workspace ID]` | Remove repo dir + manifest entry + audit |
+| `ata workspace run-update-status --id X --status Y [--workspace ID]` | Update run status |
+| `ata workspace run-remove --id X [--workspace ID]` | Remove run + worktree cleanup + audit |
+| `ata workspace add-entry --collection <type> --json '{...}' [--workspace ID]` | Append to collection (papers/datasets/artifacts/links/snapshots/indexes) |
+| `ata workspace remove-entry --collection <type> --id X [--workspace ID]` | Remove by ID from collection |
+| `ata workspace set-field --path <dotted.path> --value '<json>' [--workspace ID]` | Set manifest field at dotted path |
+| `ata workspace index-update-status --id X --status Y [--workspace ID]` | Update index status |
+| `ata workspace recipe <operation>` | Print step-by-step recipe for an operation |
+| `ata workspace recipe list` | List all available recipes |
 
 Workspace resolution: `--workspace` > project pin (`.codex/workspace.json`) > session > `global`.
 
@@ -99,4 +104,4 @@ For detailed step-by-step instructions on specific operations, read the appropri
 | Snapshots & export | `<skill_dir>/scripts/references/snapshots-and-export.md` | snapshot, restore, export, import |
 | Audit & KB | `<skill_dir>/scripts/references/audit-and-kb.md` | audit, audit-query, KB, locking |
 
-Alternatively, use `python3 $WS recipe <operation>` for quick inline recipes.
+Alternatively, use `ata workspace recipe <operation>` for quick inline recipes.
