@@ -104,6 +104,9 @@ The workspace manifest (`workspace.json`) uses **camelCase** keys. Key fields:
 | `links` | array | Resource links between entries |
 | `snapshots` | array | Manifest snapshots |
 | `indexes` | array | Search index entries |
+| `policies` | object | Clone defaults, host allowlist |
+| `knowledgeBase` | object | KB config (`{"path": "knowledge-base"}`) |
+| `labels` | object | User-defined key-value labels |
 
 ## Path Aliases
 
@@ -174,40 +177,94 @@ Removes the entire workspace directory tree. Refuses to delete `global`.
 
 ### Repository Management
 
+#### Security: URL Validation
+
+Before cloning any repository, validate the URL to prevent credential leakage:
+
+- Must use `https://` (reject `http://`, `git://`, `ssh://`, `file://`)
+- Must not contain embedded credentials (`user:pass@`)
+- Must not contain tokens in query params (`?token=`, `?access_token=`)
+- Must not contain GitHub PAT patterns (`ghp_`, `gho_`, `github_pat_`)
+
+```bash
+# Validate URL before cloning
+validate_repo_url() {
+  local url="$1"
+  if ! echo "$url" | grep -qE '^https://'; then
+    echo "error: only https:// URLs allowed" >&2; return 1
+  fi
+  if echo "$url" | grep -qE '://[^/@]+:[^/@]+@'; then
+    echo "error: embedded credentials not allowed" >&2; return 1
+  fi
+  if echo "$url" | grep -qiE '\?(token|access_token)=|ghp_|gho_|github_pat_'; then
+    echo "error: tokens/PATs in URL not allowed" >&2; return 1
+  fi
+}
+validate_repo_url "$REPO_URL" || exit 1
+```
+
+For host restriction, configure `policies.repoHostsAllowlist` in the manifest (e.g., `["github.com", "gitlab.com"]`). Only store sanitized URLs in the manifest.
+
 #### Add Repository
 
 ```bash
-# 1. Determine workspace root
+# 1. Determine workspace root and clone defaults
 WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
 ALIAS="my-repo"
+REPO_URL="https://github.com/org/repo.git"
 
-# 2. Clone with shallow/partial defaults
-git clone --depth 1 --single-branch --no-tags \
-  --filter=blob:limit=1m \
-  "https://github.com/org/repo.git" \
-  "$WS_ROOT/repos/$ALIAS"
+# 2. Read clone policy from manifest (falls back to defaults)
+CLONE_POLICY=$(python3 $WS read --workspace "$WID" | jq -r '.policies.defaultClone // empty')
+CLONE_DEPTH=$(echo "$CLONE_POLICY" | jq -r '.depth // 1')
+CLONE_FILTER=$(echo "$CLONE_POLICY" | jq -r '.filter // "blob:limit=1m"')
+CLONE_SINGLE=$(echo "$CLONE_POLICY" | jq -r '.singleBranch // true')
+CLONE_NOTAGS=$(echo "$CLONE_POLICY" | jq -r '.noTags // true')
+CLONE_SUBS=$(echo "$CLONE_POLICY" | jq -r '.submodules // "none"')
+CLONE_LFS=$(echo "$CLONE_POLICY" | jq -r '.lfs // "auto"')
 
-# 3. Read git state
+# 3. Build clone command from policy
+#    Override with --full to skip depth/filter (full clone)
+#    Override individual options: --depth N, --submodules, --lfs
+CLONE_ARGS=()
+if [ "$CLONE_DEPTH" != "null" ] && [ "$CLONE_DEPTH" -gt 0 ] 2>/dev/null; then
+  CLONE_ARGS+=(--depth "$CLONE_DEPTH")
+fi
+if [ "$CLONE_SINGLE" = "true" ]; then CLONE_ARGS+=(--single-branch); fi
+if [ "$CLONE_NOTAGS" = "true" ]; then CLONE_ARGS+=(--no-tags); fi
+if [ -n "$CLONE_FILTER" ] && [ "$CLONE_FILTER" != "null" ]; then
+  CLONE_ARGS+=(--filter="$CLONE_FILTER")
+fi
+if [ "$CLONE_SUBS" = "recursive" ]; then CLONE_ARGS+=(--recurse-submodules); fi
+
+git clone "${CLONE_ARGS[@]}" "$REPO_URL" "$WS_ROOT/repos/$ALIAS"
+
+if [ "$CLONE_LFS" = "always" ] || [ "$CLONE_LFS" = "auto" ]; then
+  (cd "$WS_ROOT/repos/$ALIAS" && git lfs pull 2>/dev/null || true)
+fi
+
+# 4. Read git state
 HEAD_SHA=$(git -C "$WS_ROOT/repos/$ALIAS" rev-parse HEAD)
 HEAD_REF=$(git -C "$WS_ROOT/repos/$ALIAS" symbolic-ref --short HEAD 2>/dev/null || echo "")
 DEFAULT_BRANCH=$(git -C "$WS_ROOT/repos/$ALIAS" rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's|origin/||' || echo "main")
 REPO_ID=$(python3 -c "import uuid; print(f'repo-{int(__import__(\"time\").time())}-{uuid.uuid4().hex}')")
 
-# 4. Register in manifest
+# 5. Record actual clone options used in manifest
+CLONE_RECORD="{\"depth\":$CLONE_DEPTH,\"singleBranch\":$CLONE_SINGLE,\"noTags\":$CLONE_NOTAGS,\"filter\":\"$CLONE_FILTER\",\"submodules\":\"$CLONE_SUBS\",\"lfs\":\"$CLONE_LFS\"}"
+
 python3 $WS mutate --workspace "$WID" \
   ".repos += [{
     \"id\": \"$REPO_ID\",
     \"alias\": \"$ALIAS\",
     \"repoKey\": \"org/repo\",
-    \"remoteUrl\": \"https://github.com/org/repo.git\",
+    \"remoteUrl\": \"$REPO_URL\",
     \"checkoutPath\": \"repos/$ALIAS\",
     \"notesPath\": \"notes/repos/$ALIAS\",
-    \"clone\": {\"depth\":1,\"singleBranch\":true,\"noTags\":true,\"filter\":\"blob:limit=1m\"},
+    \"clone\": $CLONE_RECORD,
     \"pin\": {\"mode\":\"tracking\"},
-    \"state\": {\"headSha\":\"$HEAD_SHA\",\"headRef\":\"$HEAD_REF\",\"defaultBranch\":\"$DEFAULT_BRANCH\",\"shallow\":true}
+    \"state\": {\"headSha\":\"$HEAD_SHA\",\"headRef\":\"$HEAD_REF\",\"defaultBranch\":\"$DEFAULT_BRANCH\",\"shallow\":$([ \"$CLONE_DEPTH\" -gt 0 ] 2>/dev/null && echo true || echo false)}
   }]"
 
-# 5. Create notes dir and audit
+# 6. Create notes dir and audit
 mkdir -p "$WS_ROOT/notes/repos/$ALIAS"
 python3 $WS audit --workspace "$WID" \
   "{\"op\":\"repo_add\",\"targets\":[{\"type\":\"repo\",\"id\":\"$REPO_ID\",\"alias\":\"$ALIAS\"}]}"
@@ -246,6 +303,16 @@ python3 $WS mutate --workspace "$WID" \
   ".repos = [.repos[] | if .alias == \"$ALIAS\" then .pin = {\"mode\":\"pinned\",\"pinnedSha\":\"$SHA\"} else . end]"
 ```
 
+#### Unpin Repository (switch to tracking)
+
+```bash
+python3 $WS mutate --workspace "$WID" \
+  ".repos = [.repos[] | if .alias == \"$ALIAS\" then .pin = {\"mode\":\"tracking\"} else . end]"
+
+python3 $WS audit --workspace "$WID" \
+  "{\"op\":\"repo_track\",\"targets\":[{\"type\":\"repo\",\"id\":\"\",\"alias\":\"$ALIAS\"}]}"
+```
+
 #### Remove Repository
 
 ```bash
@@ -263,7 +330,7 @@ python3 $WS audit --workspace "$WID" \
 
 ### Execution Runs
 
-#### Create Run (from repo worktree)
+#### Create Run
 
 ```bash
 WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
@@ -271,16 +338,43 @@ RUN_ID=$(python3 -c "import uuid,time; print(f'run-{int(time.time())}-{uuid.uuid
 REPO_ALIAS="my-repo"
 REPO_PATH="$WS_ROOT/repos/$REPO_ALIAS"
 RUN_ROOT="$WS_ROOT/runs/$RUN_ID"
+RUN_NAME="experiment-1"  # optional human-readable name
 
-mkdir -p "$RUN_ROOT/logs"
+mkdir -p "$RUN_ROOT/logs" "$RUN_ROOT/outputs" "$RUN_ROOT/tmp" "$RUN_ROOT/env"
 
-# Create worktree (preferred) or clone
+# --- Materialization strategy (pick one) ---
+
+# Strategy 1: Worktree (preferred — fast, shares object store)
 git -C "$REPO_PATH" worktree add "$RUN_ROOT/root" HEAD
 
+# Strategy 2: Clone (if worktree unavailable, e.g. bare repo)
+# git clone "$REPO_PATH" "$RUN_ROOT/root"
+
+# Strategy 3: Copy (no git needed)
+# cp -R "$REPO_PATH" "$RUN_ROOT/root"
+
+# --- Write run.json metadata (RunManifestV2) ---
 NOW=$(date +%s)
+HEAD_SHA=$(git -C "$RUN_ROOT/root" rev-parse HEAD 2>/dev/null || echo "")
+cat > "$RUN_ROOT/run.json" <<RUNJSON
+{
+  "schemaVersion": 2,
+  "id": "$RUN_ID",
+  "name": "$RUN_NAME",
+  "createdAt": $NOW,
+  "updatedAt": $NOW,
+  "status": "created",
+  "source": {"repoAlias": "$REPO_ALIAS", "sha": "$HEAD_SHA"},
+  "commands": [],
+  "env": {}
+}
+RUNJSON
+
+# --- Register in workspace manifest ---
 python3 $WS mutate --workspace "$WID" \
   ".runs += [{
     \"id\": \"$RUN_ID\",
+    $([ -n "$RUN_NAME" ] && echo "\"name\": \"$RUN_NAME\",")
     \"createdAt\": $NOW,
     \"updatedAt\": $NOW,
     \"rootPath\": \"runs/$RUN_ID\",
@@ -295,15 +389,47 @@ python3 $WS audit --workspace "$WID" \
 #### Execute in Run
 
 ```bash
-cd "$WS_ROOT/runs/$RUN_ID/root"
+RUN_ROOT="$WS_ROOT/runs/$RUN_ID"
 
-# Run the command, capture output
-<command> 2>&1 | tee "$WS_ROOT/runs/$RUN_ID/logs/$(date +%s).txt"
+# --- Environment setup ---
+# Network isolation (default: disabled)
+export CODEX_SANDBOX_NETWORK_DISABLED=1
 
-# Update status
+# Route caches through workspace cache (resolve via ws.py)
+export PIP_CACHE_DIR=$(python3 $WS resolve '@cache/pip' --workspace "$WID")
+export HF_HOME=$(python3 $WS resolve '@cache/huggingface' --workspace "$WID")
+export TORCH_HOME=$(python3 $WS resolve '@cache/torch' --workspace "$WID")
+mkdir -p "$PIP_CACHE_DIR" "$HF_HOME" "$TORCH_HOME"
+
+# --- Mark run as running ---
 python3 $WS mutate --workspace "$WID" \
-  ".runs = [.runs[] | if .id == \"$RUN_ID\" then .status = \"completed\" | .updatedAt = $(date +%s) else . end]"
+  ".runs = [.runs[] | if .id == \"$RUN_ID\" then .status = \"running\" | .updatedAt = $(date +%s) else . end]"
+
+# --- Execute with timeout (900s default) and log capture ---
+cd "$RUN_ROOT/root"
+LOG_FILE="$RUN_ROOT/logs/$(date +%s).txt"
+
+timeout 900 <command> 2>&1 | head -c 65536 | tee "$LOG_FILE"
+EXIT_CODE=${PIPESTATUS[0]}
+
+# --- Update status (created → running → completed/failed/cancelled) ---
+if [ "$EXIT_CODE" -eq 0 ]; then
+  STATUS="completed"
+elif [ "$EXIT_CODE" -eq 124 ]; then
+  STATUS="failed"  # timeout
+else
+  STATUS="failed"
+fi
+
+python3 $WS mutate --workspace "$WID" \
+  ".runs = [.runs[] | if .id == \"$RUN_ID\" then .status = \"$STATUS\" | .updatedAt = $(date +%s) else . end]"
 ```
+
+**Notes:**
+- Output truncation: 64KB max per stream recorded in run manifest
+- Command history: bounded at 200 entries; oldest evicted when limit reached
+- Status transitions: `created` → `running` → `completed` / `failed` / `cancelled`
+- Timeout: 900s default; process killed on timeout (exit code 124)
 
 #### List Runs
 
@@ -447,13 +573,60 @@ python3 $WS read --workspace "$WID" | jq '.snapshots[] | {id, path}'
 
 #### Restore Snapshot (re-apply repo pins)
 
-```bash
-# Read snapshot manifest and extract repo pins
-WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
-jq '.repos[] | {alias, pin}' "$WS_ROOT/$SNAP_PATH"
+Restore is **additive** — it never deletes existing repos.
 
-# For each pinned repo, checkout the pinned SHA
-# Then update the live manifest with the restored pins
+**Conflict strategies:**
+- `missing_repo_mode`: `skip` (record and continue), `fail` (abort), `re_add` (re-clone + pin)
+- `alias_conflict_mode`: `skip`, `fail` (default)
+
+```bash
+WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
+MISSING_MODE="skip"       # skip | fail | re_add
+CONFLICT_MODE="fail"      # skip | fail
+
+# Get current repo aliases
+CURRENT_ALIASES=$(python3 $WS read --workspace "$WID" | jq -r '.repos[].alias')
+
+# Process each repo from snapshot
+jq -c '.repos[]' "$WS_ROOT/$SNAP_PATH" | while read -r REPO; do
+  ALIAS=$(echo "$REPO" | jq -r '.alias')
+  PIN_SHA=$(echo "$REPO" | jq -r '.pin.pinnedSha // empty')
+  REMOTE=$(echo "$REPO" | jq -r '.remoteUrl // empty')
+
+  # Check alias conflict
+  if echo "$CURRENT_ALIASES" | grep -qx "$ALIAS"; then
+    if [ "$CONFLICT_MODE" = "fail" ]; then
+      echo "error: alias '$ALIAS' already exists" >&2; exit 1
+    fi
+    echo "skip: alias '$ALIAS' already exists" >&2; continue
+  fi
+
+  # Check if repo dir exists
+  if [ ! -d "$WS_ROOT/repos/$ALIAS" ]; then
+    case "$MISSING_MODE" in
+      skip) echo "skip: repo '$ALIAS' missing, recording" >&2; continue ;;
+      fail) echo "error: repo '$ALIAS' not found" >&2; exit 1 ;;
+      re_add)
+        # Re-clone and pin (uses repo_add flow above)
+        git clone --depth 1 "$REMOTE" "$WS_ROOT/repos/$ALIAS"
+        ;;
+    esac
+  fi
+
+  # Checkout pinned SHA if present
+  if [ -n "$PIN_SHA" ]; then
+    git -C "$WS_ROOT/repos/$ALIAS" fetch origin "$PIN_SHA" --depth 1 2>/dev/null || true
+    git -C "$WS_ROOT/repos/$ALIAS" checkout "$PIN_SHA" 2>/dev/null || \
+      echo "warn: could not checkout $PIN_SHA for $ALIAS" >&2
+  fi
+
+  # Update manifest pin
+  python3 $WS mutate --workspace "$WID" \
+    ".repos = [.repos[] | if .alias == \"$ALIAS\" then .pin = $(echo "$REPO" | jq '.pin') else . end]"
+done
+
+python3 $WS audit --workspace "$WID" \
+  "{\"op\":\"snapshot_restore\",\"targets\":[{\"type\":\"snapshot\",\"id\":\"$SNAP_ID\"}],\"details\":{\"missingMode\":\"$MISSING_MODE\",\"conflictMode\":\"$CONFLICT_MODE\"}}"
 ```
 
 ---
@@ -462,14 +635,68 @@ jq '.repos[] | {alias, pin}' "$WS_ROOT/$SNAP_PATH"
 
 #### Export Workspace Bundle
 
+Configurable export with mode controls:
+
+| Component | Modes | Default |
+|-----------|-------|---------|
+| Notes | `workspace-only`, `all`, `none` | `workspace-only` |
+| Runs | `metadata+logs`, `metadata-only`, `none` | `none` |
+| Artifacts | `metadata-only`, `blobs`, `none` | `metadata-only` |
+| Repos | `none`, `bundles` (git bundle) | `none` |
+| Format | directory, `.tar.gz` | `.tar.gz` |
+
 ```bash
 WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
 BUNDLE_PATH="/tmp/$WID-export.tar.gz"
+NOTES_MODE="workspace-only"  # workspace-only | all | none
+RUNS_MODE="none"             # metadata+logs | metadata-only | none
+ARTIFACTS_MODE="metadata-only"  # metadata-only | blobs | none
+REPOS_MODE="none"            # none | bundles
 
-# Export manifest + notes (not repo checkouts or run data)
+# Sanitize URLs in manifest before export (strip tokens)
+EXPORT_MANIFEST=$(python3 $WS read --workspace "$WID" | \
+  jq '.repos = [.repos[] | .remoteUrl = (.remoteUrl | split("?")[0])]')
+echo "$EXPORT_MANIFEST" > "/tmp/$WID-export-manifest.json"
+
+# Build file list
+EXPORT_FILES=("/tmp/$WID-export-manifest.json")
+
+case "$NOTES_MODE" in
+  workspace-only) EXPORT_FILES+=("notes/workspace/") ;;
+  all) EXPORT_FILES+=("notes/") ;;
+esac
+
+EXPORT_FILES+=("knowledge-base/")
+
+case "$RUNS_MODE" in
+  metadata+logs)
+    for RUN_DIR in "$WS_ROOT"/runs/*/; do
+      [ -f "$RUN_DIR/run.json" ] && EXPORT_FILES+=("runs/$(basename "$RUN_DIR")/run.json" "runs/$(basename "$RUN_DIR")/logs/")
+    done ;;
+  metadata-only)
+    for RUN_DIR in "$WS_ROOT"/runs/*/; do
+      [ -f "$RUN_DIR/run.json" ] && EXPORT_FILES+=("runs/$(basename "$RUN_DIR")/run.json")
+    done ;;
+esac
+
+case "$ARTIFACTS_MODE" in
+  blobs) EXPORT_FILES+=("artifacts/") ;;
+  metadata-only) ;; # artifact metadata is in manifest
+esac
+
+case "$REPOS_MODE" in
+  bundles)
+    mkdir -p "/tmp/$WID-bundles"
+    for REPO_DIR in "$WS_ROOT"/repos/*/; do
+      ALIAS=$(basename "$REPO_DIR")
+      git -C "$REPO_DIR" bundle create "/tmp/$WID-bundles/$ALIAS.bundle" --all 2>/dev/null || true
+    done ;;
+esac
+
+# Create archive
 tar -czf "$BUNDLE_PATH" \
   -C "$WS_ROOT" \
-  workspace.json notes/ knowledge-base/
+  "${EXPORT_FILES[@]}"
 
 echo "Exported to: $BUNDLE_PATH"
 ```
@@ -491,14 +718,89 @@ python3 $WS mutate --workspace "$NEW_WID" \
 
 #### Repo Import Plan + Apply
 
-To import repos from a snapshot or external manifest:
+##### Plan Phase
+
+Generate an import plan, detect license files, estimate size, and store for review:
 
 ```bash
-# 1. Generate import plan: list repos to clone
-jq '.repos[] | {alias, remoteUrl, pin}' "$IMPORT_MANIFEST" > /tmp/import-plan.json
+WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
+PLAN_ID=$(python3 -c "import uuid,time; print(f'plan-{int(time.time())}-{uuid.uuid4().hex}')")
+PLAN_DIR="$WS_ROOT/notes/workspace/import-plans"
+PLAN_PATH="$PLAN_DIR/$PLAN_ID.json"
+mkdir -p "$PLAN_DIR"
 
-# 2. Review plan, then clone each repo using the repo_add flow above
+# Build plan: list repos with metadata
+jq -c '[.repos[] | {
+  alias, remoteUrl, pin,
+  repoKey: .repoKey
+}]' "$IMPORT_MANIFEST" | python3 -c "
+import json, sys, time
+repos = json.load(sys.stdin)
+plan = {
+    'planId': '$PLAN_ID',
+    'createdAt': int(time.time()),
+    'expiresAt': int(time.time()) + 3600,
+    'sourceManifest': '$IMPORT_MANIFEST',
+    'repos': repos,
+    'status': 'pending'
+}
+json.dump(plan, sys.stdout, indent=2)
+" > "$PLAN_PATH"
+
+echo "Import plan written to: $PLAN_PATH (expires in 1 hour)"
 ```
+
+##### Apply Phase
+
+Validate plan, clone repos, record provenance:
+
+```bash
+# 1. Validate plan not expired
+EXPIRES=$(jq -r '.expiresAt' "$PLAN_PATH")
+NOW=$(date +%s)
+if [ "$NOW" -gt "$EXPIRES" ]; then
+  echo "error: import plan expired" >&2; exit 1
+fi
+
+# 2. Import each repo
+jq -c '.repos[]' "$PLAN_PATH" | while read -r REPO; do
+  ALIAS=$(echo "$REPO" | jq -r '.alias')
+  REMOTE=$(echo "$REPO" | jq -r '.remoteUrl')
+
+  # Skip files matching sensitive patterns
+  # Subtree import: git subtree add --prefix="repos/$ALIAS" "$REMOTE" main --squash
+  # Vendor copy (exclude secrets):
+  #   rsync -a --exclude='.env' --exclude='secrets.*' --exclude='credentials.*' "$SOURCE/" "$WS_ROOT/repos/$ALIAS/"
+
+  # Standard clone
+  git clone --depth 1 "$REMOTE" "$WS_ROOT/repos/$ALIAS"
+
+  # Detect license
+  LICENSE_FILE=$(find "$WS_ROOT/repos/$ALIAS" -maxdepth 1 -iname 'LICENSE*' -o -iname 'COPYING*' | head -1)
+  LICENSE_TYPE=""
+  if [ -n "$LICENSE_FILE" ]; then
+    LICENSE_TYPE=$(head -1 "$LICENSE_FILE" | grep -oiE 'MIT|Apache|GPL|BSD|ISC|MPL' | head -1)
+  fi
+
+  # Register in manifest (use repo_add flow)
+  # ... (same as Add Repository above)
+done
+
+# 3. Write provenance record (never auto-commit)
+cat > "$WS_ROOT/notes/workspace/import-provenance-$PLAN_ID.json" <<PROV
+{
+  "planId": "$PLAN_ID",
+  "importedAt": $NOW,
+  "sourceManifest": "$(jq -r '.sourceManifest' "$PLAN_PATH")",
+  "repoCount": $(jq '.repos | length' "$PLAN_PATH")
+}
+PROV
+
+# 4. Mark plan as applied
+jq '.status = "applied"' "$PLAN_PATH" > "$PLAN_PATH.tmp" && mv "$PLAN_PATH.tmp" "$PLAN_PATH"
+```
+
+**Important:** Never auto-commit imported repos. Only commit if the user explicitly requests it.
 
 ---
 
@@ -581,6 +883,129 @@ KB files live under `<workspace_root>/knowledge-base/`. Use `$kb` skill for card
 
 ```bash
 python3 $WS resolve '@kb' --workspace "$WID"
+```
+
+---
+
+### Shared Caches
+
+Shared caches live under `$CODEX_HOME/caches/` and are workspace-independent:
+
+| Cache | Path | Description |
+|-------|------|-------------|
+| Repo mirrors | `$CODEX_HOME/caches/repo-mirrors/<repoKeyHash>/` | Bare git mirrors for faster clones |
+| Artifact blobs | `$CODEX_HOME/caches/artifacts/<sha256>/blob` | Content-addressed artifact storage |
+
+Use `--reference` with mirrors for faster clones:
+
+```bash
+MIRROR="$CODEX_HOME/caches/repo-mirrors/$(echo -n "$REPO_KEY" | sha256sum | cut -c1-16)"
+if [ -d "$MIRROR" ]; then
+  git clone --reference "$MIRROR" "$REPO_URL" "$WS_ROOT/repos/$ALIAS"
+else
+  git clone "$REPO_URL" "$WS_ROOT/repos/$ALIAS"
+fi
+```
+
+---
+
+### Session Context and Project Pin
+
+Workspace resolution order (first match wins):
+
+1. **Explicit `--workspace`**: CLI argument
+2. **Project pin**: `.codex/workspace.json` discovered via upward walk from cwd (stops at `.git`)
+3. **Session**: `$CODEX_HOME/sessions/<sessionId>/workspace.json`
+4. **Global**: `global` workspace (auto-created if missing)
+
+```bash
+# Session file location
+SESSION_FILE="$CODEX_HOME/sessions/$CODEX_SESSION_ID/workspace.json"
+
+# Project pin location (discovered from cwd)
+# Walk up from cwd, stop at .git boundary
+PROJECT_PIN=".codex/workspace.json"
+```
+
+---
+
+### Locking
+
+ws.py uses workspace-level locking (`locks/workspace.lock`). The design supports finer-grained locks for future use:
+
+| Lock | Path | Purpose |
+|------|------|---------|
+| Workspace | `locks/workspace.lock` | Manifest mutations (active) |
+| Run | `runs/<runId>/run.lock` | Concurrent run execution (future) |
+| Index | `indexes/<indexId>/index.lock` | Long index builds (future) |
+| KB | `knowledge-base/kb.lock` | KB operations (future) |
+
+---
+
+### Index Operations (Advanced)
+
+#### Query Index (placeholder)
+
+Index query depends on the external indexing backend. Scaffolding:
+
+```bash
+# Symbol lookup (backend-specific)
+INDEX_PATH=$(python3 $WS resolve "@index/$INDEX_ID" --workspace "$WID")
+# ... invoke external search tool against $INDEX_PATH
+```
+
+#### Garbage Collect Orphaned Indexes
+
+Remove indexes whose `targetId` no longer references an existing repo or run:
+
+```bash
+python3 $WS read --workspace "$WID" | jq -r '
+  (.repos[].id) as $repo_ids |
+  (.runs[].id) as $run_ids |
+  .indexes[] |
+  select(
+    (.targetId | IN($repo_ids) | not) and
+    (.targetId | IN($run_ids) | not)
+  ) | .id
+' | while read -r ORPHAN_ID; do
+  WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
+  rm -rf "$WS_ROOT/indexes/$ORPHAN_ID"
+  python3 $WS mutate --workspace "$WID" \
+    ".indexes = [.indexes[] | select(.id != \"$ORPHAN_ID\")]"
+done
+```
+
+---
+
+### Artifact Download + Checksum
+
+When adding artifacts from a remote source, download and verify integrity:
+
+```bash
+WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
+ART_ID=$(python3 -c "import uuid,time; print(f'artifact-{int(time.time())}-{uuid.uuid4().hex}')")
+ARTIFACT_DIR="$WS_ROOT/artifacts/$ART_ID"
+mkdir -p "$ARTIFACT_DIR"
+
+# Download
+curl -L -o "$ARTIFACT_DIR/blob" "$SOURCE_URL"
+
+# Verify checksum
+echo "$EXPECTED_SHA256  $ARTIFACT_DIR/blob" | shasum -a 256 -c
+
+# Register with checksum
+ACTUAL_SHA=$(shasum -a 256 "$ARTIFACT_DIR/blob" | cut -d' ' -f1)
+SIZE_BYTES=$(stat -f%z "$ARTIFACT_DIR/blob" 2>/dev/null || stat -c%s "$ARTIFACT_DIR/blob")
+
+python3 $WS mutate --workspace "$WID" \
+  ".artifacts += [{
+    \"id\": \"$ART_ID\",
+    \"kind\": \"data\",
+    \"sourceUrl\": \"$SOURCE_URL\",
+    \"sha256\": \"$ACTUAL_SHA\",
+    \"sizeBytes\": $SIZE_BYTES,
+    \"materializedPath\": \"artifacts/$ART_ID/blob\"
+  }]"
 ```
 
 ---
