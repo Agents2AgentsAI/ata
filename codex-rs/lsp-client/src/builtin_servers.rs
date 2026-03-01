@@ -152,3 +152,78 @@ fn sourcekit_lsp() -> (&'static str, LspServerConfig) {
         },
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_servers_returns_six() {
+        let servers = builtin_servers();
+        assert_eq!(servers.len(), 6);
+    }
+
+    #[test]
+    fn all_servers_have_unique_ids() {
+        let servers = builtin_servers();
+        let ids: Vec<&str> = servers.iter().map(|(id, _)| *id).collect();
+        let unique: std::collections::HashSet<&&str> = ids.iter().collect();
+        assert_eq!(ids.len(), unique.len(), "duplicate server IDs");
+    }
+
+    #[test]
+    fn all_servers_have_at_least_one_extension() {
+        for (id, config) in builtin_servers() {
+            assert!(
+                !config.extensions.is_empty(),
+                "{id} has no extensions"
+            );
+        }
+    }
+
+    #[test]
+    fn all_servers_have_non_empty_command() {
+        for (id, config) in builtin_servers() {
+            assert!(
+                !config.command.is_empty(),
+                "{id} has empty command"
+            );
+        }
+    }
+
+    #[test]
+    fn all_servers_have_root_markers() {
+        for (id, config) in builtin_servers() {
+            assert!(
+                !config.root_markers.is_empty(),
+                "{id} has no root markers"
+            );
+        }
+    }
+
+    #[test]
+    fn no_servers_disabled_by_default() {
+        for (id, config) in builtin_servers() {
+            assert!(!config.disabled, "{id} should not be disabled by default");
+        }
+    }
+
+    #[test]
+    fn rust_analyzer_matches_rs_files() {
+        let (_, config) = rust_analyzer();
+        assert!(config.matches_extension(".rs"));
+        assert!(!config.matches_extension(".py"));
+    }
+
+    #[test]
+    fn typescript_server_matches_all_js_ts_extensions() {
+        let (_, config) = typescript_language_server();
+        for ext in &[".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"] {
+            assert!(
+                config.matches_extension(ext),
+                "typescript server should match {ext}"
+            );
+        }
+        assert!(!config.matches_extension(".py"));
+    }
+}
