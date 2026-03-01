@@ -15,6 +15,7 @@ use crate::skills::model::SkillToolDependency;
 use crate::skills::permissions::compile_permission_profile;
 use crate::skills::system::research_cache_root_dir;
 use crate::skills::system::system_cache_root_dir;
+use crate::skills::system::workspace_cache_root_dir;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SkillScope;
@@ -248,6 +249,12 @@ fn skill_roots_from_layer_stack_inner(
                 // immediately because the path doesn't exist on disk.
                 roots.push(SkillRoot {
                     path: research_cache_root_dir(config_folder.as_path()),
+                    scope: SkillScope::System,
+                });
+
+                // Workspace skills are cached under `$CODEX_HOME/skills/.system-workspace`.
+                roots.push(SkillRoot {
+                    path: workspace_cache_root_dir(config_folder.as_path()),
                     scope: SkillScope::System,
                 });
             }

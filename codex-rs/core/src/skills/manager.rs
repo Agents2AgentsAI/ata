@@ -22,6 +22,7 @@ use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
 use crate::skills::loader::skill_roots_from_layer_stack_with_agents;
 use crate::skills::system::install_system_skills;
+use crate::skills::system::install_workspace_skills;
 
 pub struct SkillsManager {
     codex_home: PathBuf,
@@ -32,6 +33,9 @@ impl SkillsManager {
     pub fn new(codex_home: PathBuf) -> Self {
         if let Err(err) = install_system_skills(&codex_home) {
             tracing::error!("failed to install system skills: {err}");
+        }
+        if let Err(err) = install_workspace_skills(&codex_home) {
+            tracing::error!("failed to install workspace skills: {err}");
         }
 
         Self {
