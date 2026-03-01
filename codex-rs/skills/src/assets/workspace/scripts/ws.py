@@ -5,14 +5,20 @@ ws.py — Atomic workspace manifest helper for the $workspace skill.
 Stdlib-only Python. Matches Rust WorkspaceService paths and flock(2) locking.
 
 Subcommands:
-  init <name>                    Create workspace, print ID
-  list                           List all workspaces as JSON array
-  read [--workspace ID]          Print manifest JSON
-  mutate <jq_expr> [--workspace] Lock + jq mutate + version bump + atomic write
-  select <id>                    Set active workspace selection
-  audit <json> [--workspace]     Append audit entry to audit.ndjson
-  delete <id>                    Remove workspace directory tree
-  resolve <@spec> [--workspace]  Resolve @-path alias to absolute path
+  init <name>                              Create workspace, print ID
+  list                                     List all workspaces as JSON array
+  read [--workspace ID]                    Print manifest JSON
+  mutate <jq_expr> [--workspace] [--expect-version N]
+                                           Lock + jq mutate + version bump + atomic write
+  select <id>                              Set active workspace selection (session-aware JSON)
+  audit <json> [--workspace]               Append audit entry to audit.ndjson
+  delete <id>                              Remove workspace directory tree
+  resolve <@spec> [--workspace]            Resolve @-path alias to absolute path
+  check-host <url> [--workspace]           Validate URL + check host allowlist
+  run-locked --level <lvl> [--target-id]   Run command under fine-grained lock
+  mirror-path <url>                        Print shared mirror cache path
+  audit-query [--workspace] [--since] [--until] [--ops] [--limit]
+                                           Query audit log as JSON array
 """
 
 import argparse
@@ -24,7 +30,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 import uuid
 
@@ -78,6 +83,14 @@ def audit_path(workspace_id: str) -> str:
 
 
 def selection_path() -> str:
+    """Return the path to the active workspace selection file.
+
+    Session-aware: if $CODEX_SESSION_ID is set, returns the session-scoped
+    selection file. Otherwise returns the legacy global selection path.
+    """
+    sid = os.environ.get("CODEX_SESSION_ID", "").strip()
+    if sid:
+        return os.path.join(codex_home(), "sessions", sid, "workspace.json")
     return os.path.join(codex_home(), ".workspace_selected")
 
 
@@ -137,11 +150,10 @@ def _validate_workspace_id(workspace_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _acquire_lock(workspace_id: str):
-    """Acquire exclusive flock on workspace lock file. Returns (fd, path)."""
-    lp = lock_path(workspace_id)
-    os.makedirs(os.path.dirname(lp), exist_ok=True)
-    fd = os.open(lp, os.O_RDWR | os.O_CREAT)
+def _acquire_lock_on_path(lock_file: str):
+    """Acquire exclusive flock on an arbitrary lock file. Returns fd."""
+    os.makedirs(os.path.dirname(lock_file), exist_ok=True)
+    fd = os.open(lock_file, os.O_RDWR | os.O_CREAT)
     deadline = time.monotonic() + LOCK_TIMEOUT_S
     while True:
         try:
@@ -150,8 +162,13 @@ def _acquire_lock(workspace_id: str):
         except OSError:
             if time.monotonic() >= deadline:
                 os.close(fd)
-                _die(f"timeout acquiring workspace lock after {LOCK_TIMEOUT_S}s")
+                _die(f"timeout acquiring lock after {LOCK_TIMEOUT_S}s: {lock_file}")
             time.sleep(LOCK_POLL_INTERVAL_S)
+
+
+def _acquire_lock(workspace_id: str):
+    """Acquire exclusive flock on workspace lock file. Returns fd."""
+    return _acquire_lock_on_path(lock_path(workspace_id))
 
 
 def _release_lock(fd: int) -> None:
@@ -391,6 +408,7 @@ def cmd_read(args: argparse.Namespace) -> None:
 def cmd_mutate(args: argparse.Namespace) -> None:
     wid = _resolve_workspace(args)
     jq_expr = args.jq_expr
+    expect_version = getattr(args, "expect_version", None)
 
     # Verify jq is available
     if not shutil.which("jq"):
@@ -399,6 +417,17 @@ def cmd_mutate(args: argparse.Namespace) -> None:
     fd = _acquire_lock(wid)
     try:
         manifest = _read_manifest(wid)
+
+        # Version conflict check: exit 2 if manifest version != expected
+        if expect_version is not None:
+            actual = manifest.get("manifestVersion", 0)
+            if actual != expect_version:
+                print(
+                    f"error: version conflict: expected {expect_version}, got {actual}",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+
         input_json = json.dumps(manifest, ensure_ascii=False)
         result = subprocess.run(
             ["jq", jq_expr],
@@ -433,7 +462,12 @@ def cmd_select(args: argparse.Namespace) -> None:
         _die(f"workspace '{wid}' not found")
     sp = selection_path()
     os.makedirs(os.path.dirname(sp), exist_ok=True)
-    _atomic_write(sp, wid.encode("utf-8"))
+    selection = {
+        "schemaVersion": 1,
+        "activeWorkspaceId": wid,
+        "updatedAt": _now(),
+    }
+    _atomic_write(sp, json.dumps(selection, indent=2).encode("utf-8"))
     print(f"selected: {wid}")
 
 
@@ -577,6 +611,210 @@ def cmd_resolve(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: check-host
+# ---------------------------------------------------------------------------
+
+# Patterns that indicate embedded credentials or tokens in URLs
+_TOKEN_PATTERNS = re.compile(
+    r"ghp_[A-Za-z0-9_]|gho_[A-Za-z0-9_]|github_pat_[A-Za-z0-9_]",
+    re.IGNORECASE,
+)
+_QUERY_TOKEN_PARAMS = re.compile(
+    r"[?&](token|access_token)=", re.IGNORECASE
+)
+
+
+def _validate_repo_url(url: str) -> None:
+    """Reject non-HTTPS, embedded creds, and token patterns."""
+    if not url.startswith("https://"):
+        _die(f"only https:// URLs allowed, got: {url}")
+    # Embedded credentials: user:pass@host
+    if re.search(r"://[^/@]+:[^/@]+@", url):
+        _die("embedded credentials not allowed in URL")
+    # Token query params
+    if _QUERY_TOKEN_PARAMS.search(url):
+        _die("token query parameters not allowed in URL")
+    # GitHub PAT patterns
+    if _TOKEN_PATTERNS.search(url):
+        _die("GitHub PAT/token patterns not allowed in URL")
+
+
+def _extract_host(url: str) -> str:
+    """Extract and normalize host from URL (lowercase, strip default port)."""
+    # Strip scheme
+    after_scheme = url.split("://", 1)[1] if "://" in url else url
+    # Strip path/query
+    host_part = after_scheme.split("/", 1)[0].split("?", 1)[0]
+    # Strip userinfo (shouldn't be present after validation, but be safe)
+    if "@" in host_part:
+        host_part = host_part.rsplit("@", 1)[1]
+    host_part = host_part.lower()
+    # Strip default HTTPS port
+    if host_part.endswith(":443"):
+        host_part = host_part[:-4]
+    return host_part
+
+
+def cmd_check_host(args: argparse.Namespace) -> None:
+    """Validate URL security and check against host allowlist."""
+    url = args.url
+    _validate_repo_url(url)
+
+    wid = _resolve_workspace(args)
+    manifest = _read_manifest(wid)
+    policies = manifest.get("policies", {})
+    allowlist = policies.get("repoHostsAllowlist")
+
+    # None/absent allowlist = allow all hosts
+    # Empty list [] = block all hosts
+    if allowlist is not None:
+        host = _extract_host(url)
+        allowed_hosts = [h.lower() for h in allowlist]
+        if host not in allowed_hosts:
+            _die(f"host '{host}' not in allowlist: {allowed_hosts}")
+
+    print(url)
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: run-locked
+# ---------------------------------------------------------------------------
+
+_LOCK_LEVELS = {
+    "workspace": lambda wid, _tid: os.path.join(
+        workspace_root(wid), "locks", "workspace.lock"
+    ),
+    "kb": lambda wid, _tid: os.path.join(
+        workspace_root(wid), "knowledge-base", "kb.lock"
+    ),
+    "run": lambda wid, tid: os.path.join(
+        workspace_root(wid), "runs", tid, "run.lock"
+    ),
+    "index": lambda wid, tid: os.path.join(
+        workspace_root(wid), "indexes", tid, "index.lock"
+    ),
+}
+
+
+def cmd_run_locked(args: argparse.Namespace) -> None:
+    """Acquire a fine-grained lock, run a command, release."""
+    wid = _resolve_workspace(args)
+    level = args.level
+    target_id = getattr(args, "target_id", None)
+
+    if level in ("run", "index") and not target_id:
+        _die(f"--target-id is required for lock level '{level}'")
+
+    # Strip leading '--' separator from REMAINDER
+    command = args.command
+    if command and command[0] == "--":
+        command = command[1:]
+    if not command:
+        _die("no command specified for run-locked")
+
+    lock_fn = _LOCK_LEVELS.get(level)
+    if lock_fn is None:
+        _die(f"unknown lock level: {level}")
+
+    lf = lock_fn(wid, target_id)
+    fd = _acquire_lock_on_path(lf)
+    try:
+        result = subprocess.run(command)
+        sys.exit(result.returncode)
+    finally:
+        _release_lock(fd)
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: mirror-path
+# ---------------------------------------------------------------------------
+
+
+def _normalize_repo_key(url: str) -> str:
+    """Normalize a repo URL to a stable cache key.
+
+    Strips scheme, trailing .git, lowercases, strips trailing slash.
+    """
+    # Strip scheme
+    key = url.split("://", 1)[1] if "://" in url else url
+    key = key.lower()
+    # Strip trailing .git
+    if key.endswith(".git"):
+        key = key[:-4]
+    # Strip trailing slash
+    key = key.rstrip("/")
+    return key
+
+
+def cmd_mirror_path(args: argparse.Namespace) -> None:
+    """Print the shared mirror cache path for a repo URL."""
+    url = args.url
+    key = _normalize_repo_key(url)
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+    mirror_dir = os.path.join(codex_home(), "caches", "repo-mirrors", digest)
+    print(mirror_dir)
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: audit-query
+# ---------------------------------------------------------------------------
+
+
+def cmd_audit_query(args: argparse.Namespace) -> None:
+    """Query audit log entries as JSON array. Pure Python NDJSON reader."""
+    wid = _resolve_workspace(args)
+    ap = audit_path(wid)
+
+    since_ts = getattr(args, "since", None)
+    until_ts = getattr(args, "until", None)
+    ops_filter = getattr(args, "ops", None)
+    limit = getattr(args, "limit", 200) or 200
+
+    if ops_filter:
+        ops_set = frozenset(o.strip() for o in ops_filter.split(",") if o.strip())
+    else:
+        ops_set = None
+
+    results = []
+    if not os.path.isfile(ap):
+        print("[]")
+        return
+
+    with open(ap, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            # Time filtering: parse ISO timestamp to unix
+            ts_str = entry.get("ts", "")
+            try:
+                ts_unix = int(
+                    time.mktime(time.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ"))
+                    - time.timezone
+                )
+            except (ValueError, OverflowError):
+                ts_unix = 0
+
+            if since_ts is not None and ts_unix < since_ts:
+                continue
+            if until_ts is not None and ts_unix > until_ts:
+                continue
+            if ops_set is not None and entry.get("op") not in ops_set:
+                continue
+
+            results.append(entry)
+            if len(results) >= limit:
+                break
+
+    print(json.dumps(results, indent=2))
+
+
+# ---------------------------------------------------------------------------
 # Workspace resolution
 # ---------------------------------------------------------------------------
 
@@ -592,14 +830,92 @@ def _ensure_global_workspace() -> None:
     _write_manifest(wid, _new_manifest(wid, "global"))
 
 
+def _read_workspace_selection_file(path: str) -> "str | None":
+    """Read a workspace ID from a selection file.
+
+    Handles two formats:
+    - Structured JSON: {"schemaVersion":1,"activeWorkspaceId":"..."}
+    - Legacy bare ID string (backward compat)
+
+    Returns None if file missing, malformed, or referenced workspace doesn't exist.
+    """
+    if not os.path.isfile(path):
+        return None
+    try:
+        raw = open(path, "r").read().strip()
+        if not raw:
+            return None
+        # Try structured JSON first
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                wid = data.get("activeWorkspaceId", "")
+            else:
+                wid = ""
+        except json.JSONDecodeError:
+            # Legacy: bare workspace ID string
+            wid = raw
+        if wid and os.path.isfile(manifest_path(wid)):
+            return wid
+    except OSError:
+        pass
+    return None
+
+
+def _discover_project_pin(cwd: str) -> "str | None":
+    """Walk ancestors from cwd looking for .codex/workspace.json.
+
+    Stops at .git boundary or filesystem root.
+    """
+    current = os.path.realpath(cwd)
+    while True:
+        candidate = os.path.join(current, ".codex", "workspace.json")
+        wid = _read_workspace_selection_file(candidate)
+        if wid is not None:
+            return wid
+        # Stop at .git boundary
+        if os.path.isdir(os.path.join(current, ".git")):
+            break
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return None
+
+
+def _read_session_workspace() -> "str | None":
+    """Read workspace from session selection file.
+
+    Looks at $CODEX_HOME/sessions/$CODEX_SESSION_ID/workspace.json.
+    Returns None if CODEX_SESSION_ID unset or file missing/invalid.
+    """
+    sid = os.environ.get("CODEX_SESSION_ID", "").strip()
+    if not sid:
+        return None
+    path = os.path.join(codex_home(), "sessions", sid, "workspace.json")
+    return _read_workspace_selection_file(path)
+
+
 def _resolve_workspace(args: argparse.Namespace) -> str:
-    """Resolve workspace ID: explicit --workspace > 'global' fallback."""
+    """4-tier workspace resolution: explicit > project pin > session > global."""
+    # 1. Explicit --workspace flag
     wid = getattr(args, "workspace", None)
     if wid:
         return wid
-    wid = "global"
+
+    # 2. Project pin (.codex/workspace.json from cwd upward)
+    wid = _discover_project_pin(os.getcwd())
+    if wid:
+        return wid
+
+    # 3. Session selection
+    wid = _read_session_workspace()
+    if wid:
+        return wid
+
+    # 4. Global fallback
     _ensure_global_workspace()
-    return wid
+    return "global"
 
 
 # ---------------------------------------------------------------------------
@@ -629,6 +945,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_mutate = sub.add_parser("mutate", help="Atomically mutate manifest via jq")
     p_mutate.add_argument("jq_expr", help="jq expression to apply")
     p_mutate.add_argument("--workspace", help="Workspace ID (default: global)")
+    p_mutate.add_argument(
+        "--expect-version",
+        type=int,
+        default=None,
+        help="Fail with exit code 2 if manifest version != this value",
+    )
 
     # select
     p_select = sub.add_parser("select", help="Set active workspace")
@@ -648,6 +970,55 @@ def build_parser() -> argparse.ArgumentParser:
     p_resolve.add_argument("spec", help="Path spec (e.g., @repo/file.txt)")
     p_resolve.add_argument("--workspace", help="Workspace ID (default: global)")
 
+    # check-host
+    p_check_host = sub.add_parser(
+        "check-host", help="Validate repo URL and check host allowlist"
+    )
+    p_check_host.add_argument("url", help="Repository URL to validate")
+    p_check_host.add_argument("--workspace", help="Workspace ID (default: global)")
+
+    # run-locked
+    p_run_locked = sub.add_parser(
+        "run-locked", help="Run command under fine-grained lock"
+    )
+    p_run_locked.add_argument(
+        "--level",
+        required=True,
+        choices=["workspace", "kb", "run", "index"],
+        help="Lock level",
+    )
+    p_run_locked.add_argument("--workspace", help="Workspace ID (default: global)")
+    p_run_locked.add_argument(
+        "--target-id", help="Target ID (required for run/index levels)"
+    )
+    p_run_locked.add_argument(
+        "command", nargs=argparse.REMAINDER, help="Command to run under lock"
+    )
+
+    # mirror-path
+    p_mirror_path = sub.add_parser(
+        "mirror-path", help="Print shared mirror cache path for a repo URL"
+    )
+    p_mirror_path.add_argument("url", help="Repository URL")
+
+    # audit-query
+    p_audit_query = sub.add_parser(
+        "audit-query", help="Query audit log entries as JSON"
+    )
+    p_audit_query.add_argument("--workspace", help="Workspace ID (default: global)")
+    p_audit_query.add_argument(
+        "--since", type=int, default=None, help="Filter: entries after unix timestamp"
+    )
+    p_audit_query.add_argument(
+        "--until", type=int, default=None, help="Filter: entries before unix timestamp"
+    )
+    p_audit_query.add_argument(
+        "--ops", default=None, help="Filter: comma-separated operation names"
+    )
+    p_audit_query.add_argument(
+        "--limit", type=int, default=200, help="Max entries to return (default: 200)"
+    )
+
     return parser
 
 
@@ -664,6 +1035,10 @@ def main() -> None:
         "audit": cmd_audit,
         "delete": cmd_delete,
         "resolve": cmd_resolve,
+        "check-host": cmd_check_host,
+        "run-locked": cmd_run_locked,
+        "mirror-path": cmd_mirror_path,
+        "audit-query": cmd_audit_query,
     }
 
     handler = dispatch.get(args.command)
