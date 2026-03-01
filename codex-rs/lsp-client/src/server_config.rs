@@ -130,3 +130,89 @@ impl InstallMethod {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn test_config() -> LspServerConfig {
+        LspServerConfig {
+            extensions: vec![".rs".into(), ".toml".into()],
+            command: vec!["rust-analyzer".into()],
+            env: HashMap::new(),
+            root_markers: vec!["Cargo.toml".into()],
+            initialization_options: None,
+            disabled: false,
+            install: None,
+        }
+    }
+
+    #[test]
+    fn matches_extension_with_dot() {
+        let c = test_config();
+        assert!(c.matches_extension(".rs"));
+        assert!(c.matches_extension(".toml"));
+        assert!(!c.matches_extension(".py"));
+        assert!(!c.matches_extension("rs")); // no dot
+    }
+
+    #[test]
+    fn matches_path_extracts_extension() {
+        let c = test_config();
+        assert!(c.matches_path(Path::new("src/main.rs")));
+        assert!(c.matches_path(Path::new("/abs/Cargo.toml")));
+        assert!(!c.matches_path(Path::new("readme.md")));
+    }
+
+    #[test]
+    fn matches_path_no_extension() {
+        let c = test_config();
+        assert!(!c.matches_path(Path::new("Makefile")));
+    }
+
+    #[test]
+    fn binary_name_returns_first_command() {
+        let c = test_config();
+        assert_eq!(c.binary_name(), Some("rust-analyzer"));
+    }
+
+    #[test]
+    fn binary_name_empty_command() {
+        let c = LspServerConfig {
+            command: Vec::new(),
+            ..test_config()
+        };
+        assert_eq!(c.binary_name(), None);
+    }
+
+    #[test]
+    fn install_command_cargo() {
+        let m = InstallMethod::Cargo { package: None };
+        assert_eq!(m.install_command("ra"), vec!["cargo", "install", "ra"]);
+
+        let m = InstallMethod::Cargo { package: Some("rust-analyzer".into()) };
+        assert_eq!(m.install_command("ra"), vec!["cargo", "install", "rust-analyzer"]);
+    }
+
+    #[test]
+    fn install_command_npm() {
+        let m = InstallMethod::Npm { package: Some("ts-server".into()) };
+        assert_eq!(m.install_command("ts"), vec!["npm", "install", "-g", "ts-server"]);
+    }
+
+    #[test]
+    fn install_command_go() {
+        let m = InstallMethod::Go { package_path: "golang.org/x/tools/gopls".into() };
+        assert_eq!(
+            m.install_command("gopls"),
+            vec!["go", "install", "golang.org/x/tools/gopls@latest"]
+        );
+    }
+
+    #[test]
+    fn install_command_brew() {
+        let m = InstallMethod::Brew { formula: Some("llvm".into()) };
+        assert_eq!(m.install_command("clangd"), vec!["brew", "install", "llvm"]);
+    }
+}

@@ -37,27 +37,7 @@ impl LspFeedback {
             }
         }
 
-        if errors.is_empty() {
-            return String::new();
-        }
-
-        let display_path = file.display();
-        let total = errors.len();
-        let shown: Vec<_> = errors.into_iter().take(MAX_DIAGNOSTICS_PER_FILE).collect();
-        let remaining = total.saturating_sub(MAX_DIAGNOSTICS_PER_FILE);
-
-        let mut result = format!(
-            "\nLSP errors detected in {display_path}, please fix:\n<diagnostics file=\"{display_path}\">\n"
-        );
-        for line in &shown {
-            result.push_str(line);
-            result.push('\n');
-        }
-        if remaining > 0 {
-            result.push_str(&format!("... and {remaining} more\n"));
-        }
-        result.push_str("</diagnostics>");
-        result
+        format_diagnostics_xml(file, &errors)
     }
 
     /// Sync a file without waiting for diagnostics (warmup only).
@@ -66,15 +46,38 @@ impl LspFeedback {
     }
 }
 
+/// Format a list of error strings as XML diagnostics output.
+/// Returns an empty string if `errors` is empty.
+fn format_diagnostics_xml(file: &Path, errors: &[String]) -> String {
+    if errors.is_empty() {
+        return String::new();
+    }
+
+    let display_path = file.display();
+    let total = errors.len();
+    let shown: Vec<_> = errors.iter().take(MAX_DIAGNOSTICS_PER_FILE).collect();
+    let remaining = total.saturating_sub(MAX_DIAGNOSTICS_PER_FILE);
+
+    let mut result = format!(
+        "\nLSP errors detected in {display_path}, please fix:\n<diagnostics file=\"{display_path}\">\n"
+    );
+    for line in &shown {
+        result.push_str(line);
+        result.push('\n');
+    }
+    if remaining > 0 {
+        result.push_str(&format!("... and {remaining} more\n"));
+    }
+    result.push_str("</diagnostics>");
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn format_no_errors() {
-        // Touch and collect with no diagnostics should return empty string.
-        // This is a unit test for the formatting logic; actual LSP integration
-        // is tested separately.
         let formatted = format_diagnostics_xml(Path::new("src/main.rs"), &[]);
         assert!(formatted.is_empty());
     }
@@ -101,29 +104,5 @@ mod tests {
             .collect();
         let formatted = format_diagnostics_xml(Path::new("test.rs"), &errors);
         assert!(formatted.contains("... and 5 more"));
-    }
-
-    /// Helper to test formatting logic without needing a real ServerRegistry.
-    fn format_diagnostics_xml(file: &Path, errors: &[String]) -> String {
-        if errors.is_empty() {
-            return String::new();
-        }
-        let display_path = file.display();
-        let total = errors.len();
-        let shown: Vec<_> = errors.iter().take(MAX_DIAGNOSTICS_PER_FILE).collect();
-        let remaining = total.saturating_sub(MAX_DIAGNOSTICS_PER_FILE);
-
-        let mut result = format!(
-            "\nLSP errors detected in {display_path}, please fix:\n<diagnostics file=\"{display_path}\">\n"
-        );
-        for line in &shown {
-            result.push_str(line);
-            result.push('\n');
-        }
-        if remaining > 0 {
-            result.push_str(&format!("... and {remaining} more\n"));
-        }
-        result.push_str("</diagnostics>");
-        result
     }
 }
