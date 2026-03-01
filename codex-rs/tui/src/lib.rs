@@ -981,8 +981,10 @@ pub enum LoginStatus {
 fn get_login_status(config: &Config, auth_manager: &AuthManager) -> LoginStatus {
     if config.model_provider.requires_openai_auth {
         match auth_manager.auth_cached() {
-            Some(auth) => LoginStatus::AuthMode(auth.auth_mode()),
-            None => LoginStatus::NotAuthenticated,
+            Some(auth) if !auth.api_key().is_some_and(|k| k.is_empty()) => {
+                LoginStatus::AuthMode(auth.auth_mode())
+            }
+            _ => LoginStatus::NotAuthenticated,
         }
     } else {
         LoginStatus::NotAuthenticated
@@ -1403,6 +1405,22 @@ trust_level = "untrusted"
         assert!(
             !should_show_login_screen(LoginStatus::AuthMode(AuthMode::ApiKey), &config),
             "login screen should not be shown when authenticated and no fallback"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn login_screen_shown_when_api_key_is_empty() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+
+        // Empty API key (from orphaned OAuth credential) should be treated as unauthenticated.
+        // get_login_status returns NotAuthenticated for empty keys, which causes
+        // should_show_login_screen to return true.
+        assert!(
+            should_show_login_screen(LoginStatus::NotAuthenticated, &config),
+            "login screen should be shown when API key is empty (orphaned OAuth credential)"
         );
         Ok(())
     }
