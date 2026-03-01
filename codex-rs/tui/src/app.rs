@@ -1695,11 +1695,17 @@ impl App {
                     }
                     // Allow widgets to process any pending timers before rendering.
                     self.chat_widget.pre_draw_tick();
-                    // Flush deferred history lines once both the overlay and
-                    // reading view are closed so they appear in the scrollback.
+                    // Flush deferred history lines once overlay, reading view,
+                    // and voice TTS are all inactive.
                     if !self.deferred_history_lines.is_empty()
                         && self.overlay.is_none()
                         && !self.chat_widget.is_document_reader_active()
+                        && !{
+                            #[cfg(not(target_os = "linux"))]
+                            { self.chat_widget.is_voice_speaking() }
+                            #[cfg(target_os = "linux")]
+                            { false }
+                        }
                     {
                         let lines = std::mem::take(&mut self.deferred_history_lines);
                         tui.insert_history_lines(lines);
@@ -1985,7 +1991,15 @@ impl App {
                             self.has_emitted_history_lines = true;
                         }
                     }
-                    if self.overlay.is_some() || self.chat_widget.is_document_reader_active() {
+                    let defer = self.overlay.is_some()
+                        || self.chat_widget.is_document_reader_active()
+                        || {
+                            #[cfg(not(target_os = "linux"))]
+                            { self.chat_widget.is_voice_speaking() }
+                            #[cfg(target_os = "linux")]
+                            { false }
+                        };
+                    if defer {
                         self.deferred_history_lines.extend(display);
                     } else {
                         tui.insert_history_lines(display);
@@ -2917,8 +2931,13 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             #[cfg(not(target_os = "linux"))]
-            AppEvent::VoiceModeTtsAudioChunk { pcm } => {
-                self.chat_widget.on_voice_tts_audio_chunk(pcm);
+            AppEvent::VoiceModeTtsAudioChunk { pcm, alignment } => {
+                self.chat_widget.on_voice_tts_audio_chunk(pcm, alignment);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeHighlightTick => {
+                self.chat_widget.on_voice_highlight_tick();
+                tui.frame_requester().schedule_frame();
             }
             #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModeTtsFinished => {
@@ -2955,9 +2974,14 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             #[cfg(not(target_os = "linux"))]
-            AppEvent::VoiceModeNarrateSection { text } => {
-                self.chat_widget.on_voice_narrate_section(text);
+            AppEvent::VoiceModeNarrateSection { document_id, section_index, text } => {
+                self.chat_widget.on_voice_narrate_section(document_id, section_index, text);
                 tui.frame_requester().schedule_frame();
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModePrefetchSection { document_id, section_index, text } => {
+                self.chat_widget.on_voice_prefetch_section(document_id, section_index, text);
+                // No schedule_frame needed — prefetch is silent background work.
             }
             AppEvent::StatusLineSetup { items } => {
                 let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();

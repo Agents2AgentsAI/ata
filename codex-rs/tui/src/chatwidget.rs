@@ -4171,6 +4171,17 @@ impl ChatWidget {
             voice_input,
         } = user_message;
 
+        // If TTS is playing, interrupt it — new user message is a barge-in.
+        // Set tts_suppressed so deltas from the still-running old turn don't
+        // restart TTS. Cleared in on_voice_mode_turn_complete().
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        if self.is_voice_speaking() {
+            self.on_voice_interrupt_tts();
+            if let Some(ref mut state) = self.voice_mode_state {
+                state.tts_suppressed = true;
+            }
+        }
+
         // Check if voice mode is active so we prepend voice instructions
         // (for TTS) even on typed messages — but do NOT flip `voice_input`
         // to true, since that flag controls the 🎙️ display icon.
@@ -7577,10 +7588,15 @@ impl ChatWidget {
     }
 
     /// True when the main chat composer is focused (no modal/view active) and
-    /// has text — indicating the user is actively typing. Used to avoid
-    /// intercepting Space for PTT while the user types.
+    /// has meaningful (non-whitespace) text — indicating the user is actively
+    /// typing. Used to avoid intercepting Space for PTT while the user types.
+    ///
+    /// Whitespace-only content is treated as "empty" so that a stale space
+    /// left by a quick PTT tap doesn't block subsequent PTT activations.
     fn is_main_composer_typing(&self) -> bool {
-        self.bottom_pane.no_modal_or_popup_active() && !self.bottom_pane.composer_is_empty()
+        self.bottom_pane.no_modal_or_popup_active()
+            && !self.bottom_pane.composer_is_empty()
+            && self.bottom_pane.composer_text().chars().any(|c| !c.is_whitespace())
     }
 
     pub(crate) fn insert_str(&mut self, text: &str) {
@@ -7964,12 +7980,45 @@ impl ChatWidget {
     }
 
     fn as_renderable(&self) -> RenderableItem<'_> {
-        let active_cell_renderable = match &self.active_cell {
-            Some(cell) => RenderableItem::Borrowed(cell).inset(Insets::tlbr(1, 0, 0, 0)),
-            None => RenderableItem::Owned(Box::new(())),
-        };
         let mut flex = FlexRenderable::new();
-        flex.push(1, active_cell_renderable);
+
+        // During TTS karaoke playback, the karaoke renderable replaces the
+        // active cell visually (the same text is shown with word-level
+        // highlighting). Skip the active cell to avoid duplicate text.
+        #[cfg(not(target_os = "linux"))]
+        let karaoke_active = {
+            let width = self
+                .last_rendered_width
+                .get()
+                .unwrap_or(80) as u16;
+            if let Some(lines) = self.voice_karaoke_lines(width) {
+                if !lines.is_empty() {
+                    // Push an empty flex=1 spacer in place of the active cell.
+                    flex.push(1, RenderableItem::Owned(Box::new(())));
+                    flex.push(
+                        0,
+                        RenderableItem::Owned(Box::new(VoiceKaraokeRenderable { lines }))
+                            .inset(Insets::tlbr(1, 0, 0, 0)),
+                    );
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+        #[cfg(target_os = "linux")]
+        let karaoke_active = false;
+
+        if !karaoke_active {
+            let active_cell_renderable = match &self.active_cell {
+                Some(cell) => RenderableItem::Borrowed(cell).inset(Insets::tlbr(1, 0, 0, 0)),
+                None => RenderableItem::Owned(Box::new(())),
+            };
+            flex.push(1, active_cell_renderable);
+        }
+
         flex.push(
             0,
             RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(1, 0, 0, 0)),
@@ -8009,6 +8058,29 @@ fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
         || summary.responses_api_engine_iapi_tbt_ms > 0
         || summary.responses_api_engine_service_tbt_ms > 0
 }
+
+// ─── Voice mode karaoke renderable ────────────────────────────────────────────
+
+/// A simple renderable that displays pre-built Lines (used for the voice
+/// playback karaoke text displayed in the viewport during TTS).
+#[cfg(not(target_os = "linux"))]
+struct VoiceKaraokeRenderable {
+    lines: Vec<ratatui::text::Line<'static>>,
+}
+
+#[cfg(not(target_os = "linux"))]
+impl Renderable for VoiceKaraokeRenderable {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        use ratatui::widgets::Paragraph;
+        use ratatui::widgets::Widget;
+        Paragraph::new(self.lines.clone()).render(area, buf);
+    }
+
+    fn desired_height(&self, _width: u16) -> u16 {
+        self.lines.len() as u16
+    }
+}
+
 
 impl Drop for ChatWidget {
     fn drop(&mut self) {

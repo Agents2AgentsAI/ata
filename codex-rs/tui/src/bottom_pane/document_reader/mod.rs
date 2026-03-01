@@ -674,7 +674,27 @@ impl DocumentReaderView {
                 format!("{}. {}", section.heading, section.content)
             };
             self.app_event_tx
-                .send(AppEvent::VoiceModeNarrateSection { text });
+                .send(AppEvent::VoiceModeNarrateSection {
+                    document_id: self.document_id.clone(),
+                    section_index: self.current_section,
+                    text,
+                });
+        }
+        // Prefetch the next section in the background.
+        if let Some(next) = self.sections.get(self.current_section + 1) {
+            let next_text = if next.heading.is_empty() {
+                next.content.clone()
+            } else {
+                format!("{}. {}", next.heading, next.content)
+            };
+            if !next_text.trim().is_empty() {
+                self.app_event_tx
+                    .send(AppEvent::VoiceModePrefetchSection {
+                        document_id: self.document_id.clone(),
+                        section_index: self.current_section + 1,
+                        text: next_text,
+                    });
+            }
         }
     }
 
@@ -693,6 +713,9 @@ impl DocumentReaderView {
     }
 
     fn exit_reading_mode(&mut self) {
+        // Stop any ongoing TTS playback immediately.
+        self.interrupt_tts_if_needed();
+
         // Insert a history cell with the final document state.
         let cell = crate::history_cell::new_document_cell(
             self.title.clone(),

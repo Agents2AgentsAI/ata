@@ -10,4 +10,6 @@ pub mod tts;
 pub mod types;
 
 pub use error::ElevenLabsError;
+pub use tts::TtsChunk;
 pub use types::ElevenLabsConfig;
+pub use types::TtsAlignment;

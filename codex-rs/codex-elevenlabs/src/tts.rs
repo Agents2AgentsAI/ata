@@ -17,20 +17,33 @@ use tracing::trace;
 use crate::ElevenLabsConfig;
 use crate::ElevenLabsError;
 use crate::types::GenerationConfig;
+use crate::types::TtsAlignment;
 use crate::types::TtsBosMessage;
 use crate::types::TtsResponse;
 use crate::types::TtsTextMessage;
 use crate::types::VoiceSettings;
 
+/// A single TTS audio chunk with optional alignment data.
+#[derive(Debug, Clone)]
+pub struct TtsChunk {
+    /// PCM audio samples (24kHz mono i16).
+    pub pcm: Vec<i16>,
+    /// Character-level alignment for this chunk (times relative to chunk start).
+    pub alignment: Option<TtsAlignment>,
+}
+
 /// Streaming TTS handle. Send text, receive PCM audio chunks.
 pub struct TtsStream {
     text_tx: mpsc::Sender<TtsCommand>,
-    audio_rx: mpsc::Receiver<Vec<i16>>,
+    audio_rx: mpsc::Receiver<TtsChunk>,
 }
 
 enum TtsCommand {
     Text(String),
     Flush,
+    /// Send EOS (empty text) without closing the WebSocket.
+    /// The server finishes generating audio and sends `is_final`.
+    Eos,
     Close,
 }
 
@@ -41,7 +54,7 @@ impl TtsStream {
         codex_utils_rustls_provider::ensure_rustls_crypto_provider();
 
         let url = format!(
-            "wss://api.elevenlabs.io/v1/text-to-speech/{}/stream-input?model_id={}&output_format=pcm_24000",
+            "wss://api.elevenlabs.io/v1/text-to-speech/{}/stream-input?model_id={}&output_format=pcm_24000&sync_alignment=true",
             config.voice_id, config.model_id
         );
 
@@ -63,7 +76,7 @@ impl TtsStream {
         let (mut ws_write, mut ws_read) = ws_stream.split();
 
         let (text_tx, mut text_rx) = mpsc::channel::<TtsCommand>(32);
-        let (audio_tx, audio_rx) = mpsc::channel::<Vec<i16>>(64);
+        let (audio_tx, audio_rx) = mpsc::channel::<TtsChunk>(64);
 
         // Send BOS (beginning of stream) message.
         let bos = TtsBosMessage {
@@ -110,6 +123,19 @@ impl TtsStream {
                             }
                         }
                     }
+                    TtsCommand::Eos => {
+                        // Send EOS (empty text) to signal end of input.
+                        // Don't close the WebSocket — let the reader drain
+                        // remaining audio until the server sends `is_final`.
+                        let m = TtsTextMessage {
+                            text: String::new(),
+                            flush: None,
+                        };
+                        if let Ok(json) = serde_json::to_string(&m) {
+                            let _ = ws_write.send(Message::Text(json.into())).await;
+                        }
+                        continue;
+                    }
                     TtsCommand::Close => {
                         // Send EOS (empty text) to signal end of input.
                         let m = TtsTextMessage {
@@ -144,7 +170,12 @@ impl TtsStream {
                                         Ok(bytes) => {
                                             let pcm = bytes_to_pcm_i16(&bytes);
                                             if !pcm.is_empty() {
-                                                if audio_tx.send(pcm).await.is_err() {
+                                                // Prefer normalizedAlignment, fall back to alignment.
+                                                let alignment = resp
+                                                    .normalized_alignment
+                                                    .or(resp.alignment);
+                                                let chunk = TtsChunk { pcm, alignment };
+                                                if audio_tx.send(chunk).await.is_err() {
                                                     trace!("TTS audio receiver dropped");
                                                     break;
                                                 }
@@ -197,14 +228,27 @@ impl TtsStream {
             .map_err(|_| ElevenLabsError::ConnectionClosed)
     }
 
+    /// Send EOS (end-of-stream) without closing the WebSocket.
+    /// The server finishes generating audio for all flushed text and sends
+    /// `is_final`, causing `recv_audio()` to return `None`.
+    pub async fn send_eos(&self) {
+        let _ = self.text_tx.send(TtsCommand::Eos).await;
+    }
+
     /// Gracefully close the WebSocket.
     pub async fn close(self) {
         let _ = self.text_tx.send(TtsCommand::Close).await;
     }
 
-    /// Receive the next PCM audio chunk (24kHz mono i16).
+    /// Send the close command without consuming self, allowing further
+    /// `recv_audio()` calls to drain remaining audio until `None`.
+    pub async fn request_close(&self) {
+        let _ = self.text_tx.send(TtsCommand::Close).await;
+    }
+
+    /// Receive the next TTS chunk (PCM audio + optional alignment).
     /// Returns `None` when the stream is complete.
-    pub async fn recv_audio(&mut self) -> Option<Vec<i16>> {
+    pub async fn recv_audio(&mut self) -> Option<TtsChunk> {
         self.audio_rx.recv().await
     }
 }
@@ -239,5 +283,48 @@ mod tests {
     fn bytes_to_pcm_odd_length_returns_empty() {
         let decoded = bytes_to_pcm_i16(&[1, 2, 3]);
         assert!(decoded.is_empty());
+    }
+
+    /// Integration test: verify ElevenLabs returns alignment data with sync_alignment=true.
+    /// Requires ELEVENLABS_API_KEY env var. Skipped if not set.
+    #[tokio::test]
+    async fn alignment_data_returned() {
+        let api_key = match std::env::var("ELEVENLABS_API_KEY") {
+            Ok(k) if !k.is_empty() => k,
+            _ => {
+                eprintln!("ELEVENLABS_API_KEY not set, skipping");
+                return;
+            }
+        };
+
+        let config = crate::ElevenLabsConfig::new(api_key);
+        let mut stream = TtsStream::connect(&config).await.expect("connect");
+
+        stream
+            .send_text("Hello world, this is a test.")
+            .await
+            .expect("send");
+        stream.flush().await.expect("flush");
+        stream.send_eos().await;
+
+        let mut got_alignment = false;
+        let mut total_chunks = 0;
+        while let Some(chunk) = stream.recv_audio().await {
+            total_chunks += 1;
+            if chunk.alignment.is_some() {
+                got_alignment = true;
+                let a = chunk.alignment.as_ref().unwrap();
+                eprintln!(
+                    "chunk {total_chunks}: alignment with {} chars",
+                    a.chars.len()
+                );
+            } else {
+                eprintln!("chunk {total_chunks}: NO alignment");
+            }
+        }
+
+        eprintln!("total chunks: {total_chunks}, got_alignment: {got_alignment}");
+        assert!(total_chunks > 0, "expected at least one audio chunk");
+        assert!(got_alignment, "expected alignment data with sync_alignment=true");
     }
 }

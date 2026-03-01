@@ -68,7 +68,7 @@ impl VoiceModePhase {
             Self::Idle => "\u{1F3A4}  Hold Space to speak",
             Self::Recording => "\u{1F534}  Recording...",
             Self::Transcribing => "\u{23F3}  Transcribing...",
-            Self::Speaking => "\u{1F50A}  Speaking...",
+            Self::Speaking => "\u{25B6}\u{FE0F}  Speaking...",
         }
     }
 }
@@ -332,7 +332,24 @@ fn find_sentence_boundary(text: &str) -> Option<usize> {
 #[allow(dead_code)]
 const MIN_RECORDING_MS: u64 = 600;
 
-/// Holds all voice mode runtime state for a `ChatWidget`.
+/// Cached TTS audio for a reading view section.
+pub(crate) struct TtsCacheEntry {
+    pub(crate) content_hash: u64,
+    pub(crate) chunks: Vec<Vec<i16>>,
+}
+
+/// A word-level entry in the alignment timeline.
+/// Maps an absolute playback time range to a word in the TTS output.
+#[derive(Debug, Clone)]
+pub(crate) struct AlignmentEntry {
+    /// Absolute start time in ms from beginning of playback.
+    pub(crate) start_ms: u64,
+    /// Duration in ms.
+    pub(crate) duration_ms: u64,
+    /// The word text (for rendering the highlight).
+    pub(crate) word: String,
+}
+
 pub(crate) struct VoiceModeState {
     pub(crate) phase: VoiceModePhase,
     pub(crate) sentence_buffer: SentenceBuffer,
@@ -381,6 +398,46 @@ pub(crate) struct VoiceModeState {
     /// Ref-count of in-flight TTS tasks. `VoiceModeTtsFinished` is only
     /// sent when this drops to zero.
     pub(crate) tts_in_flight: Arc<AtomicUsize>,
+
+    /// Ordering lock: each spawned TTS task acquires this before streaming
+    /// audio so sentences play in the order they were spawned.
+    pub(crate) tts_ordering_lock: Arc<tokio::sync::Mutex<()>>,
+
+    /// Generation counter: incremented on interrupt so stale tasks know to
+    /// discard their audio instead of playing it.
+    pub(crate) tts_generation: Arc<AtomicUsize>,
+
+    /// Channel to the persistent TTS worker task. `None` when no worker is running.
+    /// The worker maintains a single ElevenLabs WebSocket, eliminating per-sentence
+    /// connection overhead.
+    pub(crate) tts_worker_tx: Option<tokio::sync::mpsc::UnboundedSender<TtsWorkerCommand>>,
+
+    /// Cache of pre-generated TTS audio. Key: (document_id, section_index).
+    pub(crate) tts_section_cache: Arc<std::sync::Mutex<std::collections::HashMap<(String, usize), TtsCacheEntry>>>,
+    /// Sections currently being prefetched (to avoid duplicates).
+    pub(crate) prefetch_pending: Arc<std::sync::Mutex<std::collections::HashSet<(String, usize)>>>,
+
+    // ─── Reading view narration cache collection ───────────────────────
+
+    /// When narrating a section, tracks the (document_id, section_index)
+    /// and content hash so chunks can be collected for caching.
+    pub(crate) narrating_section: Option<(String, usize, u64)>,
+    /// Chunks collected during narration for cache storage.
+    pub(crate) narrating_chunks: Vec<Vec<i16>>,
+
+    // ─── Word-level alignment highlighting ──────────────────────────────
+
+    /// Timeline of word-level alignment entries for the current voice turn.
+    pub(crate) tts_alignment_timeline: Vec<AlignmentEntry>,
+    /// Cumulative audio duration in ms (converts per-chunk relative times to absolute).
+    pub(crate) tts_cumulative_ms: u64,
+    /// Index into `tts_alignment_timeline` for the currently highlighted word.
+    pub(crate) tts_highlight_word_idx: Option<usize>,
+    /// Cancel flag for the highlight tick timer.
+    pub(crate) highlight_tick_cancel: Option<Arc<AtomicBool>>,
+    /// Set when TTS worker has finished sending all audio to the player,
+    /// but the player may still be playing buffered audio.
+    pub(crate) tts_data_complete: bool,
 }
 
 impl VoiceModeState {
@@ -406,6 +463,18 @@ impl VoiceModeState {
             ptt_pending_at: None,
             ptt_meter_cancel: None,
             tts_in_flight: Arc::new(AtomicUsize::new(0)),
+            tts_ordering_lock: Arc::new(tokio::sync::Mutex::new(())),
+            tts_generation: Arc::new(AtomicUsize::new(0)),
+            tts_worker_tx: None,
+            tts_section_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            prefetch_pending: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            narrating_section: None,
+            narrating_chunks: Vec::new(),
+            tts_alignment_timeline: Vec::new(),
+            tts_cumulative_ms: 0,
+            tts_highlight_word_idx: None,
+            highlight_tick_cancel: None,
+            tts_data_complete: false,
         }
     }
 
@@ -431,12 +500,27 @@ impl VoiceModeState {
         self.sentence_buffer.clear();
         self.voice_tag_parser.clear();
         self.tts_in_flight.store(0, Ordering::SeqCst);
+        // Shut down the TTS worker (if running) by dropping the sender.
+        self.tts_worker_tx = None;
         if let Some(cancel) = self.tts_cancel.take() {
             let _ = cancel.send(());
         }
         if let Some(ref player) = self.audio_player {
             player.clear();
         }
+        // Bump generation so any in-flight tasks discard their audio.
+        self.tts_generation.fetch_add(1, Ordering::SeqCst);
+        // Replace the ordering lock so new tasks don't queue behind stale ones.
+        self.tts_ordering_lock = Arc::new(tokio::sync::Mutex::new(()));
+        // Clear narration collection state.
+        self.narrating_section = None;
+        self.narrating_chunks.clear();
+        // Clear alignment timeline and highlight.
+        self.tts_alignment_timeline.clear();
+        self.tts_cumulative_ms = 0;
+        self.tts_highlight_word_idx = None;
+        self.tts_data_complete = false;
+        self.cancel_highlight_tick();
     }
 
     /// Cancel the PTT timeout poller task.
@@ -449,6 +533,13 @@ impl VoiceModeState {
     /// Cancel the PTT volume meter polling thread.
     fn cancel_ptt_meter(&mut self) {
         if let Some(cancel) = self.ptt_meter_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Cancel the highlight tick timer.
+    fn cancel_highlight_tick(&mut self) {
+        if let Some(cancel) = self.highlight_tick_cancel.take() {
             cancel.store(true, Ordering::Relaxed);
         }
     }
@@ -466,6 +557,13 @@ impl VoiceModeState {
         self.recording_started_at = None;
         self.last_ptt_repeat_at = None;
         self.ptt_pending_at = None;
+        // Clear prefetch cache and pending set on full reset.
+        if let Ok(mut cache) = self.tts_section_cache.lock() {
+            cache.clear();
+        }
+        if let Ok(mut pending) = self.prefetch_pending.lock() {
+            pending.clear();
+        }
     }
 }
 
@@ -602,10 +700,19 @@ impl super::ChatWidget {
             return;
         }
 
-        // If agent is speaking, barge-in: interrupt TTS first.
-        if state.phase == VoiceModePhase::Speaking {
+        // If agent is speaking (or audio is still buffered), barge-in:
+        // interrupt TTS first.
+        if state.phase == VoiceModePhase::Speaking
+            || state
+                .audio_player
+                .as_ref()
+                .is_some_and(|p| p.has_buffered_audio())
+        {
             state.interrupt_tts();
             state.tts_suppressed = true;
+            if state.phase == VoiceModePhase::Speaking {
+                state.phase = VoiceModePhase::Idle;
+            }
             // Fall through to start recording / enter pending state.
         }
 
@@ -665,6 +772,15 @@ impl super::ChatWidget {
         };
 
         state.ptt_pending_at = None;
+
+        // Clear any whitespace-only content from the composer (stale spaces
+        // left by previous quick-tap PTT attempts).
+        if !self.bottom_pane.composer_is_empty()
+            && !self.bottom_pane.composer_text().chars().any(|c| !c.is_whitespace())
+        {
+            self.bottom_pane
+                .set_composer_text(String::new(), Vec::new(), Vec::new());
+        }
 
         // Start voice capture.
         let last_peak_arc;
@@ -998,20 +1114,28 @@ impl super::ChatWidget {
                 state.phase = VoiceModePhase::Speaking;
             }
 
-            // Send each complete sentence to TTS.
-            let vc = voice_mode_config(&self.config);
-            let tx = self.app_event_tx.clone();
-            let in_flight = state.tts_in_flight.clone();
-            for sentence in tts_sentences {
+            // Ensure TTS worker is running (one persistent WebSocket per voice turn).
+            if state.tts_worker_tx.is_none() {
+                let vc = voice_mode_config(&self.config);
+                let tx = self.app_event_tx.clone();
+                let in_flight = state.tts_in_flight.clone();
+                let gen_ref = state.tts_generation.clone();
+                let spawn_gen = gen_ref.load(Ordering::SeqCst);
                 in_flight.fetch_add(1, Ordering::SeqCst);
-                let tx = tx.clone();
-                let config = vc.clone();
-                let counter = in_flight.clone();
+
+                let (worker_tx, worker_rx) = tokio::sync::mpsc::unbounded_channel();
+                state.tts_worker_tx = Some(worker_tx);
+
                 tokio::spawn(async move {
-                    if let Err(e) = send_sentence_to_tts(&config, &sentence, tx, counter).await {
-                        tracing::error!("TTS error: {e}");
-                    }
+                    tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen).await;
                 });
+            }
+
+            // Send each sentence to the worker — no per-sentence WebSocket needed.
+            if let Some(ref worker_tx) = state.tts_worker_tx {
+                for sentence in tts_sentences {
+                    let _ = worker_tx.send(TtsWorkerCommand::SendText(sentence));
+                }
             }
         }
 
@@ -1028,33 +1152,42 @@ impl super::ChatWidget {
         }
 
         if state.should_tts() {
-            let vc = voice_mode_config(&self.config);
-            let tx = self.app_event_tx.clone();
-            let in_flight = state.tts_in_flight.clone();
+            // Collect remaining text from both parsers.
+            let mut remaining = Vec::new();
+            if let Some(r) = state.voice_tag_parser.flush() {
+                remaining.push(r);
+            }
+            if let Some(r) = state.sentence_buffer.flush() {
+                remaining.push(r);
+            }
 
-            // Flush voice tag parser.
-            if let Some(remaining) = state.voice_tag_parser.flush() {
+            let has_remaining = !remaining.is_empty();
+
+            // If there's remaining text but no worker, start one.
+            if has_remaining && state.tts_worker_tx.is_none() {
+                let vc = voice_mode_config(&self.config);
+                let tx = self.app_event_tx.clone();
+                let in_flight = state.tts_in_flight.clone();
+                let gen_ref = state.tts_generation.clone();
+                let spawn_gen = gen_ref.load(Ordering::SeqCst);
                 in_flight.fetch_add(1, Ordering::SeqCst);
-                let vc = vc.clone();
-                let tx = tx.clone();
-                let in_flight = in_flight.clone();
+
+                let (worker_tx, worker_rx) = tokio::sync::mpsc::unbounded_channel();
+                state.tts_worker_tx = Some(worker_tx);
+
                 tokio::spawn(async move {
-                    if let Err(e) = send_sentence_to_tts(&vc, &remaining, tx, in_flight).await {
-                        tracing::error!("TTS flush error: {e}");
-                    }
+                    tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen).await;
                 });
             }
 
-            // In reading view, also flush the sentence buffer (used for
-            // narrate-all mode where all text goes to TTS).
-            if let Some(remaining) = state.sentence_buffer.flush() {
-                in_flight.fetch_add(1, Ordering::SeqCst);
-                tokio::spawn(async move {
-                    if let Err(e) = send_sentence_to_tts(&vc, &remaining, tx, in_flight).await {
-                        tracing::error!("TTS flush error: {e}");
-                    }
-                });
+            // Send remaining text and signal finish.
+            if let Some(ref worker_tx) = state.tts_worker_tx {
+                for sentence in remaining {
+                    let _ = worker_tx.send(TtsWorkerCommand::SendText(sentence));
+                }
+                let _ = worker_tx.send(TtsWorkerCommand::Finish);
             }
+            state.tts_worker_tx = None;
 
             if state.phase != VoiceModePhase::Speaking {
                 state.phase = VoiceModePhase::Speaking;
@@ -1064,21 +1197,64 @@ impl super::ChatWidget {
             state.voice_tag_parser.clear();
             state.sentence_buffer.clear();
             state.phase = VoiceModePhase::Idle;
+            // Clear suppression so the next turn's TTS works.
+            state.tts_suppressed = false;
         }
         self.sync_voice_placeholder();
         self.request_redraw();
     }
 
     /// Called when a TTS audio chunk is received.
-    pub(crate) fn on_voice_tts_audio_chunk(&mut self, pcm: Vec<i16>) {
+    pub(crate) fn on_voice_tts_audio_chunk(
+        &mut self,
+        pcm: Vec<i16>,
+        alignment: Option<codex_elevenlabs::TtsAlignment>,
+    ) {
         let Some(ref mut state) = self.voice_mode_state else {
             return;
         };
         if state.phase != VoiceModePhase::Speaking {
             state.phase = VoiceModePhase::Speaking;
         }
+
+        // Compute chunk duration from PCM length (24kHz mono).
+        let chunk_duration_ms = (pcm.len() as u64) * 1000 / 24000;
+
+        // Reset playback position counter on the first chunk of a turn
+        // so alignment timing stays in sync with audio output.
+        if state.tts_cumulative_ms == 0 {
+            if let Some(ref player) = state.audio_player {
+                player.reset_playback_position();
+            }
+        }
+
+        // Build alignment entries from this chunk's alignment data.
+        if let Some(ref align) = alignment {
+            build_alignment_entries(
+                align,
+                state.tts_cumulative_ms,
+                &mut state.tts_alignment_timeline,
+            );
+        }
+
+        state.tts_cumulative_ms += chunk_duration_ms;
+
+        // Collect chunks for narration caching.
+        if state.narrating_section.is_some() {
+            state.narrating_chunks.push(pcm.clone());
+        }
+
         if let Some(ref player) = state.audio_player {
             player.enqueue_pcm(&pcm, 24000, 1);
+        }
+
+        // Start highlight tick if not already running.
+        let needs_tick = self
+            .voice_mode_state
+            .as_ref()
+            .is_some_and(|s| s.highlight_tick_cancel.is_none() && !s.tts_alignment_timeline.is_empty());
+        if needs_tick {
+            self.start_highlight_tick();
         }
     }
 
@@ -1091,10 +1267,248 @@ impl super::ChatWidget {
             return;
         }
 
+        // If the highlight tick is running and the audio player still has
+        // buffered audio, defer the full cleanup — the highlight tick will
+        // finalize once the player's buffer is empty.
+        let has_audio = state
+            .audio_player
+            .as_ref()
+            .is_some_and(|p| p.has_buffered_audio());
+        if has_audio && !state.tts_alignment_timeline.is_empty() {
+            state.tts_data_complete = true;
+            return;
+        }
+
+        self.finalize_voice_turn();
+    }
+
+    /// Full cleanup of voice turn state — called either immediately from
+    /// `on_voice_tts_finished` or deferred from `on_voice_highlight_tick`
+    /// once the audio player's buffer has drained.
+    fn finalize_voice_turn(&mut self) {
+        let Some(ref mut state) = self.voice_mode_state else {
+            return;
+        };
+
+        // Store collected narration chunks in the cache (if narrating a section).
+        if let Some((doc_id, sec_idx, content_hash)) = state.narrating_section.take() {
+            let chunks = std::mem::take(&mut state.narrating_chunks);
+            if !chunks.is_empty() {
+                if let Ok(mut cache) = state.tts_section_cache.lock() {
+                    cache.insert(
+                        (doc_id, sec_idx),
+                        TtsCacheEntry {
+                            content_hash,
+                            chunks,
+                        },
+                    );
+                }
+            }
+        }
+
+        // Clear alignment state.
+        state.tts_alignment_timeline.clear();
+        state.tts_cumulative_ms = 0;
+        state.tts_highlight_word_idx = None;
+        state.tts_data_complete = false;
+        state.cancel_highlight_tick();
+
         // Ready for next PTT press.
         state.phase = VoiceModePhase::Idle;
         self.sync_voice_placeholder();
         self.request_redraw();
+    }
+
+    // ─── Highlight tick timer ──────────────────────────────────────────
+
+    /// Start a periodic tick that updates the TTS word highlight.
+    fn start_highlight_tick(&mut self) {
+        let Some(ref mut state) = self.voice_mode_state else {
+            return;
+        };
+
+        // Don't start if already running.
+        if state.highlight_tick_cancel.is_some() {
+            return;
+        }
+
+        tracing::debug!(
+            "Starting highlight tick timer, timeline has {} entries",
+            state.tts_alignment_timeline.len(),
+        );
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        state.highlight_tick_cancel = Some(cancel.clone());
+        let tx = self.app_event_tx.clone();
+
+        std::thread::spawn(move || {
+            loop {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                tx.send(AppEvent::VoiceModeHighlightTick);
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+    }
+
+    /// Called on each highlight tick — update the highlighted word based on playback position.
+    pub(crate) fn on_voice_highlight_tick(&mut self) {
+        // Check if we should finalize — TTS data complete and audio drained.
+        let should_finalize = self.voice_mode_state.as_ref().is_some_and(|s| {
+            s.phase == VoiceModePhase::Speaking
+                && s.tts_data_complete
+                && !s.audio_player.as_ref().is_some_and(|p| p.has_buffered_audio())
+        });
+        if should_finalize {
+            self.finalize_voice_turn();
+            return;
+        }
+
+        let Some(ref mut state) = self.voice_mode_state else {
+            return;
+        };
+        if state.phase != VoiceModePhase::Speaking {
+            return;
+        }
+
+        let pos_ms = state
+            .audio_player
+            .as_ref()
+            .map(|p| p.playback_position_ms())
+            .unwrap_or(0);
+
+        if state.tts_alignment_timeline.is_empty() {
+            return;
+        }
+
+        let new_idx = find_active_word(&state.tts_alignment_timeline, pos_ms);
+
+        // During inter-sentence gaps find_active_word returns None.
+        // Keep the previous highlight rather than showing no highlight,
+        // so the karaoke doesn't appear to "pause".
+        let effective_idx = new_idx.or(state.tts_highlight_word_idx);
+
+        if effective_idx != state.tts_highlight_word_idx {
+            state.tts_highlight_word_idx = effective_idx;
+            self.request_redraw();
+        }
+    }
+
+    /// Build styled Lines for the voice playback karaoke display.
+    ///
+    /// During TTS playback the response text lives in terminal scrollback
+    /// (outside the ratatui buffer), so we can't use a post-render overlay.
+    /// Instead we render the text directly in the viewport with the current
+    /// word styled as bold+underline.
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn voice_karaoke_lines(&self, width: u16) -> Option<Vec<ratatui::text::Line<'static>>> {
+        use ratatui::style::{Modifier, Style};
+        use ratatui::text::{Line, Span};
+        use textwrap::{wrap, Options as WrapOptions};
+
+        let state = self.voice_mode_state.as_ref()?;
+        if state.phase != VoiceModePhase::Speaking {
+            return None;
+        }
+        let timeline = &state.tts_alignment_timeline;
+        if timeline.is_empty() {
+            return None;
+        }
+        let word_idx = state.tts_highlight_word_idx;
+
+        // Build the full text from the timeline words with a 🔊 prefix.
+        let mut full_text = String::from("\u{1F50A} ");
+        for (i, entry) in timeline.iter().enumerate() {
+            if i > 0 {
+                full_text.push(' ');
+            }
+            full_text.push_str(&entry.word);
+        }
+
+        // Word-wrap to the available width (minus 2 for the bullet margin).
+        let wrap_width = width.saturating_sub(4) as usize;
+        if wrap_width < 10 {
+            return None;
+        }
+        let wrapped = wrap(&full_text, WrapOptions::new(wrap_width));
+
+        // Now build styled Lines. We need to find which characters belong to
+        // the highlighted word and style them differently.
+        let highlight_style = Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+
+        // Calculate character offsets for the highlighted word.
+        let (hl_start, hl_end) = if let Some(idx) = word_idx {
+            let prefix_len = "\u{1F50A} ".len();
+            let mut char_offset = prefix_len;
+            for (i, entry) in timeline.iter().enumerate() {
+                if i > 0 {
+                    char_offset += 1; // space separator
+                }
+                if i == idx {
+                    let word_len = entry.word.len();
+                    return Some(Self::build_karaoke_lines_inner(
+                        &wrapped, char_offset, char_offset + word_len, highlight_style,
+                    ));
+                }
+                char_offset += entry.word.len();
+            }
+            (0, 0) // not found
+        } else {
+            (0, 0) // no highlight
+        };
+
+        let _ = (hl_start, hl_end);
+
+        // No highlight — render plain text.
+        Some(wrapped.iter().map(|line| {
+            Line::from(Span::raw(line.to_string()))
+        }).collect())
+    }
+
+    /// Build wrapped Lines with a highlighted byte range.
+    #[cfg(not(target_os = "linux"))]
+    fn build_karaoke_lines_inner(
+        wrapped: &[std::borrow::Cow<'_, str>],
+        hl_start: usize,
+        hl_end: usize,
+        highlight_style: ratatui::style::Style,
+    ) -> Vec<ratatui::text::Line<'static>> {
+        use ratatui::text::{Line, Span};
+
+        let mut lines = Vec::new();
+        let mut global_offset = 0usize;
+        for wrapped_line in wrapped {
+            let line_len = wrapped_line.len();
+            let line_start = global_offset;
+            let line_end = global_offset + line_len;
+
+            if hl_start >= line_end || hl_end <= line_start {
+                // No overlap — plain line.
+                lines.push(Line::from(Span::raw(wrapped_line.to_string())));
+            } else {
+                // Overlap — split into before/highlight/after spans.
+                let mut spans = Vec::new();
+                let rel_start = hl_start.saturating_sub(line_start);
+                let rel_end = hl_end.min(line_end) - line_start;
+
+                if rel_start > 0 {
+                    spans.push(Span::raw(wrapped_line[..rel_start].to_string()));
+                }
+                spans.push(Span::styled(
+                    wrapped_line[rel_start..rel_end].to_string(),
+                    highlight_style,
+                ));
+                if rel_end < line_len {
+                    spans.push(Span::raw(wrapped_line[rel_end..].to_string()));
+                }
+                lines.push(Line::from(spans));
+            }
+
+            // +1 for the newline/wrap boundary.
+            global_offset = line_end + 1;
+        }
+        lines
     }
 
     /// Called when ElevenLabs STT returns transcribed text.
@@ -1207,49 +1621,180 @@ impl super::ChatWidget {
         self.request_redraw();
     }
 
-    /// Return `true` when voice mode is active and currently playing TTS audio.
+    /// Return `true` when voice mode is active and TTS audio is playing.
+    ///
+    /// Checks both the phase (Speaking) AND whether the audio player still
+    /// has buffered samples, since `on_voice_tts_finished` transitions the
+    /// phase to Idle as soon as all TTS chunks are enqueued — the player
+    /// may still be playing buffered audio.
     pub(crate) fn is_voice_speaking(&self) -> bool {
-        self.voice_mode_state
-            .as_ref()
-            .is_some_and(|s| s.phase == VoiceModePhase::Speaking)
+        self.voice_mode_state.as_ref().is_some_and(|s| {
+            s.phase == VoiceModePhase::Speaking
+                || (s.is_active()
+                    && s.audio_player
+                        .as_ref()
+                        .is_some_and(|p| p.has_buffered_audio()))
+        })
     }
 
-    /// Interrupt TTS playback (e.g. user navigated to a different section).
+    /// Interrupt TTS playback (e.g. user pressed Escape or navigated away).
     pub(crate) fn on_voice_interrupt_tts(&mut self) {
         let Some(ref mut state) = self.voice_mode_state else {
             return;
         };
+        // Always clear the audio player buffer and TTS state, regardless
+        // of phase. Audio may still be buffered after phase left Speaking.
+        state.interrupt_tts();
         if state.phase == VoiceModePhase::Speaking {
-            state.interrupt_tts();
             state.phase = VoiceModePhase::Idle;
-            self.sync_voice_placeholder();
-            self.request_redraw();
         }
+        self.sync_voice_placeholder();
+        self.request_redraw();
     }
 
     /// Auto-narrate a reading view section via TTS.
     ///
     /// Called when the user navigates to a new section or when the reading view
     /// first opens. If voice mode is inactive or TTS is disabled, this is a no-op.
-    pub(crate) fn on_voice_narrate_section(&mut self, raw_text: String) {
-        let Some(ref mut state) = self.voice_mode_state else {
-            return;
-        };
-        if !state.should_tts() {
-            return;
+    pub(crate) fn on_voice_narrate_section(
+        &mut self,
+        document_id: String,
+        section_index: usize,
+        raw_text: String,
+    ) {
+        // Phase 1: check preconditions and interrupt (borrows state mutably).
+        {
+            let Some(ref mut state) = self.voice_mode_state else {
+                return;
+            };
+            if !state.should_tts() {
+                return;
+            }
+            state.interrupt_tts();
         }
-
-        // Interrupt any ongoing TTS first.
-        state.interrupt_tts();
 
         let cleaned = clean_for_tts(&raw_text);
         if cleaned.is_empty() {
             return;
         }
 
-        state.phase = VoiceModePhase::Speaking;
+        let content_hash = hash_text(&cleaned);
 
-        // Split into sentences and send each to TTS.
+        // Phase 2: check cache (short lock, extract data, release borrow on self).
+        let cached_chunks: Option<Vec<Vec<i16>>> = self
+            .voice_mode_state
+            .as_ref()
+            .and_then(|state| {
+                state
+                    .tts_section_cache
+                    .lock()
+                    .ok()
+                    .and_then(|cache| {
+                        cache
+                            .get(&(document_id.clone(), section_index))
+                            .filter(|entry| entry.content_hash == content_hash)
+                            .map(|entry| entry.chunks.clone())
+                    })
+            });
+
+        if let Some(chunks) = cached_chunks {
+            // Cache hit — play cached chunks directly.
+            if let Some(ref mut state) = self.voice_mode_state {
+                state.phase = VoiceModePhase::Speaking;
+            }
+            for chunk in chunks {
+                self.on_voice_tts_audio_chunk(chunk, None);
+            }
+            self.app_event_tx.send(AppEvent::VoiceModeTtsFinished);
+            self.sync_voice_placeholder();
+            return;
+        }
+
+        // Phase 3: cache miss — use persistent TTS worker (single WebSocket).
+        let Some(ref mut state) = self.voice_mode_state else {
+            return;
+        };
+        state.phase = VoiceModePhase::Speaking;
+        tracing::debug!("Narrate section: cache miss, starting TTS worker for text ({} chars)", cleaned.len());
+
+        // Track narration for chunk collection / caching.
+        state.narrating_section = Some((document_id, section_index, content_hash));
+        state.narrating_chunks.clear();
+
+        let mut sentence_buf = SentenceBuffer::new();
+        let mut sentences = sentence_buf.push(&cleaned);
+        if let Some(remaining) = sentence_buf.flush() {
+            sentences.push(remaining);
+        }
+
+        // Start the persistent TTS worker if not running.
+        if state.tts_worker_tx.is_none() {
+            let vc = voice_mode_config(&self.config);
+            let tx = self.app_event_tx.clone();
+            let in_flight = state.tts_in_flight.clone();
+            let gen_ref = state.tts_generation.clone();
+            let spawn_gen = gen_ref.load(Ordering::SeqCst);
+            in_flight.fetch_add(1, Ordering::SeqCst);
+
+            let (worker_tx, worker_rx) = tokio::sync::mpsc::unbounded_channel();
+            state.tts_worker_tx = Some(worker_tx);
+
+            tokio::spawn(async move {
+                tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen).await;
+            });
+        }
+
+        // Send all sentences and signal finish.
+        if let Some(ref worker_tx) = state.tts_worker_tx {
+            for sentence in sentences {
+                let _ = worker_tx.send(TtsWorkerCommand::SendText(sentence));
+            }
+            let _ = worker_tx.send(TtsWorkerCommand::Finish);
+        }
+        state.tts_worker_tx = None;
+
+        self.sync_voice_placeholder();
+    }
+
+    /// Handle a prefetch request: generate TTS in background, cache result.
+    pub(crate) fn on_voice_prefetch_section(
+        &mut self,
+        document_id: String,
+        section_index: usize,
+        raw_text: String,
+    ) {
+        let Some(ref state) = self.voice_mode_state else {
+            return;
+        };
+        if !state.should_tts() {
+            return;
+        }
+
+        let cleaned = clean_for_tts(&raw_text);
+        if cleaned.is_empty() {
+            return;
+        }
+
+        let content_hash = hash_text(&cleaned);
+        let key = (document_id.clone(), section_index);
+
+        // Already cached with matching hash?
+        if let Ok(cache) = state.tts_section_cache.lock() {
+            if let Some(entry) = cache.get(&key) {
+                if entry.content_hash == content_hash {
+                    return; // Already cached.
+                }
+            }
+        }
+
+        // Already being prefetched?
+        if let Ok(mut pending) = state.prefetch_pending.lock() {
+            if !pending.insert(key.clone()) {
+                return; // Prefetch already in progress.
+            }
+        }
+
+        // Split into sentences.
         let mut sentence_buf = SentenceBuffer::new();
         let mut sentences = sentence_buf.push(&cleaned);
         if let Some(remaining) = sentence_buf.flush() {
@@ -1257,21 +1802,33 @@ impl super::ChatWidget {
         }
 
         let vc = voice_mode_config(&self.config);
-        let tx = self.app_event_tx.clone();
-        let in_flight = state.tts_in_flight.clone();
+        let cache = state.tts_section_cache.clone();
+        let pending = state.prefetch_pending.clone();
 
-        // Process sentences sequentially in a single task so they play
-        // in order. Each sentence completes its TTS stream before the
-        // next one begins.
-        let total = sentences.len();
-        in_flight.fetch_add(total, Ordering::SeqCst);
         tokio::spawn(async move {
-            for sentence in sentences {
-                let _ = send_sentence_to_tts(&vc, &sentence, tx.clone(), in_flight.clone()).await;
+            let mut all_chunks = Vec::new();
+            for sentence in &sentences {
+                match prefetch_sentence_tts(&vc, sentence).await {
+                    Ok(chunks) => all_chunks.extend(chunks),
+                    Err(e) => {
+                        tracing::error!("TTS prefetch error: {e}");
+                        // Remove from pending on failure.
+                        if let Ok(mut p) = pending.lock() {
+                            p.remove(&key);
+                        }
+                        return;
+                    }
+                }
+            }
+            // Write to cache.
+            if let Ok(mut c) = cache.lock() {
+                c.insert(key.clone(), TtsCacheEntry { content_hash, chunks: all_chunks });
+            }
+            // Remove from pending.
+            if let Ok(mut p) = pending.lock() {
+                p.remove(&key);
             }
         });
-
-        self.sync_voice_placeholder();
     }
 }
 
@@ -1462,33 +2019,26 @@ pub(crate) fn clean_for_tts(markdown: &str) -> String {
     trimmed[..last_sentence_end].trim().to_string()
 }
 
-/// Send a sentence to ElevenLabs TTS and forward audio chunks as AppEvents.
-///
-/// The `in_flight` counter tracks concurrent TTS tasks. Only the last task
-/// to finish (counter drops to zero) sends `VoiceModeTtsFinished`.
-async fn send_sentence_to_tts(
+/// Generate TTS for a sentence without sending audio events (for prefetching).
+/// Collects all PCM chunks and returns them (alignment is discarded for cache).
+async fn prefetch_sentence_tts(
     voice_config: &codex_core::config::types::VoiceModeToml,
     sentence: &str,
-    tx: crate::app_event_sender::AppEventSender,
-    in_flight: Arc<AtomicUsize>,
-) -> Result<(), codex_elevenlabs::ElevenLabsError> {
-    // Decrement counter on exit (success or error) via drop guard.
-    let result = send_sentence_to_tts_inner(voice_config, sentence, &tx).await;
-
-    // Regardless of success/failure, decrement the in-flight counter.
-    // Only signal finished when this was the last in-flight TTS task.
-    if in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
-        tx.send(AppEvent::VoiceModeTtsFinished);
+) -> Result<Vec<Vec<i16>>, codex_elevenlabs::ElevenLabsError> {
+    let mut rx = start_tts_generation(voice_config, sentence)?;
+    let mut chunks = Vec::new();
+    while let Some(chunk) = rx.recv().await {
+        chunks.push(chunk.pcm);
     }
-
-    result
+    Ok(chunks)
 }
 
-async fn send_sentence_to_tts_inner(
+/// Start TTS generation in a background task, returning a channel that
+/// receives `TtsChunk`s (PCM + alignment) as they arrive from ElevenLabs.
+fn start_tts_generation(
     voice_config: &codex_core::config::types::VoiceModeToml,
     sentence: &str,
-    tx: &crate::app_event_sender::AppEventSender,
-) -> Result<(), codex_elevenlabs::ElevenLabsError> {
+) -> Result<tokio::sync::mpsc::UnboundedReceiver<codex_elevenlabs::TtsChunk>, codex_elevenlabs::ElevenLabsError> {
     let api_key = voice_config
         .elevenlabs
         .as_ref()
@@ -1506,16 +2056,269 @@ async fn send_sentence_to_tts_inner(
         }
     }
 
-    let mut stream = codex_elevenlabs::tts::TtsStream::connect(&config).await?;
-    stream.send_text(sentence).await?;
-    stream.flush().await?;
+    let sentence = sentence.to_string();
+    let (chunk_tx, chunk_rx) = tokio::sync::mpsc::unbounded_channel();
 
-    while let Some(pcm) = stream.recv_audio().await {
-        tx.send(AppEvent::VoiceModeTtsAudioChunk { pcm });
+    tokio::spawn(async move {
+        let stream_result = codex_elevenlabs::tts::TtsStream::connect(&config).await;
+        let mut stream = match stream_result {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("TTS connect error: {e}");
+                return;
+            }
+        };
+
+        let send_result = async {
+            stream.send_text(&sentence).await?;
+            stream.flush().await?;
+            Ok::<(), codex_elevenlabs::ElevenLabsError>(())
+        }
+        .await;
+
+        if let Err(e) = send_result {
+            tracing::error!("TTS send error: {e}");
+            return;
+        }
+
+        while let Some(chunk) = stream.recv_audio().await {
+            if chunk_tx.send(chunk).is_err() {
+                break; // Receiver dropped (interrupted).
+            }
+        }
+
+        // Drop sender BEFORE closing the WebSocket so the consumer
+        // unblocks immediately and can start the next sentence.
+        // The WebSocket close handshake can take hundreds of ms.
+        drop(chunk_tx);
+        stream.close().await;
+    });
+
+    Ok(chunk_rx)
+}
+
+/// Compute a simple hash of text for cache invalidation.
+fn hash_text(text: &str) -> u64 {
+    use std::hash::Hash;
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
+// ─── Persistent TTS worker (single WebSocket per voice turn) ─────────────────
+
+/// Commands sent to the persistent TTS worker task.
+#[derive(Debug)]
+pub(crate) enum TtsWorkerCommand {
+    /// Send a sentence to TTS via the existing WebSocket.
+    SendText(String),
+    /// Flush remaining audio and shut down the connection.
+    Finish,
+}
+
+/// Long-lived TTS task that maintains a single ElevenLabs WebSocket connection.
+/// Sentences are sent through the same connection via `send_text` + `flush`,
+/// eliminating per-sentence connection overhead (DNS + TLS + WS handshake).
+async fn tts_worker_loop(
+    voice_config: codex_core::config::types::VoiceModeToml,
+    mut cmd_rx: tokio::sync::mpsc::UnboundedReceiver<TtsWorkerCommand>,
+    event_tx: crate::app_event_sender::AppEventSender,
+    in_flight: Arc<AtomicUsize>,
+    gen_ref: Arc<AtomicUsize>,
+    my_gen: usize,
+) {
+    let api_key = voice_config
+        .elevenlabs
+        .as_ref()
+        .and_then(|e| e.api_key.clone())
+        .or_else(|| std::env::var("ELEVENLABS_API_KEY").ok());
+    let Some(api_key) = api_key else {
+        tracing::error!("TTS worker: missing API key");
+        if in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
+            event_tx.send(AppEvent::VoiceModeTtsFinished);
+        }
+        return;
+    };
+
+    let mut config = codex_elevenlabs::ElevenLabsConfig::new(api_key);
+    if let Some(ref el) = voice_config.elevenlabs {
+        if let Some(ref vid) = el.voice_id {
+            config = config.with_voice_id(vid.clone());
+        }
+        if let Some(ref mid) = el.model_id {
+            config = config.with_model_id(mid.clone());
+        }
     }
 
-    stream.close().await;
-    Ok(())
+    let mut stream = match codex_elevenlabs::tts::TtsStream::connect(&config).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("TTS worker connect: {e}");
+            if in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
+                event_tx.send(AppEvent::VoiceModeTtsFinished);
+            }
+            return;
+        }
+    };
+
+    tracing::debug!("TTS worker started (gen={my_gen})");
+    let mut finishing = false;
+
+    loop {
+        if finishing {
+            // Drain remaining audio after close request.
+            match stream.recv_audio().await {
+                Some(chunk) if gen_ref.load(Ordering::SeqCst) == my_gen => {
+                    event_tx.send(AppEvent::VoiceModeTtsAudioChunk {
+                        pcm: chunk.pcm,
+                        alignment: chunk.alignment,
+                    });
+                }
+                Some(_) => {} // stale generation
+                None => break,
+            }
+        } else {
+            tokio::select! {
+                biased;
+
+                cmd = cmd_rx.recv() => {
+                    match cmd {
+                        Some(TtsWorkerCommand::SendText(text)) => {
+                            if gen_ref.load(Ordering::SeqCst) != my_gen { break; }
+                            if let Err(e) = stream.send_text(&text).await {
+                                tracing::error!("TTS worker send: {e}");
+                                break;
+                            }
+                            if let Err(e) = stream.flush().await {
+                                tracing::error!("TTS worker flush: {e}");
+                                break;
+                            }
+                        }
+                        Some(TtsWorkerCommand::Finish) => {
+                            let _ = stream.flush().await;
+                            // Send EOS without closing — the server finishes
+                            // generating audio and sends is_final, which causes
+                            // recv_audio() to return None.
+                            stream.send_eos().await;
+                            finishing = true;
+                        }
+                        None => {
+                            // Sender dropped (interrupted) — exit immediately.
+                            break;
+                        }
+                    }
+                }
+
+                chunk = stream.recv_audio() => {
+                    match chunk {
+                        Some(chunk) if gen_ref.load(Ordering::SeqCst) == my_gen => {
+                            event_tx.send(AppEvent::VoiceModeTtsAudioChunk {
+                                pcm: chunk.pcm,
+                                alignment: chunk.alignment,
+                            });
+                        }
+                        Some(_) => {}
+                        None => break,
+                    }
+                }
+            }
+        }
+    }
+
+    tracing::debug!("TTS worker exiting (gen={my_gen})");
+    if gen_ref.load(Ordering::SeqCst) == my_gen {
+        if in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
+            event_tx.send(AppEvent::VoiceModeTtsFinished);
+        }
+    }
+}
+
+// ─── Alignment timeline builder ──────────────────────────────────────────────
+
+/// Build word-level `AlignmentEntry`s from a chunk's alignment data.
+///
+/// Groups consecutive characters into words (splitting on whitespace),
+/// computes absolute times using `cumulative_ms`, and appends to `timeline`.
+fn build_alignment_entries(
+    align: &codex_elevenlabs::TtsAlignment,
+    cumulative_ms: u64,
+    timeline: &mut Vec<AlignmentEntry>,
+) {
+    let n = align
+        .chars
+        .len()
+        .min(align.char_start_times_ms.len())
+        .min(align.char_durations_ms.len());
+    if n == 0 {
+        return;
+    }
+
+    // Group characters into words, tracking the first and last char index per word.
+    let mut word_start_idx: Option<usize> = None;
+    let mut word_end_idx: usize = 0;
+    let mut word_chars: Vec<&str> = Vec::new();
+
+    let flush_word =
+        |start_idx: usize,
+         end_idx: usize,
+         chars: &mut Vec<&str>,
+         timeline: &mut Vec<AlignmentEntry>| {
+            let abs_start = cumulative_ms + align.char_start_times_ms[start_idx];
+            let last_start = align.char_start_times_ms[end_idx];
+            let last_dur = align.char_durations_ms[end_idx];
+            let abs_end = cumulative_ms + last_start + last_dur;
+            let word: String = chars.iter().copied().collect();
+            chars.clear();
+            timeline.push(AlignmentEntry {
+                start_ms: abs_start,
+                duration_ms: abs_end.saturating_sub(abs_start),
+                word,
+            });
+        };
+
+    for i in 0..n {
+        let ch = align.chars[i].as_str();
+        if ch.trim().is_empty() {
+            // Whitespace: flush current word if any.
+            if let Some(ws) = word_start_idx.take() {
+                flush_word(ws, word_end_idx, &mut word_chars, timeline);
+            }
+        } else {
+            if word_start_idx.is_none() {
+                word_start_idx = Some(i);
+            }
+            word_end_idx = i;
+            word_chars.push(ch);
+        }
+    }
+    // Flush final word.
+    if let Some(ws) = word_start_idx {
+        flush_word(ws, word_end_idx, &mut word_chars, timeline);
+    }
+}
+
+/// Find the alignment entry active at the given playback position.
+/// Returns `Some(idx)` — the index into the timeline — if a word is active.
+fn find_active_word(timeline: &[AlignmentEntry], pos_ms: u64) -> Option<usize> {
+    if timeline.is_empty() {
+        return None;
+    }
+
+    // Binary search: find the last entry whose start_ms <= pos_ms.
+    let idx = match timeline.binary_search_by_key(&pos_ms, |e| e.start_ms) {
+        Ok(i) => i,
+        Err(0) => return None, // Before first word.
+        Err(i) => i - 1,
+    };
+
+    let entry = &timeline[idx];
+    // Check that we're within this word's duration.
+    if pos_ms <= entry.start_ms + entry.duration_ms {
+        Some(idx)
+    } else {
+        None // In the gap between words.
+    }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

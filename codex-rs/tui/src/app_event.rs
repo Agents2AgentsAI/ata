@@ -406,6 +406,7 @@ pub(crate) enum AppEvent {
     #[cfg(not(target_os = "linux"))]
     VoiceModeTtsAudioChunk {
         pcm: Vec<i16>,
+        alignment: Option<codex_elevenlabs::TtsAlignment>,
     },
 
     /// Live volume meter tick during PTT recording.
@@ -417,6 +418,10 @@ pub(crate) enum AppEvent {
     /// TTS playback finished — transition back to Idle.
     #[cfg(not(target_os = "linux"))]
     VoiceModeTtsFinished,
+
+    /// Periodic tick to update the TTS word-highlight position.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeHighlightTick,
 
     /// Voice mode STT transcription completed.
     #[cfg(not(target_os = "linux"))]
@@ -441,6 +446,16 @@ pub(crate) enum AppEvent {
     /// Auto-narrate a reading view section via TTS when voice mode is active.
     #[cfg(not(target_os = "linux"))]
     VoiceModeNarrateSection {
+        document_id: String,
+        section_index: usize,
+        text: String,
+    },
+
+    /// Pre-generate TTS audio for an adjacent section in the background.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModePrefetchSection {
+        document_id: String,
+        section_index: usize,
         text: String,
     },
 }
