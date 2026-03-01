@@ -1218,6 +1218,11 @@ pub struct ConfigToml {
     #[serde(default)]
     pub data: Option<DataToolsToml>,
 
+    /// LSP server integration configuration.
+    #[cfg(feature = "lsp")]
+    #[serde(default)]
+    pub lsp: Option<crate::config::types::LspConfig>,
+
     /// Optional KB settings.
     #[serde(default)]
     pub kb: Option<KbToml>,

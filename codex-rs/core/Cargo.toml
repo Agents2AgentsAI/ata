@@ -43,6 +43,7 @@ codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-data-tools = { workspace = true, optional = true }
+codex-lsp-client = { workspace = true, optional = true }
 codex-research-tools = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-state = { workspace = true }
@@ -119,6 +120,7 @@ zip = { workspace = true }
 [features]
 deterministic_process_ids = []
 data = ["dep:codex-data-tools"]
+lsp = ["dep:codex-lsp-client"]
 research = []
 test-support = []
 

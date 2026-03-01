@@ -1162,3 +1162,44 @@ mod tests {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// LSP Configuration (feature = "lsp")
+// ---------------------------------------------------------------------------
+
+/// Top-level LSP configuration: either a simple boolean (disabled) or a map of
+/// per-server overrides.
+#[cfg(feature = "lsp")]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[serde(untagged)]
+pub enum LspConfig {
+    /// `lsp = false` disables all LSP integration.
+    Disabled(bool),
+    /// Per-server configuration map.
+    Servers(HashMap<String, LspServerConfigToml>),
+}
+
+/// Per-server override in config.toml. Either just disable or provide full config.
+#[cfg(feature = "lsp")]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[serde(untagged)]
+pub enum LspServerConfigToml {
+    /// `[lsp.server-name]\ndisabled = true`
+    DisabledOnly {
+        disabled: bool,
+    },
+    /// Full server configuration.
+    Full {
+        command: Vec<String>,
+        #[serde(default)]
+        extensions: Vec<String>,
+        #[serde(default)]
+        root_markers: Vec<String>,
+        #[serde(default)]
+        env: HashMap<String, String>,
+        #[serde(default)]
+        initialization_options: Option<serde_json::Value>,
+        #[serde(default)]
+        disabled: bool,
+    },
+}

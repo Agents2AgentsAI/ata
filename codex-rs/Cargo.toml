@@ -29,6 +29,7 @@ members = [
     "file-search",
     "linux-sandbox",
     "lmstudio",
+    "lsp-client",
     "login",
     "mcp-server",
     "network-proxy",
@@ -110,6 +111,7 @@ codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
+codex-lsp-client = { path = "lsp-client" }
 codex-mcp-server = { path = "mcp-server" }
 codex-network-proxy = { path = "network-proxy" }
 codex-ollama = { path = "ollama" }
