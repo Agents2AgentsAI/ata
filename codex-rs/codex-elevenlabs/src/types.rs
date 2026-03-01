@@ -63,6 +63,19 @@ pub(crate) struct GenerationConfig {
     pub chunk_length_schedule: Vec<u32>,
 }
 
+/// Per-chunk alignment data returned by the ElevenLabs TTS WebSocket.
+///
+/// Times are **relative to the returned chunk**, not the full audio stream.
+/// Each chunk's alignment starts from 0ms.
+#[derive(Deserialize, Debug, Clone)]
+pub struct TtsAlignment {
+    pub chars: Vec<String>,
+    #[serde(rename = "charStartTimesMs")]
+    pub char_start_times_ms: Vec<u64>,
+    #[serde(rename = "charDurationsMs")]
+    pub char_durations_ms: Vec<u64>,
+}
+
 /// Response message from the TTS WebSocket.
 #[derive(Deserialize, Debug)]
 pub(crate) struct TtsResponse {
@@ -71,10 +84,12 @@ pub(crate) struct TtsResponse {
     /// True when the stream is complete.
     #[serde(default)]
     pub is_final: Option<bool>,
-    /// Alignment data (ignored).
+    /// Character-level alignment data for this chunk.
     #[serde(default)]
-    #[allow(dead_code)]
-    pub alignment: Option<serde_json::Value>,
+    pub alignment: Option<TtsAlignment>,
+    /// Normalized alignment (post-normalization text). Falls back to `alignment`.
+    #[serde(default, rename = "normalizedAlignment")]
+    pub normalized_alignment: Option<TtsAlignment>,
 }
 
 // ─── STT types ───────────────────────────────────────────────────────────────
