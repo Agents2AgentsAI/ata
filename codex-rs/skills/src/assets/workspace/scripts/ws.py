@@ -19,6 +19,11 @@ Subcommands:
   mirror-path <url>                        Print shared mirror cache path
   audit-query [--workspace] [--since] [--until] [--ops] [--limit]
                                            Query audit log as JSON array
+  repo-clone <url> <alias> [--workspace] [--full]
+                                           Validate, clone, register, audit (full repo_add flow)
+  run-setup <name> --source-alias <alias> [--strategy STR] [--workspace]
+                                           Create run dir, materialize code, register, audit
+  recipe <operation>                       Print step-by-step recipe for an operation
 """
 
 import argparse
@@ -815,6 +820,552 @@ def cmd_audit_query(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: repo-clone  (thick — full repo_add flow)
+# ---------------------------------------------------------------------------
+
+
+def _build_clone_args(policy: dict, full: bool) -> list:
+    """Build git clone argument list from clone policy."""
+    if full:
+        return []
+    args = []
+    depth = policy.get("depth", 1)
+    if isinstance(depth, int) and depth > 0:
+        args += ["--depth", str(depth)]
+    if policy.get("singleBranch", True):
+        args.append("--single-branch")
+    if policy.get("noTags", True):
+        args.append("--no-tags")
+    filt = policy.get("filter")
+    if filt and filt != "null":
+        args.append(f"--filter={filt}")
+    if policy.get("submodules") == "recursive":
+        args.append("--recurse-submodules")
+    return args
+
+
+def _read_git_state(repo_dir: str) -> dict:
+    """Read HEAD sha, ref, and default branch from a cloned repo."""
+    def _git(*cmd):
+        r = subprocess.run(
+            ["git", "-C", repo_dir] + list(cmd),
+            capture_output=True, text=True,
+        )
+        return r.stdout.strip() if r.returncode == 0 else ""
+
+    head_sha = _git("rev-parse", "HEAD")
+    head_ref = _git("symbolic-ref", "--short", "HEAD")
+    default_branch = _git("rev-parse", "--abbrev-ref", "origin/HEAD")
+    if default_branch.startswith("origin/"):
+        default_branch = default_branch[len("origin/"):]
+    if not default_branch:
+        default_branch = "main"
+    return {
+        "headSha": head_sha,
+        "headRef": head_ref,
+        "defaultBranch": default_branch,
+    }
+
+
+def _audit_entry(wid: str, op: str, targets: list, details: "dict | None" = None):
+    """Build and write an audit entry."""
+    entry = {"op": op, "targets": targets}
+    if details:
+        entry["details"] = details
+    # Reuse the audit machinery
+    actor = {"kind": "agent"}
+    session_id = os.environ.get("CODEX_SESSION_ID")
+    thread_id = os.environ.get("CODEX_THREAD_ID")
+    if session_id:
+        actor["sessionId"] = session_id
+    if thread_id:
+        actor["threadId"] = thread_id
+    full_entry = {
+        "schemaVersion": 1,
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "workspaceId": wid,
+        "actor": actor,
+        "op": op,
+        "status": entry.get("status", "success"),
+        "targets": targets,
+    }
+    if details:
+        full_entry["details"] = details
+    ap = audit_path(wid)
+    os.makedirs(os.path.dirname(ap), exist_ok=True)
+    line = json.dumps(full_entry, ensure_ascii=False) + "\n"
+    with open(ap, "a") as f:
+        f.write(line)
+    return full_entry
+
+
+def cmd_repo_clone(args: argparse.Namespace) -> None:
+    """Full repo_add flow: validate URL → clone → register → audit."""
+    wid = _resolve_workspace(args)
+    url = args.url
+    alias = args.alias
+    full = getattr(args, "full", False)
+
+    # Validate alias
+    if alias in RESERVED_ALIASES:
+        _die(f"'{alias}' is a reserved alias")
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", alias):
+        _die(f"invalid alias '{alias}': allowed chars [a-zA-Z0-9_-]")
+
+    # 1. Validate URL (check-host logic)
+    _validate_repo_url(url)
+    manifest = _read_manifest(wid)
+    policies = manifest.get("policies", {})
+    allowlist = policies.get("repoHostsAllowlist")
+    if allowlist is not None:
+        host = _extract_host(url)
+        allowed_hosts = [h.lower() for h in allowlist]
+        if host not in allowed_hosts:
+            _die(f"host '{host}' not in allowlist: {allowed_hosts}")
+
+    # 2. Check alias not already used
+    for repo in manifest.get("repos", []):
+        if repo.get("alias") == alias:
+            _die(f"alias '{alias}' already exists in workspace")
+
+    # Capture version for optimistic concurrency
+    version = manifest.get("manifestVersion", 0)
+
+    # 3. Read clone policy and build args
+    clone_policy = policies.get("defaultClone", {})
+    clone_args = _build_clone_args(clone_policy, full)
+
+    # 4. Clone
+    root = workspace_root(wid)
+    clone_dest = os.path.join(root, "repos", alias)
+    if os.path.exists(clone_dest):
+        _die(f"directory already exists: {clone_dest}")
+
+    cmd = ["git", "clone"] + clone_args + [url, clone_dest]
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        _die(f"git clone failed (exit {result.returncode})")
+
+    # 4b. LFS pull if policy says so
+    lfs_policy = clone_policy.get("lfs", "auto")
+    if lfs_policy in ("always", "auto"):
+        subprocess.run(
+            ["git", "-C", clone_dest, "lfs", "pull"],
+            capture_output=True,
+        )
+
+    # 5. Read git state
+    git_state = _read_git_state(clone_dest)
+    depth = clone_policy.get("depth", 1) if not full else 0
+    git_state["shallow"] = isinstance(depth, int) and depth > 0
+
+    # 6. Build repo entry
+    repo_id = _make_id("repo")
+
+    # Derive repoKey from URL (org/repo)
+    repo_key = url.rstrip("/")
+    if repo_key.endswith(".git"):
+        repo_key = repo_key[:-4]
+    repo_key = repo_key.split("://", 1)[-1]  # strip scheme
+    parts = repo_key.split("/")
+    if len(parts) >= 2:
+        repo_key = "/".join(parts[-2:])
+
+    clone_record = {
+        "depth": clone_policy.get("depth", 1) if not full else 0,
+        "singleBranch": clone_policy.get("singleBranch", True) if not full else False,
+        "noTags": clone_policy.get("noTags", True) if not full else False,
+        "filter": clone_policy.get("filter", "blob:limit=1m") if not full else "",
+        "submodules": clone_policy.get("submodules", "none"),
+        "lfs": clone_policy.get("lfs", "auto"),
+    }
+
+    repo_entry = {
+        "id": repo_id,
+        "alias": alias,
+        "repoKey": repo_key,
+        "remoteUrl": url,
+        "checkoutPath": f"repos/{alias}",
+        "notesPath": f"notes/repos/{alias}",
+        "clone": clone_record,
+        "pin": {"mode": "tracking"},
+        "state": git_state,
+    }
+
+    # 7. Mutate manifest (with optimistic concurrency)
+    if not shutil.which("jq"):
+        _die("jq is required but not found in PATH")
+
+    fd = _acquire_lock(wid)
+    try:
+        manifest = _read_manifest(wid)
+        actual = manifest.get("manifestVersion", 0)
+        if actual != version:
+            # Clean up the clone since we can't register it
+            shutil.rmtree(clone_dest, ignore_errors=True)
+            print(
+                f"error: version conflict: expected {version}, got {actual}",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        manifest["repos"] = manifest.get("repos", []) + [repo_entry]
+        manifest = _bump_version(manifest)
+        _write_manifest(wid, manifest)
+    finally:
+        _release_lock(fd)
+
+    # 8. Create notes dir
+    notes_dir = os.path.join(root, "notes", "repos", alias)
+    os.makedirs(notes_dir, exist_ok=True)
+
+    # 9. Audit
+    _audit_entry(wid, "repo_add", [
+        {"type": "repo", "id": repo_id, "alias": alias},
+    ])
+
+    # 10. Output result
+    result = {
+        "repoId": repo_id,
+        "alias": alias,
+        "checkoutPath": f"repos/{alias}",
+        "state": git_state,
+    }
+    print(json.dumps(result, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: run-setup  (thick — full run creation flow)
+# ---------------------------------------------------------------------------
+
+
+def cmd_run_setup(args: argparse.Namespace) -> None:
+    """Full run creation: create dirs → materialize code → register → audit."""
+    wid = _resolve_workspace(args)
+    run_name = args.name
+    source_alias = args.source_alias
+    strategy = getattr(args, "strategy", "worktree") or "worktree"
+
+    if strategy not in ("worktree", "copy", "clone"):
+        _die(f"invalid strategy '{strategy}': must be worktree, copy, or clone")
+
+    # 1. Verify source repo exists
+    manifest = _read_manifest(wid)
+    source_repo = None
+    for repo in manifest.get("repos", []):
+        if repo.get("alias") == source_alias:
+            source_repo = repo
+            break
+    if source_repo is None:
+        _die(f"source repo alias '{source_alias}' not found in workspace")
+
+    version = manifest.get("manifestVersion", 0)
+    root = workspace_root(wid)
+    repo_path = os.path.join(root, "repos", source_alias)
+
+    # 2. Create run structure
+    run_id = _make_id("run")
+    run_root = os.path.join(root, "runs", run_id)
+    for sub in ["logs", "outputs", "tmp", "env"]:
+        os.makedirs(os.path.join(run_root, sub), exist_ok=True)
+
+    # 3. Materialize code
+    code_root = os.path.join(run_root, "root")
+    if strategy == "worktree":
+        result = subprocess.run(
+            ["git", "-C", repo_path, "worktree", "add", code_root, "HEAD"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            # Fall back to copy if worktree fails
+            shutil.copytree(repo_path, code_root)
+            strategy = "copy"  # record actual strategy used
+    elif strategy == "clone":
+        result = subprocess.run(
+            ["git", "clone", repo_path, code_root],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            shutil.rmtree(run_root, ignore_errors=True)
+            _die(f"git clone failed: {result.stderr}")
+    else:  # copy
+        shutil.copytree(repo_path, code_root)
+
+    # 4. Read HEAD SHA from materialized code
+    head_sha = ""
+    r = subprocess.run(
+        ["git", "-C", code_root, "rev-parse", "HEAD"],
+        capture_output=True, text=True,
+    )
+    if r.returncode == 0:
+        head_sha = r.stdout.strip()
+
+    # 5. Write run.json
+    now = _now()
+    run_manifest = {
+        "schemaVersion": 2,
+        "id": run_id,
+        "name": run_name,
+        "createdAt": now,
+        "updatedAt": now,
+        "status": "created",
+        "source": {"repoAlias": source_alias, "sha": head_sha},
+        "strategy": strategy,
+        "commands": [],
+        "env": {},
+    }
+    run_json_path = os.path.join(run_root, "run.json")
+    _atomic_write(run_json_path, json.dumps(run_manifest, indent=2).encode("utf-8"))
+
+    # 6. Register in workspace manifest
+    if not shutil.which("jq"):
+        _die("jq is required but not found in PATH")
+
+    fd = _acquire_lock(wid)
+    try:
+        manifest = _read_manifest(wid)
+        actual = manifest.get("manifestVersion", 0)
+        if actual != version:
+            shutil.rmtree(run_root, ignore_errors=True)
+            print(
+                f"error: version conflict: expected {version}, got {actual}",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        run_entry = {
+            "id": run_id,
+            "name": run_name,
+            "createdAt": now,
+            "updatedAt": now,
+            "rootPath": f"runs/{run_id}",
+            "status": "created",
+            "source": {"repoAlias": source_alias},
+        }
+        manifest["runs"] = manifest.get("runs", []) + [run_entry]
+        manifest = _bump_version(manifest)
+        _write_manifest(wid, manifest)
+    finally:
+        _release_lock(fd)
+
+    # 7. Audit
+    _audit_entry(wid, "run_create", [
+        {"type": "run", "id": run_id},
+    ])
+
+    # 8. Output result
+    result = {
+        "runId": run_id,
+        "name": run_name,
+        "rootPath": f"runs/{run_id}",
+        "codePath": f"runs/{run_id}/root",
+        "strategy": strategy,
+        "source": {"repoAlias": source_alias, "sha": head_sha},
+    }
+    print(json.dumps(result, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: recipe  (print step-by-step recipe for an operation)
+# ---------------------------------------------------------------------------
+
+_RECIPES = {
+    "repo_update": """\
+# Update repository to latest upstream
+ALIAS="<repo_alias>"
+REPO_PATH=$(python3 $WS resolve "@$ALIAS" --workspace "$WID")
+
+git -C "$REPO_PATH" fetch --depth 1
+DEFAULT=$(git -C "$REPO_PATH" rev-parse --abbrev-ref origin/HEAD | sed 's|origin/||')
+git -C "$REPO_PATH" reset --hard "origin/$DEFAULT"
+
+HEAD_SHA=$(git -C "$REPO_PATH" rev-parse HEAD)
+NOW=$(date +%s)
+python3 $WS mutate --workspace "$WID" \\
+  ".repos = [.repos[] | if .alias == \\"$ALIAS\\" then .state.headSha = \\"$HEAD_SHA\\" | .state.lastUpdatedAt = $NOW else . end]"
+python3 $WS audit --workspace "$WID" \\
+  '{"op":"repo_update","targets":[{"type":"repo","alias":"'"$ALIAS"'"}]}'""",
+
+    "repo_pin": """\
+# Pin repository to a specific commit
+ALIAS="<repo_alias>"
+SHA="<commit_sha>"
+python3 $WS mutate --workspace "$WID" \\
+  ".repos = [.repos[] | if .alias == \\"$ALIAS\\" then .pin = {\\"mode\\":\\"pinned\\",\\"pinnedSha\\":\\"$SHA\\"} else . end]"
+python3 $WS audit --workspace "$WID" \\
+  '{"op":"repo_pin","targets":[{"type":"repo","alias":"'"$ALIAS"'"}]}'""",
+
+    "repo_unpin": """\
+# Unpin repository (switch back to tracking mode)
+ALIAS="<repo_alias>"
+python3 $WS mutate --workspace "$WID" \\
+  ".repos = [.repos[] | if .alias == \\"$ALIAS\\" then .pin = {\\"mode\\":\\"tracking\\"} else . end]"
+python3 $WS audit --workspace "$WID" \\
+  '{"op":"repo_track","targets":[{"type":"repo","alias":"'"$ALIAS"'"}]}'""",
+
+    "repo_remove": """\
+# Remove repository from workspace
+ALIAS="<repo_alias>"
+WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
+rm -rf "$WS_ROOT/repos/$ALIAS"
+python3 $WS mutate --workspace "$WID" \\
+  ".repos = [.repos[] | select(.alias != \\"$ALIAS\\")]"
+python3 $WS audit --workspace "$WID" \\
+  '{"op":"repo_remove","targets":[{"type":"repo","alias":"'"$ALIAS"'"}]}'""",
+
+    "run_exec": """\
+# Execute a command in an existing run
+RUN_ID="<run_id>"
+RUN_ROOT=$(python3 $WS resolve "@run/$RUN_ID" --workspace "$WID")
+
+# Mark as running
+python3 $WS mutate --workspace "$WID" \\
+  ".runs = [.runs[] | if .id == \\"$RUN_ID\\" then .status = \\"running\\" | .updatedAt = $(date +%s) else . end]"
+
+# Execute with timeout and log capture
+cd "$RUN_ROOT/root"
+LOG_FILE="$RUN_ROOT/logs/$(date +%s).txt"
+timeout 900 <command> 2>&1 | head -c 65536 | tee "$LOG_FILE"
+EXIT_CODE=${PIPESTATUS[0]}
+
+# Update status
+STATUS=$( [ "$EXIT_CODE" -eq 0 ] && echo "completed" || echo "failed" )
+python3 $WS mutate --workspace "$WID" \\
+  '.runs = [.runs[] | if .id == "'"$RUN_ID"'" then .status = "'"$STATUS"'" | .updatedAt = '"$(date +%s)"' else . end]'""",
+
+    "run_delete": """\
+# Delete a run and clean up worktree
+RUN_ID="<run_id>"
+WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
+
+# Clean up worktree if applicable
+REPO_PATH=$(git -C "$WS_ROOT/runs/$RUN_ID/root" rev-parse --git-common-dir 2>/dev/null | xargs dirname 2>/dev/null || true)
+if [ -n "$REPO_PATH" ]; then
+  git -C "$REPO_PATH" worktree remove "$WS_ROOT/runs/$RUN_ID/root" --force 2>/dev/null || true
+fi
+rm -rf "$WS_ROOT/runs/$RUN_ID"
+python3 $WS mutate --workspace "$WID" \\
+  ".runs = [.runs[] | select(.id != \\"$RUN_ID\\")]"
+python3 $WS audit --workspace "$WID" \\
+  '{"op":"run_delete","targets":[{"type":"run","id":"'"$RUN_ID"'"}]}'""",
+
+    "run_gc": """\
+# List stale runs (completed/failed, older than 7 days)
+python3 $WS read --workspace "$WID" | jq -r \\
+  '.runs[] | select(.status == "completed" or .status == "failed") | select(.updatedAt < (now - 604800)) | .id'
+# Then delete each with the run_delete recipe""",
+
+    "resource_add": """\
+# Add a resource (paper, dataset, or artifact)
+# Replace <type> with: papers, datasets, or artifacts
+# Replace <prefix> with: paper, dataset, or artifact
+TYPE="<type>"      # papers | datasets | artifacts
+PREFIX="<prefix>"  # paper | dataset | artifact
+RESOURCE_ID=$(python3 -c "import uuid,time; print(f'$PREFIX-{int(time.time())}-{uuid.uuid4().hex}')")
+WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
+
+python3 $WS mutate --workspace "$WID" \\
+  ".$TYPE += [{\\"id\\":\\"$RESOURCE_ID\\",\\"title\\":\\"<title>\\",\\"notesPath\\":\\"notes/$TYPE/$RESOURCE_ID\\"}]"
+mkdir -p "$WS_ROOT/notes/$TYPE/$RESOURCE_ID"
+python3 $WS audit --workspace "$WID" \\
+  '{"op":"'"${PREFIX}_add"'","targets":[{"type":"'"$PREFIX"'","id":"'"$RESOURCE_ID"'"}]}'
+
+# Additional fields per type:
+# Papers: "authors":[], "year":N, "doi":"", "arxiv":"", "url":"", "pdfArtifactId":""
+# Datasets: "name":"", "url":"", "license":"", "artifactIds":[]
+# Artifacts: "kind":"" (required: pdf|model|data), "sourceUrl":"", "sha256":"", "sizeBytes":N""",
+
+    "link_add": """\
+# Add a link between two resources
+python3 $WS mutate --workspace "$WID" \\
+  '.links += [{"from":{"type":"<from_type>","id":"<from_id>"},"to":{"type":"<to_type>","id":"<to_id>"},"kind":"<kind>"}]'
+# Common kinds: implements, uses, produces, derived_from, related_to""",
+
+    "snapshot_create": """\
+# Create a manifest snapshot
+WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
+SNAP_ID=$(python3 -c "import uuid,time; print(f'snap-{int(time.time())}-{uuid.uuid4().hex}')")
+SNAP_PATH="notes/workspace/snapshots/$SNAP_ID.json"
+cp "$WS_ROOT/workspace.json" "$WS_ROOT/$SNAP_PATH"
+python3 $WS mutate --workspace "$WID" \\
+  ".snapshots += [{\\"id\\":\\"$SNAP_ID\\",\\"path\\":\\"$SNAP_PATH\\"}]"
+python3 $WS audit --workspace "$WID" \\
+  '{"op":"snapshot_create","targets":[{"type":"snapshot","id":"'"$SNAP_ID"'"}]}'""",
+
+    "snapshot_restore": """\
+# Restore repo pins from a snapshot (additive — never deletes repos)
+WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
+SNAP_PATH="<path_to_snapshot>"  # e.g. notes/workspace/snapshots/snap-XXX.json
+
+# For each repo in snapshot:
+jq -c '.repos[]' "$WS_ROOT/$SNAP_PATH" | while read -r REPO; do
+  ALIAS=$(echo "$REPO" | jq -r '.alias')
+  PIN_SHA=$(echo "$REPO" | jq -r '.pin.pinnedSha // empty')
+  # Skip if alias already exists (or handle per policy)
+  # Checkout pinned SHA if present:
+  if [ -n "$PIN_SHA" ]; then
+    git -C "$WS_ROOT/repos/$ALIAS" fetch origin "$PIN_SHA" --depth 1 2>/dev/null || true
+    git -C "$WS_ROOT/repos/$ALIAS" checkout "$PIN_SHA" 2>/dev/null || true
+  fi
+  python3 $WS mutate --workspace "$WID" \\
+    ".repos = [.repos[] | if .alias == \\"$ALIAS\\" then .pin = $(echo "$REPO" | jq '.pin') else . end]"
+done""",
+
+    "export": """\
+# Export workspace bundle
+WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
+BUNDLE_PATH="/tmp/$WID-export.tar.gz"
+
+# Sanitize URLs before export
+python3 $WS read --workspace "$WID" | \\
+  jq '.repos = [.repos[] | .remoteUrl = (.remoteUrl | split("?")[0])]' \\
+  > "/tmp/$WID-export-manifest.json"
+
+# Build file list (customize modes: notes, runs, artifacts, repos)
+tar -czf "$BUNDLE_PATH" -C "$WS_ROOT" \\
+  workspace.json notes/workspace/ knowledge-base/
+echo "Exported to: $BUNDLE_PATH" """,
+
+    "import": """\
+# Import workspace bundle
+NEW_WID=$(python3 $WS init "Imported Project")
+NEW_ROOT=$(python3 $WS resolve '@ws' --workspace "$NEW_WID" | sed 's|/$||')
+tar -xzf "$BUNDLE_PATH" -C "$NEW_ROOT"
+python3 $WS mutate --workspace "$NEW_WID" ".id = \\"$NEW_WID\\""
+echo "Imported as: $NEW_WID" """,
+
+    "index_build": """\
+# Build a search index (scaffold — uses external indexing tool)
+INDEX_ID=$(python3 -c "import uuid,time; print(f'idx-{int(time.time())}-{uuid.uuid4().hex}')")
+WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
+INDEX_PATH="indexes/$INDEX_ID"
+mkdir -p "$WS_ROOT/$INDEX_PATH"
+NOW=$(date +%s)
+python3 $WS mutate --workspace "$WID" \\
+  ".indexes += [{\\"id\\":\\"$INDEX_ID\\",\\"kind\\":\\"keyword\\",\\"targetType\\":\\"repo\\",\\"targetId\\":\\"$REPO_ID\\",\\"createdAt\\":$NOW,\\"status\\":\\"building\\",\\"path\\":\\"$INDEX_PATH\\"}]"
+# ... run external indexing tool, then mark ready:
+python3 $WS mutate --workspace "$WID" \\
+  ".indexes = [.indexes[] | if .id == \\"$INDEX_ID\\" then .status = \\"ready\\" | .updatedAt = $(date +%s) else . end]" """,
+}
+
+
+def cmd_recipe(args: argparse.Namespace) -> None:
+    """Print step-by-step recipe for an operation."""
+    op = args.operation
+    if op == "list":
+        print("Available recipes:")
+        for name in sorted(_RECIPES):
+            print(f"  {name}")
+        return
+
+    recipe = _RECIPES.get(op)
+    if recipe is None:
+        print(f"error: unknown recipe '{op}'", file=sys.stderr)
+        print(f"Available: {', '.join(sorted(_RECIPES))}", file=sys.stderr)
+        sys.exit(1)
+
+    print(recipe)
+
+
+# ---------------------------------------------------------------------------
 # Workspace resolution
 # ---------------------------------------------------------------------------
 
@@ -1019,6 +1570,47 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit", type=int, default=200, help="Max entries to return (default: 200)"
     )
 
+    # repo-clone (thick command)
+    p_repo_clone = sub.add_parser(
+        "repo-clone",
+        help="Validate, clone, register, and audit a repo (full repo_add flow)",
+    )
+    p_repo_clone.add_argument("url", help="Repository URL (https:// only)")
+    p_repo_clone.add_argument("alias", help="Local alias for the repo")
+    p_repo_clone.add_argument("--workspace", help="Workspace ID (default: global)")
+    p_repo_clone.add_argument(
+        "--full",
+        action="store_true",
+        help="Full clone (ignore depth/filter policy)",
+    )
+
+    # run-setup (thick command)
+    p_run_setup = sub.add_parser(
+        "run-setup",
+        help="Create run directory, materialize code, register, and audit",
+    )
+    p_run_setup.add_argument("name", help="Human-readable run name")
+    p_run_setup.add_argument(
+        "--source-alias", required=True, help="Source repo alias"
+    )
+    p_run_setup.add_argument(
+        "--strategy",
+        choices=["worktree", "copy", "clone"],
+        default="worktree",
+        help="Code materialization strategy (default: worktree)",
+    )
+    p_run_setup.add_argument("--workspace", help="Workspace ID (default: global)")
+
+    # recipe
+    p_recipe = sub.add_parser(
+        "recipe",
+        help="Print step-by-step recipe for an operation (use 'list' to see all)",
+    )
+    p_recipe.add_argument(
+        "operation",
+        help="Operation name (e.g., repo_update, run_exec) or 'list'",
+    )
+
     return parser
 
 
@@ -1039,6 +1631,9 @@ def main() -> None:
         "run-locked": cmd_run_locked,
         "mirror-path": cmd_mirror_path,
         "audit-query": cmd_audit_query,
+        "repo-clone": cmd_repo_clone,
+        "run-setup": cmd_run_setup,
+        "recipe": cmd_recipe,
     }
 
     handler = dispatch.get(args.command)
