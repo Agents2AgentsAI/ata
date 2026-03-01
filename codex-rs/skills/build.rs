@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 fn main() {
-    for dir_name in ["src/assets/samples", "src/assets/research"] {
+    for dir_name in ["src/assets/samples", "src/assets/research", "src/assets/workspace"] {
         let dir = Path::new(dir_name);
         if !dir.exists() {
             continue;
