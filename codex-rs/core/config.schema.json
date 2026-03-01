@@ -359,6 +359,9 @@
             "js_repl_tools_only": {
               "type": "boolean"
             },
+            "lsp": {
+              "type": "boolean"
+            },
             "memories": {
               "type": "boolean"
             },
@@ -665,6 +668,82 @@
         }
       },
       "type": "object"
+    },
+    "LspConfig": {
+      "anyOf": [
+        {
+          "description": "`lsp = false` disables all LSP integration.",
+          "type": "boolean"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/definitions/LspServerConfigToml"
+          },
+          "description": "Per-server configuration map.",
+          "type": "object"
+        }
+      ],
+      "description": "Top-level LSP configuration: either a simple boolean (disabled) or a map of per-server overrides."
+    },
+    "LspServerConfigToml": {
+      "anyOf": [
+        {
+          "description": "`[lsp.server-name]\\ndisabled = true`",
+          "properties": {
+            "disabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "disabled"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Full server configuration.",
+          "properties": {
+            "command": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "disabled": {
+              "default": false,
+              "type": "boolean"
+            },
+            "env": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {},
+              "type": "object"
+            },
+            "extensions": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "initialization_options": {
+              "default": null
+            },
+            "root_markers": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Per-server override in config.toml. Either just disable or provide full config."
     },
     "MemoriesToml": {
       "additionalProperties": false,
@@ -1750,6 +1829,9 @@
         "js_repl_tools_only": {
           "type": "boolean"
         },
+        "lsp": {
+          "type": "boolean"
+        },
         "memories": {
           "type": "boolean"
         },
@@ -1954,6 +2036,15 @@
         }
       ],
       "description": "Directory where Codex writes log files, for example `codex-tui.log`. Defaults to `$CODEX_HOME/log`."
+    },
+    "lsp": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/LspConfig"
+        }
+      ],
+      "default": null,
+      "description": "LSP server integration configuration."
     },
     "mcp_oauth_callback_port": {
       "description": "Optional fixed port for the local HTTP callback server used during MCP OAuth login. When unset, Codex will bind to an ephemeral port chosen by the OS.",
