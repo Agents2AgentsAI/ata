@@ -170,6 +170,8 @@ pub enum Feature {
     ReadingView,
     /// Enable knowledge base persistence (cards, journal, research-context).
     ResearchKnowledgeBase,
+    /// Enable the background job scheduler for running skills on cron/event triggers.
+    Scheduler,
 }
 
 impl Feature {
@@ -828,6 +830,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "research_knowledge_base",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::Scheduler,
+        key: "scheduler",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
 ];
 
