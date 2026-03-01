@@ -3,7 +3,7 @@
 ## Create Workspace
 
 ```bash
-WID=$(python3 $WS init "My Project")
+WID=$(ata workspace init "My Project")
 echo "Created workspace: $WID"
 ```
 
@@ -12,7 +12,7 @@ Generates ID (`slugified-name-<hash>`), creates full directory tree, writes init
 ## List Workspaces
 
 ```bash
-python3 $WS list
+ata workspace list
 ```
 
 Returns JSON array: `[{"id", "name", "updatedAt", "repoCount"}, ...]`
@@ -20,13 +20,13 @@ Returns JSON array: `[{"id", "name", "updatedAt", "repoCount"}, ...]`
 ## Get Workspace Details
 
 ```bash
-python3 $WS read --workspace "$WID"
+ata workspace read --workspace "$WID"
 ```
 
 ## Select Active Workspace
 
 ```bash
-python3 $WS select "$WID"
+ata workspace select "$WID"
 ```
 
 Writes structured JSON to session-scoped selection file. If `$CODEX_SESSION_ID` is set, writes to `$CODEX_HOME/sessions/<sessionId>/workspace.json`; otherwise to `$CODEX_HOME/.workspace_selected`.
@@ -34,7 +34,7 @@ Writes structured JSON to session-scoped selection file. If `$CODEX_SESSION_ID` 
 ## Delete Workspace
 
 ```bash
-python3 $WS delete "$WID"
+ata workspace delete "$WID"
 ```
 
 Removes the entire workspace directory tree. Refuses to delete `global`.

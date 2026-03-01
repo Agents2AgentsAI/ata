@@ -5,7 +5,7 @@
 Use `run-setup` for the full safe flow:
 
 ```bash
-python3 $WS run-setup "experiment-1" --source-alias my-repo --workspace "$WID"
+ata workspace run-setup "experiment-1" --source-alias my-repo --workspace "$WID"
 # Options:
 #   --strategy worktree  (default, fast, shares object store)
 #   --strategy copy      (no git needed)
@@ -26,11 +26,10 @@ Output: JSON with `runId`, `name`, `rootPath`, `codePath`, `strategy`, `source`.
 
 ```bash
 RUN_ID="<run_id>"
-RUN_ROOT=$(python3 $WS resolve "@run/$RUN_ID" --workspace "$WID")
+RUN_ROOT=$(ata workspace resolve "@run/$RUN_ID" --workspace "$WID")
 
 # Mark as running
-python3 $WS mutate --workspace "$WID" \
-  ".runs = [.runs[] | if .id == \"$RUN_ID\" then .status = \"running\" | .updatedAt = $(date +%s) else . end]"
+ata workspace run-update-status --id "$RUN_ID" --status running --workspace "$WID"
 
 # Execute with timeout and log capture
 cd "$RUN_ROOT/root"
@@ -40,8 +39,7 @@ EXIT_CODE=${PIPESTATUS[0]}
 
 # Update status
 STATUS=$( [ "$EXIT_CODE" -eq 0 ] && echo "completed" || echo "failed" )
-python3 $WS mutate --workspace "$WID" \
-  ".runs = [.runs[] | if .id == \"$RUN_ID\" then .status = \"$STATUS\" | .updatedAt = $(date +%s) else . end]"
+ata workspace run-update-status --id "$RUN_ID" --status "$STATUS" --workspace "$WID"
 ```
 
 **Notes:**
@@ -57,40 +55,31 @@ python3 $WS mutate --workspace "$WID" \
 export CODEX_SANDBOX_NETWORK_DISABLED=1
 
 # Route caches through workspace
-export PIP_CACHE_DIR=$(python3 $WS resolve '@cache/pip' --workspace "$WID")
-export HF_HOME=$(python3 $WS resolve '@cache/huggingface' --workspace "$WID")
-export TORCH_HOME=$(python3 $WS resolve '@cache/torch' --workspace "$WID")
+export PIP_CACHE_DIR=$(ata workspace resolve '@cache/pip' --workspace "$WID")
+export HF_HOME=$(ata workspace resolve '@cache/huggingface' --workspace "$WID")
+export TORCH_HOME=$(ata workspace resolve '@cache/torch' --workspace "$WID")
 mkdir -p "$PIP_CACHE_DIR" "$HF_HOME" "$TORCH_HOME"
 ```
 
 ## List Runs
 
 ```bash
-python3 $WS read --workspace "$WID" | jq '.runs[] | {id, name, status, createdAt}'
+ata workspace read --workspace "$WID" | jq '.runs[] | {id, name, status, createdAt}'
 ```
 
 ## Delete Run
 
 ```bash
-WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
-
-# Clean up worktree if applicable
-REPO_PATH=$(git -C "$WS_ROOT/runs/$RUN_ID/root" rev-parse --git-common-dir 2>/dev/null | xargs dirname 2>/dev/null || true)
-if [ -n "$REPO_PATH" ]; then
-  git -C "$REPO_PATH" worktree remove "$WS_ROOT/runs/$RUN_ID/root" --force 2>/dev/null || true
-fi
-rm -rf "$WS_ROOT/runs/$RUN_ID"
-python3 $WS mutate --workspace "$WID" \
-  ".runs = [.runs[] | select(.id != \"$RUN_ID\")]"
-python3 $WS audit --workspace "$WID" \
-  '{"op":"run_delete","targets":[{"type":"run","id":"'"$RUN_ID"'"}]}'
+ata workspace run-remove --id "$RUN_ID" --workspace "$WID"
 ```
+
+This single command handles worktree cleanup, directory removal, manifest update, and audit logging.
 
 ## Garbage Collect Stale Runs
 
 ```bash
 # List runs older than 7 days with completed/failed status
-python3 $WS read --workspace "$WID" | jq -r \
+ata workspace read --workspace "$WID" | jq -r \
   '.runs[] | select(.status == "completed" or .status == "failed") | select(.updatedAt < (now - 604800)) | .id'
 ```
 

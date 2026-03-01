@@ -17,6 +17,7 @@ use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::login::run_login_with_device_code;
 use codex_cli::login::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
+use codex_workspace::Cli as WorkspaceCli;
 use codex_exec::Cli as ExecCli;
 use codex_exec::Command as ExecCommand;
 use codex_exec::ReviewArgs;
@@ -150,6 +151,10 @@ enum Subcommand {
 
     /// Control the scheduler daemon.
     Scheduler(codex_scheduler::cli::SchedulerCli),
+
+    /// Manage workspaces (repos, runs, artifacts, audit).
+    #[clap(visible_alias = "ws")]
+    Workspace(WorkspaceCli),
 }
 
 #[derive(Debug, Parser)]
@@ -831,6 +836,12 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         }
         Some(Subcommand::Scheduler(scheduler_cli)) => {
             codex_scheduler::cli::run_scheduler_command(scheduler_cli).await?;
+        }
+        Some(Subcommand::Workspace(workspace_cli)) => {
+            let code = codex_workspace::run_cli(workspace_cli);
+            if code != 0 {
+                std::process::exit(code);
+            }
         }
     }
 

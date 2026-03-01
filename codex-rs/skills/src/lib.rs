@@ -371,7 +371,11 @@ mod tests {
         );
         assert!(
             paths
-                .binary_search_by(|probe| probe.as_str().cmp("scripts/ws.py"))
+                .binary_search_by(|probe| {
+                    probe
+                        .as_str()
+                        .cmp("scripts/references/workspace-management.md")
+                })
                 .is_ok()
         );
     }
