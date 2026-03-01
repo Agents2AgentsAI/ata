@@ -38,13 +38,17 @@ WS="<skill_dir>/scripts/ws.py"
 | `python3 $WS init <name>` | Create workspace, print workspace ID |
 | `python3 $WS list` | List all workspaces as JSON array |
 | `python3 $WS read [--workspace ID]` | Print manifest JSON to stdout |
-| `python3 $WS mutate '<jq_expr>' [--workspace ID]` | Lock, apply jq, bump version, atomic write |
-| `python3 $WS select <id>` | Set active workspace selection |
+| `python3 $WS mutate '<jq_expr>' [--workspace ID] [--expect-version N]` | Lock, apply jq, bump version, atomic write. Exit code 2 on version conflict |
+| `python3 $WS select <id>` | Set active workspace selection (session-aware JSON) |
 | `python3 $WS audit '<json>' [--workspace ID]` | Append entry to audit.ndjson |
 | `python3 $WS delete <id>` | Remove workspace directory tree |
 | `python3 $WS resolve '<@spec>' [--workspace ID]` | Resolve @-path alias to absolute path |
+| `python3 $WS check-host <url> [--workspace ID]` | Validate URL security + check `policies.repoHostsAllowlist` |
+| `python3 $WS run-locked --level <lvl> [--target-id ID] [--workspace ID] -- <cmd>` | Run command under fine-grained lock (levels: workspace, kb, run, index) |
+| `python3 $WS mirror-path <url>` | Print shared repo mirror cache path (`$CODEX_HOME/caches/repo-mirrors/`) |
+| `python3 $WS audit-query [--workspace ID] [--since TS] [--until TS] [--ops OPS] [--limit N]` | Query audit log entries as JSON array |
 
-Default workspace is `global` when `--workspace` is omitted.
+Default workspace resolved via 4-tier chain: `--workspace` > project pin > session > `global`.
 
 ## Directory Layout
 
@@ -163,7 +167,7 @@ python3 $WS read --workspace "$WID"
 python3 $WS select "$WID"
 ```
 
-Writes workspace ID to `$CODEX_HOME/.workspace_selected`.
+Writes structured JSON `{"schemaVersion":1,"activeWorkspaceId":"...","updatedAt":...}` to the selection file. Location is session-aware: if `$CODEX_SESSION_ID` is set, writes to `$CODEX_HOME/sessions/<sessionId>/workspace.json`; otherwise writes to `$CODEX_HOME/.workspace_selected`.
 
 #### Delete Workspace
 
@@ -179,39 +183,33 @@ Removes the entire workspace directory tree. Refuses to delete `global`.
 
 #### Security: URL Validation
 
-Before cloning any repository, validate the URL to prevent credential leakage:
-
-- Must use `https://` (reject `http://`, `git://`, `ssh://`, `file://`)
-- Must not contain embedded credentials (`user:pass@`)
-- Must not contain tokens in query params (`?token=`, `?access_token=`)
-- Must not contain GitHub PAT patterns (`ghp_`, `gho_`, `github_pat_`)
+Before cloning any repository, validate the URL using `check-host`:
 
 ```bash
-# Validate URL before cloning
-validate_repo_url() {
-  local url="$1"
-  if ! echo "$url" | grep -qE '^https://'; then
-    echo "error: only https:// URLs allowed" >&2; return 1
-  fi
-  if echo "$url" | grep -qE '://[^/@]+:[^/@]+@'; then
-    echo "error: embedded credentials not allowed" >&2; return 1
-  fi
-  if echo "$url" | grep -qiE '\?(token|access_token)=|ghp_|gho_|github_pat_'; then
-    echo "error: tokens/PATs in URL not allowed" >&2; return 1
-  fi
-}
-validate_repo_url "$REPO_URL" || exit 1
+python3 $WS check-host "$REPO_URL" --workspace "$WID" || exit 1
 ```
 
-For host restriction, configure `policies.repoHostsAllowlist` in the manifest (e.g., `["github.com", "gitlab.com"]`). Only store sanitized URLs in the manifest.
+This validates:
+- Must use `https://` (rejects `http://`, `git://`, `ssh://`, `file://`)
+- No embedded credentials (`user:pass@`)
+- No tokens in query params (`?token=`, `?access_token=`)
+- No GitHub PAT patterns (`ghp_`, `gho_`, `github_pat_`)
+- Host is in `policies.repoHostsAllowlist` (if configured; absent/null = allow all, `[]` = block all)
+
+Configure the allowlist: `python3 $WS mutate '.policies.repoHostsAllowlist = ["github.com", "gitlab.com"]' --workspace "$WID"`
 
 #### Add Repository
 
 ```bash
-# 1. Determine workspace root and clone defaults
+# 1. Validate URL + determine workspace root
+REPO_URL="https://github.com/org/repo.git"
+python3 $WS check-host "$REPO_URL" --workspace "$WID" || exit 1
+
 WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
 ALIAS="my-repo"
-REPO_URL="https://github.com/org/repo.git"
+
+# 1b. Capture manifest version for optimistic concurrency (unlocked read)
+VERSION=$(python3 $WS read --workspace "$WID" | jq -r '.manifestVersion')
 
 # 2. Read clone policy from manifest (falls back to defaults)
 CLONE_POLICY=$(python3 $WS read --workspace "$WID" | jq -r '.policies.defaultClone // empty')
@@ -251,7 +249,7 @@ REPO_ID=$(python3 -c "import uuid; print(f'repo-{int(__import__(\"time\").time()
 # 5. Record actual clone options used in manifest
 CLONE_RECORD="{\"depth\":$CLONE_DEPTH,\"singleBranch\":$CLONE_SINGLE,\"noTags\":$CLONE_NOTAGS,\"filter\":\"$CLONE_FILTER\",\"submodules\":\"$CLONE_SUBS\",\"lfs\":\"$CLONE_LFS\"}"
 
-python3 $WS mutate --workspace "$WID" \
+python3 $WS mutate --workspace "$WID" --expect-version "$VERSION" \
   ".repos += [{
     \"id\": \"$REPO_ID\",
     \"alias\": \"$ALIAS\",
@@ -263,6 +261,7 @@ python3 $WS mutate --workspace "$WID" \
     \"pin\": {\"mode\":\"tracking\"},
     \"state\": {\"headSha\":\"$HEAD_SHA\",\"headRef\":\"$HEAD_REF\",\"defaultBranch\":\"$DEFAULT_BRANCH\",\"shallow\":$([ \"$CLONE_DEPTH\" -gt 0 ] 2>/dev/null && echo true || echo false)}
   }]"
+# Exit code 2 = version conflict (another process mutated between read and write)
 
 # 6. Create notes dir and audit
 mkdir -p "$WS_ROOT/notes/repos/$ALIAS"
@@ -859,14 +858,16 @@ All operations append to `notes/workspace/audit.ndjson`. Each line is a JSON obj
 #### Read Audit Log
 
 ```bash
+# All entries (last 200)
+python3 $WS audit-query --workspace "$WID"
+
+# With filters
+python3 $WS audit-query --workspace "$WID" --ops "repo_add,repo_remove" --limit 50
+python3 $WS audit-query --workspace "$WID" --since 1700000000 --until 1710000000
+
+# Raw NDJSON (for jq pipelines)
 WS_ROOT=$(python3 $WS resolve '@ws' --workspace "$WID" | sed 's|/$||')
 cat "$WS_ROOT/notes/workspace/audit.ndjson" | jq -s '.'
-```
-
-#### Filter by Operation
-
-```bash
-cat "$WS_ROOT/notes/workspace/audit.ndjson" | jq -s '[.[] | select(.op == "repo_add")]'
 ```
 
 #### Filter by Target
@@ -885,6 +886,12 @@ KB files live under `<workspace_root>/knowledge-base/`. Use `$kb` skill for card
 python3 $WS resolve '@kb' --workspace "$WID"
 ```
 
+For write operations, use `run-locked` with KB-level locking:
+
+```bash
+python3 $WS run-locked --level kb --workspace "$WID" -- <kb-write-command>
+```
+
 ---
 
 ### Shared Caches
@@ -896,15 +903,20 @@ Shared caches live under `$CODEX_HOME/caches/` and are workspace-independent:
 | Repo mirrors | `$CODEX_HOME/caches/repo-mirrors/<repoKeyHash>/` | Bare git mirrors for faster clones |
 | Artifact blobs | `$CODEX_HOME/caches/artifacts/<sha256>/blob` | Content-addressed artifact storage |
 
-Use `--reference` with mirrors for faster clones:
+Use `mirror-path` with `--reference` for faster clones:
 
 ```bash
-MIRROR="$CODEX_HOME/caches/repo-mirrors/$(echo -n "$REPO_KEY" | sha256sum | cut -c1-16)"
+MIRROR=$(python3 $WS mirror-path "$REPO_URL")
 if [ -d "$MIRROR" ]; then
-  git clone --reference "$MIRROR" "$REPO_URL" "$WS_ROOT/repos/$ALIAS"
+  # Update existing mirror
+  git -C "$MIRROR" fetch --all --prune
 else
-  git clone "$REPO_URL" "$WS_ROOT/repos/$ALIAS"
+  # Create new bare mirror
+  mkdir -p "$(dirname "$MIRROR")"
+  git clone --mirror "$REPO_URL" "$MIRROR"
 fi
+# Clone using local mirror as reference (saves bandwidth)
+git clone --reference "$MIRROR" "${CLONE_ARGS[@]}" "$REPO_URL" "$WS_ROOT/repos/$ALIAS"
 ```
 
 ---
@@ -931,14 +943,16 @@ PROJECT_PIN=".codex/workspace.json"
 
 ### Locking
 
-ws.py uses workspace-level locking (`locks/workspace.lock`). The design supports finer-grained locks for future use:
+ws.py supports fine-grained locking via `run-locked`. Lock ordering convention: workspace < kb < run < index.
 
-| Lock | Path | Purpose |
-|------|------|---------|
-| Workspace | `locks/workspace.lock` | Manifest mutations (active) |
-| Run | `runs/<runId>/run.lock` | Concurrent run execution (future) |
-| Index | `indexes/<indexId>/index.lock` | Long index builds (future) |
-| KB | `knowledge-base/kb.lock` | KB operations (future) |
+| Lock | Path | Usage |
+|------|------|-------|
+| Workspace | `locks/workspace.lock` | Manifest mutations (automatic via `mutate`) |
+| KB | `knowledge-base/kb.lock` | `run-locked --level kb -- <cmd>` |
+| Run | `runs/<runId>/run.lock` | `run-locked --level run --target-id <id> -- <cmd>` |
+| Index | `indexes/<indexId>/index.lock` | `run-locked --level index --target-id <id> -- <cmd>` |
+
+All locks use exclusive flock with 30s timeout.
 
 ---
 
