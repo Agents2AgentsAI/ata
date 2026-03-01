@@ -1695,17 +1695,11 @@ impl App {
                     }
                     // Allow widgets to process any pending timers before rendering.
                     self.chat_widget.pre_draw_tick();
-                    // Flush deferred history lines once overlay, reading view,
-                    // and voice TTS are all inactive.
+                    // Flush deferred history lines once both the overlay and
+                    // reading view are closed so they appear in the scrollback.
                     if !self.deferred_history_lines.is_empty()
                         && self.overlay.is_none()
                         && !self.chat_widget.is_document_reader_active()
-                        && !{
-                            #[cfg(not(target_os = "linux"))]
-                            { self.chat_widget.is_voice_speaking() }
-                            #[cfg(target_os = "linux")]
-                            { false }
-                        }
                     {
                         let lines = std::mem::take(&mut self.deferred_history_lines);
                         tui.insert_history_lines(lines);
@@ -1992,13 +1986,7 @@ impl App {
                         }
                     }
                     let defer = self.overlay.is_some()
-                        || self.chat_widget.is_document_reader_active()
-                        || {
-                            #[cfg(not(target_os = "linux"))]
-                            { self.chat_widget.is_voice_speaking() }
-                            #[cfg(target_os = "linux")]
-                            { false }
-                        };
+                        || self.chat_widget.is_document_reader_active();
                     if defer {
                         self.deferred_history_lines.extend(display);
                     } else {
@@ -2974,8 +2962,8 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             #[cfg(not(target_os = "linux"))]
-            AppEvent::VoiceModeNarrateSection { document_id, section_index, text } => {
-                self.chat_widget.on_voice_narrate_section(document_id, section_index, text);
+            AppEvent::VoiceModeNarrateSection { document_id, section_index, text, selection } => {
+                self.chat_widget.on_voice_narrate_section(document_id, section_index, text, selection);
                 tui.frame_requester().schedule_frame();
             }
             #[cfg(not(target_os = "linux"))]

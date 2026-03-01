@@ -449,6 +449,9 @@ pub(crate) enum AppEvent {
         document_id: String,
         section_index: usize,
         text: String,
+        /// When true, the text is a visual selection rather than the full section.
+        /// Selection narrations skip caching and use overlay-style karaoke.
+        selection: bool,
     },
 
     /// Pre-generate TTS audio for an adjacent section in the background.

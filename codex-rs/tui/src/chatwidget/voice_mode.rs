@@ -336,6 +336,8 @@ const MIN_RECORDING_MS: u64 = 600;
 pub(crate) struct TtsCacheEntry {
     pub(crate) content_hash: u64,
     pub(crate) chunks: Vec<Vec<i16>>,
+    /// Cached alignment timeline so karaoke works on replay.
+    pub(crate) alignment_timeline: Vec<AlignmentEntry>,
 }
 
 /// A word-level entry in the alignment timeline.
@@ -422,6 +424,13 @@ pub(crate) struct VoiceModeState {
     /// When narrating a section, tracks the (document_id, section_index)
     /// and content hash so chunks can be collected for caching.
     pub(crate) narrating_section: Option<(String, usize, u64)>,
+    /// True when the current narration is for a visual selection rather
+    /// than the full section.  Selection narrations use overlay-style
+    /// karaoke and skip caching.
+    pub(crate) narrating_selection: bool,
+    /// Cleaned text sent to TTS for the current narration (preserves newlines).
+    /// Used by the karaoke builder to maintain line structure in the display.
+    pub(crate) narrating_cleaned_text: Option<String>,
     /// Chunks collected during narration for cache storage.
     pub(crate) narrating_chunks: Vec<Vec<i16>>,
 
@@ -435,6 +444,8 @@ pub(crate) struct VoiceModeState {
     pub(crate) tts_highlight_word_idx: Option<usize>,
     /// Cancel flag for the highlight tick timer.
     pub(crate) highlight_tick_cancel: Option<Arc<AtomicBool>>,
+    /// Partial word carried across chunk boundaries in alignment data.
+    pub(crate) tts_pending_word: Option<AlignmentEntry>,
     /// Set when TTS worker has finished sending all audio to the player,
     /// but the player may still be playing buffered audio.
     pub(crate) tts_data_complete: bool,
@@ -469,11 +480,14 @@ impl VoiceModeState {
             tts_section_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             prefetch_pending: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             narrating_section: None,
+            narrating_selection: false,
+            narrating_cleaned_text: None,
             narrating_chunks: Vec::new(),
             tts_alignment_timeline: Vec::new(),
             tts_cumulative_ms: 0,
             tts_highlight_word_idx: None,
             highlight_tick_cancel: None,
+            tts_pending_word: None,
             tts_data_complete: false,
         }
     }
@@ -514,11 +528,14 @@ impl VoiceModeState {
         self.tts_ordering_lock = Arc::new(tokio::sync::Mutex::new(()));
         // Clear narration collection state.
         self.narrating_section = None;
+        self.narrating_selection = false;
+        self.narrating_cleaned_text = None;
         self.narrating_chunks.clear();
         // Clear alignment timeline and highlight.
         self.tts_alignment_timeline.clear();
         self.tts_cumulative_ms = 0;
         self.tts_highlight_word_idx = None;
+        self.tts_pending_word = None;
         self.tts_data_complete = false;
         self.cancel_highlight_tick();
     }
@@ -713,6 +730,11 @@ impl super::ChatWidget {
             if state.phase == VoiceModePhase::Speaking {
                 state.phase = VoiceModePhase::Idle;
             }
+            // Clear reading view overlays so the highlight doesn't stick.
+            self.bottom_pane
+                .set_document_reader_karaoke_lines(None, false);
+            self.bottom_pane
+                .set_document_reader_reading_progress(None, 0);
             // Fall through to start recording / enter pending state.
         }
 
@@ -1098,12 +1120,20 @@ impl super::ChatWidget {
         let result = state.voice_tag_parser.push(delta);
 
         // Determine what to send to TTS.
-        let tts_sentences = if reading_view {
+        // When a section is being auto-narrated, skip sending agent delta
+        // text to TTS — the section narration already owns the audio stream
+        // and mixing in the agent's conversational response would corrupt
+        // the alignment timeline and karaoke overlay.
+        let is_narrating = state.narrating_section.is_some();
+        let tts_sentences = if reading_view && !is_narrating {
             // In reading view: send ALL display text to TTS via sentence buffer.
             let mut sentences = state.sentence_buffer.push(&result.display_text);
             // Also include any voice-tagged sentences (in case agent used tags).
             sentences.extend(result.voice_sentences);
             sentences
+        } else if is_narrating {
+            // Auto-narration active — don't send anything to TTS.
+            vec![]
         } else {
             result.voice_sentences
         };
@@ -1230,10 +1260,13 @@ impl super::ChatWidget {
 
         // Build alignment entries from this chunk's alignment data.
         if let Some(ref align) = alignment {
+            // ElevenLabs alignment timestamps are session-absolute (not
+            // per-chunk), so pass 0 as offset — no cumulative adjustment needed.
             build_alignment_entries(
                 align,
-                state.tts_cumulative_ms,
+                0,
                 &mut state.tts_alignment_timeline,
+                &mut state.tts_pending_word,
             );
         }
 
@@ -1256,6 +1289,13 @@ impl super::ChatWidget {
         if needs_tick {
             self.start_highlight_tick();
         }
+
+        // Push initial karaoke lines to the reading view (if active) so
+        // the highlighted text appears as soon as alignment data arrives.
+        #[cfg(not(target_os = "linux"))]
+        if alignment.is_some() {
+            self.push_karaoke_to_reader();
+        }
     }
 
     /// Called when TTS playback is finished.
@@ -1265,6 +1305,11 @@ impl super::ChatWidget {
         };
         if state.phase != VoiceModePhase::Speaking {
             return;
+        }
+
+        // Flush any pending partial word so the last word gets highlighted.
+        if let Some(pw) = state.tts_pending_word.take() {
+            state.tts_alignment_timeline.push(pw);
         }
 
         // If the highlight tick is running and the audio player still has
@@ -1290,16 +1335,22 @@ impl super::ChatWidget {
             return;
         };
 
-        // Store collected narration chunks in the cache (if narrating a section).
+        // Store collected narration chunks + alignment in cache.
+        // Skip caching for selections — they are ad-hoc and not worth storing.
+        let was_selection = state.narrating_selection;
+        state.narrating_cleaned_text = None;
+        state.narrating_selection = false;
         if let Some((doc_id, sec_idx, content_hash)) = state.narrating_section.take() {
             let chunks = std::mem::take(&mut state.narrating_chunks);
-            if !chunks.is_empty() {
+            let alignment_timeline = state.tts_alignment_timeline.clone();
+            if !was_selection && !chunks.is_empty() {
                 if let Ok(mut cache) = state.tts_section_cache.lock() {
                     cache.insert(
                         (doc_id, sec_idx),
                         TtsCacheEntry {
                             content_hash,
                             chunks,
+                            alignment_timeline,
                         },
                     );
                 }
@@ -1310,11 +1361,22 @@ impl super::ChatWidget {
         state.tts_alignment_timeline.clear();
         state.tts_cumulative_ms = 0;
         state.tts_highlight_word_idx = None;
+        state.tts_pending_word = None;
         state.tts_data_complete = false;
         state.cancel_highlight_tick();
 
         // Ready for next PTT press.
         state.phase = VoiceModePhase::Idle;
+
+        // Clear karaoke overlay and reading cursor in the reading view.
+        self.bottom_pane
+            .set_document_reader_karaoke_lines(None, false);
+        self.bottom_pane
+            .set_document_reader_reading_progress(None, 0);
+
+        // Flush any voice response cells that were stashed during karaoke.
+        self.flush_deferred_voice_cells();
+
         self.sync_voice_placeholder();
         self.request_redraw();
     }
@@ -1391,6 +1453,8 @@ impl super::ChatWidget {
 
         if effective_idx != state.tts_highlight_word_idx {
             state.tts_highlight_word_idx = effective_idx;
+            #[cfg(not(target_os = "linux"))]
+            self.push_karaoke_to_reader();
             self.request_redraw();
         }
     }
@@ -1511,6 +1575,210 @@ impl super::ChatWidget {
         lines
     }
 
+    /// Build karaoke lines for the reading view content area.
+    ///
+    /// Uses the stored cleaned narration text (which preserves newlines) for
+    /// layout, wrapping each paragraph independently. The heading is rendered
+    /// separately by the reader, so we strip it from the text. The timeline
+    /// word index drives the highlight position.
+    #[cfg(not(target_os = "linux"))]
+    fn build_reading_view_karaoke_lines(
+        &self,
+        width: u16,
+        heading: &str,
+    ) -> Option<Vec<ratatui::text::Line<'static>>> {
+        use ratatui::style::{Modifier, Style};
+        use ratatui::text::{Line, Span};
+        use textwrap::{wrap, Options as WrapOptions};
+
+        let state = self.voice_mode_state.as_ref()?;
+        if state.phase != VoiceModePhase::Speaking {
+            return None;
+        }
+        let timeline = &state.tts_alignment_timeline;
+        if timeline.is_empty() {
+            return None;
+        }
+
+        let wrap_width = width as usize;
+        if wrap_width < 10 {
+            return None;
+        }
+
+        // Count heading words to skip in the timeline (narration only).
+        let skip = if !heading.is_empty() {
+            heading.split_whitespace().count()
+        } else {
+            0
+        };
+
+        // Use the stored cleaned text (preserves newlines) if available
+        // (narration mode), otherwise build text from timeline words
+        // (Q&A mode — no stored cleaned text).
+        let (all_wrapped, full_text) = if let Some(cleaned) = state.narrating_cleaned_text.as_deref()
+        {
+            // Strip heading prefix from the cleaned text.
+            let body = if !heading.is_empty() {
+                let prefix = format!("{}.", heading);
+                cleaned
+                    .strip_prefix(&prefix)
+                    .map(|s| s.trim_start())
+                    .unwrap_or(cleaned)
+            } else {
+                cleaned
+            };
+
+            // Wrap each line independently to preserve paragraph structure.
+            let mut wrapped: Vec<std::borrow::Cow<'_, str>> = Vec::new();
+            for line in body.lines() {
+                if line.trim().is_empty() {
+                    wrapped.push(std::borrow::Cow::Borrowed(""));
+                } else {
+                    wrapped.extend(wrap(line, WrapOptions::new(wrap_width)));
+                }
+            }
+            let text: String = wrapped.iter().enumerate().fold(
+                String::new(),
+                |mut acc, (i, line)| {
+                    if i > 0 {
+                        acc.push('\n');
+                    }
+                    acc.push_str(line);
+                    acc
+                },
+            );
+            (wrapped, text)
+        } else {
+            // Q&A mode: build text from timeline words.
+            let mut text = String::new();
+            for entry in timeline.iter().skip(skip) {
+                if !text.is_empty() {
+                    text.push(' ');
+                }
+                text.push_str(&entry.word);
+            }
+            let wrapped = wrap(&text, WrapOptions::new(wrap_width));
+            let owned: Vec<std::borrow::Cow<'_, str>> = wrapped
+                .into_iter()
+                .map(|c| std::borrow::Cow::Owned(c.into_owned()))
+                .collect();
+            let rejoined: String = owned.iter().enumerate().fold(
+                String::new(),
+                |mut acc, (i, line)| {
+                    if i > 0 {
+                        acc.push('\n');
+                    }
+                    acc.push_str(line);
+                    acc
+                },
+            );
+            (owned, rejoined)
+        };
+
+        let highlight_style =
+            Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+        let word_idx = state.tts_highlight_word_idx;
+        let adjusted_idx = word_idx.and_then(|idx| idx.checked_sub(skip));
+
+        // Find the highlighted word's byte range in full_text.
+        // The adj-th whitespace-delimited word in full_text corresponds
+        // to the adj-th word after the heading in the timeline.
+        let (hl_start, hl_end) = if let Some(adj) = adjusted_idx {
+            if let Some(offset) = find_nth_word_offset(&full_text, adj) {
+                let word_len = full_text[offset..]
+                    .split_whitespace()
+                    .next()
+                    .map(|w| w.len())
+                    .unwrap_or(0);
+                (offset, offset + word_len)
+            } else {
+                (0, 0)
+            }
+        } else {
+            (0, 0)
+        };
+
+        // Build styled Lines from the wrapped text.
+        let mut lines = Vec::new();
+        let mut global_offset = 0usize;
+        for wrapped_line in &all_wrapped {
+            let line_len = wrapped_line.len();
+            let line_start = global_offset;
+            let line_end = global_offset + line_len;
+
+            if hl_start == hl_end || hl_start >= line_end || hl_end <= line_start {
+                lines.push(Line::from(Span::raw(wrapped_line.to_string())));
+            } else {
+                let mut spans = Vec::new();
+                let rel_start = hl_start.saturating_sub(line_start);
+                let rel_end = hl_end.min(line_end) - line_start;
+
+                if rel_start > 0 {
+                    spans.push(Span::raw(wrapped_line[..rel_start].to_string()));
+                }
+                spans.push(Span::styled(
+                    wrapped_line[rel_start..rel_end].to_string(),
+                    highlight_style,
+                ));
+                if rel_end < line_len {
+                    spans.push(Span::raw(wrapped_line[rel_end..].to_string()));
+                }
+                lines.push(Line::from(spans));
+            }
+
+            // +1 for the '\n' separator between lines.
+            global_offset = line_end + 1;
+        }
+
+        Some(lines)
+    }
+
+    /// Push reading progress to the reading view if the document reader is active.
+    ///
+    /// For section auto-narration (`narrating_section` is Some): sends the
+    /// current word index so the view can highlight the corresponding
+    /// rendered line (preserving markdown formatting).
+    /// For Q&A responses: appends karaoke-highlighted lines after the
+    /// existing section content (word-level highlight in plain text).
+    #[cfg(not(target_os = "linux"))]
+    fn push_karaoke_to_reader(&mut self) {
+        if !self.bottom_pane.is_document_reader_active() {
+            return;
+        }
+        let is_narrating = self
+            .voice_mode_state
+            .as_ref()
+            .is_some_and(|s| s.narrating_section.is_some());
+        let is_selection = self
+            .voice_mode_state
+            .as_ref()
+            .is_some_and(|s| s.narrating_selection);
+
+        if is_narrating && !is_selection {
+            // Full-section narration: send word index to the view which maps
+            // it to a rendered line, preserving markdown formatting.
+            let word_idx = self
+                .voice_mode_state
+                .as_ref()
+                .and_then(|s| s.tts_highlight_word_idx);
+            self.bottom_pane
+                .set_document_reader_reading_progress(word_idx, 0);
+        } else {
+            // Q&A or selection: build karaoke lines with word-level highlighting.
+            // Q&A appends after content; selection replaces content.
+            let width = self
+                .last_rendered_width
+                .get()
+                .map(|w| w.saturating_sub(8) as u16)
+                .unwrap_or(72);
+            let heading = String::new();
+            let lines = self.build_reading_view_karaoke_lines(width, &heading);
+            let append = !is_selection;
+            self.bottom_pane
+                .set_document_reader_karaoke_lines(lines, append);
+        }
+    }
+
     /// Called when ElevenLabs STT returns transcribed text.
     pub(crate) fn on_voice_transcription_complete(&mut self, text: String) {
         // Check phase and read auto_submit before borrowing self for other calls.
@@ -1525,12 +1793,15 @@ impl super::ChatWidget {
             state.tts_suppressed = false;
         }
 
+        let mut reading_view_question: Option<String> = None;
         if auto_submit {
             // Check if a reading view is active — if so, route through the
             // reading-view-aware voice path so the agent explains rather than
             // recites and writes a summary into the document.
             if let Some(rv_ctx) = self.bottom_pane.reading_view_voice_context() {
+                let question = text.clone();
                 self.submit_reading_view_voice_message(text, rv_ctx);
+                reading_view_question = Some(question);
             } else {
                 let mut msg = super::UserMessage::from(text);
                 msg.voice_input = true;
@@ -1541,6 +1812,17 @@ impl super::ChatWidget {
         }
 
         self.sync_voice_placeholder();
+        // Show the inline "You asked: ... • thinking..." indicator in the
+        // reading view — same style as text questions.
+        if let Some(question) = reading_view_question {
+            if let Some(ctx) = self.bottom_pane.reading_view_voice_context() {
+                self.bottom_pane
+                    .set_document_reader_pending_voice_question(
+                        ctx.section_index,
+                        question,
+                    );
+            }
+        }
         self.request_redraw();
     }
 
@@ -1570,21 +1852,26 @@ impl super::ChatWidget {
              The user is reading \"{title}\", section \"{heading}\". They asked:\n\
              {text}\n\
              {selection_hint}\n\
-             Speak your explanation conversationally. Reference what they see. \
-             Your entire response will be read aloud — do NOT use <voice> tags. \
-             Do NOT include LaTeX, code blocks, or markdown formatting in your spoken answer \
-             since this is a terminal that cannot render them. Use plain language instead \
+             Write your explanation as plain conversational prose. \
+             Your text response will be read aloud AND saved as a note, so write \
+             it exactly as you want it to sound and appear. \
+             Do NOT use <voice> tags — everything is narrated automatically. \
+             Do NOT include LaTeX, code blocks, or markdown formatting \
+             since this is a terminal TTS context. Use plain language instead \
              (e.g. say \"the attention equation\" instead of writing $\\text{{Attention}}(Q,K,V)$).\n\n\
-             Then write a concise summary using EXACTLY ONE tool call:\n\
+             After your spoken explanation, save it using EXACTLY ONE tool call:\n\
              append_to_section(document_id=\"{doc_id}\", section_index={idx}, \
-             content=\"your written summary\", foldable=true, \
+             content=\"<same text you just spoke>\", foldable=true, \
              summary=\"Descriptive topic label\")\n\n\
+             IMPORTANT: The content in append_to_section MUST be the same text you \
+             spoke above — do NOT write a separate summary. Copy your spoken \
+             response verbatim into the content field.\n\n\
              Rules:\n\
              - Do NOT use <voice> tags — everything is narrated automatically\n\
              - Make exactly ONE append_to_section call\n\
              - Set foldable=true always\n\
-             - Write prose, not Q:/A: format\n\
-             - No LaTeX, no code blocks in your spoken response\n\
+             - The content must match what you said (verbatim)\n\
+             - No LaTeX, no code blocks\n\
              - The summary should describe the topic (e.g. \"Dropout as regularization\", \
              \"Why gradients vanish\")\n\
              - Do NOT rewrite the section or make multiple tool calls",
@@ -1648,6 +1935,11 @@ impl super::ChatWidget {
         if state.phase == VoiceModePhase::Speaking {
             state.phase = VoiceModePhase::Idle;
         }
+        // Clear karaoke overlay and reading cursor in the reading view.
+        self.bottom_pane
+            .set_document_reader_karaoke_lines(None, false);
+        self.bottom_pane
+            .set_document_reader_reading_progress(None, 0);
         self.sync_voice_placeholder();
         self.request_redraw();
     }
@@ -1661,6 +1953,7 @@ impl super::ChatWidget {
         document_id: String,
         section_index: usize,
         raw_text: String,
+        selection: bool,
     ) {
         // Phase 1: check preconditions and interrupt (borrows state mutably).
         {
@@ -1680,37 +1973,48 @@ impl super::ChatWidget {
 
         let content_hash = hash_text(&cleaned);
 
-        // Phase 2: check cache (short lock, extract data, release borrow on self).
-        let cached_chunks: Option<Vec<Vec<i16>>> = self
-            .voice_mode_state
-            .as_ref()
-            .and_then(|state| {
-                state
-                    .tts_section_cache
-                    .lock()
-                    .ok()
-                    .and_then(|cache| {
-                        cache
-                            .get(&(document_id.clone(), section_index))
-                            .filter(|entry| entry.content_hash == content_hash)
-                            .map(|entry| entry.chunks.clone())
-                    })
-            });
+        // Phase 2: check cache — skip for selections (ad-hoc text, not worth caching).
+        if !selection {
+            let cached: Option<(Vec<Vec<i16>>, Vec<AlignmentEntry>)> = self
+                .voice_mode_state
+                .as_ref()
+                .and_then(|state| {
+                    state
+                        .tts_section_cache
+                        .lock()
+                        .ok()
+                        .and_then(|cache| {
+                            cache
+                                .get(&(document_id.clone(), section_index))
+                                .filter(|entry| entry.content_hash == content_hash)
+                                .map(|entry| {
+                                    (entry.chunks.clone(), entry.alignment_timeline.clone())
+                                })
+                        })
+                });
 
-        if let Some(chunks) = cached_chunks {
-            // Cache hit — play cached chunks directly.
-            if let Some(ref mut state) = self.voice_mode_state {
-                state.phase = VoiceModePhase::Speaking;
+            if let Some((chunks, cached_timeline)) = cached {
+                // Cache hit — play cached chunks and restore alignment for karaoke.
+                if let Some(ref mut state) = self.voice_mode_state {
+                    state.phase = VoiceModePhase::Speaking;
+                    state.narrating_section =
+                        Some((document_id, section_index, content_hash));
+                    state.narrating_selection = false;
+                    state.narrating_cleaned_text = Some(cleaned);
+                    state.tts_alignment_timeline = cached_timeline;
+                }
+                for chunk in chunks {
+                    self.on_voice_tts_audio_chunk(chunk, None);
+                }
+                // Start highlight tick so karaoke progresses during playback.
+                self.start_highlight_tick();
+                self.app_event_tx.send(AppEvent::VoiceModeTtsFinished);
+                self.sync_voice_placeholder();
+                return;
             }
-            for chunk in chunks {
-                self.on_voice_tts_audio_chunk(chunk, None);
-            }
-            self.app_event_tx.send(AppEvent::VoiceModeTtsFinished);
-            self.sync_voice_placeholder();
-            return;
         }
 
-        // Phase 3: cache miss — use persistent TTS worker (single WebSocket).
+        // Phase 3: cache miss (or selection) — use persistent TTS worker (single WebSocket).
         let Some(ref mut state) = self.voice_mode_state else {
             return;
         };
@@ -1718,7 +2022,11 @@ impl super::ChatWidget {
         tracing::debug!("Narrate section: cache miss, starting TTS worker for text ({} chars)", cleaned.len());
 
         // Track narration for chunk collection / caching.
+        // Selections set narrating_section for karaoke text tracking but skip
+        // cache storage in finalize_voice_turn.
         state.narrating_section = Some((document_id, section_index, content_hash));
+        state.narrating_selection = selection;
+        state.narrating_cleaned_text = Some(cleaned.clone());
         state.narrating_chunks.clear();
 
         let mut sentence_buf = SentenceBuffer::new();
@@ -1807,9 +2115,13 @@ impl super::ChatWidget {
 
         tokio::spawn(async move {
             let mut all_chunks = Vec::new();
+            let mut all_timeline = Vec::new();
             for sentence in &sentences {
                 match prefetch_sentence_tts(&vc, sentence).await {
-                    Ok(chunks) => all_chunks.extend(chunks),
+                    Ok((chunks, timeline)) => {
+                        all_chunks.extend(chunks);
+                        all_timeline.extend(timeline);
+                    }
                     Err(e) => {
                         tracing::error!("TTS prefetch error: {e}");
                         // Remove from pending on failure.
@@ -1820,9 +2132,13 @@ impl super::ChatWidget {
                     }
                 }
             }
-            // Write to cache.
+            // Write to cache with alignment for karaoke on replay.
             if let Ok(mut c) = cache.lock() {
-                c.insert(key.clone(), TtsCacheEntry { content_hash, chunks: all_chunks });
+                c.insert(key.clone(), TtsCacheEntry {
+                    content_hash,
+                    chunks: all_chunks,
+                    alignment_timeline: all_timeline,
+                });
             }
             // Remove from pending.
             if let Ok(mut p) = pending.lock() {
@@ -1830,6 +2146,13 @@ impl super::ChatWidget {
             }
         });
     }
+}
+
+/// Find the byte offset of the n-th whitespace-delimited word in `text`.
+fn find_nth_word_offset(text: &str, n: usize) -> Option<usize> {
+    text.split_whitespace()
+        .nth(n)
+        .map(|word| word.as_ptr() as usize - text.as_ptr() as usize)
 }
 
 /// Strip markdown formatting from text to make it suitable for TTS narration.
@@ -1985,17 +2308,17 @@ pub(crate) fn clean_for_tts(markdown: &str) -> String {
         out.push(ch);
     }
 
-    // Collapse multiple newlines into single newlines
+    // Collapse 3+ consecutive newlines to 2 (preserve paragraph breaks).
     let mut collapsed = String::with_capacity(out.len());
-    let mut prev_newline = false;
+    let mut consecutive_newlines = 0u32;
     for ch in out.chars() {
         if ch == '\n' {
-            if !prev_newline {
+            consecutive_newlines += 1;
+            if consecutive_newlines <= 2 {
                 collapsed.push('\n');
             }
-            prev_newline = true;
         } else {
-            prev_newline = false;
+            consecutive_newlines = 0;
             collapsed.push(ch);
         }
     }
@@ -2020,17 +2343,25 @@ pub(crate) fn clean_for_tts(markdown: &str) -> String {
 }
 
 /// Generate TTS for a sentence without sending audio events (for prefetching).
-/// Collects all PCM chunks and returns them (alignment is discarded for cache).
+/// Collects PCM chunks and alignment timeline entries.
 async fn prefetch_sentence_tts(
     voice_config: &codex_core::config::types::VoiceModeToml,
     sentence: &str,
-) -> Result<Vec<Vec<i16>>, codex_elevenlabs::ElevenLabsError> {
+) -> Result<(Vec<Vec<i16>>, Vec<AlignmentEntry>), codex_elevenlabs::ElevenLabsError> {
     let mut rx = start_tts_generation(voice_config, sentence)?;
     let mut chunks = Vec::new();
+    let mut timeline = Vec::new();
+    let mut pending_word: Option<AlignmentEntry> = None;
     while let Some(chunk) = rx.recv().await {
+        if let Some(ref align) = chunk.alignment {
+            build_alignment_entries(align, 0, &mut timeline, &mut pending_word);
+        }
         chunks.push(chunk.pcm);
     }
-    Ok(chunks)
+    if let Some(pw) = pending_word {
+        timeline.push(pw);
+    }
+    Ok((chunks, timeline))
 }
 
 /// Start TTS generation in a background task, returning a channel that
@@ -2239,11 +2570,17 @@ async fn tts_worker_loop(
 /// Build word-level `AlignmentEntry`s from a chunk's alignment data.
 ///
 /// Groups consecutive characters into words (splitting on whitespace),
-/// computes absolute times using `cumulative_ms`, and appends to `timeline`.
+/// using the alignment's absolute timestamps directly (ElevenLabs
+/// `sync_alignment` timestamps are session-absolute).
+///
+/// Words that span chunk boundaries are handled via `pending_word`: if the
+/// chunk ends mid-word the partial entry is stored there, and on the next
+/// call the continuation is merged in.
 fn build_alignment_entries(
     align: &codex_elevenlabs::TtsAlignment,
-    cumulative_ms: u64,
+    _cumulative_ms: u64,
     timeline: &mut Vec<AlignmentEntry>,
+    pending_word: &mut Option<AlignmentEntry>,
 ) {
     let n = align
         .chars
@@ -2258,18 +2595,34 @@ fn build_alignment_entries(
     let mut word_start_idx: Option<usize> = None;
     let mut word_end_idx: usize = 0;
     let mut word_chars: Vec<&str> = Vec::new();
+    let mut is_first_word = true;
 
     let flush_word =
         |start_idx: usize,
          end_idx: usize,
          chars: &mut Vec<&str>,
-         timeline: &mut Vec<AlignmentEntry>| {
-            let abs_start = cumulative_ms + align.char_start_times_ms[start_idx];
+         timeline: &mut Vec<AlignmentEntry>,
+         pending: &mut Option<AlignmentEntry>,
+         first: &mut bool| {
+            let abs_start = align.char_start_times_ms[start_idx];
             let last_start = align.char_start_times_ms[end_idx];
             let last_dur = align.char_durations_ms[end_idx];
-            let abs_end = cumulative_ms + last_start + last_dur;
+            let abs_end = last_start + last_dur;
             let word: String = chars.iter().copied().collect();
             chars.clear();
+
+            // If this is the first word in the chunk and there's a pending
+            // partial word from the previous chunk, merge them.
+            if *first {
+                *first = false;
+                if let Some(mut prev) = pending.take() {
+                    prev.word.push_str(&word);
+                    prev.duration_ms = abs_end.saturating_sub(prev.start_ms);
+                    timeline.push(prev);
+                    return;
+                }
+            }
+
             timeline.push(AlignmentEntry {
                 start_ms: abs_start,
                 duration_ms: abs_end.saturating_sub(abs_start),
@@ -2282,7 +2635,7 @@ fn build_alignment_entries(
         if ch.trim().is_empty() {
             // Whitespace: flush current word if any.
             if let Some(ws) = word_start_idx.take() {
-                flush_word(ws, word_end_idx, &mut word_chars, timeline);
+                flush_word(ws, word_end_idx, &mut word_chars, timeline, pending_word, &mut is_first_word);
             }
         } else {
             if word_start_idx.is_none() {
@@ -2292,9 +2645,44 @@ fn build_alignment_entries(
             word_chars.push(ch);
         }
     }
-    // Flush final word.
+
+    // Final partial word: might span into the next chunk.
+    // Check if the chunk ended mid-word (last char was not whitespace).
     if let Some(ws) = word_start_idx {
-        flush_word(ws, word_end_idx, &mut word_chars, timeline);
+        let last_char = align.chars.last().map(|s| s.as_str()).unwrap_or("");
+        let ends_mid_word = !last_char.trim().is_empty();
+
+        if ends_mid_word {
+            // Save as pending — might continue in the next chunk.
+            let abs_start = align.char_start_times_ms[ws];
+            let last_start = align.char_start_times_ms[word_end_idx];
+            let last_dur = align.char_durations_ms[word_end_idx];
+            let abs_end = last_start + last_dur;
+            let word: String = word_chars.iter().copied().collect();
+
+            // Merge with existing pending if this is the first (and only) word.
+            if is_first_word {
+                if let Some(prev) = pending_word.as_mut() {
+                    prev.word.push_str(&word);
+                    prev.duration_ms = abs_end.saturating_sub(prev.start_ms);
+                    return;
+                }
+            }
+
+            *pending_word = Some(AlignmentEntry {
+                start_ms: abs_start,
+                duration_ms: abs_end.saturating_sub(abs_start),
+                word,
+            });
+        } else {
+            // Chunk ends with whitespace after this word — flush it.
+            flush_word(ws, word_end_idx, &mut word_chars, timeline, pending_word, &mut is_first_word);
+        }
+    } else if is_first_word {
+        // Chunk was all whitespace but we have a pending word — flush it now.
+        if let Some(prev) = pending_word.take() {
+            timeline.push(prev);
+        }
     }
 }
 

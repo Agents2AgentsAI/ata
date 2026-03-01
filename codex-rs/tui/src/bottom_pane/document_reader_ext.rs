@@ -148,4 +148,45 @@ impl BottomPane {
             self.request_redraw();
         }
     }
+
+    /// Mark a section as pending a voice question answer (same inline
+    /// indicator as text questions).
+    pub(crate) fn set_document_reader_pending_voice_question(
+        &mut self,
+        section: usize,
+        question: String,
+    ) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.set_pending_voice_question(section, question);
+            self.request_redraw();
+        }
+    }
+
+    /// Push karaoke-highlighted lines into the active document reader's content area.
+    /// When `append` is true, lines are shown after the existing content (Q&A mode).
+    pub(crate) fn set_document_reader_karaoke_lines(
+        &mut self,
+        lines: Option<Vec<ratatui::text::Line<'static>>>,
+        append: bool,
+    ) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.set_voice_karaoke_lines(lines, append);
+            self.request_redraw();
+        }
+    }
+
+    /// Set the reading cursor in the active document reader by word index.
+    ///
+    /// During narration this highlights the rendered line containing the
+    /// given word, preserving full markdown formatting.
+    pub(crate) fn set_document_reader_reading_progress(
+        &mut self,
+        word_idx: Option<usize>,
+        heading_words_to_skip: usize,
+    ) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.set_voice_reading_progress(word_idx, heading_words_to_skip);
+            self.request_redraw();
+        }
+    }
 }
