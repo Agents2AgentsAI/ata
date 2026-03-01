@@ -303,6 +303,31 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
         }
     }
 
+    // Create an `ata` alias so that agent shell commands (e.g.
+    // `ata workspace list`) resolve to the same binary hosting this session,
+    // rather than a potentially stale install elsewhere on PATH.
+    {
+        let exe = std::env::current_exe()?;
+
+        #[cfg(unix)]
+        {
+            let link = path.join("ata");
+            symlink(&exe, &link)?;
+        }
+
+        #[cfg(windows)]
+        {
+            let batch_script = path.join("ata.bat");
+            std::fs::write(
+                &batch_script,
+                format!(
+                    "@echo off\n\"{}\" %*\n",
+                    exe.display()
+                ),
+            )?;
+        }
+    }
+
     #[cfg(unix)]
     const PATH_SEPARATOR: &str = ":";
 
