@@ -198,9 +198,27 @@ impl LspClient {
         ));
 
         // Run initialize handshake.
-        client.initialize_handshake().await?;
-
-        Ok(client)
+        match client.initialize_handshake().await {
+            Ok(()) => Ok(client),
+            Err(handshake_err) => {
+                // If the server process has already exited, this is likely a
+                // broken shim (e.g. rustup proxy without the component) rather
+                // than a legitimate handshake failure.  Convert to
+                // ProcessExitedImmediately so callers can attempt auto-install.
+                let mut guard = client.child.lock().await;
+                if let Some(ref mut child) = *guard {
+                    if let Ok(Some(exit_status)) = child.try_wait() {
+                        return Err(LspError::ProcessExitedImmediately {
+                            status: exit_status.to_string(),
+                            stderr: format!(
+                                "server exited during initialize handshake: {handshake_err}"
+                            ),
+                        });
+                    }
+                }
+                Err(handshake_err)
+            }
+        }
     }
 
     /// Initialize handshake: send `initialize`, wait for response, send `initialized`.
