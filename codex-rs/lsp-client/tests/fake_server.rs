@@ -95,6 +95,26 @@ def handle_request(msg):
                 }
             }
         })
+    elif method == 'workspace/symbol':
+        params = msg.get('params', {})
+        query = params.get('query', '')
+        send_message({
+            'jsonrpc': '2.0',
+            'id': req_id,
+            'result': [
+                {
+                    'name': f'{query}_symbol',
+                    'kind': 12,
+                    'location': {
+                        'uri': 'file:///test.rs',
+                        'range': {
+                            'start': {'line': 0, 'character': 0},
+                            'end': {'line': 0, 'character': 1}
+                        }
+                    }
+                }
+            ]
+        })
     else:
         # Unknown request — send empty result.
         send_message({
@@ -371,4 +391,27 @@ async fn did_change_on_second_sync() {
     );
 
     client.shutdown().await;
+}
+
+#[tokio::test]
+async fn workspace_symbol_autospawns_clients() {
+    let dir = TempDir::new().unwrap();
+    let script = write_fake_server(&dir);
+    let config = fake_config(&script);
+    let root = dir.path();
+
+    std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"test\"").unwrap();
+
+    let mut servers = HashMap::new();
+    servers.insert("fake".to_string(), config);
+    let registry = Arc::new(ServerRegistry::new(servers, root.to_path_buf(), None));
+
+    let symbols = registry.workspace_symbol("hello").await;
+    assert!(
+        symbols.iter().any(|s| s.name == "hello_symbol"),
+        "expected 'hello_symbol' from workspace/symbol response, got: {symbols:?}",
+        symbols = symbols
+    );
+
+    registry.shutdown_all().await;
 }

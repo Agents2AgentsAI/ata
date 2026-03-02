@@ -92,10 +92,6 @@ use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::request_user_input::RequestUserInputArgs;
-#[cfg(feature = "lsp")]
-use codex_protocol::request_user_input::RequestUserInputQuestion;
-#[cfg(feature = "lsp")]
-use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::skill_approval::SkillApprovalResponse;
 use codex_rmcp_client::ElicitationResponse;
@@ -1697,53 +1693,99 @@ impl Session {
                             return false;
                         };
 
-                        const LSP_INSTALL_QID: &str = "lsp_install";
-                        const INSTALL_OPTION: &str = "Install";
+                        // Run the install through unified_exec so it can request
+                        // escalated sandbox permissions and reuse the standard
+                        // command approval UX (single prompt).
+                        let process_id = sess
+                            .services
+                            .unified_exec_manager
+                            .allocate_process_id()
+                            .await;
 
-                        let cmd_display = command.join(" ");
-                        let args = RequestUserInputArgs {
-                            questions: vec![RequestUserInputQuestion {
-                                id: LSP_INSTALL_QID.to_string(),
-                                header: "Install LSP server?".to_string(),
-                                question: format!("{prompt}\nCommand: `{cmd_display}`"),
-                                is_other: false,
-                                is_secret: false,
-                                options: Some(vec![
-                                    RequestUserInputQuestionOption {
-                                        label: INSTALL_OPTION.to_string(),
-                                        description:
-                                            "Install now and continue this LSP operation."
-                                                .to_string(),
-                                    },
-                                    RequestUserInputQuestionOption {
-                                        label: "Skip".to_string(),
-                                        description:
-                                            "Skip install and continue without this server."
-                                                .to_string(),
-                                    },
-                                ]),
-                            }],
-                        };
-
-                        let call_id = format!("lsp-install-{}", Uuid::new_v4());
-                        let response_fut = sess.request_user_input(&turn_context, call_id, args);
-                        let response = tokio::select! {
-                            _ = cancellation_token.cancelled() => {
-                                let empty = RequestUserInputResponse { answers: HashMap::new() };
-                                sess.notify_user_input_response(&turn_context.sub_id, empty.clone()).await;
-                                Some(empty)
+                        // Offer a stable "approve once" choice for install commands.
+                        // Keep this conservative to avoid over-broad allowlisting.
+                        let prefix_rule: Option<Vec<String>> = match command.as_slice() {
+                            [a, b, c, ..] if a == "npm" && b == "install" && c == "-g" => {
+                                Some(vec![a.clone(), b.clone(), c.clone()])
                             }
-                            response = response_fut => response,
+                            [a, b, ..] => Some(vec![a.clone(), b.clone()]),
+                            [a] => Some(vec![a.clone()]),
+                            [] => None,
                         };
 
-                        response
-                            .and_then(|r| r.answers.get(LSP_INSTALL_QID).cloned())
-                            .is_some_and(|answer| {
-                                answer
-                                    .answers
-                                    .iter()
-                                    .any(|entry| entry == INSTALL_OPTION)
-                            })
+                        let justification = Some(format!(
+                            "{prompt}\nCommand: `{}`",
+                            command.join(" ")
+                        ));
+
+                        let context = crate::unified_exec::UnifiedExecContext::new(
+                            Arc::clone(&sess),
+                            Arc::clone(&turn_context),
+                            format!("lsp-install-{}", Uuid::new_v4()),
+                        );
+
+                        let mut response = tokio::select! {
+                            _ = cancellation_token.cancelled() => {
+                                sess.services.unified_exec_manager.release_process_id(&process_id).await;
+                                return false;
+                            }
+                            result = sess.services.unified_exec_manager.exec_command(
+                                crate::unified_exec::ExecCommandRequest {
+                                    command: command.clone(),
+                                    process_id: process_id.clone(),
+                                    yield_time_ms: 10_000,
+                                    max_output_tokens: None,
+                                    workdir: None,
+                                    network: None,
+                                    tty: false,
+                                    sandbox_permissions: crate::sandboxing::SandboxPermissions::RequireEscalated,
+                                    additional_permissions: None,
+                                    justification,
+                                    prefix_rule,
+                                },
+                                &context,
+                            ) => match result {
+                                Ok(resp) => resp,
+                                Err(err) => {
+                                    tracing::warn!("LSP auto-install failed to start: {err:?}");
+                                    return false;
+                                }
+                            }
+                        };
+
+                        // If the install is long-running, poll for completion.
+                        let deadline = tokio::time::Instant::now()
+                            + std::time::Duration::from_secs(10 * 60);
+                        while response.exit_code.is_none() && response.process_id.is_some() {
+                            if tokio::time::Instant::now() >= deadline {
+                                tracing::warn!("LSP auto-install timed out");
+                                break;
+                            }
+                            let poll = tokio::select! {
+                                _ = cancellation_token.cancelled() => break,
+                                poll = sess.services.unified_exec_manager.write_stdin(
+                                    crate::unified_exec::WriteStdinRequest {
+                                        process_id: process_id.as_str(),
+                                        input: "",
+                                        yield_time_ms: 10_000,
+                                        max_output_tokens: None,
+                                    }
+                                ) => poll
+                            };
+                            match poll {
+                                Ok(r) => response = r,
+                                Err(err) => {
+                                    tracing::warn!("LSP auto-install polling failed: {err:?}");
+                                    break;
+                                }
+                            }
+                        }
+
+                        // If the process exited during polling, the unified exec manager
+                        // will have removed it from the store; release_process_id is a no-op.
+                        sess.services.unified_exec_manager.release_process_id(&process_id).await;
+
+                        response.exit_code == Some(0)
                     })
                 },
             )))

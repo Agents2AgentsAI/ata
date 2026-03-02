@@ -36,4 +36,7 @@ pub enum LspError {
 
     #[error("spawn failed: {0}")]
     SpawnFailed(String),
+
+    #[error("server process exited immediately (status={status}): {stderr}")]
+    ProcessExitedImmediately { status: String, stderr: String },
 }
