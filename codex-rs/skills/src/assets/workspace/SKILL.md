@@ -54,6 +54,9 @@ Required: `git`. The `ata` binary is already in PATH.
 | `ata workspace remove-entry --collection <type> --id X [--workspace ID]` | Remove by ID from collection |
 | `ata workspace set-field --path <dotted.path> --value '<json>' [--workspace ID]` | Set manifest field at dotted path |
 | `ata workspace index-update-status --id X --status Y [--workspace ID]` | Update index status |
+| **`ata workspace materialize <spec-path> [--workspace ID] [--dry-run]`** | **Materialize workspace from a spec file** |
+| `ata workspace export-spec [--workspace ID] [--output PATH]` | Export workspace repos as a portable spec file |
+| `ata workspace diff-spec <spec-path> [--workspace ID]` | Show what materialize would do (add/pin/skip) |
 | `ata workspace recipe <operation>` | Print step-by-step recipe for an operation |
 | `ata workspace recipe list` | List all available recipes |
 

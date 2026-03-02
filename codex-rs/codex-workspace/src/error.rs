@@ -96,6 +96,12 @@ pub enum WorkspaceError {
     #[error("unknown recipe '{0}'")]
     UnknownRecipe(String),
 
+    #[error("spec file not found: {0}")]
+    SpecNotFound(PathBuf),
+
+    #[error("invalid spec: {0}")]
+    InvalidSpec(String),
+
     #[error("invalid JSON: {0}")]
     InvalidJson(String),
 

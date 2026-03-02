@@ -15,6 +15,8 @@ pub fn get_recipe(name: &str) -> Option<&'static str> {
         "export" => Some(RECIPE_EXPORT),
         "import" => Some(RECIPE_IMPORT),
         "index_build" => Some(RECIPE_INDEX_BUILD),
+        "materialize" => Some(RECIPE_MATERIALIZE),
+        "export_spec" => Some(RECIPE_EXPORT_SPEC),
         _ => None,
     }
 }
@@ -23,9 +25,11 @@ pub fn get_recipe(name: &str) -> Option<&'static str> {
 pub fn list_recipes() -> Vec<&'static str> {
     let mut names = vec![
         "export",
+        "export_spec",
         "import",
         "index_build",
         "link_add",
+        "materialize",
         "repo_pin",
         "repo_remove",
         "repo_unpin",
@@ -192,4 +196,33 @@ ata workspace add-entry --collection indexes \
   --workspace "$WID"
 # ... run external indexing tool, then mark ready:
 ata workspace index-update-status --id "$INDEX_ID" --status ready --workspace "$WID"
+"#;
+
+const RECIPE_MATERIALIZE: &str = r#"# Materialize workspace from a spec file
+SPEC_PATH="<path_to_workspace-spec.json>"
+
+# Preview what would change:
+ata workspace diff-spec "$SPEC_PATH" --workspace "$WID"
+
+# Materialize (create/update workspace from spec):
+ata workspace materialize "$SPEC_PATH" --workspace "$WID"
+
+# Or dry-run first:
+ata workspace materialize "$SPEC_PATH" --workspace "$WID" --dry-run
+
+# Or create a new workspace from the spec (omit --workspace):
+ata workspace materialize "$SPEC_PATH"
+"#;
+
+const RECIPE_EXPORT_SPEC: &str = r#"# Export workspace to a portable spec file
+# Print to stdout:
+ata workspace export-spec --workspace "$WID"
+
+# Write to file:
+ata workspace export-spec --workspace "$WID" --output workspace-spec.json
+
+# Round-trip: export → materialize into new workspace
+ata workspace export-spec --workspace "$WID" --output /tmp/spec.json
+NEW_WID=$(ata workspace init "imported-workspace")
+ata workspace materialize /tmp/spec.json --workspace "$NEW_WID"
 "#;

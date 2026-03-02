@@ -8,6 +8,7 @@ pub mod paths;
 pub mod recipes;
 pub mod resolve;
 pub mod selection;
+pub mod spec;
 pub mod types;
 pub mod url_validation;
 pub mod workspace_id;
@@ -280,6 +281,37 @@ pub enum Command {
         /// Operation name or 'list'.
         operation: String,
     },
+
+    /// Materialize a workspace from a spec file.
+    Materialize {
+        /// Path to workspace-spec.json.
+        spec_path: String,
+        /// Workspace ID (default: create new from spec name, or resolved).
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Show what would change without executing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Export current workspace repos as a workspace spec file.
+    ExportSpec {
+        /// Workspace ID (default: resolved).
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Output file path (prints to stdout if omitted).
+        #[arg(long)]
+        output: Option<String>,
+    },
+
+    /// Show what materialize would do (repos to add/pin/skip).
+    DiffSpec {
+        /// Path to workspace-spec.json.
+        spec_path: String,
+        /// Workspace ID (default: resolved).
+        #[arg(long)]
+        workspace: Option<String>,
+    },
 }
 
 /// Run the workspace CLI and print output to stdout/stderr.
@@ -500,7 +532,60 @@ fn dispatch(cli: Cli) -> Result<(), WorkspaceError> {
             let text = commands::recipe::run(&operation)?;
             print!("{text}");
         }
+
+        Command::Materialize {
+            spec_path,
+            workspace,
+            dry_run,
+        } => {
+            let wid = resolve_workspace_or_create_from_spec(workspace.as_deref(), &spec_path)?;
+            let result =
+                commands::materialize::run(&wid, std::path::Path::new(&spec_path), dry_run)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+
+        Command::ExportSpec { workspace, output } => {
+            let wid = workspace_resolution::resolve_workspace(workspace.as_deref());
+            let json =
+                commands::export_spec::run(&wid, output.as_deref().map(std::path::Path::new))?;
+            println!("{json}");
+        }
+
+        Command::DiffSpec {
+            spec_path,
+            workspace,
+        } => {
+            let wid = workspace_resolution::resolve_workspace(workspace.as_deref());
+            let diff = commands::diff_spec::run(&wid, std::path::Path::new(&spec_path))?;
+            print!("{diff}");
+        }
     }
 
     Ok(())
+}
+
+/// Resolve workspace for materialize: use explicit ID, resolved workspace,
+/// or create a new one from the spec name.
+fn resolve_workspace_or_create_from_spec(
+    explicit: Option<&str>,
+    spec_path: &str,
+) -> Result<String, WorkspaceError> {
+    // If explicit workspace given, use it
+    if let Some(wid) = explicit {
+        return Ok(wid.to_string());
+    }
+
+    // Try normal resolution (project pin, session, global)
+    let resolved = workspace_resolution::resolve_workspace(None);
+
+    // If we resolved to something other than "global", use it
+    if resolved != "global" {
+        return Ok(resolved);
+    }
+
+    // Create a new workspace from the spec name
+    let spec = spec::read_spec(std::path::Path::new(spec_path))?;
+    let wid = commands::init::run(&spec.name)?;
+    eprintln!("created workspace: {wid}");
+    Ok(wid)
 }
