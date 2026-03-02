@@ -90,3 +90,85 @@ echo "Imported as: $NEW_WID"
 ```
 
 **Important:** Never auto-commit imported repos. Only commit if the user explicitly requests it.
+
+## Workspace Spec (Portable Configuration)
+
+A **workspace spec** (`workspace-spec.json`) is a portable, human-readable, Git-friendly file that declares the desired contents of a workspace. Unlike snapshots (which are internal state) and export bundles (which are opaque archives), a spec is designed to be checked into a pipeline/project repo and reviewed in PRs.
+
+### Spec Format
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "name": "3d-recon-pipeline",
+  "repos": [
+    {
+      "url": "https://github.com/colmap/colmap.git",
+      "alias": "colmap",
+      "sha": "abc123...",           // optional: pin to exact SHA
+      "ref": "main",               // optional: branch/tag (used if no sha)
+      "full": false,               // optional: override clone policy
+      "role": "sfm"                // optional: stored in extra
+    }
+  ],
+  "policies": { ... },             // optional: override default clone policy
+  "labels": { ... }                // optional: workspace labels
+}
+```
+
+### Export Spec
+
+Export the current workspace state as a portable spec:
+
+```bash
+# Print to stdout
+ata workspace export-spec --workspace "$WID"
+
+# Write to file
+ata workspace export-spec --workspace "$WID" --output workspace-spec.json
+```
+
+### Diff Spec
+
+Preview what materializing a spec would do:
+
+```bash
+ata workspace diff-spec workspace-spec.json --workspace "$WID"
+# Output: lists repos to add, pin, or skip
+```
+
+### Materialize Spec
+
+Create or update a workspace from a spec file:
+
+```bash
+# Into existing workspace
+ata workspace materialize workspace-spec.json --workspace "$WID"
+
+# Create new workspace from spec (auto-names from spec.name)
+ata workspace materialize workspace-spec.json
+
+# Dry run — show plan without executing
+ata workspace materialize workspace-spec.json --workspace "$WID" --dry-run
+```
+
+Materialize logic per repo:
+- **Not in workspace** → clone + pin (if sha specified) + apply extra fields
+- **In workspace, SHA differs** → re-pin + apply extra fields
+- **In workspace, matches** → skip (still applies extra field changes)
+
+Also applies spec-level `policies`, `labels`, and records `specSource` provenance.
+
+### Round-Trip
+
+```bash
+# Export from workspace A
+ata workspace export-spec --workspace "$WID_A" --output spec.json
+
+# Materialize into workspace B
+ata workspace materialize spec.json --workspace "$WID_B"
+
+# Verify no drift
+ata workspace diff-spec spec.json --workspace "$WID_B"
+# → "No changes needed."
+```
