@@ -871,6 +871,23 @@ impl SandboxPolicy {
                                 );
                             }
                         }
+
+                        // Allow workspace operations to read/write workspace
+                        // manifests and repo/run paths under CODEX_HOME.
+                        let workspaces_dir = codex_home.join("workspaces");
+                        let _ = std::fs::create_dir_all(&workspaces_dir);
+                        match AbsolutePathBuf::from_absolute_path(&workspaces_dir) {
+                            Ok(workspaces_path) => {
+                                if !roots.iter().any(|r| r == &workspaces_path) {
+                                    roots.push(workspaces_path);
+                                }
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Ignoring workspaces dir {workspaces_dir:?} for sandbox writable root: {e}",
+                                );
+                            }
+                        }
                     }
 
                     // Allow writing the session-scoped workspace selection

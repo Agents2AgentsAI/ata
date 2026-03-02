@@ -17,7 +17,8 @@ pub const CODEX_SESSION_ID_ENV_VAR: &str = "CODEX_SESSION_ID";
 /// for [`ShellEnvironmentPolicy`].
 ///
 /// `CODEX_THREAD_ID` and `CODEX_SESSION_ID` are injected when a thread id is
-/// provided, even when `include_only` is set.
+/// provided, even when `include_only` is set. If `CODEX_SESSION_ID` is
+/// explicitly provided in policy overrides, that value is preserved.
 pub fn create_env(
     policy: &ShellEnvironmentPolicy,
     thread_id: Option<ThreadId>,
@@ -86,11 +87,21 @@ where
         env_map.retain(|k, _| matches_any(k, &policy.include_only));
     }
 
+    let inherited_session_id = policy
+        .r#set
+        .get(CODEX_SESSION_ID_ENV_VAR)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
     // Step 6 – Populate compatibility IDs when a thread id is provided.
     if let Some(thread_id) = thread_id {
         let thread_id = thread_id.to_string();
+        let session_id = inherited_session_id
+            .unwrap_or(thread_id.as_str())
+            .to_string();
         env_map.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.clone());
-        env_map.insert(CODEX_SESSION_ID_ENV_VAR.to_string(), thread_id);
+        env_map.insert(CODEX_SESSION_ID_ENV_VAR.to_string(), session_id);
     }
 
     env_map
@@ -202,6 +213,61 @@ mod tests {
         };
         expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
         expected.insert(CODEX_SESSION_ID_ENV_VAR.to_string(), thread_id.to_string());
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn populate_env_preserves_explicit_session_id_from_policy_set() {
+        let vars = make_vars(&[("PATH", "/usr/bin")]);
+        let mut policy = ShellEnvironmentPolicy {
+            ignore_default_excludes: true,
+            ..Default::default()
+        };
+        policy.r#set.insert(
+            CODEX_SESSION_ID_ENV_VAR.to_string(),
+            "parent-session".to_string(),
+        );
+
+        let thread_id = ThreadId::new();
+        let result = populate_env(vars, &policy, Some(thread_id));
+
+        let mut expected: HashMap<String, String> = hashmap! {
+            "PATH".to_string() => "/usr/bin".to_string(),
+        };
+        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+        expected.insert(
+            CODEX_SESSION_ID_ENV_VAR.to_string(),
+            "parent-session".to_string(),
+        );
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn populate_env_preserves_session_id_with_include_only_filter() {
+        let vars = make_vars(&[("PATH", "/usr/bin"), ("FOO", "bar")]);
+        let mut policy = ShellEnvironmentPolicy {
+            ignore_default_excludes: true,
+            include_only: vec![EnvironmentVariablePattern::new_case_insensitive("*PATH")],
+            ..Default::default()
+        };
+        policy.r#set.insert(
+            CODEX_SESSION_ID_ENV_VAR.to_string(),
+            "parent-session".to_string(),
+        );
+
+        let thread_id = ThreadId::new();
+        let result = populate_env(vars, &policy, Some(thread_id));
+
+        let mut expected: HashMap<String, String> = hashmap! {
+            "PATH".to_string() => "/usr/bin".to_string(),
+        };
+        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+        expected.insert(
+            CODEX_SESSION_ID_ENV_VAR.to_string(),
+            "parent-session".to_string(),
+        );
 
         assert_eq!(result, expected);
     }
