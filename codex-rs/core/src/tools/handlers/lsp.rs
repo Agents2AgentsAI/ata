@@ -1,10 +1,21 @@
 //! LSP tool handler exposing 9 code intelligence operations to the agent.
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use codex_lsp_client::ServerRegistry;
+use codex_lsp_client::lsp_types::CallHierarchyItem;
+use codex_lsp_client::lsp_types::DocumentSymbol;
+use codex_lsp_client::lsp_types::DocumentSymbolResponse;
+use codex_lsp_client::lsp_types::GotoDefinitionResponse;
+use codex_lsp_client::lsp_types::Hover;
+use codex_lsp_client::lsp_types::HoverContents;
+use codex_lsp_client::lsp_types::Location;
+use codex_lsp_client::lsp_types::MarkedString;
+use codex_lsp_client::lsp_types::SymbolInformation;
+use codex_lsp_client::lsp_types::request::GotoImplementationResponse;
 use codex_protocol::models::FunctionCallOutputBody;
 use serde::Deserialize;
 
@@ -13,13 +24,16 @@ use crate::client_common::tools::ToolSpec;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
-use crate::tools::context::ToolPayload;
+use crate::tools::handlers::function_arguments_from_payload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::spec::JsonSchema;
 
 const LSP_TOOL_DESCRIPTION: &str = include_str!("tool_lsp.txt");
+const DEFAULT_LIMIT: usize = 20;
+const MAX_RESULTS: usize = 50;
+const MAX_RESULT_BYTES: usize = 8 * 1024;
 
 /// Handler for the `lsp` tool.
 pub struct LspToolHandler {
@@ -28,7 +42,7 @@ pub struct LspToolHandler {
 
 #[derive(Deserialize)]
 struct LspToolArgs {
-    operation: String,
+    operation: LspOperation,
     #[serde(default)]
     file: Option<String>,
     #[serde(default)]
@@ -37,9 +51,25 @@ struct LspToolArgs {
     character: Option<u32>,
     #[serde(default)]
     query: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
     /// Serialized CallHierarchyItem for incoming/outgoing calls.
     #[serde(default)]
     item: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum LspOperation {
+    GoToDefinition,
+    FindReferences,
+    Hover,
+    DocumentSymbol,
+    WorkspaceSymbol,
+    GoToImplementation,
+    PrepareCallHierarchy,
+    IncomingCalls,
+    OutgoingCalls,
 }
 
 #[async_trait]
@@ -55,93 +85,112 @@ impl ToolHandler for LspToolHandler {
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
         let ToolInvocation { payload, .. } = invocation;
 
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "lsp handler received unsupported payload".to_string(),
-                ));
-            }
-        };
-
+        let arguments = function_arguments_from_payload(payload, "lsp")?;
         let args: LspToolArgs = parse_arguments(&arguments)?;
+        let limit = args.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_RESULTS);
 
-        let result = match args.operation.as_str() {
-            "goToDefinition" => {
+        let result = match args.operation {
+            LspOperation::GoToDefinition => {
                 let (path, line, char) = extract_position(&args)?;
+                self.sync_file_for_query(&path).await?;
                 let resp = self.registry.definition(&path, line, char).await;
                 format_definition(resp)
             }
-            "findReferences" => {
+            LspOperation::FindReferences => {
                 let (path, line, char) = extract_position(&args)?;
+                self.sync_file_for_query(&path).await?;
                 let refs = self.registry.references(&path, line, char).await;
-                format_references(&refs)
+                format_references(&refs, limit)
             }
-            "hover" => {
+            LspOperation::Hover => {
                 let (path, line, char) = extract_position(&args)?;
+                self.sync_file_for_query(&path).await?;
                 let hover = self.registry.hover(&path, line, char).await;
                 format_hover(hover)
             }
-            "documentSymbol" => {
+            LspOperation::DocumentSymbol => {
                 let path = extract_file(&args)?;
+                self.sync_file_for_query(&path).await?;
                 let resp = self.registry.document_symbol(&path).await;
                 format_document_symbols(resp)
             }
-            "workspaceSymbol" => {
+            LspOperation::WorkspaceSymbol => {
                 let query = args.query.as_deref().unwrap_or("");
                 let symbols = self.registry.workspace_symbol(query).await;
-                format_workspace_symbols(&symbols)
+                format_workspace_symbols(&symbols, limit)
             }
-            "goToImplementation" => {
+            LspOperation::GoToImplementation => {
                 let (path, line, char) = extract_position(&args)?;
+                self.sync_file_for_query(&path).await?;
                 let resp = self.registry.implementation(&path, line, char).await;
                 format_implementation(resp)
             }
-            "prepareCallHierarchy" => {
+            LspOperation::PrepareCallHierarchy => {
                 let (path, line, char) = extract_position(&args)?;
+                self.sync_file_for_query(&path).await?;
                 let items = self
                     .registry
                     .prepare_call_hierarchy(&path, line, char)
                     .await;
-                serde_json::to_string_pretty(&items).unwrap_or_else(|_| "[]".to_string())
+                serde_json::to_string_pretty(&items.into_iter().take(limit).collect::<Vec<_>>())
+                    .unwrap_or_else(|_| "[]".to_string())
             }
-            "incomingCalls" => {
+            LspOperation::IncomingCalls => {
                 let item_val = args.item.ok_or_else(|| {
                     FunctionCallError::RespondToModel(
                         "incomingCalls requires `item` from prepareCallHierarchy".to_string(),
                     )
                 })?;
-                let item: codex_lsp_client::lsp_types::CallHierarchyItem =
-                    serde_json::from_value(item_val).map_err(|e| {
-                        FunctionCallError::RespondToModel(format!("invalid item: {e}"))
-                    })?;
+                let item: CallHierarchyItem = serde_json::from_value(item_val)
+                    .map_err(|e| FunctionCallError::RespondToModel(format!("invalid item: {e}")))?;
                 let calls = self.registry.incoming_calls(item).await;
-                serde_json::to_string_pretty(&calls).unwrap_or_else(|_| "[]".to_string())
+                serde_json::to_string_pretty(&calls.into_iter().take(limit).collect::<Vec<_>>())
+                    .unwrap_or_else(|_| "[]".to_string())
             }
-            "outgoingCalls" => {
+            LspOperation::OutgoingCalls => {
                 let item_val = args.item.ok_or_else(|| {
                     FunctionCallError::RespondToModel(
                         "outgoingCalls requires `item` from prepareCallHierarchy".to_string(),
                     )
                 })?;
-                let item: codex_lsp_client::lsp_types::CallHierarchyItem =
-                    serde_json::from_value(item_val).map_err(|e| {
-                        FunctionCallError::RespondToModel(format!("invalid item: {e}"))
-                    })?;
+                let item: CallHierarchyItem = serde_json::from_value(item_val)
+                    .map_err(|e| FunctionCallError::RespondToModel(format!("invalid item: {e}")))?;
                 let calls = self.registry.outgoing_calls(item).await;
-                serde_json::to_string_pretty(&calls).unwrap_or_else(|_| "[]".to_string())
-            }
-            other => {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "unknown LSP operation: {other}. Valid operations: goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls"
-                )));
+                serde_json::to_string_pretty(&calls.into_iter().take(limit).collect::<Vec<_>>())
+                    .unwrap_or_else(|_| "[]".to_string())
             }
         };
 
         Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(result),
+            body: FunctionCallOutputBody::Text(truncate_output(&result)),
             success: Some(true),
         })
+    }
+}
+
+impl LspToolHandler {
+    async fn sync_file_for_query(&self, path: &Path) -> Result<(), FunctionCallError> {
+        if !path.exists() {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "file not found: {}",
+                path.display()
+            )));
+        }
+        if !path.is_file() {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "path is not a file: {}",
+                path.display()
+            )));
+        }
+        if !self.registry.has_servers_for(path) {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "no LSP server configured for {}",
+                path.display()
+            )));
+        }
+
+        let _ = self.registry.touch_file(path, false).await;
+        Ok(())
     }
 }
 
@@ -184,13 +233,11 @@ fn extract_position(args: &LspToolArgs) -> Result<(PathBuf, u32, u32), FunctionC
 // Formatting helpers
 // ---------------------------------------------------------------------------
 
-fn format_definition(resp: Option<codex_lsp_client::lsp_types::GotoDefinitionResponse>) -> String {
+fn format_definition(resp: Option<GotoDefinitionResponse>) -> String {
     match resp {
         None => "No definition found.".to_string(),
-        Some(codex_lsp_client::lsp_types::GotoDefinitionResponse::Scalar(loc)) => {
-            format_location(&loc)
-        }
-        Some(codex_lsp_client::lsp_types::GotoDefinitionResponse::Array(locs)) => {
+        Some(GotoDefinitionResponse::Scalar(loc)) => format_location(&loc),
+        Some(GotoDefinitionResponse::Array(locs)) => {
             if locs.is_empty() {
                 "No definition found.".to_string()
             } else {
@@ -200,7 +247,7 @@ fn format_definition(resp: Option<codex_lsp_client::lsp_types::GotoDefinitionRes
                     .join("\n")
             }
         }
-        Some(codex_lsp_client::lsp_types::GotoDefinitionResponse::Link(links)) => {
+        Some(GotoDefinitionResponse::Link(links)) => {
             if links.is_empty() {
                 "No definition found.".to_string()
             } else {
@@ -221,25 +268,24 @@ fn format_definition(resp: Option<codex_lsp_client::lsp_types::GotoDefinitionRes
     }
 }
 
-fn format_implementation(
-    resp: Option<codex_lsp_client::lsp_types::request::GotoImplementationResponse>,
-) -> String {
+fn format_implementation(resp: Option<GotoImplementationResponse>) -> String {
     // GotoImplementationResponse is a type alias for GotoDefinitionResponse.
     format_definition(resp)
 }
 
-fn format_references(refs: &[codex_lsp_client::lsp_types::Location]) -> String {
+fn format_references(refs: &[Location], limit: usize) -> String {
     if refs.is_empty() {
         "No references found.".to_string()
     } else {
         refs.iter()
+            .take(limit)
             .map(format_location)
             .collect::<Vec<_>>()
             .join("\n")
     }
 }
 
-fn format_location(loc: &codex_lsp_client::lsp_types::Location) -> String {
+fn format_location(loc: &Location) -> String {
     format!(
         "{}:{}:{}",
         loc.uri.as_str(),
@@ -248,38 +294,34 @@ fn format_location(loc: &codex_lsp_client::lsp_types::Location) -> String {
     )
 }
 
-fn format_hover(hover: Option<codex_lsp_client::lsp_types::Hover>) -> String {
+fn format_hover(hover: Option<Hover>) -> String {
     match hover {
         None => "No hover information available.".to_string(),
         Some(h) => match h.contents {
-            codex_lsp_client::lsp_types::HoverContents::Scalar(content) => {
-                format_markup_content(content)
-            }
-            codex_lsp_client::lsp_types::HoverContents::Array(contents) => contents
+            HoverContents::Scalar(content) => format_markup_content(content),
+            HoverContents::Array(contents) => contents
                 .into_iter()
                 .map(format_markup_content)
                 .collect::<Vec<_>>()
                 .join("\n---\n"),
-            codex_lsp_client::lsp_types::HoverContents::Markup(markup) => markup.value,
+            HoverContents::Markup(markup) => markup.value,
         },
     }
 }
 
-fn format_markup_content(content: codex_lsp_client::lsp_types::MarkedString) -> String {
+fn format_markup_content(content: MarkedString) -> String {
     match content {
-        codex_lsp_client::lsp_types::MarkedString::String(s) => s,
-        codex_lsp_client::lsp_types::MarkedString::LanguageString(ls) => {
+        MarkedString::String(s) => s,
+        MarkedString::LanguageString(ls) => {
             format!("```{}\n{}\n```", ls.language, ls.value)
         }
     }
 }
 
-fn format_document_symbols(
-    resp: Option<codex_lsp_client::lsp_types::DocumentSymbolResponse>,
-) -> String {
+fn format_document_symbols(resp: Option<DocumentSymbolResponse>) -> String {
     match resp {
         None => "No symbols found.".to_string(),
-        Some(codex_lsp_client::lsp_types::DocumentSymbolResponse::Flat(symbols)) => {
+        Some(DocumentSymbolResponse::Flat(symbols)) => {
             if symbols.is_empty() {
                 return "No symbols found.".to_string();
             }
@@ -298,7 +340,7 @@ fn format_document_symbols(
                 .collect::<Vec<_>>()
                 .join("\n")
         }
-        Some(codex_lsp_client::lsp_types::DocumentSymbolResponse::Nested(symbols)) => {
+        Some(DocumentSymbolResponse::Nested(symbols)) => {
             if symbols.is_empty() {
                 return "No symbols found.".to_string();
             }
@@ -309,11 +351,7 @@ fn format_document_symbols(
     }
 }
 
-fn format_nested_symbols(
-    symbols: &[codex_lsp_client::lsp_types::DocumentSymbol],
-    depth: usize,
-    out: &mut Vec<String>,
-) {
+fn format_nested_symbols(symbols: &[DocumentSymbol], depth: usize, out: &mut Vec<String>) {
     let indent = "  ".repeat(depth);
     for s in symbols {
         out.push(format!(
@@ -330,13 +368,13 @@ fn format_nested_symbols(
 }
 
 #[allow(deprecated)]
-fn format_workspace_symbols(symbols: &[codex_lsp_client::lsp_types::SymbolInformation]) -> String {
+fn format_workspace_symbols(symbols: &[SymbolInformation], limit: usize) -> String {
     if symbols.is_empty() {
         return "No symbols found.".to_string();
     }
     symbols
         .iter()
-        .take(10) // Limit to 10 results.
+        .take(limit)
         .map(|s| {
             format!(
                 "{:?} {} @ {}:{}:{}",
@@ -349,6 +387,29 @@ fn format_workspace_symbols(symbols: &[codex_lsp_client::lsp_types::SymbolInform
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn truncate_output(output: &str) -> String {
+    if output.len() <= MAX_RESULT_BYTES {
+        return output.to_string();
+    }
+
+    let mut byte_cut = 0usize;
+    for (idx, ch) in output.char_indices() {
+        let end = idx + ch.len_utf8();
+        if end > MAX_RESULT_BYTES {
+            break;
+        }
+        byte_cut = end;
+    }
+
+    if byte_cut == 0 {
+        return "... truncated".to_string();
+    }
+
+    let prefix = &output[..byte_cut];
+    let cut = prefix.rfind('\n').unwrap_or(byte_cut);
+    format!("{}\n\n... truncated", &output[..cut])
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +452,12 @@ pub(crate) fn create_lsp_tool() -> ToolSpec {
         "query".to_string(),
         JsonSchema::String {
             description: Some("Search query for workspaceSymbol operation".to_string()),
+        },
+    );
+    properties.insert(
+        "limit".to_string(),
+        JsonSchema::Number {
+            description: Some("Result limit (default 20, max 50).".to_string()),
         },
     );
     properties.insert(

@@ -6,10 +6,12 @@ use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::RwLock;
 
 use lsp_types::request::GotoImplementationResponse;
 use lsp_types::*;
 use tokio::sync::Mutex;
+use tokio::task::JoinSet;
 use tracing;
 
 use crate::client::LspClient;
@@ -39,7 +41,7 @@ pub struct ServerRegistry {
     /// Workspace root directory.
     workspace_root: PathBuf,
     /// Optional install confirmation callback.
-    install_confirm: Option<InstallConfirmFn>,
+    install_confirm: RwLock<Option<InstallConfirmFn>>,
 }
 
 impl std::fmt::Debug for ServerRegistry {
@@ -64,8 +66,22 @@ impl ServerRegistry {
             broken: Mutex::new(HashSet::new()),
             spawning: Mutex::new(HashMap::new()),
             workspace_root,
-            install_confirm,
+            install_confirm: RwLock::new(install_confirm),
         }
+    }
+
+    /// Set or clear the install confirmation callback used for auto-install.
+    pub fn set_install_confirm(&self, callback: Option<InstallConfirmFn>) {
+        if let Ok(mut guard) = self.install_confirm.write() {
+            *guard = callback;
+        }
+    }
+
+    /// Returns true when at least one configured server can handle this file.
+    pub fn has_servers_for(&self, file: &Path) -> bool {
+        self.servers
+            .values()
+            .any(|config| !config.disabled && config.matches_path(file))
     }
 
     /// Get or spawn all applicable clients for a given file.
@@ -194,7 +210,8 @@ impl ServerRegistry {
         let cmd = install_config.method.install_command(binary);
 
         // Ask user for confirmation if callback is set.
-        if let Some(confirm) = &self.install_confirm {
+        let confirm = self.install_confirm.read().ok().and_then(|g| g.clone());
+        if let Some(confirm) = confirm {
             let approved = confirm(
                 &format!("Install {server_id} via `{}`?", cmd.join(" ")),
                 &cmd,
@@ -301,9 +318,23 @@ impl ServerRegistry {
 
     pub async fn references(&self, path: &Path, line: u32, character: u32) -> Vec<Location> {
         let clients = self.get_clients(path).await;
-        let mut all = Vec::new();
+        if clients.is_empty() {
+            return Vec::new();
+        }
+
+        let path = path.to_path_buf();
+        let mut tasks = JoinSet::new();
         for (_, client) in clients {
-            all.extend(client.references(path, line, character).await);
+            let path = path.clone();
+            tasks.spawn(async move { client.references(&path, line, character).await });
+        }
+
+        let mut all = Vec::new();
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(mut refs) => all.append(&mut refs),
+                Err(e) => tracing::debug!("references query task failed: {e}"),
+            }
         }
         all
     }
@@ -319,10 +350,27 @@ impl ServerRegistry {
     }
 
     pub async fn workspace_symbol(&self, query: &str) -> Vec<SymbolInformation> {
-        let clients_map = self.clients.lock().await;
+        let clients: Vec<Arc<LspClient>> = {
+            let clients_map = self.clients.lock().await;
+            clients_map.values().cloned().collect()
+        };
+
+        if clients.is_empty() {
+            return Vec::new();
+        }
+
+        let mut tasks = JoinSet::new();
+        for client in clients {
+            let query = query.to_string();
+            tasks.spawn(async move { client.workspace_symbol(&query).await });
+        }
+
         let mut all = Vec::new();
-        for client in clients_map.values() {
-            all.extend(client.workspace_symbol(query).await);
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(mut symbols) => all.append(&mut symbols),
+                Err(e) => tracing::debug!("workspace_symbol query task failed: {e}"),
+            }
         }
         all
     }
@@ -349,9 +397,23 @@ impl ServerRegistry {
         character: u32,
     ) -> Vec<CallHierarchyItem> {
         let clients = self.get_clients(path).await;
-        let mut all = Vec::new();
+        if clients.is_empty() {
+            return Vec::new();
+        }
+
+        let path = path.to_path_buf();
+        let mut tasks = JoinSet::new();
         for (_, client) in clients {
-            all.extend(client.prepare_call_hierarchy(path, line, character).await);
+            let path = path.clone();
+            tasks.spawn(async move { client.prepare_call_hierarchy(&path, line, character).await });
+        }
+
+        let mut all = Vec::new();
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(mut items) => all.append(&mut items),
+                Err(e) => tracing::debug!("prepare_call_hierarchy query task failed: {e}"),
+            }
         }
         all
     }
@@ -363,9 +425,22 @@ impl ServerRegistry {
             None => return Vec::new(),
         };
         let clients = self.get_clients(&path).await;
-        let mut all = Vec::new();
+        if clients.is_empty() {
+            return Vec::new();
+        }
+
+        let mut tasks = JoinSet::new();
         for (_, client) in clients {
-            all.extend(client.incoming_calls(item.clone()).await);
+            let item = item.clone();
+            tasks.spawn(async move { client.incoming_calls(item).await });
+        }
+
+        let mut all = Vec::new();
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(mut calls) => all.append(&mut calls),
+                Err(e) => tracing::debug!("incoming_calls query task failed: {e}"),
+            }
         }
         all
     }
@@ -376,9 +451,22 @@ impl ServerRegistry {
             None => return Vec::new(),
         };
         let clients = self.get_clients(&path).await;
-        let mut all = Vec::new();
+        if clients.is_empty() {
+            return Vec::new();
+        }
+
+        let mut tasks = JoinSet::new();
         for (_, client) in clients {
-            all.extend(client.outgoing_calls(item.clone()).await);
+            let item = item.clone();
+            tasks.spawn(async move { client.outgoing_calls(item).await });
+        }
+
+        let mut all = Vec::new();
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(mut calls) => all.append(&mut calls),
+                Err(e) => tracing::debug!("outgoing_calls query task failed: {e}"),
+            }
         }
         all
     }

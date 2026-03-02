@@ -74,6 +74,18 @@ where
     })
 }
 
+pub(super) fn function_arguments_from_payload(
+    payload: crate::tools::context::ToolPayload,
+    handler_name: &str,
+) -> Result<String, FunctionCallError> {
+    match payload {
+        crate::tools::context::ToolPayload::Function { arguments } => Ok(arguments),
+        _ => Err(FunctionCallError::RespondToModel(format!(
+            "{handler_name} handler received unsupported payload"
+        ))),
+    }
+}
+
 /// Validates feature/policy constraints for `with_additional_permissions` and
 /// returns normalized absolute paths. Errors if paths are invalid.
 pub(super) fn normalize_and_validate_additional_permissions(
