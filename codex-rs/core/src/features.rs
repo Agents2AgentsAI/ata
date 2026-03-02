@@ -172,6 +172,8 @@ pub enum Feature {
     ResearchKnowledgeBase,
     /// Enable cross-session agent coordination channel.
     Coordination,
+    /// Enable the background job scheduler for running skills on cron/event triggers.
+    Scheduler,
 }
 
 impl Feature {
@@ -834,6 +836,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Coordination,
         key: "coordination",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Scheduler,
+        key: "scheduler",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

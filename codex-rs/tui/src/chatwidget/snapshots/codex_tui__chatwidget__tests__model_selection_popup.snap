@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 6000
 expression: popup
 ---
   Select Model and Effort
@@ -12,10 +13,5 @@ expression: popup
                               knowledge, reasoning and coding
   4. gpt-5.1-codex-mini       Optimized for codex. Cheaper, faster, but less
                               capable.
-  5. claude-sonnet-4-6        Anthropic's balanced model for coding tasks.
-  6. claude-opus-4-6          Anthropic's most capable model for complex
-                              reasoning.
-  7. gemini-3-pro-preview     Google's advanced model for complex tasks.
-  8. gemini-3.1-pro-preview   Google's advanced model for complex tasks.
 
   Press enter to select reasoning effort, or esc to dismiss.
