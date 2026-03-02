@@ -18,6 +18,7 @@ pub use content::GrepScope;
 pub use content::PeekResult;
 pub use error::TreeSitterError;
 pub use file_entry::FileEntry;
+pub use file_entry::FileMark;
 pub use file_entry::Language;
 pub use file_tree::FileTree;
 pub use ops::CallerInfo;

@@ -7,6 +7,7 @@ use crate::content::PeekResult;
 use crate::content::{self};
 use crate::error::TreeSitterError;
 use crate::file_entry::FileEntry;
+use crate::file_entry::FileMark;
 use crate::file_tree::FileTree;
 use crate::ops::CallerInfo;
 use crate::ops::TestInfo;
@@ -116,6 +117,30 @@ impl ProjectIndex {
 
     pub fn implementation(&self, symbol: &str, rel_file: &str) -> Result<String, String> {
         ops::get_implementation(&self.root, &self.symbol_table, symbol, rel_file)
+    }
+
+    pub fn define_symbol(
+        &self,
+        symbol: &str,
+        rel_file: &str,
+        definition: &str,
+        overwrite: bool,
+    ) -> Result<(), String> {
+        self.symbol_table
+            .set_definition(rel_file, symbol, definition, overwrite)
+    }
+
+    pub fn define_file(
+        &self,
+        rel_file: &str,
+        definition: &str,
+        overwrite: bool,
+    ) -> Result<(), String> {
+        self.file_tree.define_file(rel_file, definition, overwrite)
+    }
+
+    pub fn mark_file(&self, rel_file: &str, mark: FileMark) -> Result<(), String> {
+        self.file_tree.mark_file(rel_file, mark)
     }
 
     pub fn structure(&self, depth: usize) -> String {
