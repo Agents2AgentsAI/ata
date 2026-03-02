@@ -76,12 +76,9 @@ pub(crate) struct ToolsConfig {
     pub agent_jobs_worker_tools: bool,
     /// Per-category research feature flags for filtering research tools.
     pub features: Features,
-    /// LSP server registry for code intelligence (feature-gated).
-    #[cfg(feature = "lsp")]
-    pub lsp_registry: Option<Arc<codex_lsp_client::ServerRegistry>>,
-    /// Tree-sitter project index for structural code intelligence (feature-gated).
-    #[cfg(feature = "treesitter")]
-    pub treesitter_index: Option<Arc<codex_treesitter::ProjectIndex>>,
+    /// Unified code intelligence state (feature-gated).
+    #[cfg(any(feature = "lsp", feature = "treesitter"))]
+    pub multi_root_state: Option<Arc<crate::state::MultiRootState>>,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -166,10 +163,8 @@ impl ToolsConfig {
             agent_jobs_tools: include_agent_jobs,
             agent_jobs_worker_tools,
             features: (*features).clone(),
-            #[cfg(feature = "lsp")]
-            lsp_registry: None,
-            #[cfg(feature = "treesitter")]
-            treesitter_index: None,
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
         }
     }
 
@@ -2063,11 +2058,13 @@ pub(crate) fn build_specs_with_toolkits(
 
     #[cfg(feature = "lsp")]
     if config.features.enabled(Feature::Lsp) {
-        if let Some(lsp_registry) = &config.lsp_registry {
+        if let Some(multi_root_state) = &config.multi_root_state
+            && multi_root_state.has_lsp()
+        {
             use crate::tools::handlers::lsp::LspToolHandler;
             use crate::tools::handlers::lsp::create_lsp_tool;
             let lsp_handler = Arc::new(LspToolHandler {
-                registry: Arc::clone(lsp_registry),
+                state: Arc::clone(multi_root_state),
             });
             builder.push_spec_with_parallel_support(create_lsp_tool(), true);
             builder.register_handler("lsp", lsp_handler);
@@ -2076,11 +2073,13 @@ pub(crate) fn build_specs_with_toolkits(
 
     #[cfg(feature = "treesitter")]
     if config.features.enabled(Feature::TreeSitter) {
-        if let Some(treesitter_index) = &config.treesitter_index {
+        if let Some(multi_root_state) = &config.multi_root_state
+            && multi_root_state.has_treesitter()
+        {
             use crate::tools::handlers::code_intel::CodeIntelToolHandler;
             use crate::tools::handlers::code_intel::create_code_intel_tool;
             let code_intel_handler = Arc::new(CodeIntelToolHandler {
-                index: Arc::clone(treesitter_index),
+                state: Arc::clone(multi_root_state),
             });
             builder.push_spec_with_parallel_support(create_code_intel_tool(), true);
             builder.register_handler("code_intel", code_intel_handler);

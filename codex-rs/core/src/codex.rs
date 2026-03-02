@@ -237,6 +237,51 @@ fn build_lsp_server_configs(
 
     codex_lsp_client::merge_configs(builtins, overrides)
 }
+
+#[cfg(feature = "treesitter")]
+fn build_treesitter_index_config(config: &Config) -> Option<codex_treesitter::ProjectIndexConfig> {
+    use crate::config::types::TreeSitterConfig;
+    use crate::config::types::TreeSitterConfigMap;
+
+    let treesitter_config = config
+        .config_layer_stack
+        .effective_config()
+        .get("treesitter")
+        .cloned()
+        .and_then(|value| value.try_into::<TreeSitterConfig>().ok());
+
+    let config_map = match treesitter_config {
+        Some(TreeSitterConfig::Disabled(false)) => return None,
+        Some(TreeSitterConfig::Config(map)) => map,
+        _ => TreeSitterConfigMap::default(),
+    };
+
+    let disabled_languages = config_map
+        .disabled_languages
+        .iter()
+        .filter_map(|language_name| {
+            let language = codex_treesitter::Language::from_name(language_name);
+            if language.is_none() {
+                tracing::warn!(
+                    "ignoring unknown treesitter disabled language '{}'",
+                    language_name
+                );
+            }
+            language
+        })
+        .collect::<Vec<_>>();
+
+    Some(
+        codex_treesitter::ProjectIndexConfig {
+            max_file_size: config_map.max_file_size,
+            ignore_patterns: config_map.ignore_patterns.clone(),
+            watch: config_map.watch,
+            persist_annotations: config_map.persist_annotations,
+            ..codex_treesitter::ProjectIndexConfig::default()
+        }
+        .with_disabled_languages(disabled_languages),
+    )
+}
 use crate::data::SharedDataToolkit;
 
 mod file_attachments;
@@ -324,6 +369,8 @@ use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::tool_kind_for_path;
 use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+use crate::state::MultiRootState;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state_db;
@@ -1479,39 +1526,51 @@ impl Session {
                 (None, None)
             };
 
-        // Initialize LSP feedback if the feature is enabled.
-        #[cfg(feature = "lsp")]
-        let lsp_feedback = if config.features.enabled(Feature::Lsp) {
-            use crate::tools::lsp_feedback::LspFeedback;
-            let servers = build_lsp_server_configs(config.as_ref());
-            let registry = Arc::new(codex_lsp_client::ServerRegistry::new(
-                servers,
-                session_configuration.cwd.clone(),
-                None,
-            ));
-            Some(Arc::new(LspFeedback::new(registry)))
-        } else {
-            None
-        };
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        let multi_root_state = {
+            #[cfg(feature = "lsp")]
+            let lsp_server_configs = if config.features.enabled(Feature::Lsp) {
+                Some(build_lsp_server_configs(config.as_ref()))
+            } else {
+                None
+            };
+            #[cfg(feature = "treesitter")]
+            let treesitter_config = if config.features.enabled(Feature::TreeSitter) {
+                build_treesitter_index_config(config.as_ref())
+            } else {
+                None
+            };
 
-        #[cfg(feature = "treesitter")]
-        let treesitter_index = if config.features.enabled(Feature::TreeSitter) {
-            let root = session_configuration.cwd.clone();
-            match tokio::task::spawn_blocking(move || codex_treesitter::ProjectIndex::new(root))
+            #[cfg(feature = "lsp")]
+            let lsp_enabled = lsp_server_configs
+                .as_ref()
+                .is_some_and(|configs| !configs.is_empty());
+            #[cfg(not(feature = "lsp"))]
+            let lsp_enabled = false;
+            #[cfg(feature = "treesitter")]
+            let treesitter_enabled = treesitter_config.is_some();
+            #[cfg(not(feature = "treesitter"))]
+            let treesitter_enabled = false;
+
+            if lsp_enabled || treesitter_enabled {
+                match MultiRootState::new(
+                    session_configuration.cwd.clone(),
+                    #[cfg(feature = "lsp")]
+                    lsp_server_configs,
+                    #[cfg(feature = "treesitter")]
+                    treesitter_config,
+                )
                 .await
-            {
-                Ok(Ok(index)) => Some(Arc::new(index)),
-                Ok(Err(error)) => {
-                    tracing::warn!("failed to initialize tree-sitter index: {error}");
-                    None
+                {
+                    Ok(state) => Some(Arc::new(state)),
+                    Err(error) => {
+                        tracing::warn!("failed to initialize multi-root state: {error}");
+                        None
+                    }
                 }
-                Err(error) => {
-                    tracing::warn!("tree-sitter initialization task failed: {error}");
-                    None
-                }
+            } else {
+                None
             }
-        } else {
-            None
         };
 
         let services = SessionServices {
@@ -1571,10 +1630,8 @@ impl Session {
                 config.codex_home.clone(),
                 config.cli_auth_credentials_store_mode,
             ),
-            #[cfg(feature = "lsp")]
-            lsp_feedback,
-            #[cfg(feature = "treesitter")]
-            treesitter_index,
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state,
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
@@ -1597,9 +1654,12 @@ impl Session {
         });
 
         #[cfg(feature = "lsp")]
-        if let Some(ref fb) = sess.services.lsp_feedback {
+        if let Some(ref multi_root_state) = sess.services.multi_root_state
+            && multi_root_state.has_lsp()
+        {
             let weak_sess = Arc::downgrade(&sess);
-            fb.registry.set_install_confirm(Some(Arc::new(
+            multi_root_state
+                .set_install_confirm(Some(Arc::new(
                 move |prompt: &str, command: &[String]| {
                     let weak_sess = weak_sess.clone();
                     let prompt = prompt.to_string();
@@ -1667,7 +1727,8 @@ impl Session {
                             })
                     })
                 },
-            )));
+            )))
+                .await;
         }
 
         if let Some(network_policy_decider_session) = network_policy_decider_session {
@@ -4823,9 +4884,9 @@ mod handlers {
             .unified_exec_manager
             .terminate_all_processes()
             .await;
-        #[cfg(feature = "lsp")]
-        if let Some(ref lsp_feedback) = sess.services.lsp_feedback {
-            lsp_feedback.registry.shutdown_all().await;
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        if let Some(ref multi_root_state) = sess.services.multi_root_state {
+            multi_root_state.shutdown_all().await;
         }
         info!("Shutting down Codex instance");
         let history = sess.clone_history().await;
@@ -6144,16 +6205,12 @@ async fn built_tools(
             connectors::filter_codex_apps_tools_by_policy(selected_mcp_tools, &turn_context.config);
     }
 
-    // Clone tools_config and inject session-scoped LSP registry if available.
+    // Clone tools_config and inject unified multi-root code intelligence state if available.
     #[allow(unused_mut)]
     let mut tools_config = turn_context.tools_config.clone();
-    #[cfg(feature = "lsp")]
-    if let Some(ref fb) = sess.services.lsp_feedback {
-        tools_config.lsp_registry = Some(Arc::clone(&fb.registry));
-    }
-    #[cfg(feature = "treesitter")]
-    if let Some(ref index) = sess.services.treesitter_index {
-        tools_config.treesitter_index = Some(Arc::clone(index));
+    #[cfg(any(feature = "lsp", feature = "treesitter"))]
+    if let Some(ref multi_root_state) = sess.services.multi_root_state {
+        tools_config.multi_root_state = Some(Arc::clone(multi_root_state));
     }
 
     Ok(Arc::new(ToolRouter::from_config_with_toolkits(
@@ -9009,10 +9066,8 @@ mod tests {
                 config.codex_home.clone(),
                 config.cli_auth_credentials_store_mode,
             ),
-            #[cfg(feature = "lsp")]
-            lsp_feedback: None,
-            #[cfg(feature = "treesitter")]
-            treesitter_index: None,
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
@@ -9179,10 +9234,8 @@ mod tests {
                 config.codex_home.clone(),
                 config.cli_auth_credentials_store_mode,
             ),
-            #[cfg(feature = "lsp")]
-            lsp_feedback: None,
-            #[cfg(feature = "treesitter")]
-            treesitter_index: None,
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),

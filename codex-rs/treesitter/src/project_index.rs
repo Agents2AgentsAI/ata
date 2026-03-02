@@ -1,6 +1,10 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use ignore::gitignore::Gitignore;
+use ignore::gitignore::GitignoreBuilder;
+
+use crate::config::ProjectIndexConfig;
 use crate::content::GrepResult;
 use crate::content::GrepScope;
 use crate::content::PeekResult;
@@ -18,23 +22,34 @@ use crate::symbol::Symbol;
 use crate::symbol_table::SymbolTable;
 use crate::walker;
 
-#[derive(Debug)]
 pub struct ProjectIndex {
     root: PathBuf,
+    config: ProjectIndexConfig,
+    extra_ignores: Option<Gitignore>,
     file_tree: FileTree,
     symbol_table: SymbolTable,
 }
 
 impl ProjectIndex {
     pub fn new(root: PathBuf) -> Result<Self, TreeSitterError> {
+        Self::new_with_config(root, ProjectIndexConfig::default())
+    }
+
+    pub fn new_with_config(
+        root: PathBuf,
+        config: ProjectIndexConfig,
+    ) -> Result<Self, TreeSitterError> {
+        let extra_ignores = build_extra_ignores(&root, &config.ignore_patterns)?;
         let file_tree = FileTree::new();
         let symbol_table = SymbolTable::new();
 
-        walker::scan_directory(&root, &file_tree)?;
-        parser::extract_all_symbols(&root, &file_tree, &symbol_table)?;
+        walker::scan_directory_with_config(&root, &file_tree, &config, extra_ignores.as_ref())?;
+        parser::extract_all_symbols(&root, &file_tree, &symbol_table, &config)?;
 
         Ok(Self {
             root,
+            config,
+            extra_ignores,
             file_tree,
             symbol_table,
         })
@@ -46,6 +61,10 @@ impl ProjectIndex {
 
     pub fn file_tree(&self) -> &FileTree {
         &self.file_tree
+    }
+
+    pub fn config(&self) -> &ProjectIndexConfig {
+        &self.config
     }
 
     pub fn symbol_table(&self) -> &SymbolTable {
@@ -66,10 +85,29 @@ impl ProjectIndex {
 
         if path.is_file() {
             let metadata = path.metadata()?;
+            let language = crate::file_entry::Language::from_path(path);
+
+            if metadata.len() > self.config.max_file_size
+                || !self.config.is_language_enabled(language)
+                || self
+                    .extra_ignores
+                    .as_ref()
+                    .is_some_and(|ignores| ignores.matched(path, false).is_ignore())
+            {
+                self.file_tree.remove(&rel_path);
+                self.symbol_table.remove_file(&rel_path);
+                return Ok(());
+            }
+
             self.file_tree
                 .insert(FileEntry::new(rel_path.clone(), metadata.len()));
-            let language = crate::file_entry::Language::from_path(path);
-            parser::reindex_file(&self.root, &self.symbol_table, &rel_path, language)?;
+            parser::reindex_file(
+                &self.root,
+                &self.symbol_table,
+                &rel_path,
+                language,
+                &self.config,
+            )?;
         } else {
             self.file_tree.remove(&rel_path);
             self.symbol_table.remove_file(&rel_path);
@@ -178,4 +216,34 @@ impl ProjectIndex {
             context_lines,
         )
     }
+}
+
+impl std::fmt::Debug for ProjectIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProjectIndex")
+            .field("root", &self.root)
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
+}
+
+fn build_extra_ignores(
+    root: &Path,
+    patterns: &[String],
+) -> Result<Option<Gitignore>, TreeSitterError> {
+    if patterns.is_empty() {
+        return Ok(None);
+    }
+
+    let mut builder = GitignoreBuilder::new(root);
+    for pattern in patterns {
+        builder
+            .add_line(None, pattern)
+            .map_err(|error| TreeSitterError::InvalidIgnorePattern(error.to_string()))?;
+    }
+
+    builder
+        .build()
+        .map(Some)
+        .map_err(|error| TreeSitterError::InvalidIgnorePattern(error.to_string()))
 }

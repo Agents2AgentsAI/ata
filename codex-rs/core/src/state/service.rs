@@ -61,10 +61,7 @@ pub(crate) struct SessionServices {
     pub(crate) state_db: Option<StateDbHandle>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
-    /// LSP diagnostic feedback (feature-gated).
-    #[cfg(feature = "lsp")]
-    pub(crate) lsp_feedback: Option<Arc<crate::tools::lsp_feedback::LspFeedback>>,
-    /// Tree-sitter project index (feature-gated).
-    #[cfg(feature = "treesitter")]
-    pub(crate) treesitter_index: Option<Arc<codex_treesitter::ProjectIndex>>,
+    /// Unified code intelligence state across root(s).
+    #[cfg(any(feature = "lsp", feature = "treesitter"))]
+    pub(crate) multi_root_state: Option<Arc<crate::state::MultiRootState>>,
 }

@@ -1523,6 +1523,63 @@
       },
       "type": "object"
     },
+    "TreeSitterConfig": {
+      "anyOf": [
+        {
+          "description": "`treesitter = false` disables TreeSitter indexing.",
+          "type": "boolean"
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TreeSitterConfigMap"
+            }
+          ],
+          "description": "Detailed TreeSitter configuration map."
+        }
+      ],
+      "description": "Top-level TreeSitter configuration: either a simple boolean (disabled) or a configuration map."
+    },
+    "TreeSitterConfigMap": {
+      "additionalProperties": false,
+      "description": "TreeSitter index behavior in config.toml.",
+      "properties": {
+        "disabled_languages": {
+          "default": [],
+          "description": "Language names to disable (e.g. \"rust\", \"python\", \"typescript\").",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ignore_patterns": {
+          "default": [],
+          "description": "Extra ignore globs relative to the root.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "max_file_size": {
+          "default": 1048576,
+          "description": "Maximum file size for indexing (bytes).",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "persist_annotations": {
+          "default": true,
+          "description": "Reserved for future annotation persistence support.",
+          "type": "boolean"
+        },
+        "watch": {
+          "default": true,
+          "description": "Reserved for future file watching support.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "TrustLevel": {
       "description": "Represents the trust level for a project directory. This determines the approval policy and sandbox mode applied.",
       "enum": [
@@ -2314,6 +2371,15 @@
         }
       ],
       "description": "Nested tools section for feature toggles"
+    },
+    "treesitter": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/TreeSitterConfig"
+        }
+      ],
+      "default": null,
+      "description": "TreeSitter indexing configuration."
     },
     "tui": {
       "allOf": [

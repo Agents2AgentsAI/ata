@@ -20,5 +20,10 @@ Supported operations:
 - defineSymbol: Add a human definition to a symbol.
 - defineFile: Add a human definition to a file.
 - markFile: Mark a file as test/docs/config/generated/entryPoint or any custom tag.
+- addRoot: Register a new root (`root` + `path`).
+- removeRoot: Unregister a root (`root`).
+- listRoots: List all roots with feature status.
+
+All operations accept optional `root` for scoping; when omitted, search-style operations fan out across roots.
 
 Use the `lsp` tool when semantic precision is required (type-aware definitions, references, hover).

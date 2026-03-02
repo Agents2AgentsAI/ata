@@ -1199,3 +1199,59 @@ pub enum LspServerConfigToml {
         disabled: bool,
     },
 }
+
+// ---------------------------------------------------------------------------
+// TreeSitter Configuration
+// ---------------------------------------------------------------------------
+
+/// Top-level TreeSitter configuration: either a simple boolean (disabled) or a
+/// configuration map.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[serde(untagged)]
+pub enum TreeSitterConfig {
+    /// `treesitter = false` disables TreeSitter indexing.
+    Disabled(bool),
+    /// Detailed TreeSitter configuration map.
+    Config(TreeSitterConfigMap),
+}
+
+/// TreeSitter index behavior in config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TreeSitterConfigMap {
+    /// Maximum file size for indexing (bytes).
+    #[serde(default = "default_treesitter_max_file_size")]
+    pub max_file_size: u64,
+    /// Extra ignore globs relative to the root.
+    #[serde(default)]
+    pub ignore_patterns: Vec<String>,
+    /// Language names to disable (e.g. "rust", "python", "typescript").
+    #[serde(default)]
+    pub disabled_languages: Vec<String>,
+    /// Reserved for future file watching support.
+    #[serde(default = "default_treesitter_true")]
+    pub watch: bool,
+    /// Reserved for future annotation persistence support.
+    #[serde(default = "default_treesitter_true")]
+    pub persist_annotations: bool,
+}
+
+impl Default for TreeSitterConfigMap {
+    fn default() -> Self {
+        Self {
+            max_file_size: default_treesitter_max_file_size(),
+            ignore_patterns: Vec::new(),
+            disabled_languages: Vec::new(),
+            watch: default_treesitter_true(),
+            persist_annotations: default_treesitter_true(),
+        }
+    }
+}
+
+pub const fn default_treesitter_max_file_size() -> u64 {
+    1_048_576
+}
+
+const fn default_treesitter_true() -> bool {
+    true
+}

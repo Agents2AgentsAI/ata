@@ -74,6 +74,7 @@ where
     })
 }
 
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
 pub(super) fn function_arguments_from_payload(
     payload: crate::tools::context::ToolPayload,
     handler_name: &str,
@@ -84,6 +85,21 @@ pub(super) fn function_arguments_from_payload(
             "{handler_name} handler received unsupported payload"
         ))),
     }
+}
+
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+pub(super) fn truncate_tool_output(output: &str, max_bytes: usize) -> String {
+    if output.len() <= max_bytes {
+        return output.to_string();
+    }
+
+    let prefix = codex_utils_string::take_bytes_at_char_boundary(output, max_bytes);
+    if prefix.is_empty() {
+        return "... truncated".to_string();
+    }
+
+    let cut = prefix.rfind('\n').unwrap_or(prefix.len());
+    format!("{}\n\n... truncated", &prefix[..cut])
 }
 
 /// Validates feature/policy constraints for `with_additional_permissions` and

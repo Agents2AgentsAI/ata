@@ -1,12 +1,13 @@
 use std::path::Path;
 
 use ignore::WalkBuilder;
+use ignore::gitignore::Gitignore;
 
+use crate::config::ProjectIndexConfig;
 use crate::error::TreeSitterError;
 use crate::file_entry::FileEntry;
+use crate::file_entry::Language;
 use crate::file_tree::FileTree;
-
-const DEFAULT_MAX_FILE_SIZE_BYTES: u64 = 1_000_000;
 
 const IGNORED_DIR_NAMES: &[&str] = &[
     ".git",
@@ -21,13 +22,26 @@ const IGNORED_DIR_NAMES: &[&str] = &[
 ];
 
 pub fn scan_directory(root: &Path, file_tree: &FileTree) -> Result<usize, TreeSitterError> {
-    scan_directory_with_limit(root, file_tree, DEFAULT_MAX_FILE_SIZE_BYTES)
+    scan_directory_with_config(root, file_tree, &ProjectIndexConfig::default(), None)
 }
 
 pub fn scan_directory_with_limit(
     root: &Path,
     file_tree: &FileTree,
     max_file_size: u64,
+) -> Result<usize, TreeSitterError> {
+    let config = ProjectIndexConfig {
+        max_file_size,
+        ..ProjectIndexConfig::default()
+    };
+    scan_directory_with_config(root, file_tree, &config, None)
+}
+
+pub fn scan_directory_with_config(
+    root: &Path,
+    file_tree: &FileTree,
+    config: &ProjectIndexConfig,
+    extra_ignores: Option<&Gitignore>,
 ) -> Result<usize, TreeSitterError> {
     let walker = WalkBuilder::new(root)
         .hidden(true)
@@ -53,13 +67,24 @@ pub fn scan_directory_with_limit(
             continue;
         }
 
+        let language = Language::from_path(path);
+        if !config.is_language_enabled(language) {
+            continue;
+        }
+
+        if let Some(ignores) = extra_ignores
+            && ignores.matched(path, false).is_ignore()
+        {
+            continue;
+        }
+
         let metadata = match entry.metadata() {
             Ok(metadata) => metadata,
             Err(_) => continue,
         };
 
         let size = metadata.len();
-        if size > max_file_size {
+        if size > config.max_file_size {
             continue;
         }
 

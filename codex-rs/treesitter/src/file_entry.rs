@@ -16,6 +16,20 @@ pub enum Language {
 }
 
 impl Language {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "rust" => Some(Self::Rust),
+            "python" => Some(Self::Python),
+            "typescript" | "ts" => Some(Self::TypeScript),
+            "javascript" | "js" => Some(Self::JavaScript),
+            "go" | "golang" => Some(Self::Go),
+            "java" => Some(Self::Java),
+            "scala" => Some(Self::Scala),
+            "other" => Some(Self::Other),
+            _ => None,
+        }
+    }
+
     pub fn from_extension(ext: &str) -> Self {
         match ext.to_lowercase().as_str() {
             "rs" => Self::Rust,
