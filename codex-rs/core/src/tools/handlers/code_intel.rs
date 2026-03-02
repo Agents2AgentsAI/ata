@@ -14,7 +14,7 @@ use crate::client_common::tools::ToolSpec;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
-use crate::tools::context::ToolPayload;
+use crate::tools::handlers::function_arguments_from_payload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -31,7 +31,7 @@ pub struct CodeIntelToolHandler {
 
 #[derive(Debug, Deserialize)]
 struct CodeIntelToolArgs {
-    operation: String,
+    operation: CodeIntelOperation,
     #[serde(default)]
     symbol: Option<String>,
     #[serde(default)]
@@ -54,6 +54,22 @@ struct CodeIntelToolArgs {
     scope: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum CodeIntelOperation {
+    SymbolSearch,
+    Callers,
+    Tests,
+    Variables,
+    Implementation,
+    Structure,
+    Peek,
+    Grep,
+    DefineSymbol,
+    DefineFile,
+    MarkFile,
+}
+
 #[async_trait]
 impl ToolHandler for CodeIntelToolHandler {
     fn kind(&self) -> ToolKind {
@@ -67,25 +83,18 @@ impl ToolHandler for CodeIntelToolHandler {
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
         let ToolInvocation { payload, .. } = invocation;
 
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "code_intel handler received unsupported payload".to_string(),
-                ));
-            }
-        };
+        let arguments = function_arguments_from_payload(payload, "code_intel")?;
 
         let args: CodeIntelToolArgs = parse_arguments(&arguments)?;
         let limit = args.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_RESULTS);
 
-        let output = match args.operation.as_str() {
-            "symbolSearch" => {
+        let output = match args.operation {
+            CodeIntelOperation::SymbolSearch => {
                 let query = require_param(args.query.as_deref(), "query")?;
                 let symbols = self.index.search_symbols(query, limit);
                 format_symbols(&symbols)
             }
-            "callers" => {
+            CodeIntelOperation::Callers => {
                 let symbol = require_param(args.symbol.as_deref(), "symbol")?;
                 let rel_file = self.relative_file(args.file.as_deref())?;
                 let callers = self
@@ -94,7 +103,7 @@ impl ToolHandler for CodeIntelToolHandler {
                     .map_err(FunctionCallError::RespondToModel)?;
                 format_callers(&callers)
             }
-            "tests" => {
+            CodeIntelOperation::Tests => {
                 let symbol = require_param(args.symbol.as_deref(), "symbol")?;
                 let rel_file = self.relative_file(args.file.as_deref())?;
                 let tests = self
@@ -103,7 +112,7 @@ impl ToolHandler for CodeIntelToolHandler {
                     .map_err(FunctionCallError::RespondToModel)?;
                 format_tests(&tests)
             }
-            "variables" => {
+            CodeIntelOperation::Variables => {
                 let function = require_param(args.symbol.as_deref(), "symbol")?;
                 let rel_file = self.relative_file(args.file.as_deref())?;
                 let variables = self
@@ -112,18 +121,18 @@ impl ToolHandler for CodeIntelToolHandler {
                     .map_err(FunctionCallError::RespondToModel)?;
                 format_variables(function, &variables)
             }
-            "implementation" => {
+            CodeIntelOperation::Implementation => {
                 let symbol = require_param(args.symbol.as_deref(), "symbol")?;
                 let rel_file = self.relative_file(args.file.as_deref())?;
                 self.index
                     .implementation(symbol, &rel_file)
                     .map_err(FunctionCallError::RespondToModel)?
             }
-            "structure" => {
+            CodeIntelOperation::Structure => {
                 let depth = args.depth.unwrap_or(3);
                 self.index.structure(depth)
             }
-            "peek" => {
+            CodeIntelOperation::Peek => {
                 let rel_file = self.relative_file(args.file.as_deref())?;
                 let start_line = args.line.unwrap_or(1) as usize;
                 let line_count = limit;
@@ -136,7 +145,7 @@ impl ToolHandler for CodeIntelToolHandler {
                     peek.file, peek.start_line, peek.end_line, peek.total_lines, peek.content
                 )
             }
-            "grep" => {
+            CodeIntelOperation::Grep => {
                 let pattern = require_param(args.pattern.as_deref(), "pattern")?;
                 let scope = GrepScope::from_input(args.scope.as_deref());
                 let result = self
@@ -145,7 +154,7 @@ impl ToolHandler for CodeIntelToolHandler {
                     .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
                 format_grep(&result)
             }
-            "defineSymbol" => {
+            CodeIntelOperation::DefineSymbol => {
                 let symbol = require_param(args.symbol.as_deref(), "symbol")?;
                 let rel_file = self.relative_file(args.file.as_deref())?;
                 let definition = require_param(args.definition.as_deref(), "definition")?;
@@ -154,7 +163,7 @@ impl ToolHandler for CodeIntelToolHandler {
                     .map_err(FunctionCallError::RespondToModel)?;
                 format!("Defined symbol '{symbol}' in {rel_file}")
             }
-            "defineFile" => {
+            CodeIntelOperation::DefineFile => {
                 let rel_file = self.relative_file(args.file.as_deref())?;
                 let definition = require_param(args.definition.as_deref(), "definition")?;
                 self.index
@@ -162,7 +171,7 @@ impl ToolHandler for CodeIntelToolHandler {
                     .map_err(FunctionCallError::RespondToModel)?;
                 format!("Defined file '{rel_file}'")
             }
-            "markFile" => {
+            CodeIntelOperation::MarkFile => {
                 let rel_file = self.relative_file(args.file.as_deref())?;
                 let mark = require_param(args.mark.as_deref(), "mark")?;
                 let mark_enum = FileMark::from_input(mark).ok_or_else(|| {
@@ -175,11 +184,6 @@ impl ToolHandler for CodeIntelToolHandler {
                     .mark_file(&rel_file, mark_enum)
                     .map_err(FunctionCallError::RespondToModel)?;
                 format!("Marked file '{rel_file}' as {mark}")
-            }
-            other => {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "unknown code_intel operation: {other}. Valid operations: symbolSearch, callers, tests, variables, implementation, structure, peek, grep, defineSymbol, defineFile, markFile"
-                )));
             }
         };
 

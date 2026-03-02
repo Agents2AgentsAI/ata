@@ -92,6 +92,10 @@ use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::request_user_input::RequestUserInputArgs;
+#[cfg(feature = "lsp")]
+use codex_protocol::request_user_input::RequestUserInputQuestion;
+#[cfg(feature = "lsp")]
+use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::skill_approval::SkillApprovalResponse;
 use codex_rmcp_client::ElicitationResponse;
@@ -162,6 +166,76 @@ pub enum SteerInputError {
     ExpectedTurnMismatch { expected: String, actual: String },
     EmptyInput,
     InvalidFileInput(String),
+}
+
+#[cfg(feature = "lsp")]
+fn normalize_lsp_extensions(extensions: Vec<String>) -> Vec<String> {
+    extensions
+        .into_iter()
+        .map(|ext| ext.trim().to_string())
+        .filter(|ext| !ext.is_empty())
+        .map(|ext| {
+            if ext.starts_with('.') {
+                ext
+            } else {
+                format!(".{ext}")
+            }
+        })
+        .collect()
+}
+
+#[cfg(feature = "lsp")]
+fn build_lsp_server_configs(
+    config: &Config,
+) -> std::collections::HashMap<String, codex_lsp_client::LspServerConfig> {
+    use crate::config::types::LspConfig;
+    use crate::config::types::LspServerConfigToml;
+
+    let builtins = codex_lsp_client::builtin_servers::builtin_servers();
+    let mut overrides = std::collections::HashMap::new();
+
+    let lsp_config = config
+        .config_layer_stack
+        .effective_config()
+        .get("lsp")
+        .cloned()
+        .and_then(|value| value.try_into::<LspConfig>().ok());
+
+    match lsp_config.as_ref() {
+        Some(LspConfig::Disabled(false)) => return std::collections::HashMap::new(),
+        Some(LspConfig::Servers(servers)) => {
+            for (server_id, server_cfg) in servers {
+                let override_cfg = match server_cfg {
+                    LspServerConfigToml::DisabledOnly { disabled } => {
+                        codex_lsp_client::UserServerOverride::DisabledOnly {
+                            disabled: disabled.to_owned(),
+                        }
+                    }
+                    LspServerConfigToml::Full {
+                        command,
+                        extensions,
+                        root_markers,
+                        env,
+                        initialization_options,
+                        disabled,
+                    } => codex_lsp_client::UserServerOverride::Full(
+                        codex_lsp_client::UserServerFull {
+                            command: command.clone(),
+                            extensions: normalize_lsp_extensions(extensions.clone()),
+                            root_markers: root_markers.clone(),
+                            env: env.clone(),
+                            initialization_options: initialization_options.clone(),
+                            disabled: disabled.to_owned(),
+                        },
+                    ),
+                };
+                overrides.insert(server_id.clone(), override_cfg);
+            }
+        }
+        _ => {}
+    }
+
+    codex_lsp_client::merge_configs(builtins, overrides)
 }
 use crate::data::SharedDataToolkit;
 
@@ -1409,11 +1483,7 @@ impl Session {
         #[cfg(feature = "lsp")]
         let lsp_feedback = if config.features.enabled(Feature::Lsp) {
             use crate::tools::lsp_feedback::LspFeedback;
-            let servers: std::collections::HashMap<String, codex_lsp_client::LspServerConfig> =
-                codex_lsp_client::builtin_servers::builtin_servers()
-                    .into_iter()
-                    .map(|(k, v)| (k.to_string(), v))
-                    .collect();
+            let servers = build_lsp_server_configs(config.as_ref());
             let registry = Arc::new(codex_lsp_client::ServerRegistry::new(
                 servers,
                 session_configuration.cwd.clone(),
@@ -1525,6 +1595,81 @@ impl Session {
             document_cache: crate::tools::handlers::DocumentCache::new(),
             next_internal_sub_id: AtomicU64::new(0),
         });
+
+        #[cfg(feature = "lsp")]
+        if let Some(ref fb) = sess.services.lsp_feedback {
+            let weak_sess = Arc::downgrade(&sess);
+            fb.registry.set_install_confirm(Some(Arc::new(
+                move |prompt: &str, command: &[String]| {
+                    let weak_sess = weak_sess.clone();
+                    let prompt = prompt.to_string();
+                    let command = command.to_vec();
+
+                    Box::pin(async move {
+                        let Some(sess) = weak_sess.upgrade() else {
+                            return false;
+                        };
+                        let Some((turn_context, cancellation_token)) =
+                            sess.active_turn_context_and_cancellation_token().await
+                        else {
+                            tracing::debug!(
+                                "skipping LSP auto-install prompt: no active turn context"
+                            );
+                            return false;
+                        };
+
+                        const LSP_INSTALL_QID: &str = "lsp_install";
+                        const INSTALL_OPTION: &str = "Install";
+
+                        let cmd_display = command.join(" ");
+                        let args = RequestUserInputArgs {
+                            questions: vec![RequestUserInputQuestion {
+                                id: LSP_INSTALL_QID.to_string(),
+                                header: "Install LSP server?".to_string(),
+                                question: format!("{prompt}\nCommand: `{cmd_display}`"),
+                                is_other: false,
+                                is_secret: false,
+                                options: Some(vec![
+                                    RequestUserInputQuestionOption {
+                                        label: INSTALL_OPTION.to_string(),
+                                        description:
+                                            "Install now and continue this LSP operation."
+                                                .to_string(),
+                                    },
+                                    RequestUserInputQuestionOption {
+                                        label: "Skip".to_string(),
+                                        description:
+                                            "Skip install and continue without this server."
+                                                .to_string(),
+                                    },
+                                ]),
+                            }],
+                        };
+
+                        let call_id = format!("lsp-install-{}", Uuid::new_v4());
+                        let response_fut = sess.request_user_input(&turn_context, call_id, args);
+                        let response = tokio::select! {
+                            _ = cancellation_token.cancelled() => {
+                                let empty = RequestUserInputResponse { answers: HashMap::new() };
+                                sess.notify_user_input_response(&turn_context.sub_id, empty.clone()).await;
+                                Some(empty)
+                            }
+                            response = response_fut => response,
+                        };
+
+                        response
+                            .and_then(|r| r.answers.get(LSP_INSTALL_QID).cloned())
+                            .is_some_and(|answer| {
+                                answer
+                                    .answers
+                                    .iter()
+                                    .any(|entry| entry == INSTALL_OPTION)
+                            })
+                    })
+                },
+            )));
+        }
+
         if let Some(network_policy_decider_session) = network_policy_decider_session {
             let mut guard = network_policy_decider_session.write().await;
             *guard = Arc::downgrade(&sess);
@@ -4678,6 +4823,10 @@ mod handlers {
             .unified_exec_manager
             .terminate_all_processes()
             .await;
+        #[cfg(feature = "lsp")]
+        if let Some(ref lsp_feedback) = sess.services.lsp_feedback {
+            lsp_feedback.registry.shutdown_all().await;
+        }
         info!("Shutting down Codex instance");
         let history = sess.clone_history().await;
         let turn_count = history
