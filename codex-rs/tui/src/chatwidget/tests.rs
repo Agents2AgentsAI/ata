@@ -2271,7 +2271,8 @@ async fn reasoning_selection_in_plan_mode_opens_scope_prompt_event() {
         event,
         AppEvent::OpenPlanReasoningScopePrompt {
             model,
-            effort: Some(_)
+            effort: Some(_),
+            ..
         } if model == "gpt-5.1-codex-max"
     );
 }
@@ -2336,7 +2337,8 @@ async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_glo
         event,
         AppEvent::OpenPlanReasoningScopePrompt {
             model,
-            effort: Some(ReasoningEffortConfig::Medium)
+            effort: Some(ReasoningEffortConfig::Medium),
+            ..
         } if model == "gpt-5.1-codex-max"
     );
 }
@@ -2401,6 +2403,7 @@ async fn plan_reasoning_scope_popup_all_modes_persists_global_and_plan_override(
     chat.open_plan_reasoning_scope_prompt(
         "gpt-5.1-codex-max".to_string(),
         Some(ReasoningEffortConfig::High),
+        None,
     );
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
@@ -2438,6 +2441,7 @@ async fn plan_reasoning_scope_popup_mentions_selected_reasoning() {
     chat.open_plan_reasoning_scope_prompt(
         "gpt-5.1-codex-max".to_string(),
         Some(ReasoningEffortConfig::Medium),
+        None,
     );
 
     let popup = render_bottom_popup(&chat, 100);
@@ -2454,6 +2458,7 @@ async fn plan_reasoning_scope_popup_mentions_built_in_plan_default_when_no_overr
     chat.open_plan_reasoning_scope_prompt(
         "gpt-5.1-codex-max".to_string(),
         Some(ReasoningEffortConfig::Medium),
+        None,
     );
 
     let popup = render_bottom_popup(&chat, 100);
@@ -2466,6 +2471,7 @@ async fn plan_reasoning_scope_popup_plan_only_does_not_update_all_modes_reasonin
     chat.open_plan_reasoning_scope_prompt(
         "gpt-5.1-codex-max".to_string(),
         Some(ReasoningEffortConfig::High),
+        None,
     );
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
