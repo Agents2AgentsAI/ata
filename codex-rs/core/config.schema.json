@@ -455,6 +455,9 @@
             "steer": {
               "type": "boolean"
             },
+            "treesitter": {
+              "type": "boolean"
+            },
             "undo": {
               "type": "boolean"
             },
@@ -1923,6 +1926,9 @@
           "type": "boolean"
         },
         "steer": {
+          "type": "boolean"
+        },
+        "treesitter": {
           "type": "boolean"
         },
         "undo": {
