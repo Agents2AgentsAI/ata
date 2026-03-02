@@ -1,6 +1,7 @@
 use codex_protocol::models::FunctionCallOutputBody;
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use codex_utils_string::take_bytes_at_char_boundary;
@@ -152,13 +153,25 @@ impl ToolHandler for ReadFileHandler {
             }
         };
 
-        // Warm up LSP client for this file (fire-and-forget, no diagnostics wait).
+        // Warm up LSP/tree-sitter for this file (fire-and-forget).
         #[cfg(any(feature = "lsp", feature = "treesitter"))]
         if let Some(ref multi_root_state) = session.services.multi_root_state {
             #[cfg(feature = "lsp")]
-            multi_root_state.touch_lsp_nowait(&path).await;
+            {
+                let state = Arc::clone(multi_root_state);
+                let path = path.clone();
+                tokio::spawn(async move {
+                    state.touch_lsp_nowait(&path).await;
+                });
+            }
             #[cfg(feature = "treesitter")]
-            multi_root_state.reindex_file(&path).await;
+            {
+                let state = Arc::clone(multi_root_state);
+                let path = path.clone();
+                tokio::spawn(async move {
+                    state.reindex_file(&path).await;
+                });
+            }
         }
 
         Ok(ToolOutput::Function {

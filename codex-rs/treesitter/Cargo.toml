@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 dashmap = "6"
 ignore = { workspace = true }
+rayon = "1"
 regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }

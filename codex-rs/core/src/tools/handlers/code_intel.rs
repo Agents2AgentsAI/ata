@@ -313,7 +313,11 @@ impl CodeIntelToolHandler {
         &self,
         root: Option<&str>,
     ) -> Result<Vec<(String, Arc<codex_treesitter::ProjectIndex>)>, FunctionCallError> {
-        let indices = self.state.treesitter_indices(root).await;
+        let indices = self
+            .state
+            .treesitter_indices(root)
+            .await
+            .map_err(FunctionCallError::RespondToModel)?;
         if indices.is_empty() {
             return Err(FunctionCallError::RespondToModel(match root {
                 Some(root) => format!("unknown root '{root}' or root has no TreeSitter index"),
@@ -332,6 +336,7 @@ impl CodeIntelToolHandler {
             .state
             .treesitter_index_for_file(file, root)
             .await
+            .map_err(FunctionCallError::RespondToModel)?
             .ok_or_else(|| {
                 if let Some(root) = root {
                     FunctionCallError::RespondToModel(format!(

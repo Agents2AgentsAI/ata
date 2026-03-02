@@ -2424,6 +2424,7 @@ version = "0.0.0"
 dependencies = [
  "dashmap",
  "ignore",
+ "rayon",
  "regex",
  "serde",
  "tempfile",
