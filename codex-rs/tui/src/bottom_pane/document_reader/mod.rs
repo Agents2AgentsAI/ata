@@ -297,6 +297,12 @@ pub(crate) struct DocumentReaderView {
     /// During narration, the word at this position gets bold+underline
     /// while all surrounding formatting is preserved.
     voice_reading_highlight: Option<(usize, usize, usize)>,
+
+    /// Deferred narration: when auto-narration fires but the section content
+    /// is still empty (streaming hasn't filled it yet), we store the section
+    /// index here. `update_section` checks this and re-triggers narration
+    /// once content arrives.
+    pending_narration_section: Option<usize>,
 }
 
 impl DocumentReaderView {
@@ -384,6 +390,7 @@ impl DocumentReaderView {
             voice_karaoke_lines: None,
             voice_karaoke_append: false,
             voice_reading_highlight: None,
+            pending_narration_section: None,
         };
         // Auto-narrate the first section on open (if voice mode is active,
         // ChatWidget will pick it up; otherwise it's a no-op).
@@ -444,6 +451,12 @@ impl DocumentReaderView {
                 if set.is_empty() {
                     self.streaming_sections = None;
                 }
+            }
+
+            // Fulfill deferred narration if this section was waiting for content.
+            if self.pending_narration_section == Some(section_index) {
+                self.pending_narration_section = None;
+                self.narrate_current_section_if_voice();
             }
         }
     }
@@ -743,6 +756,17 @@ impl DocumentReaderView {
         }
 
         if let Some(section) = self.sections.get(self.current_section) {
+            // If content is still empty (streaming hasn't filled it yet),
+            // defer narration until update_section delivers the content.
+            let still_streaming = self
+                .streaming_sections
+                .as_ref()
+                .is_some_and(|set| set.contains(&self.current_section));
+            if section.content.trim().is_empty() && still_streaming {
+                self.pending_narration_section = Some(self.current_section);
+                return;
+            }
+
             let text = if section.heading.is_empty() {
                 section.content.clone()
             } else {

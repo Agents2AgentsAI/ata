@@ -2937,6 +2937,11 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeTtsError { error } => {
+                self.chat_widget.on_voice_tts_error(&error);
+                tui.frame_requester().schedule_frame();
+            }
+            #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModeTranscriptionComplete { text } => {
                 self.chat_widget.on_voice_transcription_complete(text);
                 tui.frame_requester().schedule_frame();

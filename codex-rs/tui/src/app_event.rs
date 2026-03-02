@@ -420,6 +420,13 @@ pub(crate) enum AppEvent {
     #[cfg(not(target_os = "linux"))]
     VoiceModeTtsFinished,
 
+    /// TTS error (e.g. credit exhaustion, connection failure).
+    /// Displayed to the user as a voice status message.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeTtsError {
+        error: String,
+    },
+
     /// Periodic tick to update the TTS word-highlight position.
     #[cfg(not(target_os = "linux"))]
     VoiceModeHighlightTick,

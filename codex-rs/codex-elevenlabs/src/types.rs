@@ -18,7 +18,7 @@ impl ElevenLabsConfig {
         Self {
             api_key,
             voice_id: "21m00Tcm4TlvDq8ikWAM".to_string(),
-            model_id: "eleven_turbo_v2_5".to_string(),
+            model_id: "eleven_flash_v2_5".to_string(),
         }
     }
 
@@ -108,7 +108,7 @@ mod tests {
     fn config_defaults() {
         let config = ElevenLabsConfig::new("test-key".to_string());
         assert_eq!(config.voice_id, "21m00Tcm4TlvDq8ikWAM");
-        assert_eq!(config.model_id, "eleven_turbo_v2_5");
+        assert_eq!(config.model_id, "eleven_flash_v2_5");
     }
 
     #[test]
