@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use serde::Serialize;
 use tree_sitter::StreamingIterator;
 
 use crate::file_entry::Language;
@@ -31,7 +32,7 @@ pub fn get_implementation(
     Ok(source[symbol.byte_range.0..end].to_string())
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CallerInfo {
     pub file: String,
     pub line: usize,
@@ -224,7 +225,7 @@ fn is_definition_line(line: &str, name: &str, language: Language) -> bool {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TestInfo {
     pub name: String,
     pub file: String,
@@ -300,7 +301,7 @@ fn is_test_symbol(symbol: &Symbol) -> bool {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct VariableInfo {
     pub name: String,
     pub function: String,

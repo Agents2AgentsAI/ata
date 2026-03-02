@@ -67,6 +67,10 @@ pub fn scan_directory_with_config(
             continue;
         }
 
+        if config.is_extension_ignored(&rel_path) {
+            continue;
+        }
+
         let language = Language::from_path(path);
         if !config.is_language_enabled(language) {
             continue;

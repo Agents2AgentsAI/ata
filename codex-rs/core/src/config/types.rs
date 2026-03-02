@@ -1225,9 +1225,15 @@ pub struct TreeSitterConfigMap {
     /// Extra ignore globs relative to the root.
     #[serde(default)]
     pub ignore_patterns: Vec<String>,
+    /// Extra ignored file extensions/suffixes (for example: "pdf", "min.js").
+    #[serde(default)]
+    pub ignore_extensions: Vec<String>,
     /// Language names to disable (e.g. "rust", "python", "typescript").
     #[serde(default)]
     pub disabled_languages: Vec<String>,
+    /// Optional annotation persistence path. Relative paths are resolved from root.
+    #[serde(default)]
+    pub annotation_store_path: Option<String>,
     /// Reserved for future file watching support.
     #[serde(default = "default_treesitter_true")]
     pub watch: bool,
@@ -1241,7 +1247,9 @@ impl Default for TreeSitterConfigMap {
         Self {
             max_file_size: default_treesitter_max_file_size(),
             ignore_patterns: Vec::new(),
+            ignore_extensions: Vec::new(),
             disabled_languages: Vec::new(),
+            annotation_store_path: None,
             watch: default_treesitter_true(),
             persist_annotations: default_treesitter_true(),
         }

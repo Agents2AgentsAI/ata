@@ -101,6 +101,22 @@ impl SymbolTable {
         Err(format!("symbol '{name}' not found in '{file}'"))
     }
 
+    pub fn set_definition_by_key(
+        &self,
+        key: &str,
+        definition: &str,
+        overwrite: bool,
+    ) -> Result<(), String> {
+        let Some(mut symbol) = self.symbols.get_mut(key) else {
+            return Err(format!("symbol key '{key}' not found in index"));
+        };
+        if symbol.definition.is_some() && !overwrite {
+            return Err(format!("symbol key '{key}' already has a definition"));
+        }
+        symbol.definition = Some(definition.to_string());
+        Ok(())
+    }
+
     pub fn symbols_in_file(&self, rel_path: &str) -> Vec<Symbol> {
         let Some(keys) = self.by_file.get(rel_path) else {
             return Vec::new();
@@ -114,6 +130,19 @@ impl SymbolTable {
         self.symbols
             .iter()
             .map(|entry| entry.value().clone())
+            .collect()
+    }
+
+    pub fn all_symbol_definitions(&self) -> Vec<(String, String)> {
+        self.symbols
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .value()
+                    .definition
+                    .as_ref()
+                    .map(|definition| (entry.key().clone(), definition.clone()))
+            })
             .collect()
     }
 

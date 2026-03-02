@@ -7,7 +7,9 @@ use async_trait::async_trait;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_treesitter::FileMark;
 use codex_treesitter::GrepScope;
+use codex_treesitter::SymbolKind;
 use serde::Deserialize;
+use serde_json::json;
 
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
@@ -26,6 +28,8 @@ const CODE_INTEL_TOOL_DESCRIPTION: &str = include_str!("tool_code_intel.txt");
 const DEFAULT_LIMIT: usize = 20;
 const MAX_RESULTS: usize = 50;
 const MAX_RESULT_BYTES: usize = 8 * 1024;
+const DEFAULT_CHUNK_SIZE: usize = 5000;
+const DEFAULT_CHUNK_OVERLAP: usize = 200;
 
 pub struct CodeIntelToolHandler {
     pub state: Arc<MultiRootState>,
@@ -47,23 +51,32 @@ struct CodeIntelToolArgs {
     #[serde(default)]
     mark: Option<String>,
     #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
     line: Option<u32>,
     #[serde(default)]
     limit: Option<usize>,
     #[serde(default)]
     depth: Option<usize>,
     #[serde(default)]
+    chunk_size: Option<usize>,
+    #[serde(default)]
+    overlap: Option<usize>,
+    #[serde(default)]
     scope: Option<String>,
     #[serde(default)]
     root: Option<String>,
     #[serde(default)]
     path: Option<String>,
+    #[serde(default)]
+    response_format: Option<ResponseFormat>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum CodeIntelOperation {
     SymbolSearch,
+    Symbols,
     Callers,
     Tests,
     Variables,
@@ -71,12 +84,30 @@ enum CodeIntelOperation {
     Structure,
     Peek,
     Grep,
+    ChunkIndices,
     DefineSymbol,
+    RedefineSymbol,
     DefineFile,
+    RedefineFile,
     MarkFile,
+    SaveAnnotations,
+    LoadAnnotations,
     AddRoot,
     RemoveRoot,
     ListRoots,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ResponseFormat {
+    Text,
+    Json,
+}
+
+impl Default for ResponseFormat {
+    fn default() -> Self {
+        Self::Text
+    }
 }
 
 #[async_trait]
@@ -96,8 +127,9 @@ impl ToolHandler for CodeIntelToolHandler {
 
         let args: CodeIntelToolArgs = parse_arguments(&arguments)?;
         let limit = args.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_RESULTS);
+        let response_format = args.response_format.unwrap_or_default();
 
-        let output = match args.operation {
+        let (output_text, output_json) = match args.operation {
             CodeIntelOperation::SymbolSearch => {
                 let query = require_param(args.query.as_deref(), "query")?;
                 let indices = self.indices_for_query(args.root.as_deref()).await?;
@@ -113,7 +145,56 @@ impl ToolHandler for CodeIntelToolHandler {
                         break;
                     }
                 }
-                format_symbols(&symbols)
+                (
+                    format_symbols(&symbols),
+                    json!({
+                        "count": symbols.len(),
+                        "symbols": symbols
+                            .iter()
+                            .map(|(root, symbol)| json!({"root": root, "symbol": symbol}))
+                            .collect::<Vec<_>>()
+                    }),
+                )
+            }
+            CodeIntelOperation::Symbols => {
+                let kind = parse_symbol_kind(args.kind.as_deref())?;
+                let mut symbols = Vec::new();
+
+                if let Some(file) = args.file.as_deref() {
+                    let path = absolute_file(Some(file))?;
+                    let (root, index, rel_file) =
+                        self.index_for_file(&path, args.root.as_deref()).await?;
+                    for symbol in index.list_symbols(kind, Some(&rel_file), limit) {
+                        symbols.push((root.clone(), symbol));
+                        if symbols.len() >= limit {
+                            break;
+                        }
+                    }
+                } else {
+                    let indices = self.indices_for_query(args.root.as_deref()).await?;
+                    for (root, index) in indices {
+                        for symbol in index.list_symbols(kind, None, limit) {
+                            symbols.push((root.clone(), symbol));
+                            if symbols.len() >= limit {
+                                break;
+                            }
+                        }
+                        if symbols.len() >= limit {
+                            break;
+                        }
+                    }
+                }
+
+                (
+                    format_symbols(&symbols),
+                    json!({
+                        "count": symbols.len(),
+                        "symbols": symbols
+                            .iter()
+                            .map(|(root, symbol)| json!({"root": root, "symbol": symbol}))
+                            .collect::<Vec<_>>()
+                    }),
+                )
             }
             CodeIntelOperation::Callers => {
                 let symbol = require_param(args.symbol.as_deref(), "symbol")?;
@@ -123,7 +204,10 @@ impl ToolHandler for CodeIntelToolHandler {
                 let callers = index
                     .find_callers(symbol, &rel_file, limit)
                     .map_err(FunctionCallError::RespondToModel)?;
-                format_callers(&root, &callers)
+                (
+                    format_callers(&root, &callers),
+                    json!({"root": root, "count": callers.len(), "callers": callers}),
+                )
             }
             CodeIntelOperation::Tests => {
                 let symbol = require_param(args.symbol.as_deref(), "symbol")?;
@@ -133,7 +217,10 @@ impl ToolHandler for CodeIntelToolHandler {
                 let tests = index
                     .find_tests(symbol, &rel_file, limit)
                     .map_err(FunctionCallError::RespondToModel)?;
-                format_tests(&root, &tests)
+                (
+                    format_tests(&root, &tests),
+                    json!({"root": root, "count": tests.len(), "tests": tests}),
+                )
             }
             CodeIntelOperation::Variables => {
                 let function = require_param(args.symbol.as_deref(), "symbol")?;
@@ -143,7 +230,10 @@ impl ToolHandler for CodeIntelToolHandler {
                 let variables = index
                     .list_variables(function, &rel_file)
                     .map_err(FunctionCallError::RespondToModel)?;
-                format_variables(&root, function, &variables)
+                (
+                    format_variables(&root, function, &variables),
+                    json!({"root": root, "function": function, "count": variables.len(), "variables": variables}),
+                )
             }
             CodeIntelOperation::Implementation => {
                 let symbol = require_param(args.symbol.as_deref(), "symbol")?;
@@ -153,7 +243,15 @@ impl ToolHandler for CodeIntelToolHandler {
                 let implementation = index
                     .implementation(symbol, &rel_file)
                     .map_err(FunctionCallError::RespondToModel)?;
-                format!("[{root}]\n{implementation}")
+                (
+                    format!("[{root}]\n{implementation}"),
+                    json!({
+                        "root": root,
+                        "file": rel_file,
+                        "symbol": symbol,
+                        "source": implementation,
+                    }),
+                )
             }
             CodeIntelOperation::Structure => {
                 let depth = args.depth.unwrap_or(3);
@@ -164,11 +262,24 @@ impl ToolHandler for CodeIntelToolHandler {
                     ));
                 }
                 let mut out = Vec::new();
+                let mut roots = Vec::new();
                 for (root, index) in indices {
                     out.push(format!("[{root}]"));
                     out.push(index.structure(depth));
+                    roots.push(json!({
+                        "root": root,
+                        "depth": depth,
+                        "tree": index.structure(depth),
+                        "file_count": index.file_tree().len(),
+                        "language_breakdown": index
+                            .file_tree()
+                            .language_breakdown()
+                            .into_iter()
+                            .map(|(language, count)| json!({"language": language, "count": count}))
+                            .collect::<Vec<_>>()
+                    }));
                 }
-                out.join("\n")
+                (out.join("\n"), json!({"roots": roots}))
             }
             CodeIntelOperation::Peek => {
                 let path = absolute_file(args.file.as_deref())?;
@@ -179,9 +290,12 @@ impl ToolHandler for CodeIntelToolHandler {
                 let peek = index
                     .peek(&rel_file, start_line, line_count)
                     .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
-                format!(
-                    "[{root}] {}:{}-{} ({} total lines)\n{}",
-                    peek.file, peek.start_line, peek.end_line, peek.total_lines, peek.content
+                (
+                    format!(
+                        "[{root}] {}:{}-{} ({} total lines)\n{}",
+                        peek.file, peek.start_line, peek.end_line, peek.total_lines, peek.content
+                    ),
+                    json!({"root": root, "peek": peek}),
                 )
             }
             CodeIntelOperation::Grep => {
@@ -210,7 +324,32 @@ impl ToolHandler for CodeIntelToolHandler {
                     }
                 }
 
-                format_grep(pattern, total_matches, truncated, &all_matches)
+                (
+                    format_grep(pattern, total_matches, truncated, &all_matches),
+                    json!({
+                        "pattern": pattern,
+                        "total_matches": total_matches,
+                        "truncated": truncated,
+                        "matches": all_matches
+                            .iter()
+                            .map(|(root, matched)| json!({"root": root, "match": matched}))
+                            .collect::<Vec<_>>()
+                    }),
+                )
+            }
+            CodeIntelOperation::ChunkIndices => {
+                let path = absolute_file(args.file.as_deref())?;
+                let chunk_size = args.chunk_size.unwrap_or(DEFAULT_CHUNK_SIZE);
+                let overlap = args.overlap.unwrap_or(DEFAULT_CHUNK_OVERLAP);
+                let (root, index, rel_file) =
+                    self.index_for_file(&path, args.root.as_deref()).await?;
+                let result = index
+                    .chunk_indices(&rel_file, chunk_size, overlap)
+                    .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
+                (
+                    format_chunk_indices(&root, &result),
+                    json!({"root": root, "chunk_indices": result}),
+                )
             }
             CodeIntelOperation::DefineSymbol => {
                 let symbol = require_param(args.symbol.as_deref(), "symbol")?;
@@ -221,7 +360,26 @@ impl ToolHandler for CodeIntelToolHandler {
                 index
                     .define_symbol(symbol, &rel_file, definition, false)
                     .map_err(FunctionCallError::RespondToModel)?;
-                format!("Defined symbol '{symbol}' in [{root}] {rel_file}")
+                let message = format!("Defined symbol '{symbol}' in [{root}] {rel_file}");
+                (
+                    message.clone(),
+                    json!({"ok": true, "root": root, "file": rel_file, "symbol": symbol, "message": message}),
+                )
+            }
+            CodeIntelOperation::RedefineSymbol => {
+                let symbol = require_param(args.symbol.as_deref(), "symbol")?;
+                let path = absolute_file(args.file.as_deref())?;
+                let (root, index, rel_file) =
+                    self.index_for_file(&path, args.root.as_deref()).await?;
+                let definition = require_param(args.definition.as_deref(), "definition")?;
+                index
+                    .define_symbol(symbol, &rel_file, definition, true)
+                    .map_err(FunctionCallError::RespondToModel)?;
+                let message = format!("Redefined symbol '{symbol}' in [{root}] {rel_file}");
+                (
+                    message.clone(),
+                    json!({"ok": true, "root": root, "file": rel_file, "symbol": symbol, "message": message}),
+                )
             }
             CodeIntelOperation::DefineFile => {
                 let path = absolute_file(args.file.as_deref())?;
@@ -231,7 +389,25 @@ impl ToolHandler for CodeIntelToolHandler {
                 index
                     .define_file(&rel_file, definition, false)
                     .map_err(FunctionCallError::RespondToModel)?;
-                format!("Defined file [{root}] '{rel_file}'")
+                let message = format!("Defined file [{root}] '{rel_file}'");
+                (
+                    message.clone(),
+                    json!({"ok": true, "root": root, "file": rel_file, "message": message}),
+                )
+            }
+            CodeIntelOperation::RedefineFile => {
+                let path = absolute_file(args.file.as_deref())?;
+                let (root, index, rel_file) =
+                    self.index_for_file(&path, args.root.as_deref()).await?;
+                let definition = require_param(args.definition.as_deref(), "definition")?;
+                index
+                    .define_file(&rel_file, definition, true)
+                    .map_err(FunctionCallError::RespondToModel)?;
+                let message = format!("Redefined file [{root}] '{rel_file}'");
+                (
+                    message.clone(),
+                    json!({"ok": true, "root": root, "file": rel_file, "message": message}),
+                )
             }
             CodeIntelOperation::MarkFile => {
                 let path = absolute_file(args.file.as_deref())?;
@@ -247,7 +423,51 @@ impl ToolHandler for CodeIntelToolHandler {
                 index
                     .mark_file(&rel_file, mark_enum)
                     .map_err(FunctionCallError::RespondToModel)?;
-                format!("Marked file [{root}] '{rel_file}' as {mark}")
+                let message = format!("Marked file [{root}] '{rel_file}' as {mark}");
+                (
+                    message.clone(),
+                    json!({"ok": true, "root": root, "file": rel_file, "mark": mark, "message": message}),
+                )
+            }
+            CodeIntelOperation::SaveAnnotations => {
+                let indices = self.indices_for_query(args.root.as_deref()).await?;
+                let mut results = Vec::new();
+                for (root, index) in indices {
+                    let stats = index
+                        .save_annotations()
+                        .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
+                    results.push((root, stats));
+                }
+                (
+                    format_save_annotations(&results),
+                    json!({
+                        "count": results.len(),
+                        "results": results
+                            .iter()
+                            .map(|(root, stats)| json!({"root": root, "stats": stats}))
+                            .collect::<Vec<_>>()
+                    }),
+                )
+            }
+            CodeIntelOperation::LoadAnnotations => {
+                let indices = self.indices_for_query(args.root.as_deref()).await?;
+                let mut results = Vec::new();
+                for (root, index) in indices {
+                    let stats = index
+                        .load_annotations()
+                        .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
+                    results.push((root, stats));
+                }
+                (
+                    format_load_annotations(&results),
+                    json!({
+                        "count": results.len(),
+                        "results": results
+                            .iter()
+                            .map(|(root, stats)| json!({"root": root, "stats": stats}))
+                            .collect::<Vec<_>>()
+                    }),
+                )
             }
             CodeIntelOperation::AddRoot => {
                 let root = require_param(args.root.as_deref(), "root")?;
@@ -257,7 +477,11 @@ impl ToolHandler for CodeIntelToolHandler {
                     .add_root(root.to_string(), path)
                     .await
                     .map_err(FunctionCallError::RespondToModel)?;
-                format!("Added root '{}' at {}", added.name, added.path.display())
+                let message = format!("Added root '{}' at {}", added.name, added.path.display());
+                (
+                    message.clone(),
+                    json!({"ok": true, "root": added.name, "path": added.path, "message": message}),
+                )
             }
             CodeIntelOperation::RemoveRoot => {
                 let root = require_param(args.root.as_deref(), "root")?;
@@ -265,16 +489,20 @@ impl ToolHandler for CodeIntelToolHandler {
                     .remove_root(root)
                     .await
                     .map_err(FunctionCallError::RespondToModel)?;
-                format!("Removed root '{root}'")
+                let message = format!("Removed root '{root}'");
+                (
+                    message.clone(),
+                    json!({"ok": true, "root": root, "message": message}),
+                )
             }
             CodeIntelOperation::ListRoots => {
                 let statuses = self.state.root_statuses().await;
-                if statuses.is_empty() {
+                let text = if statuses.is_empty() {
                     "No roots registered.".to_string()
                 } else {
                     let mut lines = Vec::with_capacity(statuses.len() + 1);
                     lines.push("Registered roots:".to_string());
-                    for status in statuses {
+                    for status in &statuses {
                         let mut caps = Vec::new();
                         #[cfg(feature = "lsp")]
                         if status.has_lsp {
@@ -297,8 +525,36 @@ impl ToolHandler for CodeIntelToolHandler {
                         ));
                     }
                     lines.join("\n")
-                }
+                };
+
+                let statuses_json = statuses
+                    .into_iter()
+                    .map(|status| {
+                        let mut capabilities = Vec::new();
+                        #[cfg(feature = "lsp")]
+                        if status.has_lsp {
+                            capabilities.push("lsp");
+                        }
+                        #[cfg(feature = "treesitter")]
+                        if status.has_treesitter {
+                            capabilities.push("treesitter");
+                        }
+                        json!({
+                            "name": status.name,
+                            "path": status.path,
+                            "is_primary": status.is_primary,
+                            "capabilities": capabilities,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                (text, json!({"count": statuses_json.len(), "roots": statuses_json}))
             }
+        };
+
+        let output = match response_format {
+            ResponseFormat::Text => output_text,
+            ResponseFormat::Json => serde_json::to_string_pretty(&output_json).unwrap_or(output_text),
         };
 
         Ok(ToolOutput::Function {
@@ -360,6 +616,33 @@ impl CodeIntelToolHandler {
 
 fn require_param<'a>(value: Option<&'a str>, key: &str) -> Result<&'a str, FunctionCallError> {
     value.ok_or_else(|| FunctionCallError::RespondToModel(format!("`{key}` is required")))
+}
+
+fn parse_symbol_kind(value: Option<&str>) -> Result<Option<SymbolKind>, FunctionCallError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    let kind = match value.trim().to_ascii_lowercase().as_str() {
+        "function" => SymbolKind::Function,
+        "method" => SymbolKind::Method,
+        "class" => SymbolKind::Class,
+        "struct" => SymbolKind::Struct,
+        "enum" => SymbolKind::Enum,
+        "trait" => SymbolKind::Trait,
+        "interface" => SymbolKind::Interface,
+        "constant" => SymbolKind::Constant,
+        "variable" => SymbolKind::Variable,
+        "type" => SymbolKind::Type,
+        "module" => SymbolKind::Module,
+        other => {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "unsupported symbol kind '{other}'. Valid kinds: function, method, class, struct, enum, trait, interface, constant, variable, type, module"
+            )));
+        }
+    };
+
+    Ok(Some(kind))
 }
 
 fn absolute_file(file: Option<&str>) -> Result<PathBuf, FunctionCallError> {
@@ -472,13 +755,75 @@ fn format_grep(
     out.join("\n")
 }
 
+fn format_chunk_indices(root: &str, result: &codex_treesitter::ChunkIndicesResult) -> String {
+    if result.chunks.is_empty() {
+        return format!(
+            "[{root}] {} has no chunks ({} bytes total).",
+            result.file, result.total_bytes
+        );
+    }
+
+    let mut out = vec![format!(
+        "[{root}] {}: {} chunk(s), chunk_size={}, overlap={}, total_bytes={}",
+        result.file,
+        result.chunks.len(),
+        result.chunk_size,
+        result.overlap,
+        result.total_bytes
+    )];
+
+    for chunk in &result.chunks {
+        out.push(format!("  #{} [{}..{})", chunk.index, chunk.start, chunk.end));
+    }
+
+    out.join("\n")
+}
+
+fn format_save_annotations(results: &[(String, codex_treesitter::AnnotationSaveStats)]) -> String {
+    if results.is_empty() {
+        return "No TreeSitter roots are configured.".to_string();
+    }
+
+    let mut out = vec![format!("Saved annotations for {} root(s):", results.len())];
+    for (root, stats) in results {
+        out.push(format!(
+            "[{root}] persisted={} path={} file_definitions={} file_marks={} symbol_definitions={}",
+            stats.persisted,
+            stats.path,
+            stats.file_definitions,
+            stats.file_marks,
+            stats.symbol_definitions
+        ));
+    }
+    out.join("\n")
+}
+
+fn format_load_annotations(results: &[(String, codex_treesitter::AnnotationLoadStats)]) -> String {
+    if results.is_empty() {
+        return "No TreeSitter roots are configured.".to_string();
+    }
+
+    let mut out = vec![format!("Loaded annotations for {} root(s):", results.len())];
+    for (root, stats) in results {
+        out.push(format!(
+            "[{root}] loaded={} path={} file_definitions_applied={} file_marks_applied={} symbol_definitions_applied={}",
+            stats.loaded,
+            stats.path,
+            stats.file_definitions_applied,
+            stats.file_marks_applied,
+            stats.symbol_definitions_applied
+        ));
+    }
+    out.join("\n")
+}
+
 pub(crate) fn create_code_intel_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
         "operation".to_string(),
         JsonSchema::String {
             description: Some(
-                "Operation name: symbolSearch, callers, tests, variables, implementation, structure, peek, grep, defineSymbol, defineFile, markFile, addRoot, removeRoot, listRoots"
+                "Operation name: symbolSearch, symbols, callers, tests, variables, implementation, structure, peek, grep, chunkIndices, defineSymbol, redefineSymbol, defineFile, redefineFile, markFile, saveAnnotations, loadAnnotations, addRoot, removeRoot, listRoots"
                     .to_string(),
             ),
         },
@@ -502,6 +847,12 @@ pub(crate) fn create_code_intel_tool() -> ToolSpec {
         },
     );
     properties.insert(
+        "kind".to_string(),
+        JsonSchema::String {
+            description: Some("Optional symbol kind filter for symbols operation.".to_string()),
+        },
+    );
+    properties.insert(
         "pattern".to_string(),
         JsonSchema::String {
             description: Some("Regex pattern for grep.".to_string()),
@@ -510,7 +861,7 @@ pub(crate) fn create_code_intel_tool() -> ToolSpec {
     properties.insert(
         "definition".to_string(),
         JsonSchema::String {
-            description: Some("Definition text for defineSymbol/defineFile.".to_string()),
+            description: Some("Definition text for define/redefine operations.".to_string()),
         },
     );
     properties.insert(
@@ -540,6 +891,18 @@ pub(crate) fn create_code_intel_tool() -> ToolSpec {
         },
     );
     properties.insert(
+        "chunk_size".to_string(),
+        JsonSchema::Number {
+            description: Some("Chunk size in bytes for chunkIndices (default 5000).".to_string()),
+        },
+    );
+    properties.insert(
+        "overlap".to_string(),
+        JsonSchema::Number {
+            description: Some("Chunk overlap in bytes for chunkIndices (default 200).".to_string()),
+        },
+    );
+    properties.insert(
         "scope".to_string(),
         JsonSchema::String {
             description: Some("Grep scope: all or code.".to_string()),
@@ -558,6 +921,12 @@ pub(crate) fn create_code_intel_tool() -> ToolSpec {
         "path".to_string(),
         JsonSchema::String {
             description: Some("Absolute directory path for addRoot.".to_string()),
+        },
+    );
+    properties.insert(
+        "response_format".to_string(),
+        JsonSchema::String {
+            description: Some("Output format: text (default) or json.".to_string()),
         },
     );
 
