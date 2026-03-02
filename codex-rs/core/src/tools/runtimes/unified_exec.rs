@@ -14,8 +14,10 @@ use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
+use crate::tools::runtimes::CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
+use crate::tools::runtimes::resolve_agent_ata_command;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -162,10 +164,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<UnifiedExecProcess, ToolError> {
-        let base_command = &req.command;
+        let (base_command, rewrote_ata) = resolve_agent_ata_command(&req.command);
         let session_shell = ctx.session.user_shell();
         let command = maybe_wrap_shell_lc_with_snapshot(
-            base_command,
+            &base_command,
             session_shell.as_ref(),
             &req.cwd,
             &req.explicit_env_overrides,
@@ -179,6 +181,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         };
 
         let mut env = req.env.clone();
+        if rewrote_ata {
+            env.insert(
+                CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR.to_string(),
+                "1".to_string(),
+            );
+        }
         if let Some(network) = req.network.as_ref() {
             network.apply_to_env(&mut env);
         }
