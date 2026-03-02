@@ -1,0 +1,21 @@
+Use the `code_intel` tool for fast, structural code intelligence powered by tree-sitter.
+
+Prefer this for exploration tasks:
+- finding symbols by name
+- tracing callers and tests
+- listing local variables
+- reading exact symbol implementations
+- viewing project structure
+- scoped grep across files
+
+Supported operations:
+- symbolSearch: Search symbols by query string.
+- callers: Find call sites for a symbol.
+- tests: Find test symbols referencing a symbol.
+- variables: List local variables in a function.
+- implementation: Return source for a symbol implementation.
+- structure: Render project tree for indexed files.
+- peek: Read a line window from a file.
+- grep: Regex search across indexed files.
+
+Use the `lsp` tool when semantic precision is required (type-aware definitions, references, hover).

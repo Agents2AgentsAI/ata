@@ -100,7 +100,7 @@ impl ToolHandler for ReadFileHandler {
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
         let ToolInvocation {
-            #[cfg(feature = "lsp")]
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
             session,
             payload,
             ..
@@ -156,6 +156,12 @@ impl ToolHandler for ReadFileHandler {
         #[cfg(feature = "lsp")]
         if let Some(ref lsp) = session.services.lsp_feedback {
             lsp.touch_nowait(&path).await;
+        }
+        #[cfg(feature = "treesitter")]
+        if let Some(ref treesitter) = session.services.treesitter_index
+            && let Err(error) = treesitter.reindex_absolute_path(&path)
+        {
+            tracing::debug!("tree-sitter reindex failed for {}: {error}", path.display());
         }
 
         Ok(ToolOutput::Function {

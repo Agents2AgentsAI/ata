@@ -174,6 +174,8 @@ pub enum Feature {
     Scheduler,
     /// Enable Language Server Protocol integration for diagnostics and code intelligence.
     Lsp,
+    /// Enable tree-sitter structural code intelligence integration.
+    TreeSitter,
 }
 
 impl Feature {
@@ -846,6 +848,16 @@ pub const FEATURES: &[FeatureSpec] = &[
             name: "LSP Integration",
             menu_description: "Enable Language Server Protocol integration for diagnostics and code intelligence queries.",
             announcement: "NEW: LSP integration provides real-time diagnostics and code navigation. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::TreeSitter,
+        key: "treesitter",
+        stage: Stage::Experimental {
+            name: "Tree-sitter Code Intel",
+            menu_description: "Enable fast structural code intelligence powered by tree-sitter indexing.",
+            announcement: "NEW: Tree-sitter code intelligence adds symbol search and structure exploration. Enable in /experimental!",
         },
         default_enabled: false,
     },

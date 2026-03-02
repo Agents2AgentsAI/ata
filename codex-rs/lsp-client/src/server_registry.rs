@@ -1,16 +1,19 @@
 //! Registry that manages a pool of LSP clients, one per (server_id, root) pair.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use lsp_types::*;
 use lsp_types::request::GotoImplementationResponse;
+use lsp_types::*;
 use tokio::sync::Mutex;
 use tracing;
 
-use crate::client::{LspClient, path_from_uri};
+use crate::client::LspClient;
+use crate::client::path_from_uri;
 use crate::error::LspError;
 use crate::root_discovery::nearest_root;
 use crate::server_config::LspServerConfig;
@@ -19,7 +22,9 @@ use crate::server_config::LspServerConfig;
 type ClientKey = (String, PathBuf);
 
 /// Callback type for confirming auto-install with the user.
-pub type InstallConfirmFn = Arc<dyn Fn(&str, &[String]) -> std::pin::Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;
+pub type InstallConfirmFn = Arc<
+    dyn Fn(&str, &[String]) -> std::pin::Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync,
+>;
 
 /// Manages a pool of LSP clients.
 pub struct ServerRegistry {
@@ -161,7 +166,10 @@ impl ServerRegistry {
 
         match result {
             Ok(client) => {
-                self.clients.lock().await.insert(key.clone(), client.clone());
+                self.clients
+                    .lock()
+                    .await
+                    .insert(key.clone(), client.clone());
                 notify.notify_waiters();
                 Ok(client)
             }
@@ -232,11 +240,7 @@ impl ServerRegistry {
 
     /// Sync a file to all applicable clients. If `wait` is true, also wait for
     /// diagnostics to settle and return them.
-    pub async fn touch_file(
-        &self,
-        path: &Path,
-        wait: bool,
-    ) -> HashMap<String, Vec<Diagnostic>> {
+    pub async fn touch_file(&self, path: &Path, wait: bool) -> HashMap<String, Vec<Diagnostic>> {
         let clients = self.get_clients(path).await;
         let mut all_diags = HashMap::new();
 
@@ -295,12 +299,7 @@ impl ServerRegistry {
         None
     }
 
-    pub async fn references(
-        &self,
-        path: &Path,
-        line: u32,
-        character: u32,
-    ) -> Vec<Location> {
+    pub async fn references(&self, path: &Path, line: u32, character: u32) -> Vec<Location> {
         let clients = self.get_clients(path).await;
         let mut all = Vec::new();
         for (_, client) in clients {
@@ -309,10 +308,7 @@ impl ServerRegistry {
         all
     }
 
-    pub async fn document_symbol(
-        &self,
-        path: &Path,
-    ) -> Option<DocumentSymbolResponse> {
+    pub async fn document_symbol(&self, path: &Path) -> Option<DocumentSymbolResponse> {
         let clients = self.get_clients(path).await;
         for (_, client) in clients {
             if let Some(result) = client.document_symbol(path).await {
@@ -360,10 +356,7 @@ impl ServerRegistry {
         all
     }
 
-    pub async fn incoming_calls(
-        &self,
-        item: CallHierarchyItem,
-    ) -> Vec<CallHierarchyIncomingCall> {
+    pub async fn incoming_calls(&self, item: CallHierarchyItem) -> Vec<CallHierarchyIncomingCall> {
         // Route to all clients — the item.uri tells us which server owns it.
         let path = match path_from_uri(&item.uri) {
             Some(p) => p,
@@ -377,10 +370,7 @@ impl ServerRegistry {
         all
     }
 
-    pub async fn outgoing_calls(
-        &self,
-        item: CallHierarchyItem,
-    ) -> Vec<CallHierarchyOutgoingCall> {
+    pub async fn outgoing_calls(&self, item: CallHierarchyItem) -> Vec<CallHierarchyOutgoingCall> {
         let path = match path_from_uri(&item.uri) {
             Some(p) => p,
             None => return Vec::new(),

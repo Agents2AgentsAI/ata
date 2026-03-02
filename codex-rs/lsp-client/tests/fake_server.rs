@@ -8,8 +8,9 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_lsp_client::LspClient;
+use codex_lsp_client::ServerRegistry;
 use codex_lsp_client::server_config::LspServerConfig;
-use codex_lsp_client::{LspClient, ServerRegistry};
 use tempfile::TempDir;
 
 /// Inline Python script implementing a minimal LSP server.
@@ -160,10 +161,7 @@ fn write_fake_server(dir: &TempDir) -> PathBuf {
 fn fake_config(script: &PathBuf) -> LspServerConfig {
     LspServerConfig {
         extensions: vec![".rs".into()],
-        command: vec![
-            "python3".into(),
-            script.to_string_lossy().to_string(),
-        ],
+        command: vec!["python3".into(), script.to_string_lossy().to_string()],
         env: HashMap::new(),
         root_markers: vec!["Cargo.toml".into()],
         initialization_options: None,
@@ -214,7 +212,12 @@ async fn diagnostics_published_after_did_open() {
     let diags = client.wait_for_diagnostics(&file_path).await;
 
     // The fake server publishes 2 diagnostics (1 error + 1 warning).
-    assert_eq!(diags.len(), 2, "expected 2 diagnostics, got {}", diags.len());
+    assert_eq!(
+        diags.len(),
+        2,
+        "expected 2 diagnostics, got {}",
+        diags.len()
+    );
     assert_eq!(diags[0].message, "fake error: type mismatch");
     assert_eq!(
         diags[0].severity,
@@ -280,10 +283,7 @@ async fn server_registry_touch_file_collects_diagnostics() {
 
     // touch_file with wait=true should return diagnostics.
     let diags = registry.touch_file(&file_path, true).await;
-    assert!(
-        !diags.is_empty(),
-        "expected diagnostics from touch_file"
-    );
+    assert!(!diags.is_empty(), "expected diagnostics from touch_file");
     let server_diags = diags.get("fake").expect("expected 'fake' server entry");
     assert_eq!(server_diags.len(), 2);
 
@@ -329,7 +329,10 @@ async fn server_registry_disabled_server_skipped() {
     let registry = Arc::new(ServerRegistry::new(servers, root.to_path_buf(), None));
 
     let diags = registry.touch_file(&file_path, true).await;
-    assert!(diags.is_empty(), "disabled server should not produce diagnostics");
+    assert!(
+        diags.is_empty(),
+        "disabled server should not produce diagnostics"
+    );
 
     registry.shutdown_all().await;
 }
@@ -361,7 +364,11 @@ async fn did_change_on_second_sync() {
     // The fake server only publishes diagnostics on didOpen, not didChange,
     // so we still see the same diagnostics from the first sync.
     let diags2 = client.diagnostics_for(&file_path).await;
-    assert_eq!(diags2.len(), 2, "diagnostics should persist after didChange");
+    assert_eq!(
+        diags2.len(),
+        2,
+        "diagnostics should persist after didChange"
+    );
 
     client.shutdown().await;
 }

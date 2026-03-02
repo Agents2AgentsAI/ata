@@ -64,4 +64,7 @@ pub(crate) struct SessionServices {
     /// LSP diagnostic feedback (feature-gated).
     #[cfg(feature = "lsp")]
     pub(crate) lsp_feedback: Option<Arc<crate::tools::lsp_feedback::LspFeedback>>,
+    /// Tree-sitter project index (feature-gated).
+    #[cfg(feature = "treesitter")]
+    pub(crate) treesitter_index: Option<Arc<codex_treesitter::ProjectIndex>>,
 }

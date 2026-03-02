@@ -79,6 +79,9 @@ pub(crate) struct ToolsConfig {
     /// LSP server registry for code intelligence (feature-gated).
     #[cfg(feature = "lsp")]
     pub lsp_registry: Option<Arc<codex_lsp_client::ServerRegistry>>,
+    /// Tree-sitter project index for structural code intelligence (feature-gated).
+    #[cfg(feature = "treesitter")]
+    pub treesitter_index: Option<Arc<codex_treesitter::ProjectIndex>>,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -165,6 +168,8 @@ impl ToolsConfig {
             features: (*features).clone(),
             #[cfg(feature = "lsp")]
             lsp_registry: None,
+            #[cfg(feature = "treesitter")]
+            treesitter_index: None,
         }
     }
 
@@ -2059,12 +2064,26 @@ pub(crate) fn build_specs_with_toolkits(
     #[cfg(feature = "lsp")]
     if config.features.enabled(Feature::Lsp) {
         if let Some(lsp_registry) = &config.lsp_registry {
-            use crate::tools::handlers::lsp::{LspToolHandler, create_lsp_tool};
+            use crate::tools::handlers::lsp::LspToolHandler;
+            use crate::tools::handlers::lsp::create_lsp_tool;
             let lsp_handler = Arc::new(LspToolHandler {
                 registry: Arc::clone(lsp_registry),
             });
             builder.push_spec_with_parallel_support(create_lsp_tool(), true);
             builder.register_handler("lsp", lsp_handler);
+        }
+    }
+
+    #[cfg(feature = "treesitter")]
+    if config.features.enabled(Feature::TreeSitter) {
+        if let Some(treesitter_index) = &config.treesitter_index {
+            use crate::tools::handlers::code_intel::CodeIntelToolHandler;
+            use crate::tools::handlers::code_intel::create_code_intel_tool;
+            let code_intel_handler = Arc::new(CodeIntelToolHandler {
+                index: Arc::clone(treesitter_index),
+            });
+            builder.push_spec_with_parallel_support(create_code_intel_tool(), true);
+            builder.register_handler("code_intel", code_intel_handler);
         }
     }
 

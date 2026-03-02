@@ -11,9 +11,12 @@ use serde::Deserialize;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::{ToolInvocation, ToolOutput, ToolPayload};
+use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
+use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::registry::{ToolHandler, ToolKind};
+use crate::tools::registry::ToolHandler;
+use crate::tools::registry::ToolKind;
 use crate::tools::spec::JsonSchema;
 
 const LSP_TOOL_DESCRIPTION: &str = include_str!("tool_lsp.txt");
@@ -66,10 +69,7 @@ impl ToolHandler for LspToolHandler {
         let result = match args.operation.as_str() {
             "goToDefinition" => {
                 let (path, line, char) = extract_position(&args)?;
-                let resp = self
-                    .registry
-                    .definition(&path, line, char)
-                    .await;
+                let resp = self.registry.definition(&path, line, char).await;
                 format_definition(resp)
             }
             "findReferences" => {
@@ -94,10 +94,7 @@ impl ToolHandler for LspToolHandler {
             }
             "goToImplementation" => {
                 let (path, line, char) = extract_position(&args)?;
-                let resp = self
-                    .registry
-                    .implementation(&path, line, char)
-                    .await;
+                let resp = self.registry.implementation(&path, line, char).await;
                 format_implementation(resp)
             }
             "prepareCallHierarchy" => {
@@ -153,9 +150,10 @@ impl ToolHandler for LspToolHandler {
 // ---------------------------------------------------------------------------
 
 fn extract_file(args: &LspToolArgs) -> Result<PathBuf, FunctionCallError> {
-    let file = args.file.as_deref().ok_or_else(|| {
-        FunctionCallError::RespondToModel("`file` is required".to_string())
-    })?;
+    let file = args
+        .file
+        .as_deref()
+        .ok_or_else(|| FunctionCallError::RespondToModel("`file` is required".to_string()))?;
     let path = PathBuf::from(file);
     if !path.is_absolute() {
         return Err(FunctionCallError::RespondToModel(
@@ -189,12 +187,17 @@ fn extract_position(args: &LspToolArgs) -> Result<(PathBuf, u32, u32), FunctionC
 fn format_definition(resp: Option<codex_lsp_client::lsp_types::GotoDefinitionResponse>) -> String {
     match resp {
         None => "No definition found.".to_string(),
-        Some(codex_lsp_client::lsp_types::GotoDefinitionResponse::Scalar(loc)) => format_location(&loc),
+        Some(codex_lsp_client::lsp_types::GotoDefinitionResponse::Scalar(loc)) => {
+            format_location(&loc)
+        }
         Some(codex_lsp_client::lsp_types::GotoDefinitionResponse::Array(locs)) => {
             if locs.is_empty() {
                 "No definition found.".to_string()
             } else {
-                locs.iter().map(format_location).collect::<Vec<_>>().join("\n")
+                locs.iter()
+                    .map(format_location)
+                    .collect::<Vec<_>>()
+                    .join("\n")
             }
         }
         Some(codex_lsp_client::lsp_types::GotoDefinitionResponse::Link(links)) => {
@@ -229,7 +232,10 @@ fn format_references(refs: &[codex_lsp_client::lsp_types::Location]) -> String {
     if refs.is_empty() {
         "No references found.".to_string()
     } else {
-        refs.iter().map(format_location).collect::<Vec<_>>().join("\n")
+        refs.iter()
+            .map(format_location)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -246,7 +252,9 @@ fn format_hover(hover: Option<codex_lsp_client::lsp_types::Hover>) -> String {
     match hover {
         None => "No hover information available.".to_string(),
         Some(h) => match h.contents {
-            codex_lsp_client::lsp_types::HoverContents::Scalar(content) => format_markup_content(content),
+            codex_lsp_client::lsp_types::HoverContents::Scalar(content) => {
+                format_markup_content(content)
+            }
             codex_lsp_client::lsp_types::HoverContents::Array(contents) => contents
                 .into_iter()
                 .map(format_markup_content)
@@ -266,7 +274,9 @@ fn format_markup_content(content: codex_lsp_client::lsp_types::MarkedString) -> 
     }
 }
 
-fn format_document_symbols(resp: Option<codex_lsp_client::lsp_types::DocumentSymbolResponse>) -> String {
+fn format_document_symbols(
+    resp: Option<codex_lsp_client::lsp_types::DocumentSymbolResponse>,
+) -> String {
     match resp {
         None => "No symbols found.".to_string(),
         Some(codex_lsp_client::lsp_types::DocumentSymbolResponse::Flat(symbols)) => {
@@ -360,7 +370,9 @@ pub(crate) fn create_lsp_tool() -> ToolSpec {
     properties.insert(
         "file".to_string(),
         JsonSchema::String {
-            description: Some("Absolute path to the file (required for most operations)".to_string()),
+            description: Some(
+                "Absolute path to the file (required for most operations)".to_string(),
+            ),
         },
     );
     properties.insert(

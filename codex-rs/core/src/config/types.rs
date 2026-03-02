@@ -1183,9 +1183,7 @@ pub enum LspConfig {
 #[serde(untagged)]
 pub enum LspServerConfigToml {
     /// `[lsp.server-name]\ndisabled = true`
-    DisabledOnly {
-        disabled: bool,
-    },
+    DisabledOnly { disabled: bool },
     /// Full server configuration.
     Full {
         command: Vec<String>,

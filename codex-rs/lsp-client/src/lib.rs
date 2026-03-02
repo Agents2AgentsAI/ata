@@ -16,7 +16,11 @@ pub mod server_config;
 pub mod server_registry;
 
 pub use client::LspClient;
-pub use config_merge::{UserServerFull, UserServerOverride, merge_configs};
+pub use config_merge::UserServerFull;
+pub use config_merge::UserServerOverride;
+pub use config_merge::merge_configs;
 pub use error::LspError;
-pub use server_config::{InstallConfig, InstallMethod, LspServerConfig};
+pub use server_config::InstallConfig;
+pub use server_config::InstallMethod;
+pub use server_config::LspServerConfig;
 pub use server_registry::ServerRegistry;

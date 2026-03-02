@@ -1,6 +1,8 @@
 //! Built-in LSP server configurations for common languages.
 
-use crate::server_config::{InstallConfig, InstallMethod, LspServerConfig};
+use crate::server_config::InstallConfig;
+use crate::server_config::InstallMethod;
+use crate::server_config::LspServerConfig;
 
 /// Returns the 6 built-in server configurations (v1).
 pub fn builtin_servers() -> Vec<(&'static str, LspServerConfig)> {
@@ -174,30 +176,21 @@ mod tests {
     #[test]
     fn all_servers_have_at_least_one_extension() {
         for (id, config) in builtin_servers() {
-            assert!(
-                !config.extensions.is_empty(),
-                "{id} has no extensions"
-            );
+            assert!(!config.extensions.is_empty(), "{id} has no extensions");
         }
     }
 
     #[test]
     fn all_servers_have_non_empty_command() {
         for (id, config) in builtin_servers() {
-            assert!(
-                !config.command.is_empty(),
-                "{id} has empty command"
-            );
+            assert!(!config.command.is_empty(), "{id} has empty command");
         }
     }
 
     #[test]
     fn all_servers_have_root_markers() {
         for (id, config) in builtin_servers() {
-            assert!(
-                !config.root_markers.is_empty(),
-                "{id} has no root markers"
-            );
+            assert!(!config.root_markers.is_empty(), "{id} has no root markers");
         }
     }
 

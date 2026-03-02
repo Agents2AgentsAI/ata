@@ -1,6 +1,7 @@
 //! LSP server configuration types.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -191,19 +192,31 @@ mod tests {
         let m = InstallMethod::Cargo { package: None };
         assert_eq!(m.install_command("ra"), vec!["cargo", "install", "ra"]);
 
-        let m = InstallMethod::Cargo { package: Some("rust-analyzer".into()) };
-        assert_eq!(m.install_command("ra"), vec!["cargo", "install", "rust-analyzer"]);
+        let m = InstallMethod::Cargo {
+            package: Some("rust-analyzer".into()),
+        };
+        assert_eq!(
+            m.install_command("ra"),
+            vec!["cargo", "install", "rust-analyzer"]
+        );
     }
 
     #[test]
     fn install_command_npm() {
-        let m = InstallMethod::Npm { package: Some("ts-server".into()) };
-        assert_eq!(m.install_command("ts"), vec!["npm", "install", "-g", "ts-server"]);
+        let m = InstallMethod::Npm {
+            package: Some("ts-server".into()),
+        };
+        assert_eq!(
+            m.install_command("ts"),
+            vec!["npm", "install", "-g", "ts-server"]
+        );
     }
 
     #[test]
     fn install_command_go() {
-        let m = InstallMethod::Go { package_path: "golang.org/x/tools/gopls".into() };
+        let m = InstallMethod::Go {
+            package_path: "golang.org/x/tools/gopls".into(),
+        };
         assert_eq!(
             m.install_command("gopls"),
             vec!["go", "install", "golang.org/x/tools/gopls@latest"]
@@ -212,7 +225,9 @@ mod tests {
 
     #[test]
     fn install_command_brew() {
-        let m = InstallMethod::Brew { formula: Some("llvm".into()) };
+        let m = InstallMethod::Brew {
+            formula: Some("llvm".into()),
+        };
         assert_eq!(m.install_command("clangd"), vec!["brew", "install", "llvm"]);
     }
 }
