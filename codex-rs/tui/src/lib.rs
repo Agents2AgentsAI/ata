@@ -981,7 +981,7 @@ pub enum LoginStatus {
 fn get_login_status(config: &Config, auth_manager: &AuthManager) -> LoginStatus {
     if config.model_provider.requires_openai_auth {
         match auth_manager.auth_cached() {
-            Some(auth) if !auth.api_key().is_some_and(|k| k.is_empty()) => {
+            Some(auth) if !auth.api_key().is_some_and(str::is_empty) => {
                 LoginStatus::AuthMode(auth.auth_mode())
             }
             _ => LoginStatus::NotAuthenticated,
