@@ -1713,10 +1713,8 @@ impl Session {
                             [] => None,
                         };
 
-                        let justification = Some(format!(
-                            "{prompt}\nCommand: `{}`",
-                            command.join(" ")
-                        ));
+                        let justification =
+                            Some(format!("{prompt} Command: `{}`", command.join(" ")));
 
                         let context = crate::unified_exec::UnifiedExecContext::new(
                             Arc::clone(&sess),

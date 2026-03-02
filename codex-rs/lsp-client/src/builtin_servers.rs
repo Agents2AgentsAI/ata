@@ -27,8 +27,8 @@ fn rust_analyzer() -> (&'static str, LspServerConfig) {
             initialization_options: None,
             disabled: false,
             install: Some(InstallConfig {
-                method: InstallMethod::Cargo {
-                    package: Some("rust-analyzer".into()),
+                method: InstallMethod::RustupComponent {
+                    component: Some("rust-analyzer".into()),
                 },
             }),
         },
@@ -206,6 +206,18 @@ mod tests {
         let (_, config) = rust_analyzer();
         assert!(config.matches_extension(".rs"));
         assert!(!config.matches_extension(".py"));
+    }
+
+    #[test]
+    fn rust_analyzer_uses_rustup_component_install() {
+        let (_, config) = rust_analyzer();
+        let Some(install) = config.install else {
+            panic!("rust-analyzer should have an install method");
+        };
+        assert_eq!(
+            install.method.install_command("rust-analyzer"),
+            vec!["rustup", "component", "add", "rust-analyzer"]
+        );
     }
 
     #[test]

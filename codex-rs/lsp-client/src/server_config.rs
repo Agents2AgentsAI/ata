@@ -74,6 +74,10 @@ pub enum InstallMethod {
         #[serde(default)]
         package: Option<String>,
     },
+    RustupComponent {
+        #[serde(default)]
+        component: Option<String>,
+    },
     Npm {
         #[serde(default)]
         package: Option<String>,
@@ -101,6 +105,10 @@ impl InstallMethod {
             InstallMethod::Cargo { package } => {
                 let pkg = package.as_deref().unwrap_or(binary_name);
                 vec!["cargo".into(), "install".into(), pkg.into()]
+            }
+            InstallMethod::RustupComponent { component } => {
+                let comp = component.as_deref().unwrap_or(binary_name);
+                vec!["rustup".into(), "component".into(), "add".into(), comp.into()]
             }
             InstallMethod::Npm { package } => {
                 let pkg = package.as_deref().unwrap_or(binary_name);
@@ -209,6 +217,26 @@ mod tests {
         assert_eq!(
             m.install_command("ts"),
             vec!["npm", "install", "-g", "ts-server"]
+        );
+    }
+
+    #[test]
+    fn install_command_rustup_component_default_binary() {
+        let m = InstallMethod::RustupComponent { component: None };
+        assert_eq!(
+            m.install_command("rust-analyzer"),
+            vec!["rustup", "component", "add", "rust-analyzer"]
+        );
+    }
+
+    #[test]
+    fn install_command_rustup_component_explicit_component() {
+        let m = InstallMethod::RustupComponent {
+            component: Some("rust-analyzer".into()),
+        };
+        assert_eq!(
+            m.install_command("ra-proxy"),
+            vec!["rustup", "component", "add", "rust-analyzer"]
         );
     }
 
