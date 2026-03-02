@@ -872,6 +872,27 @@ impl SandboxPolicy {
                             }
                         }
                     }
+
+                    // Allow writing the session-scoped workspace selection
+                    // file under CODEX_HOME/sessions/<scope-id>/workspace.json
+                    // so `ata workspace select` can persist state inside the
+                    // sandbox writable roots.
+                    if let Some(scope_id) = workspace_scope_id_from_env() {
+                        let session_dir = codex_home.join("sessions").join(&scope_id);
+                        let _ = std::fs::create_dir_all(&session_dir);
+                        match AbsolutePathBuf::from_absolute_path(&session_dir) {
+                            Ok(session_path) => {
+                                if !roots.iter().any(|r| r == &session_path) {
+                                    roots.push(session_path);
+                                }
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Ignoring session scope dir {session_dir:?} for sandbox writable root: {e}",
+                                );
+                            }
+                        }
+                    }
                 }
 
                 // Include the scheduler directories under codex home
@@ -945,6 +966,40 @@ impl SandboxPolicy {
             }
         }
     }
+}
+
+const CODEX_SESSION_ID_ENV_VAR: &str = "CODEX_SESSION_ID";
+const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
+
+fn workspace_scope_id_from_env() -> Option<String> {
+    let session_id = std::env::var(CODEX_SESSION_ID_ENV_VAR).ok();
+    let thread_id = std::env::var(CODEX_THREAD_ID_ENV_VAR).ok();
+    workspace_scope_id(session_id.as_deref(), thread_id.as_deref())
+}
+
+fn workspace_scope_id(session_id: Option<&str>, thread_id: Option<&str>) -> Option<String> {
+    for (source, candidate) in [
+        (CODEX_SESSION_ID_ENV_VAR, session_id),
+        (CODEX_THREAD_ID_ENV_VAR, thread_id),
+    ] {
+        let Some(scope_id) = candidate.map(str::trim).filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        if is_safe_scope_id(scope_id) {
+            return Some(scope_id.to_string());
+        }
+        error!("Ignoring unsafe {source} value for sandbox writable root: {scope_id:?}",);
+    }
+    None
+}
+
+fn is_safe_scope_id(scope_id: &str) -> bool {
+    if scope_id.contains('\\') {
+        return false;
+    }
+    let mut components = Path::new(scope_id).components();
+    matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none()
 }
 
 fn is_git_pointer_file(path: &AbsolutePathBuf) -> bool {
@@ -3158,6 +3213,27 @@ mod tests {
             }
             .rejects_mcp_elicitations()
         );
+    }
+
+    #[test]
+    fn workspace_scope_id_prefers_session_id() {
+        let scope_id = workspace_scope_id(Some("session-123"), Some("thread-456"));
+        assert_eq!(scope_id, Some("session-123".to_string()));
+    }
+
+    #[test]
+    fn workspace_scope_id_falls_back_to_thread_id_on_invalid_session_id() {
+        let scope_id = workspace_scope_id(Some("../bad-session"), Some("thread-456"));
+        assert_eq!(scope_id, Some("thread-456".to_string()));
+    }
+
+    #[test]
+    fn workspace_scope_id_rejects_unsafe_values() {
+        assert_eq!(workspace_scope_id(Some(""), Some("..")), None);
+        assert_eq!(workspace_scope_id(Some("foo/bar"), None), None);
+        assert_eq!(workspace_scope_id(Some(r"foo\bar"), None), None);
+        assert_eq!(workspace_scope_id(Some("."), None), None);
+        assert_eq!(workspace_scope_id(Some(".."), None), None);
     }
 
     #[test]
