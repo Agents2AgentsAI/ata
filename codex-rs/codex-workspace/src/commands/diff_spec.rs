@@ -12,6 +12,7 @@ pub fn run(workspace_id: &str, spec_path: &Path) -> Result<String, WorkspaceErro
 
     let mut adds = Vec::new();
     let mut pins = Vec::new();
+    let mut refs = Vec::new();
     let mut skips = Vec::new();
 
     for action in &actions {
@@ -21,6 +22,9 @@ pub fn run(workspace_id: &str, spec_path: &Path) -> Result<String, WorkspaceErro
                 current_sha,
                 target_sha,
             } => pins.push((action.alias.as_str(), current_sha.as_str(), target_sha.as_str())),
+            ActionKind::Ref { ref_name } => {
+                refs.push((action.alias.as_str(), ref_name.as_str()))
+            }
             ActionKind::Skip => skips.push(action.alias.as_str()),
         }
     }
@@ -41,6 +45,13 @@ pub fn run(workspace_id: &str, spec_path: &Path) -> Result<String, WorkspaceErro
         }
     }
 
+    if !refs.is_empty() {
+        output.push_str(&format!("Ref ({}):\n", refs.len()));
+        for (alias, ref_name) in &refs {
+            output.push_str(&format!("  ? {alias}: ref={ref_name}\n"));
+        }
+    }
+
     if !skips.is_empty() {
         output.push_str(&format!("Skip ({}):\n", skips.len()));
         for alias in &skips {
@@ -48,13 +59,14 @@ pub fn run(workspace_id: &str, spec_path: &Path) -> Result<String, WorkspaceErro
         }
     }
 
-    if adds.is_empty() && pins.is_empty() {
+    if adds.is_empty() && pins.is_empty() && refs.is_empty() {
         output.push_str("No changes needed.\n");
     } else {
         output.push_str(&format!(
-            "\nSummary: {} add, {} pin, {} skip\n",
+            "\nSummary: {} add, {} pin, {} ref, {} skip\n",
             adds.len(),
             pins.len(),
+            refs.len(),
             skips.len()
         ));
     }

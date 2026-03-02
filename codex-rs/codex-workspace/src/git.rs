@@ -136,6 +136,38 @@ pub fn git_common_dir(path: &Path) -> Option<std::path::PathBuf> {
         })
 }
 
+/// Resolve a git ref (branch/tag) to a commit SHA in a local checkout.
+pub fn resolve_ref(repo_dir: &Path, ref_name: &str) -> Option<String> {
+    Command::new("git")
+        .args(["-C", repo_dir.to_str().unwrap_or("."), "rev-parse", ref_name])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Fetch a specific SHA (if needed) and checkout to it.
+pub fn fetch_and_checkout(repo_dir: &Path, sha: &str) -> Result<bool, std::io::Error> {
+    // Try fetch first (needed for shallow clones or if sha not present locally)
+    let _ = Command::new("git")
+        .args([
+            "-C",
+            repo_dir.to_str().unwrap_or("."),
+            "fetch",
+            "origin",
+            sha,
+            "--depth",
+            "1",
+        ])
+        .output();
+    // Checkout
+    let output = Command::new("git")
+        .args(["-C", repo_dir.to_str().unwrap_or("."), "checkout", sha])
+        .output()?;
+    Ok(output.status.success())
+}
+
 /// Derive repo_key from URL (strip scheme, trailing .git, keep last 2 path segments).
 pub fn derive_repo_key(url: &str) -> String {
     let mut key = url.trim_end_matches('/').to_string();
