@@ -42,6 +42,18 @@ pub fn nearest_root(file: &Path, workspace_root: &Path, markers: &[String]) -> P
     workspace_root.to_path_buf()
 }
 
+/// Returns true if `dir` contains any marker from `markers`.
+///
+/// Marker entries may be literal file names (like `Cargo.toml`) or glob patterns
+/// (like `*.xcodeproj`).
+pub fn dir_has_any_marker(dir: &Path, markers: &[String]) -> bool {
+    if markers.is_empty() {
+        return true;
+    }
+    let glob_set = build_glob_set(markers);
+    has_marker(dir, &glob_set, markers)
+}
+
 /// Build a `GlobSet` from marker patterns (only those containing glob chars).
 fn build_glob_set(markers: &[String]) -> Option<GlobSet> {
     let mut builder = GlobSetBuilder::new();
@@ -134,5 +146,22 @@ mod tests {
         let root = tmp.path();
         let result = nearest_root(&root.join("file.rs"), root, &[]);
         assert_eq!(result, root);
+    }
+
+    #[test]
+    fn dir_has_any_marker_literal() {
+        let tmp = TempDir::new().expect("tmp");
+        let root = tmp.path();
+        std::fs::write(root.join("Cargo.toml"), "").expect("write marker");
+        assert!(dir_has_any_marker(root, &["Cargo.toml".to_string()]));
+        assert!(!dir_has_any_marker(root, &["go.mod".to_string()]));
+    }
+
+    #[test]
+    fn dir_has_any_marker_glob() {
+        let tmp = TempDir::new().expect("tmp");
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("Foo.xcodeproj")).expect("mkdir");
+        assert!(dir_has_any_marker(root, &["*.xcodeproj".to_string()]));
     }
 }

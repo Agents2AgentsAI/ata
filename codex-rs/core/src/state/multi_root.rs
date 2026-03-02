@@ -32,7 +32,7 @@ pub(crate) struct MultiRootState {
     #[cfg(feature = "lsp")]
     lsp_registries: RwLock<HashMap<String, Arc<codex_lsp_client::ServerRegistry>>>,
     #[cfg(feature = "lsp")]
-    install_confirm: std::sync::RwLock<Option<codex_lsp_client::server_registry::InstallConfirmFn>>,
+    install_confirm: std::sync::RwLock<Option<codex_lsp_client::server_registry::InstallRunnerFn>>,
     #[cfg(feature = "treesitter")]
     treesitter_config: Option<codex_treesitter::ProjectIndexConfig>,
     #[cfg(feature = "treesitter")]
@@ -243,7 +243,9 @@ impl MultiRootState {
         };
 
         #[cfg(feature = "lsp")]
-        let lsp_registry = if let Some(servers) = &self.lsp_server_configs {
+        let lsp_registry = if let Some(servers) = &self.lsp_server_configs
+            && !servers.is_empty()
+        {
             let callback = self
                 .install_confirm
                 .read()
@@ -556,7 +558,7 @@ impl MultiRootState {
     #[cfg(feature = "lsp")]
     pub async fn set_install_confirm(
         &self,
-        callback: Option<codex_lsp_client::server_registry::InstallConfirmFn>,
+        callback: Option<codex_lsp_client::server_registry::InstallRunnerFn>,
     ) {
         if let Ok(mut guard) = self.install_confirm.write() {
             *guard = callback.clone();

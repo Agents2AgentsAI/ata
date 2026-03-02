@@ -131,7 +131,12 @@ impl ToolHandler for LspToolHandler {
                 format_document_symbols(resp)
             }
             LspOperation::WorkspaceSymbol => {
-                let query = args.query.as_deref().unwrap_or("");
+                let query = args.query.as_deref().map(str::trim).unwrap_or("");
+                if query.is_empty() {
+                    return Err(FunctionCallError::RespondToModel(
+                        "workspaceSymbol requires a non-empty `query` string".to_string(),
+                    ));
+                }
                 let registries = self.state.lsp_registries(args.root.as_deref()).await;
                 if registries.is_empty() {
                     return Err(FunctionCallError::RespondToModel(
@@ -143,8 +148,15 @@ impl ToolHandler for LspToolHandler {
                     ));
                 }
                 let mut symbols = Vec::new();
+                let mut any_running_clients = false;
                 for (_, registry) in registries {
                     symbols.extend(registry.workspace_symbol(query).await);
+                    any_running_clients |= registry.running_client_count().await > 0;
+                }
+                if symbols.is_empty() && !any_running_clients {
+                    return Err(FunctionCallError::RespondToModel(
+                        "no LSP servers are running (failed to start any)".to_string(),
+                    ));
                 }
                 format_workspace_symbols(&symbols, limit)
             }
@@ -287,6 +299,14 @@ impl LspToolHandler {
                 "no LSP server configured for {} under root '{}'",
                 path.display(),
                 root_name
+            )));
+        }
+
+        let clients = registry.get_clients(path).await;
+        if clients.is_empty() {
+            let display_path = path.display();
+            return Err(FunctionCallError::RespondToModel(format!(
+                "no LSP server could be started for {display_path} under root '{root_name}'"
             )));
         }
 

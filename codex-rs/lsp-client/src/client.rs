@@ -11,6 +11,8 @@ use lsp_types::request::GotoImplementationParams;
 use lsp_types::request::GotoImplementationResponse;
 use lsp_types::*;
 use serde_json::Value;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
@@ -108,7 +110,7 @@ impl LspClient {
         cmd.args(args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .current_dir(&root_canonical)
             .kill_on_drop(true);
 
@@ -128,6 +130,32 @@ impl LspClient {
             .stdout
             .take()
             .ok_or_else(|| LspError::SpawnFailed("no stdout".into()))?;
+        let mut stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| LspError::SpawnFailed("no stderr".into()))?;
+
+        // Early-death detection: wait briefly for shims that exit immediately.
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        if let Some(exit_status) = child.try_wait().map_err(LspError::Io)? {
+            let mut stderr_buf = String::new();
+            let _ = stderr.read_to_string(&mut stderr_buf).await;
+            let stderr_msg = stderr_buf.trim().to_string();
+            return Err(LspError::ProcessExitedImmediately {
+                status: exit_status.to_string(),
+                stderr: stderr_msg,
+            });
+        }
+
+        // Server is still running — spawn a background task to drain stderr.
+        let drain_server_id = server_id.to_string();
+        tokio::spawn(async move {
+            let reader = tokio::io::BufReader::new(stderr);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                tracing::trace!(server = %drain_server_id, "stderr: {line}");
+            }
+        });
 
         let (diag_tx, _) = broadcast::channel(64);
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
