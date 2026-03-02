@@ -1,5 +1,6 @@
 use crate::error::WorkspaceError;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 const LOCK_TIMEOUT_S: u64 = 30;
 const LOCK_POLL_INTERVAL_MS: u64 = 50;
@@ -29,8 +30,7 @@ impl FileLock {
             .open(lock_path)?;
         let fd = file.into_raw_fd();
 
-        let deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(LOCK_TIMEOUT_S);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(LOCK_TIMEOUT_S);
 
         loop {
             let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };

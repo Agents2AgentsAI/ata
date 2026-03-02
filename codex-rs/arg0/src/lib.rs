@@ -320,10 +320,7 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
             let batch_script = path.join("ata.bat");
             std::fs::write(
                 &batch_script,
-                format!(
-                    "@echo off\n\"{}\" %*\n",
-                    exe.display()
-                ),
+                format!("@echo off\n\"{}\" %*\n", exe.display()),
             )?;
         }
     }

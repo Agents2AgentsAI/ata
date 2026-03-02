@@ -5,8 +5,8 @@ use serde_json::Value;
 
 /// Append an audit entry from raw JSON input.
 pub fn run(workspace_id: &str, json_str: &str) -> Result<AuditEntry, WorkspaceError> {
-    let input: Value = serde_json::from_str(json_str)
-        .map_err(|e| WorkspaceError::InvalidJson(e.to_string()))?;
+    let input: Value =
+        serde_json::from_str(json_str).map_err(|e| WorkspaceError::InvalidJson(e.to_string()))?;
 
     let op = input
         .get("op")

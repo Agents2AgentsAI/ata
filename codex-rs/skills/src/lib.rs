@@ -189,9 +189,7 @@ pub fn install_workspace_skills(codex_home: &Path) -> Result<(), SystemSkillsErr
 
     let marker_path = dest_workspace
         .join(WORKSPACE_SKILLS_MARKER_FILENAME)
-        .map_err(|source| {
-            SystemSkillsError::io("resolve workspace skills marker path", source)
-        })?;
+        .map_err(|source| SystemSkillsError::io("resolve workspace skills marker path", source))?;
     let expected_fingerprint = embedded_workspace_skills_fingerprint();
     if dest_workspace.as_path().is_dir()
         && read_marker(&marker_path).is_ok_and(|marker| marker == expected_fingerprint)

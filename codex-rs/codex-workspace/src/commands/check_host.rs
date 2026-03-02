@@ -1,6 +1,7 @@
 use crate::error::WorkspaceError;
 use crate::manifest::read_manifest;
-use crate::url_validation::{check_host_allowlist, validate_repo_url};
+use crate::url_validation::check_host_allowlist;
+use crate::url_validation::validate_repo_url;
 
 /// Validate a URL and check it against the workspace host allowlist.
 pub fn run(workspace_id: &str, url: &str) -> Result<(), WorkspaceError> {

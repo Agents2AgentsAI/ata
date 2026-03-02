@@ -36,10 +36,7 @@ pub fn validate_repo_url(url: &str) -> Result<(), WorkspaceError> {
 
 /// Extract and normalize host from URL (lowercase, strip default port `:443`).
 pub fn extract_host(url: &str) -> String {
-    let after_scheme = url
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .unwrap_or(url);
+    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
     let host_part = after_scheme
         .split('/')
         .next()
@@ -61,10 +58,7 @@ pub fn extract_host(url: &str) -> String {
 }
 
 /// Check host against allowlist. `None` = allow all, empty `[]` = block all.
-pub fn check_host_allowlist(
-    url: &str,
-    allowlist: Option<&[String]>,
-) -> Result<(), WorkspaceError> {
+pub fn check_host_allowlist(url: &str, allowlist: Option<&[String]>) -> Result<(), WorkspaceError> {
     if let Some(allowed) = allowlist {
         let host = extract_host(url);
         let allowed_lower: Vec<String> = allowed.iter().map(|h| h.to_lowercase()).collect();
@@ -93,10 +87,7 @@ mod tests {
 
     #[test]
     fn test_extract_host() {
-        assert_eq!(
-            extract_host("https://GitHub.COM/org/repo"),
-            "github.com"
-        );
+        assert_eq!(extract_host("https://GitHub.COM/org/repo"), "github.com");
         assert_eq!(
             extract_host("https://github.com:443/org/repo"),
             "github.com"
@@ -114,16 +105,14 @@ mod tests {
         // Empty = block all
         assert!(check_host_allowlist("https://any.com/repo", Some(&[])).is_err());
         // Match
-        assert!(check_host_allowlist(
-            "https://github.com/repo",
-            Some(&["github.com".to_string()])
-        )
-        .is_ok());
+        assert!(
+            check_host_allowlist("https://github.com/repo", Some(&["github.com".to_string()]))
+                .is_ok()
+        );
         // No match
-        assert!(check_host_allowlist(
-            "https://gitlab.com/repo",
-            Some(&["github.com".to_string()])
-        )
-        .is_err());
+        assert!(
+            check_host_allowlist("https://gitlab.com/repo", Some(&["github.com".to_string()]))
+                .is_err()
+        );
     }
 }

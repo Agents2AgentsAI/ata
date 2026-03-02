@@ -43,9 +43,8 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), WorkspaceError> {
         tmp.write_all(data)?;
         tmp.as_file().sync_all()?;
     }
-    tmp.persist(path).map_err(|e| {
-        std::io::Error::other(format!("persist failed: {e}"))
-    })?;
+    tmp.persist(path)
+        .map_err(|e| std::io::Error::other(format!("persist failed: {e}")))?;
     // fsync parent directory
     #[cfg(unix)]
     {

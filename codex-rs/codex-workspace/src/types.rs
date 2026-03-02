@@ -1,5 +1,7 @@
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde::Deserialize;
+use serde::Serialize;
+use serde_json::Map;
+use serde_json::Value;
 
 /// Workspace manifest (schema v2).
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,10 +1,17 @@
 use crate::audit::write_audit;
-use crate::commands::{repo_clone, repo_pin, repo_update_state, set_field};
+use crate::commands::repo_clone;
+use crate::commands::repo_pin;
+use crate::commands::repo_update_state;
+use crate::commands::set_field;
 use crate::error::WorkspaceError;
-use crate::manifest::{read_manifest, with_locked_manifest};
-use crate::spec::{read_spec, WorkspaceSpec};
-use crate::{git, paths};
-use serde_json::{json, Value};
+use crate::git;
+use crate::manifest::read_manifest;
+use crate::manifest::with_locked_manifest;
+use crate::paths;
+use crate::spec::WorkspaceSpec;
+use crate::spec::read_spec;
+use serde_json::Value;
+use serde_json::json;
 use std::path::Path;
 
 /// Action determined for each repo in the spec.
@@ -19,7 +26,10 @@ pub enum ActionKind {
     /// Repo doesn't exist in workspace — needs cloning.
     Add,
     /// Repo exists but pinned SHA differs — needs re-pin.
-    Pin { current_sha: String, target_sha: String },
+    Pin {
+        current_sha: String,
+        target_sha: String,
+    },
     /// Repo has a `ref` but no `sha` — needs ref resolution at runtime.
     Ref { ref_name: String },
     /// Repo exists and matches spec — nothing to do.
@@ -27,10 +37,7 @@ pub enum ActionKind {
 }
 
 /// Compute what materialize would do without executing.
-pub fn plan(
-    workspace_id: &str,
-    spec: &WorkspaceSpec,
-) -> Result<Vec<RepoAction>, WorkspaceError> {
+pub fn plan(workspace_id: &str, spec: &WorkspaceSpec) -> Result<Vec<RepoAction>, WorkspaceError> {
     let manifest = read_manifest(workspace_id)?;
     let mut actions = Vec::new();
 
@@ -102,11 +109,7 @@ pub fn plan(
 /// - If in workspace and matches → skip
 ///
 /// Also applies policies, labels, and extra fields from the spec.
-pub fn run(
-    workspace_id: &str,
-    spec_path: &Path,
-    dry_run: bool,
-) -> Result<Value, WorkspaceError> {
+pub fn run(workspace_id: &str, spec_path: &Path, dry_run: bool) -> Result<Value, WorkspaceError> {
     let spec = read_spec(spec_path)?;
     let actions = plan(workspace_id, &spec)?;
 
@@ -217,7 +220,8 @@ pub fn run(
         let spec_labels = spec.labels.clone();
         with_locked_manifest(workspace_id, None, move |m| {
             if let Some(sp) = spec_policies {
-                let mut existing = serde_json::to_value(&m.policies).map_err(WorkspaceError::Json)?;
+                let mut existing =
+                    serde_json::to_value(&m.policies).map_err(WorkspaceError::Json)?;
                 let incoming = serde_json::to_value(&sp).map_err(WorkspaceError::Json)?;
                 if let (Some(base), Some(patch)) = (existing.as_object_mut(), incoming.as_object())
                 {
