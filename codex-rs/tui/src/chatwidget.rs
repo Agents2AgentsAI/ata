@@ -3401,14 +3401,16 @@ impl ChatWidget {
                 }
                 return;
             }
-            // Ctrl+M: toggle voice mode.
+            // Ctrl+Shift+M: toggle voice mode.
+            // Requires enhanced keyboard protocol (Kitty) — works on iTerm2,
+            // Ghostty, Kitty, WezTerm.  Fallback: `/voice` command.
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
             KeyEvent {
-                code: KeyCode::Char(c),
+                code: KeyCode::Char('M'),
                 modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'m') => {
+            } if modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
                 self.toggle_voice_mode();
                 return;
             }
@@ -4284,8 +4286,27 @@ impl ChatWidget {
                     text_elements: text_elements.clone(),
                 });
             } else {
+                // Voice mode was previously on but now off — tell the agent
+                // to stop using <voice> tags.
+                #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+                let voice_was_on = self
+                    .voice_mode_state
+                    .as_ref()
+                    .is_some_and(|s| !s.is_active());
+                #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
+                let voice_was_on = false;
+
+                let model_text = if voice_was_on {
+                    format!(
+                        "{}{}",
+                        crate::chatwidget::voice_mode::VOICE_MODE_OFF_INSTRUCTION,
+                        &text,
+                    )
+                } else {
+                    text.clone()
+                };
                 items.push(UserInput::Text {
-                    text: text.clone(),
+                    text: model_text,
                     text_elements: text_elements.clone(),
                 });
             }

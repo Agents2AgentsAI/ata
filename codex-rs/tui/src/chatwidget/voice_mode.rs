@@ -39,6 +39,13 @@ or \"Checking a few more files.\"). Keep these to one sentence.\n\
 For purely conversational responses with no code or tools, wrap the entire \
 response in <voice> tags.\n\n";
 
+/// Instruction prepended to the first user message after voice mode is
+/// turned off, so the agent stops using `<voice>` tags.
+pub(crate) const VOICE_MODE_OFF_INSTRUCTION: &str = "\
+[VOICE MODE OFF] Voice mode has been turned off. \
+Do NOT use <voice></voice> tags in your responses. \
+Respond normally with plain text.\n\n";
+
 
 // ─── Voice mode phase ────────────────────────────────────────────────────────
 
@@ -424,10 +431,11 @@ pub(crate) struct VoiceModeState {
     /// When narrating a section, tracks the (document_id, section_index)
     /// and content hash so chunks can be collected for caching.
     pub(crate) narrating_section: Option<(String, usize, u64)>,
-    /// True when the current narration is for a visual selection rather
-    /// than the full section.  Selection narrations use overlay-style
-    /// karaoke and skip caching.
-    pub(crate) narrating_selection: bool,
+    /// When narrating a visual selection, holds the word offset of the
+    /// selection start within the section's rendered lines.  The offset
+    /// is added to TTS word indices so karaoke highlights the correct
+    /// word in-place.  `None` means full-section narration.
+    pub(crate) selection_word_offset: Option<usize>,
     /// Cleaned text sent to TTS for the current narration (preserves newlines).
     /// Used by the karaoke builder to maintain line structure in the display.
     pub(crate) narrating_cleaned_text: Option<String>,
@@ -480,7 +488,7 @@ impl VoiceModeState {
             tts_section_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             prefetch_pending: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             narrating_section: None,
-            narrating_selection: false,
+            selection_word_offset: None,
             narrating_cleaned_text: None,
             narrating_chunks: Vec::new(),
             tts_alignment_timeline: Vec::new(),
@@ -528,7 +536,7 @@ impl VoiceModeState {
         self.tts_ordering_lock = Arc::new(tokio::sync::Mutex::new(()));
         // Clear narration collection state.
         self.narrating_section = None;
-        self.narrating_selection = false;
+        self.selection_word_offset = None;
         self.narrating_cleaned_text = None;
         self.narrating_chunks.clear();
         // Clear alignment timeline and highlight.
@@ -632,7 +640,7 @@ impl super::ChatWidget {
             .set_document_reader_voice_status(None);
     }
 
-    /// Toggle voice mode on/off (Ctrl+M or /voice).
+    /// Toggle voice mode on/off (Ctrl+Shift+M or /voice).
     pub(crate) fn toggle_voice_mode(&mut self) {
         if !self.config.features.enabled(codex_core::features::Feature::VoiceMode) {
             self.add_info_message(
@@ -690,7 +698,7 @@ impl super::ChatWidget {
             .send(AppEvent::PersistVoiceModeEnabled(true));
 
         self.add_info_message(
-            "Voice mode on. Hold Space to speak. Ctrl+M to stop.".to_string(),
+            "Voice mode on. Hold Space to speak. Ctrl+Shift+M to stop.".to_string(),
             None,
         );
 
@@ -1107,7 +1115,12 @@ impl super::ChatWidget {
             return None;
         };
         if !state.is_active() {
-            return None;
+            // Voice mode was previously on but is now off.  The agent may
+            // still emit <voice> tags from earlier instructions in the
+            // conversation context.  Strip them for clean display without
+            // sending anything to TTS.
+            let result = state.voice_tag_parser.push(delta);
+            return Some(result.display_text);
         }
 
         // In reading view mode, narrate ALL text (no <voice> tags needed).
@@ -1336,14 +1349,12 @@ impl super::ChatWidget {
         };
 
         // Store collected narration chunks + alignment in cache.
-        // Skip caching for selections — they are ad-hoc and not worth storing.
-        let was_selection = state.narrating_selection;
         state.narrating_cleaned_text = None;
-        state.narrating_selection = false;
+        state.selection_word_offset = None;
         if let Some((doc_id, sec_idx, content_hash)) = state.narrating_section.take() {
             let chunks = std::mem::take(&mut state.narrating_chunks);
             let alignment_timeline = state.tts_alignment_timeline.clone();
-            if !was_selection && !chunks.is_empty() {
+            if !chunks.is_empty() {
                 if let Ok(mut cache) = state.tts_section_cache.lock() {
                     cache.insert(
                         (doc_id, sec_idx),
@@ -1749,33 +1760,31 @@ impl super::ChatWidget {
             .voice_mode_state
             .as_ref()
             .is_some_and(|s| s.narrating_section.is_some());
-        let is_selection = self
-            .voice_mode_state
-            .as_ref()
-            .is_some_and(|s| s.narrating_selection);
 
-        if is_narrating && !is_selection {
-            // Full-section narration: send word index to the view which maps
-            // it to a rendered line, preserving markdown formatting.
-            let word_idx = self
+        if is_narrating {
+            // Narration mode (full section or selection): send word index to
+            // the view which maps it to a rendered line, preserving markdown.
+            // For selections, add the word offset so karaoke highlights the
+            // correct position within the full rendered content.
+            let (word_idx, sel_offset) = self
                 .voice_mode_state
                 .as_ref()
-                .and_then(|s| s.tts_highlight_word_idx);
+                .map(|s| (s.tts_highlight_word_idx, s.selection_word_offset.unwrap_or(0)))
+                .unwrap_or((None, 0));
+            let adjusted = word_idx.map(|w| w + sel_offset);
             self.bottom_pane
-                .set_document_reader_reading_progress(word_idx, 0);
+                .set_document_reader_reading_progress(adjusted, 0);
         } else {
-            // Q&A or selection: build karaoke lines with word-level highlighting.
-            // Q&A appends after content; selection replaces content.
+            // Q&A mode: build karaoke lines with word-level highlighting.
             let width = self
                 .last_rendered_width
                 .get()
                 .map(|w| w.saturating_sub(8) as u16)
                 .unwrap_or(72);
-            let heading = String::new();
+            let heading = String::new(); // Don't skip heading words for Q&A
             let lines = self.build_reading_view_karaoke_lines(width, &heading);
-            let append = !is_selection;
             self.bottom_pane
-                .set_document_reader_karaoke_lines(lines, append);
+                .set_document_reader_karaoke_lines(lines, true);
         }
     }
 
@@ -1953,7 +1962,7 @@ impl super::ChatWidget {
         document_id: String,
         section_index: usize,
         raw_text: String,
-        selection: bool,
+        selection_word_offset: Option<usize>,
     ) {
         // Phase 1: check preconditions and interrupt (borrows state mutably).
         {
@@ -1973,48 +1982,47 @@ impl super::ChatWidget {
 
         let content_hash = hash_text(&cleaned);
 
-        // Phase 2: check cache — skip for selections (ad-hoc text, not worth caching).
-        if !selection {
-            let cached: Option<(Vec<Vec<i16>>, Vec<AlignmentEntry>)> = self
-                .voice_mode_state
-                .as_ref()
-                .and_then(|state| {
-                    state
-                        .tts_section_cache
-                        .lock()
-                        .ok()
-                        .and_then(|cache| {
-                            cache
-                                .get(&(document_id.clone(), section_index))
-                                .filter(|entry| entry.content_hash == content_hash)
-                                .map(|entry| {
-                                    (entry.chunks.clone(), entry.alignment_timeline.clone())
-                                })
-                        })
-                });
+        // Phase 2: check cache (works for both full sections and selections —
+        // the content_hash distinguishes different text under the same key).
+        let cached: Option<(Vec<Vec<i16>>, Vec<AlignmentEntry>)> = self
+            .voice_mode_state
+            .as_ref()
+            .and_then(|state| {
+                state
+                    .tts_section_cache
+                    .lock()
+                    .ok()
+                    .and_then(|cache| {
+                        cache
+                            .get(&(document_id.clone(), section_index))
+                            .filter(|entry| entry.content_hash == content_hash)
+                            .map(|entry| {
+                                (entry.chunks.clone(), entry.alignment_timeline.clone())
+                            })
+                    })
+            });
 
-            if let Some((chunks, cached_timeline)) = cached {
-                // Cache hit — play cached chunks and restore alignment for karaoke.
-                if let Some(ref mut state) = self.voice_mode_state {
-                    state.phase = VoiceModePhase::Speaking;
-                    state.narrating_section =
-                        Some((document_id, section_index, content_hash));
-                    state.narrating_selection = false;
-                    state.narrating_cleaned_text = Some(cleaned);
-                    state.tts_alignment_timeline = cached_timeline;
-                }
-                for chunk in chunks {
-                    self.on_voice_tts_audio_chunk(chunk, None);
-                }
-                // Start highlight tick so karaoke progresses during playback.
-                self.start_highlight_tick();
-                self.app_event_tx.send(AppEvent::VoiceModeTtsFinished);
-                self.sync_voice_placeholder();
-                return;
+        if let Some((chunks, cached_timeline)) = cached {
+            // Cache hit — play cached chunks and restore alignment for karaoke.
+            if let Some(ref mut state) = self.voice_mode_state {
+                state.phase = VoiceModePhase::Speaking;
+                state.narrating_section =
+                    Some((document_id, section_index, content_hash));
+                state.selection_word_offset = selection_word_offset;
+                state.narrating_cleaned_text = Some(cleaned);
+                state.tts_alignment_timeline = cached_timeline;
             }
+            for chunk in chunks {
+                self.on_voice_tts_audio_chunk(chunk, None);
+            }
+            // Start highlight tick so karaoke progresses during playback.
+            self.start_highlight_tick();
+            self.app_event_tx.send(AppEvent::VoiceModeTtsFinished);
+            self.sync_voice_placeholder();
+            return;
         }
 
-        // Phase 3: cache miss (or selection) — use persistent TTS worker (single WebSocket).
+        // Phase 3: cache miss — use persistent TTS worker (single WebSocket).
         let Some(ref mut state) = self.voice_mode_state else {
             return;
         };
@@ -2022,10 +2030,8 @@ impl super::ChatWidget {
         tracing::debug!("Narrate section: cache miss, starting TTS worker for text ({} chars)", cleaned.len());
 
         // Track narration for chunk collection / caching.
-        // Selections set narrating_section for karaoke text tracking but skip
-        // cache storage in finalize_voice_turn.
         state.narrating_section = Some((document_id, section_index, content_hash));
-        state.narrating_selection = selection;
+        state.selection_word_offset = selection_word_offset;
         state.narrating_cleaned_text = Some(cleaned.clone());
         state.narrating_chunks.clear();
 
