@@ -119,6 +119,7 @@ zip = { workspace = true }
 
 
 [features]
+default = ["code-intel"]
 deterministic_process_ids = []
 data = ["dep:codex-data-tools"]
 lsp = ["dep:codex-lsp-client"]
