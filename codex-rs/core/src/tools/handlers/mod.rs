@@ -1,6 +1,8 @@
 pub(crate) mod agent_jobs;
 pub mod apply_patch;
 pub(crate) mod attach_url_files;
+#[cfg(feature = "treesitter")]
+pub(crate) mod code_intel;
 #[cfg(feature = "data")]
 pub(crate) mod data;
 pub(crate) mod document_reader;

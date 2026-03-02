@@ -1,18 +1,17 @@
 //! Discover the nearest project root for a given file by walking up directories
 //! and looking for marker files (e.g. `Cargo.toml`, `go.mod`).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
-use globset::{Glob, GlobSet, GlobSetBuilder};
+use globset::Glob;
+use globset::GlobSet;
+use globset::GlobSetBuilder;
 
 /// Walk up from `file`'s parent directory looking for any of the given marker
 /// files/patterns. Returns the first directory containing a match, or
 /// `workspace_root` as a fallback.
-pub fn nearest_root(
-    file: &Path,
-    workspace_root: &Path,
-    markers: &[String],
-) -> PathBuf {
+pub fn nearest_root(file: &Path, workspace_root: &Path, markers: &[String]) -> PathBuf {
     if markers.is_empty() {
         return workspace_root.to_path_buf();
     }
@@ -102,11 +101,7 @@ mod tests {
         std::fs::create_dir_all(&sub).expect("mkdir");
         std::fs::write(root.join("Cargo.toml"), "").expect("write marker");
 
-        let result = nearest_root(
-            &sub.join("main.rs"),
-            root,
-            &["Cargo.toml".to_string()],
-        );
+        let result = nearest_root(&sub.join("main.rs"), root, &["Cargo.toml".to_string()]);
         assert_eq!(result, root);
     }
 
@@ -129,11 +124,7 @@ mod tests {
         std::fs::create_dir_all(&sub).expect("mkdir");
         std::fs::write(sub.join("my-project.cabal"), "").expect("write cabal");
 
-        let result = nearest_root(
-            &sub.join("Main.hs"),
-            root,
-            &["*.cabal".to_string()],
-        );
+        let result = nearest_root(&sub.join("Main.hs"), root, &["*.cabal".to_string()]);
         assert_eq!(result, sub);
     }
 

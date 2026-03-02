@@ -1,9 +1,12 @@
 //! JSON-RPC codec implementing Content-Length framing for LSP communication.
 
-use bytes::{BufMut, BytesMut};
-use serde::{Deserialize, Serialize};
+use bytes::BufMut;
+use bytes::BytesMut;
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
-use tokio_util::codec::{Decoder, Encoder};
+use tokio_util::codec::Decoder;
+use tokio_util::codec::Encoder;
 
 use crate::error::LspError;
 
@@ -108,8 +111,11 @@ impl Decoder for LspCodec {
             let mut content_length = None;
             for line in header_str.split("\r\n") {
                 if let Some(val) = line.strip_prefix("Content-Length: ") {
-                    content_length =
-                        Some(val.trim().parse::<usize>().map_err(|_| LspError::InvalidHeader)?);
+                    content_length = Some(
+                        val.trim()
+                            .parse::<usize>()
+                            .map_err(|_| LspError::InvalidHeader)?,
+                    );
                 }
             }
 
@@ -197,18 +203,20 @@ mod tests {
 
     #[test]
     fn classify_request() {
-        let raw: Value =
-            serde_json::from_str(r#"{"jsonrpc":"2.0","id":5,"method":"window/workDoneProgress/create","params":{}}"#)
-                .expect("parse");
+        let raw: Value = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":5,"method":"window/workDoneProgress/create","params":{}}"#,
+        )
+        .expect("parse");
         let msg = classify_message(raw).expect("classify");
         assert!(matches!(msg, JsonRpcMessage::Request(_)));
     }
 
     #[test]
     fn classify_notification() {
-        let raw: Value =
-            serde_json::from_str(r#"{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{}}"#)
-                .expect("parse");
+        let raw: Value = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{}}"#,
+        )
+        .expect("parse");
         let msg = classify_message(raw).expect("classify");
         assert!(matches!(msg, JsonRpcMessage::Notification(_)));
     }

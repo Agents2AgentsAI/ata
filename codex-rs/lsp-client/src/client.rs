@@ -3,17 +3,22 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 
+use lsp_types::request::GotoImplementationParams;
+use lsp_types::request::GotoImplementationResponse;
 use lsp_types::*;
-use lsp_types::request::{
-    GotoImplementationParams, GotoImplementationResponse,
-};
 use serde_json::Value;
-use tokio::io::{AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin};
-use tokio::sync::{broadcast, oneshot, Mutex, RwLock};
+use tokio::io::AsyncWriteExt;
+use tokio::io::BufReader;
+use tokio::process::Child;
+use tokio::process::ChildStdin;
+use tokio::sync::Mutex;
+use tokio::sync::RwLock;
+use tokio::sync::broadcast;
+use tokio::sync::oneshot;
 use tokio_stream::StreamExt;
 use tokio_util::codec::FramedRead;
 
@@ -93,9 +98,10 @@ impl LspClient {
         let root_uri = uri_from_directory(&root_canonical)
             .ok_or_else(|| LspError::SpawnFailed("invalid root path".into()))?;
 
-        let binary = config.command.first().ok_or_else(|| {
-            LspError::SpawnFailed("empty command".into())
-        })?;
+        let binary = config
+            .command
+            .first()
+            .ok_or_else(|| LspError::SpawnFailed("empty command".into()))?;
         let args = &config.command[1..];
 
         let mut cmd = tokio::process::Command::new(binary);
@@ -110,16 +116,18 @@ impl LspClient {
             cmd.env(k, v);
         }
 
-        let mut child = cmd.spawn().map_err(|e| {
-            LspError::SpawnFailed(format!("{binary}: {e}"))
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| LspError::SpawnFailed(format!("{binary}: {e}")))?;
 
-        let stdin = child.stdin.take().ok_or_else(|| {
-            LspError::SpawnFailed("no stdin".into())
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            LspError::SpawnFailed("no stdout".into())
-        })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| LspError::SpawnFailed("no stdin".into()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| LspError::SpawnFailed("no stdout".into()))?;
 
         let (diag_tx, _) = broadcast::channel(64);
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
@@ -280,10 +288,9 @@ impl LspClient {
 
     /// Notify the server about a file being opened or changed (full-document sync).
     pub async fn notify_open(&self, path: &Path) -> Result<(), LspError> {
-        let content =
-            tokio::fs::read_to_string(path)
-                .await
-                .map_err(|e| LspError::Io(e))?;
+        let content = tokio::fs::read_to_string(path)
+            .await
+            .map_err(|e| LspError::Io(e))?;
         let uri = uri_from_path(path).ok_or_else(|| {
             LspError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -356,10 +363,7 @@ impl LspClient {
                 "textDocument/didChange",
                 Some(
                     serde_json::to_value(DidChangeTextDocumentParams {
-                        text_document: VersionedTextDocumentIdentifier {
-                            uri,
-                            version,
-                        },
+                        text_document: VersionedTextDocumentIdentifier { uri, version },
                         content_changes: vec![TextDocumentContentChangeEvent {
                             range: None,
                             range_length: None,
@@ -449,12 +453,7 @@ impl LspClient {
         serde_json::from_value(val).ok()
     }
 
-    pub async fn references(
-        &self,
-        path: &Path,
-        line: u32,
-        character: u32,
-    ) -> Vec<Location> {
+    pub async fn references(&self, path: &Path, line: u32, character: u32) -> Vec<Location> {
         let Some(tdp) = self.text_doc_pos(path, line, character) else {
             return Vec::new();
         };
@@ -536,10 +535,7 @@ impl LspClient {
         serde_json::from_value(val).unwrap_or_default()
     }
 
-    pub async fn incoming_calls(
-        &self,
-        item: CallHierarchyItem,
-    ) -> Vec<CallHierarchyIncomingCall> {
+    pub async fn incoming_calls(&self, item: CallHierarchyItem) -> Vec<CallHierarchyIncomingCall> {
         let params = CallHierarchyIncomingCallsParams {
             item,
             work_done_progress_params: Default::default(),
@@ -552,10 +548,7 @@ impl LspClient {
         serde_json::from_value(val).unwrap_or_default()
     }
 
-    pub async fn outgoing_calls(
-        &self,
-        item: CallHierarchyItem,
-    ) -> Vec<CallHierarchyOutgoingCall> {
+    pub async fn outgoing_calls(&self, item: CallHierarchyItem) -> Vec<CallHierarchyOutgoingCall> {
         let params = CallHierarchyOutgoingCallsParams {
             item,
             work_done_progress_params: Default::default(),
@@ -711,8 +704,9 @@ impl LspClient {
                         | "client/registerCapability"
                         | "client/unregisterCapability" => Some(Value::Null),
                         "workspace/configuration" => {
-                            let settings =
-                                initialization_options.clone().unwrap_or(serde_json::json!({}));
+                            let settings = initialization_options
+                                .clone()
+                                .unwrap_or(serde_json::json!({}));
                             Some(serde_json::json!([settings]))
                         }
                         "workspace/workspaceFolders" => Some(serde_json::json!([{
@@ -764,4 +758,3 @@ impl LspClient {
         }
     }
 }
-

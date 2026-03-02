@@ -108,14 +108,15 @@ impl ToolHandler for ApplyPatchHandler {
         let command = vec!["apply_patch".to_string(), patch_input.clone()];
         match codex_apply_patch::maybe_parse_apply_patch_verified(&command, &cwd) {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
-                #[cfg(feature = "lsp")]
-                let lsp_file_paths = file_paths_for_action(&changes);
+                #[cfg(any(feature = "lsp", feature = "treesitter"))]
+                let changed_file_paths = file_paths_for_action(&changes);
                 match apply_patch::apply_patch(turn.as_ref(), changes).await {
                     InternalApplyPatchInvocation::Output(item) => {
                         #[allow(unused_mut)]
                         let mut content = item?;
-                        #[cfg(feature = "lsp")]
-                        append_lsp_diagnostics(&session, &lsp_file_paths, &mut content).await;
+                        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+                        append_code_intel_feedback(&session, &changed_file_paths, &mut content)
+                            .await;
                         Ok(ToolOutput::Function {
                             body: FunctionCallOutputBody::Text(content),
                             success: Some(true),
@@ -171,8 +172,9 @@ impl ToolHandler for ApplyPatchHandler {
                         );
                         #[allow(unused_mut)]
                         let mut content = emitter.finish(event_ctx, out).await?;
-                        #[cfg(feature = "lsp")]
-                        append_lsp_diagnostics(&session, &lsp_file_paths, &mut content).await;
+                        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+                        append_code_intel_feedback(&session, &changed_file_paths, &mut content)
+                            .await;
                         Ok(ToolOutput::Function {
                             body: FunctionCallOutputBody::Text(content),
                             success: Some(true),
@@ -401,18 +403,31 @@ It is important to remember:
     })
 }
 
-/// Append LSP diagnostic errors to the output of a successful patch.
-#[cfg(feature = "lsp")]
-async fn append_lsp_diagnostics(
+/// Append code intelligence feedback after a successful patch.
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+async fn append_code_intel_feedback(
     session: &Session,
     paths: &[AbsolutePathBuf],
     content: &mut String,
 ) {
+    #[cfg(feature = "lsp")]
     if let Some(ref lsp) = session.services.lsp_feedback {
         for p in paths {
             let diag = lsp.touch_and_collect_errors(p.as_path()).await;
             if !diag.is_empty() {
                 content.push_str(&diag);
+            }
+        }
+    }
+
+    #[cfg(feature = "treesitter")]
+    if let Some(ref treesitter) = session.services.treesitter_index {
+        for p in paths {
+            if let Err(error) = treesitter.reindex_absolute_path(p.as_path()) {
+                tracing::debug!(
+                    "tree-sitter reindex failed for {}: {error}",
+                    p.as_path().display()
+                );
             }
         }
     }

@@ -44,6 +44,7 @@ codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-data-tools = { workspace = true, optional = true }
 codex-lsp-client = { workspace = true, optional = true }
+codex-treesitter = { workspace = true, optional = true }
 codex-research-tools = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-state = { workspace = true }
@@ -121,6 +122,8 @@ zip = { workspace = true }
 deterministic_process_ids = []
 data = ["dep:codex-data-tools"]
 lsp = ["dep:codex-lsp-client"]
+treesitter = ["dep:codex-treesitter"]
+code-intel = ["lsp", "treesitter"]
 research = []
 test-support = []
 

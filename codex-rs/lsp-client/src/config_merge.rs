@@ -142,7 +142,12 @@ mod tests {
         overrides.insert(
             "sql-lsp".to_string(),
             UserServerOverride::Full(UserServerFull {
-                command: vec!["sql-language-server".into(), "up".into(), "--method".into(), "stdio".into()],
+                command: vec![
+                    "sql-language-server".into(),
+                    "up".into(),
+                    "--method".into(),
+                    "stdio".into(),
+                ],
                 extensions: vec![".sql".into()],
                 root_markers: Vec::new(),
                 env: HashMap::new(),

@@ -193,7 +193,10 @@ mod tests {
     #[test]
     fn known_extensions() {
         assert_eq!(language_id_for_path(Path::new("main.rs")), Some("rust"));
-        assert_eq!(language_id_for_path(Path::new("app.tsx")), Some("typescriptreact"));
+        assert_eq!(
+            language_id_for_path(Path::new("app.tsx")),
+            Some("typescriptreact")
+        );
         assert_eq!(language_id_for_path(Path::new("lib.py")), Some("python"));
         assert_eq!(language_id_for_path(Path::new("main.go")), Some("go"));
         assert_eq!(language_id_for_path(Path::new("file.cpp")), Some("cpp"));

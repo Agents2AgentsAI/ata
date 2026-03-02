@@ -1424,6 +1424,26 @@ impl Session {
             None
         };
 
+        #[cfg(feature = "treesitter")]
+        let treesitter_index = if config.features.enabled(Feature::TreeSitter) {
+            let root = session_configuration.cwd.clone();
+            match tokio::task::spawn_blocking(move || codex_treesitter::ProjectIndex::new(root))
+                .await
+            {
+                Ok(Ok(index)) => Some(Arc::new(index)),
+                Ok(Err(error)) => {
+                    tracing::warn!("failed to initialize tree-sitter index: {error}");
+                    None
+                }
+                Err(error) => {
+                    tracing::warn!("tree-sitter initialization task failed: {error}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
             // instance. It will be replaced with one created via
@@ -1483,6 +1503,8 @@ impl Session {
             ),
             #[cfg(feature = "lsp")]
             lsp_feedback,
+            #[cfg(feature = "treesitter")]
+            treesitter_index,
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
@@ -5980,6 +6002,10 @@ async fn built_tools(
     if let Some(ref fb) = sess.services.lsp_feedback {
         tools_config.lsp_registry = Some(Arc::clone(&fb.registry));
     }
+    #[cfg(feature = "treesitter")]
+    if let Some(ref index) = sess.services.treesitter_index {
+        tools_config.treesitter_index = Some(Arc::clone(index));
+    }
 
     Ok(Arc::new(ToolRouter::from_config_with_toolkits(
         &tools_config,
@@ -8836,6 +8862,8 @@ mod tests {
             ),
             #[cfg(feature = "lsp")]
             lsp_feedback: None,
+            #[cfg(feature = "treesitter")]
+            treesitter_index: None,
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
@@ -9004,6 +9032,8 @@ mod tests {
             ),
             #[cfg(feature = "lsp")]
             lsp_feedback: None,
+            #[cfg(feature = "treesitter")]
+            treesitter_index: None,
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
