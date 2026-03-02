@@ -24,6 +24,8 @@ Required: `git`. The `ata` binary is already in PATH.
 - **ALWAYS** use `ata workspace resolve '@spec'` for workspace paths — never construct paths manually
 - **ALWAYS** use `ata workspace check-host <url>` before any clone operation
 - **ALWAYS** use typed mutation commands (e.g. `repo-pin`, `add-entry`, `set-field`) for manifest changes (atomic lock + version bump)
+- **ALWAYS** resolve the target workspace ID first (store as `WID`) and pass `--workspace "$WID"` on every mutating `ata workspace` command
+- **NEVER** run mutating workspace commands without explicit `--workspace "$WID"` (even if resolution would normally infer one)
 - **ALWAYS** audit significant operations via `ata workspace audit`
 - For repo cloning, prefer the thick command `ata workspace repo-clone <url> <alias>` which enforces all of the above
 
