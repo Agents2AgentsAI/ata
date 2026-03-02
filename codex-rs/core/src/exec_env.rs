@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 pub const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
+pub const CODEX_SESSION_ID_ENV_VAR: &str = "CODEX_SESSION_ID";
 
 /// Construct an environment map based on the rules in the specified policy. The
 /// resulting map can be passed directly to `Command::envs()` after calling
@@ -15,8 +16,8 @@ pub const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
 /// The derivation follows the algorithm documented in the struct-level comment
 /// for [`ShellEnvironmentPolicy`].
 ///
-/// `CODEX_THREAD_ID` is injected when a thread id is provided, even when
-/// `include_only` is set.
+/// `CODEX_THREAD_ID` and `CODEX_SESSION_ID` are injected when a thread id is
+/// provided, even when `include_only` is set.
 pub fn create_env(
     policy: &ShellEnvironmentPolicy,
     thread_id: Option<ThreadId>,
@@ -85,9 +86,11 @@ where
         env_map.retain(|k, _| matches_any(k, &policy.include_only));
     }
 
-    // Step 6 – Populate the thread ID environment variable when provided.
+    // Step 6 – Populate compatibility IDs when a thread id is provided.
     if let Some(thread_id) = thread_id {
-        env_map.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+        let thread_id = thread_id.to_string();
+        env_map.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.clone());
+        env_map.insert(CODEX_SESSION_ID_ENV_VAR.to_string(), thread_id);
     }
 
     env_map
@@ -126,6 +129,7 @@ mod tests {
             "SECRET_TOKEN".to_string() => "t".to_string(),
         };
         expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+        expected.insert(CODEX_SESSION_ID_ENV_VAR.to_string(), thread_id.to_string());
 
         assert_eq!(result, expected);
     }
@@ -151,6 +155,7 @@ mod tests {
             "HOME".to_string() => "/home/user".to_string(),
         };
         expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+        expected.insert(CODEX_SESSION_ID_ENV_VAR.to_string(), thread_id.to_string());
 
         assert_eq!(result, expected);
     }
@@ -173,6 +178,7 @@ mod tests {
             "PATH".to_string() => "/usr/bin".to_string(),
         };
         expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+        expected.insert(CODEX_SESSION_ID_ENV_VAR.to_string(), thread_id.to_string());
 
         assert_eq!(result, expected);
     }
@@ -195,12 +201,13 @@ mod tests {
             "NEW_VAR".to_string() => "42".to_string(),
         };
         expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+        expected.insert(CODEX_SESSION_ID_ENV_VAR.to_string(), thread_id.to_string());
 
         assert_eq!(result, expected);
     }
 
     #[test]
-    fn populate_env_inserts_thread_id() {
+    fn populate_env_inserts_thread_and_session_ids() {
         let vars = make_vars(&[("PATH", "/usr/bin")]);
         let policy = ShellEnvironmentPolicy::default();
         let thread_id = ThreadId::new();
@@ -210,12 +217,13 @@ mod tests {
             "PATH".to_string() => "/usr/bin".to_string(),
         };
         expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+        expected.insert(CODEX_SESSION_ID_ENV_VAR.to_string(), thread_id.to_string());
 
         assert_eq!(result, expected);
     }
 
     #[test]
-    fn populate_env_omits_thread_id_when_missing() {
+    fn populate_env_omits_thread_and_session_ids_when_missing() {
         let vars = make_vars(&[("PATH", "/usr/bin")]);
         let policy = ShellEnvironmentPolicy::default();
         let result = populate_env(vars, &policy, None);
@@ -241,6 +249,7 @@ mod tests {
         let result = populate_env(vars.clone(), &policy, Some(thread_id));
         let mut expected: HashMap<String, String> = vars.into_iter().collect();
         expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+        expected.insert(CODEX_SESSION_ID_ENV_VAR.to_string(), thread_id.to_string());
         assert_eq!(result, expected);
     }
 
@@ -260,6 +269,7 @@ mod tests {
             "PATH".to_string() => "/usr/bin".to_string(),
         };
         expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+        expected.insert(CODEX_SESSION_ID_ENV_VAR.to_string(), thread_id.to_string());
         assert_eq!(result, expected);
     }
 
@@ -285,6 +295,7 @@ mod tests {
             "TEMP".to_string() => "C:\\Temp".to_string(),
         };
         expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+        expected.insert(CODEX_SESSION_ID_ENV_VAR.to_string(), thread_id.to_string());
 
         assert_eq!(result, expected);
     }
@@ -308,6 +319,7 @@ mod tests {
             "ONLY_VAR".to_string() => "yes".to_string(),
         };
         expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+        expected.insert(CODEX_SESSION_ID_ENV_VAR.to_string(), thread_id.to_string());
         assert_eq!(result, expected);
     }
 }

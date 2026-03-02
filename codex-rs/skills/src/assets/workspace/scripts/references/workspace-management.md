@@ -31,6 +31,13 @@ ata workspace select "$WID"
 
 Writes structured JSON to session-scoped selection file. If `$CODEX_SESSION_ID` is set, writes to `$CODEX_HOME/sessions/<sessionId>/workspace.json`; otherwise to `$CODEX_HOME/.workspace_selected`.
 
+Run the selector command directly. Do not preflight with `ata --help` or
+`ata workspace --help`; only run help output after a real unknown-subcommand
+error.
+
+For mutating workspace operations (`repo-clone`, `repo-pin`, `run-setup`,
+`add-entry`, etc.), always pass `--workspace "$WID"` explicitly.
+
 ## Delete Workspace
 
 ```bash
