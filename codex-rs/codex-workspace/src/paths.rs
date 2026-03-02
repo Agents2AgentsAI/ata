@@ -81,19 +81,47 @@ pub fn audit_path(workspace_id: &str) -> PathBuf {
         .join("audit.ndjson")
 }
 
-/// Path to the active workspace selection file (session-aware).
-pub fn selection_path() -> PathBuf {
-    let sid = std::env::var("CODEX_SESSION_ID")
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    if !sid.is_empty() {
-        return codex_home()
+fn normalized_scope_id(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+pub(crate) fn workspace_scope_id(
+    session_id: Option<&str>,
+    thread_id: Option<&str>,
+) -> Option<String> {
+    normalized_scope_id(session_id).or_else(|| normalized_scope_id(thread_id))
+}
+
+pub(crate) fn global_selection_path_for(codex_home: &std::path::Path) -> PathBuf {
+    codex_home.join(".workspace_selected")
+}
+
+pub(crate) fn selection_path_for(codex_home: &std::path::Path, scope_id: Option<&str>) -> PathBuf {
+    if let Some(scope_id) = scope_id {
+        return codex_home
             .join("sessions")
-            .join(&sid)
+            .join(scope_id)
             .join("workspace.json");
     }
-    codex_home().join(".workspace_selected")
+
+    global_selection_path_for(codex_home)
+}
+
+/// Path to the active workspace selection file (session-aware).
+pub fn selection_path() -> PathBuf {
+    let codex_home = codex_home();
+    let session_id = std::env::var("CODEX_SESSION_ID").ok();
+    let thread_id = std::env::var("CODEX_THREAD_ID").ok();
+    let scope_id = workspace_scope_id(session_id.as_deref(), thread_id.as_deref());
+    selection_path_for(&codex_home, scope_id.as_deref())
+}
+
+/// Path to the global legacy workspace selection file.
+pub fn global_selection_path() -> PathBuf {
+    global_selection_path_for(&codex_home())
 }
 
 /// Path to a lock file for a given lock level and optional target ID.
@@ -220,6 +248,47 @@ mod tests {
         assert!(
             err.to_string().contains("is not a directory"),
             "error should mention non-directory root path"
+        );
+    }
+
+    #[test]
+    fn workspace_scope_id_prefers_session_over_thread() {
+        assert_eq!(
+            workspace_scope_id(Some(" session-1 "), Some("thread-1")),
+            Some("session-1".to_string())
+        );
+    }
+
+    #[test]
+    fn workspace_scope_id_uses_thread_when_session_missing() {
+        assert_eq!(
+            workspace_scope_id(None, Some(" thread-1 ")),
+            Some("thread-1".to_string())
+        );
+        assert_eq!(
+            workspace_scope_id(Some("   "), Some("thread-2")),
+            Some("thread-2".to_string())
+        );
+    }
+
+    #[test]
+    fn selection_path_for_uses_scoped_session_path_when_scope_present() {
+        let codex_home = std::path::Path::new("/tmp/codex-home");
+        assert_eq!(
+            selection_path_for(codex_home, Some("scope-123")),
+            codex_home
+                .join("sessions")
+                .join("scope-123")
+                .join("workspace.json")
+        );
+    }
+
+    #[test]
+    fn selection_path_for_uses_global_path_when_scope_missing() {
+        let codex_home = std::path::Path::new("/tmp/codex-home");
+        assert_eq!(
+            selection_path_for(codex_home, None),
+            codex_home.join(".workspace_selected")
         );
     }
 }
