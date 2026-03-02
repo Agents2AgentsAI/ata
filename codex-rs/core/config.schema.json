@@ -425,6 +425,9 @@
             "runtime_metrics": {
               "type": "boolean"
             },
+            "scheduler": {
+              "type": "boolean"
+            },
             "search_tool": {
               "type": "boolean"
             },
@@ -1837,6 +1840,9 @@
           "type": "boolean"
         },
         "runtime_metrics": {
+          "type": "boolean"
+        },
+        "scheduler": {
           "type": "boolean"
         },
         "search_tool": {

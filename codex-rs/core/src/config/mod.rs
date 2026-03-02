@@ -108,6 +108,11 @@ pub use permissions::PermissionsToml;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
 
+/// Well-known prefix for provider-fallback warnings in `startup_warnings`.
+/// The TUI checks for this prefix to force the login screen when a fallback
+/// to the openai provider occurs (cached tokens are likely stale/absent).
+pub const MODEL_PROVIDER_FALLBACK_PREFIX: &str = "Model provider fallback:";
+
 pub use codex_git::GhostSnapshotConfig;
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
@@ -1842,21 +1847,34 @@ impl Config {
             model_providers.entry(key).or_insert(provider);
         }
 
-        let model_provider_id = model_provider
+        let mut model_provider_id = model_provider
             .or(config_profile.model_provider)
             .or(cfg.model_provider)
             .unwrap_or_else(|| "openai".to_string());
-        let model_provider = model_providers
-            .get(&model_provider_id)
-            .ok_or_else(|| {
-                let message = if model_provider_id == LEGACY_OLLAMA_CHAT_PROVIDER_ID {
+        let model_provider = match model_providers.get(&model_provider_id) {
+            Some(provider) => provider.clone(),
+            None => {
+                let warning = if model_provider_id == LEGACY_OLLAMA_CHAT_PROVIDER_ID {
                     OLLAMA_CHAT_PROVIDER_REMOVED_ERROR.to_string()
                 } else {
                     format!("Model provider `{model_provider_id}` not found")
                 };
-                std::io::Error::new(std::io::ErrorKind::NotFound, message)
-            })?
-            .clone();
+                tracing::warn!("{warning}; falling back to openai");
+                startup_warnings.push(format!(
+                    "{MODEL_PROVIDER_FALLBACK_PREFIX} {warning}. Using the default openai provider."
+                ));
+                model_provider_id = "openai".to_string();
+                model_providers
+                    .get("openai")
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "built-in openai provider is missing",
+                        )
+                    })?
+                    .clone()
+            }
+        };
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
         let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
@@ -5479,26 +5497,54 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn test_load_config_rejects_legacy_ollama_chat_provider_with_helpful_error()
-    -> std::io::Result<()> {
+    fn test_load_config_falls_back_for_legacy_ollama_chat_provider() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml {
             model_provider: Some(LEGACY_OLLAMA_CHAT_PROVIDER_ID.to_string()),
             ..Default::default()
         };
 
-        let result = Config::load_from_base_config_with_overrides(
+        let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
             codex_home.path().to_path_buf(),
-        );
-        assert!(result.is_err());
-        let error = result.unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        )?;
+        assert_eq!(config.model_provider_id, "openai");
         assert!(
-            error
-                .to_string()
-                .contains(OLLAMA_CHAT_PROVIDER_REMOVED_ERROR)
+            config
+                .startup_warnings
+                .iter()
+                .any(|w| w.starts_with(MODEL_PROVIDER_FALLBACK_PREFIX)
+                    && w.contains(OLLAMA_CHAT_PROVIDER_REMOVED_ERROR)),
+            "expected startup warning with fallback prefix about ollama-chat removal, got: {:?}",
+            config.startup_warnings,
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_config_falls_back_for_unknown_provider() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml {
+            model_provider: Some("github-copilot".to_string()),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+        assert_eq!(config.model_provider_id, "openai");
+        assert!(
+            config
+                .startup_warnings
+                .iter()
+                .any(|w| w.starts_with(MODEL_PROVIDER_FALLBACK_PREFIX)
+                    && w.contains("github-copilot")),
+            "expected startup warning with fallback prefix mentioning the unknown provider, got: {:?}",
+            config.startup_warnings,
         );
 
         Ok(())

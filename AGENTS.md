@@ -1,3 +1,24 @@
+# User interaction principles
+
+## Minimize user friction for external services
+
+When you need the user to interact with an external service (Slack, GitHub, cloud providers, etc.), always lead with the lowest-friction option. Do not give step-by-step UI walkthroughs when a single copy-paste or CLI command exists.
+
+Rules:
+
+1. **Open URLs in their browser** — use `open <url>` (macOS) or `xdg-open <url>` (Linux). Their default browser is already authenticated to most services, so no login needed.
+2. **Provide manifests / config files** that can be pasted in one shot, not step-by-step click instructions.
+3. **Check for CLI tools first** — many services have CLIs (`slack`, `gh`, `gcloud`, `aws`) that can do setup from the terminal with zero browser interaction. Run `which <tool>` before falling back to browser-based flows.
+4. **Never give more than 4-5 user-facing steps.** If you're writing more, you're not automating enough.
+5. **Do all local work silently** — write config files, set permissions, wire integrations. Only present what the user must do manually.
+6. **Pre-fill where possible** — use URL query parameters, manifest templates, and pre-configured defaults to skip manual entry.
+
+Bad example: "Go to slack.com, click Create App, click From Scratch, enter a name, pick workspace, click Create, navigate to Incoming Webhooks, toggle on, click Add, pick channel, click Allow, copy URL, paste here" (12 steps)
+
+Good example: "I'll open the Slack app setup page in your browser. Paste this manifest: [yaml]. Click Create, then Add Webhook, pick your channel, and paste the URL here." (4 steps + browser auto-opens)
+
+---
+
 # Rust/codex-rs
 
 In the codex-rs folder where the rust code lives:

@@ -531,7 +531,7 @@ async fn handle_model_migration_prompt_if_needed(
                 app_event_tx.send(AppEvent::PersistModelSelection {
                     model: target_model.clone(),
                     effort: mapped_effort,
-                    provider: None,
+                    provider: target_preset.provider_id.clone(),
                 });
             }
             ModelMigrationOutcome::Rejected => {
@@ -1813,6 +1813,15 @@ impl App {
                     }
                     // Allow widgets to process any pending timers before rendering.
                     self.chat_widget.pre_draw_tick();
+                    // Flush deferred history lines once both the overlay and
+                    // reading view are closed so they appear in the scrollback.
+                    if !self.deferred_history_lines.is_empty()
+                        && self.overlay.is_none()
+                        && !self.chat_widget.is_document_reader_active()
+                    {
+                        let lines = std::mem::take(&mut self.deferred_history_lines);
+                        tui.insert_history_lines(lines);
+                    }
                     tui.draw(
                         self.chat_widget.desired_height(tui.terminal.size()?.width),
                         |frame| {
@@ -2094,7 +2103,7 @@ impl App {
                             self.has_emitted_history_lines = true;
                         }
                     }
-                    if self.overlay.is_some() {
+                    if self.overlay.is_some() || self.chat_widget.is_document_reader_active() {
                         self.deferred_history_lines.extend(display);
                     } else {
                         tui.insert_history_lines(display);
@@ -2251,9 +2260,13 @@ impl App {
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
             }
-            AppEvent::OpenPlanReasoningScopePrompt { model, effort } => {
+            AppEvent::OpenPlanReasoningScopePrompt {
+                model,
+                effort,
+                provider,
+            } => {
                 self.chat_widget
-                    .open_plan_reasoning_scope_prompt(model, effort);
+                    .open_plan_reasoning_scope_prompt(model, effort, provider);
             }
             AppEvent::OpenAllModelsPopup { models } => {
                 self.chat_widget.open_all_models_popup(models);
@@ -4402,6 +4415,8 @@ mod tests {
             Some(&target_hn)
         );
         assert_eq!(feature_flags.get(Feature::Research.key()), Some(&false));
+        #[cfg(target_os = "windows")]
+        let _ = emitted_windows_sandbox_level;
         #[cfg(not(target_os = "windows"))]
         assert_eq!(emitted_windows_sandbox_level, Some(None));
     }

@@ -187,6 +187,7 @@ pub(crate) enum AppEvent {
     OpenPlanReasoningScopePrompt {
         model: String,
         effort: Option<ReasoningEffort>,
+        provider: Option<String>,
     },
 
     /// Open the full model picker (non-auto models).

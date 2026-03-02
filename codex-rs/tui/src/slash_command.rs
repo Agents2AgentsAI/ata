@@ -32,6 +32,7 @@ pub enum SlashCommand {
     Plan,
     Collab,
     Agent,
+    Jobs,
     // Undo,
     Diff,
     Copy,
@@ -95,6 +96,7 @@ impl SlashCommand {
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent => "switch the active agent thread",
+            SlashCommand::Jobs => "view scheduled jobs and daemon status",
             SlashCommand::Approvals => "choose what Codex is allowed to do",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
@@ -159,6 +161,7 @@ impl SlashCommand {
             | SlashCommand::Skills
             | SlashCommand::Status
             | SlashCommand::DebugConfig
+            | SlashCommand::Jobs
             | SlashCommand::Ps
             | SlashCommand::Clean
             | SlashCommand::Mcp

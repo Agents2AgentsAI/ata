@@ -147,6 +147,12 @@ enum Subcommand {
 
     /// Show coordination agents and messages.
     Team(TeamCli),
+
+    /// Manage scheduled jobs.
+    Jobs(codex_scheduler::cli::JobsCli),
+
+    /// Control the scheduler daemon.
+    Scheduler(codex_scheduler::cli::SchedulerCli),
 }
 
 #[derive(Debug, Parser)]
@@ -872,6 +878,12 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 disable_feature_in_config(&interactive, &feature).await?;
             }
         },
+        Some(Subcommand::Jobs(jobs_cli)) => {
+            codex_scheduler::cli::run_jobs_command(jobs_cli).await?;
+        }
+        Some(Subcommand::Scheduler(scheduler_cli)) => {
+            codex_scheduler::cli::run_scheduler_command(scheduler_cli).await?;
+        }
     }
 
     Ok(())
