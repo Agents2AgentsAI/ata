@@ -119,6 +119,18 @@ pub fn parse_shell_lc_plain_commands(command: &[String]) -> Option<Vec<Vec<Strin
     try_parse_word_only_commands_sequence(&tree, script)
 }
 
+/// Returns command names invoked by a `bash -lc "..."` / `zsh -lc "..."` /
+/// `sh -lc "..."` script.
+///
+/// Command names are collected from `command_name` nodes in the parsed AST.
+/// Returns `None` when the command is not a supported shell invocation or the
+/// script does not parse cleanly.
+pub fn parse_shell_lc_command_names(command: &[String]) -> Option<Vec<String>> {
+    let (_, script) = extract_bash_command(command)?;
+    let tree = try_parse_shell(script)?;
+    collect_command_names(&tree, script)
+}
+
 /// Returns the parsed argv for a single shell command in a here-doc style
 /// script (`<<`), as long as the script contains exactly one command node.
 pub fn parse_shell_lc_single_command_prefix(command: &[String]) -> Option<Vec<String>> {
@@ -282,6 +294,32 @@ fn has_named_descendant_kind(node: Node<'_>, kind: &str) -> bool {
     false
 }
 
+fn collect_command_names(tree: &Tree, src: &str) -> Option<Vec<String>> {
+    let root = tree.root_node();
+    if root.has_error() {
+        return None;
+    }
+
+    let mut names = Vec::new();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "command_name"
+            && let Some(word_node) = node.named_child(0)
+            && matches!(word_node.kind(), "word" | "number")
+            && let Ok(word) = word_node.utf8_text(src.as_bytes())
+        {
+            names.push(word.to_string());
+        }
+
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+
+    Some(names)
+}
+
 fn parse_double_quoted_string(node: Node, src: &str) -> Option<String> {
     if node.kind() != "string" {
         return None;
@@ -320,6 +358,11 @@ mod tests {
     fn parse_seq(src: &str) -> Option<Vec<Vec<String>>> {
         let tree = try_parse_shell(src)?;
         try_parse_word_only_commands_sequence(&tree, src)
+    }
+
+    fn parse_command_names(src: &str) -> Option<Vec<String>> {
+        let tree = try_parse_shell(src)?;
+        collect_command_names(&tree, src)
     }
 
     #[test]
@@ -586,5 +629,37 @@ mod tests {
             "python3 $((1<<2)) <<'PY'\nprint('hello')\nPY".to_string(),
         ];
         assert_eq!(parse_shell_lc_single_command_prefix(&command), None);
+    }
+
+    #[test]
+    fn collects_command_names_from_control_flow_scripts() {
+        let names = parse_command_names(
+            "for repo in a b; do ata workspace list --workspace \"$repo\"; done; echo done",
+        )
+        .expect("command names");
+        assert!(names.iter().any(|name| name == "ata"));
+        assert!(names.iter().any(|name| name == "echo"));
+    }
+
+    #[test]
+    fn collects_command_names_does_not_match_comments_or_plain_strings() {
+        let names =
+            parse_command_names("echo \"ata workspace list\"\n# ata workspace list\nprintf done")
+                .expect("command names");
+        assert!(names.iter().any(|name| name == "echo"));
+        assert!(names.iter().any(|name| name == "printf"));
+        assert!(!names.iter().any(|name| name == "ata"));
+    }
+
+    #[test]
+    fn parse_shell_lc_command_names_extracts_from_shell_command() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "echo pre; for i in 1 2; do ata workspace list; done".to_string(),
+        ];
+        let names = parse_shell_lc_command_names(&command).expect("command names");
+        assert!(names.iter().any(|name| name == "ata"));
+        assert!(names.iter().any(|name| name == "echo"));
     }
 }
