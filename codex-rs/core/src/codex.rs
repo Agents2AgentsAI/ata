@@ -1339,7 +1339,73 @@ impl Session {
             (auth, mcp_servers, auth_statuses)
         };
 
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        let multi_root_fut = {
+            let cwd = session_configuration.cwd.clone();
+            let config_for_multi_root = Arc::clone(&config);
+            async move {
+                #[cfg(feature = "lsp")]
+                let lsp_server_configs = if config_for_multi_root.features.enabled(Feature::Lsp) {
+                    Some(build_lsp_server_configs(config_for_multi_root.as_ref()))
+                } else {
+                    None
+                };
+                #[cfg(feature = "treesitter")]
+                let treesitter_config =
+                    if config_for_multi_root.features.enabled(Feature::TreeSitter) {
+                        build_treesitter_index_config(config_for_multi_root.as_ref())
+                    } else {
+                        None
+                    };
+
+                #[cfg(feature = "lsp")]
+                let lsp_enabled = lsp_server_configs
+                    .as_ref()
+                    .is_some_and(|configs| !configs.is_empty());
+                #[cfg(not(feature = "lsp"))]
+                let lsp_enabled = false;
+                #[cfg(feature = "treesitter")]
+                let treesitter_enabled = treesitter_config.is_some();
+                #[cfg(not(feature = "treesitter"))]
+                let treesitter_enabled = false;
+
+                if lsp_enabled || treesitter_enabled {
+                    match MultiRootState::new(
+                        cwd,
+                        #[cfg(feature = "lsp")]
+                        lsp_server_configs,
+                        #[cfg(feature = "treesitter")]
+                        treesitter_config,
+                    )
+                    .await
+                    {
+                        Ok(state) => Some(Arc::new(state)),
+                        Err(error) => {
+                            tracing::warn!("failed to initialize multi-root state: {error}");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
+        };
+
         // Join all independent futures.
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        let (
+            rollout_recorder_and_state_db,
+            (history_log_id, history_entry_count),
+            (auth, mcp_servers, auth_statuses),
+            multi_root_state,
+        ) = tokio::join!(
+            rollout_fut,
+            history_meta_fut,
+            auth_and_mcp_fut,
+            multi_root_fut
+        );
+
+        #[cfg(not(any(feature = "lsp", feature = "treesitter")))]
         let (
             rollout_recorder_and_state_db,
             (history_log_id, history_entry_count),
@@ -1525,53 +1591,6 @@ impl Session {
             } else {
                 (None, None)
             };
-
-        #[cfg(any(feature = "lsp", feature = "treesitter"))]
-        let multi_root_state = {
-            #[cfg(feature = "lsp")]
-            let lsp_server_configs = if config.features.enabled(Feature::Lsp) {
-                Some(build_lsp_server_configs(config.as_ref()))
-            } else {
-                None
-            };
-            #[cfg(feature = "treesitter")]
-            let treesitter_config = if config.features.enabled(Feature::TreeSitter) {
-                build_treesitter_index_config(config.as_ref())
-            } else {
-                None
-            };
-
-            #[cfg(feature = "lsp")]
-            let lsp_enabled = lsp_server_configs
-                .as_ref()
-                .is_some_and(|configs| !configs.is_empty());
-            #[cfg(not(feature = "lsp"))]
-            let lsp_enabled = false;
-            #[cfg(feature = "treesitter")]
-            let treesitter_enabled = treesitter_config.is_some();
-            #[cfg(not(feature = "treesitter"))]
-            let treesitter_enabled = false;
-
-            if lsp_enabled || treesitter_enabled {
-                match MultiRootState::new(
-                    session_configuration.cwd.clone(),
-                    #[cfg(feature = "lsp")]
-                    lsp_server_configs,
-                    #[cfg(feature = "treesitter")]
-                    treesitter_config,
-                )
-                .await
-                {
-                    Ok(state) => Some(Arc::new(state)),
-                    Err(error) => {
-                        tracing::warn!("failed to initialize multi-root state: {error}");
-                        None
-                    }
-                }
-            } else {
-                None
-            }
-        };
 
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized

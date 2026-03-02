@@ -3,6 +3,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+#[cfg(feature = "treesitter")]
+use tokio::sync::Notify;
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,7 +36,75 @@ pub(crate) struct MultiRootState {
     #[cfg(feature = "treesitter")]
     treesitter_config: Option<codex_treesitter::ProjectIndexConfig>,
     #[cfg(feature = "treesitter")]
-    treesitter_indices: RwLock<HashMap<String, Arc<codex_treesitter::ProjectIndex>>>,
+    treesitter_indices: RwLock<HashMap<String, Arc<TreeSitterIndex>>>,
+}
+
+#[cfg(feature = "treesitter")]
+#[derive(Debug, Clone)]
+enum TreeSitterIndexState {
+    Building,
+    Ready(Arc<codex_treesitter::ProjectIndex>),
+    Failed(String),
+}
+
+/// Tree-sitter index initialization is expensive on large repos. We build it in
+/// the background so session startup stays fast, and await it only when a tool
+/// actually needs the index.
+#[cfg(feature = "treesitter")]
+#[derive(Debug)]
+struct TreeSitterIndex {
+    state: tokio::sync::Mutex<TreeSitterIndexState>,
+    notify: Notify,
+}
+
+#[cfg(feature = "treesitter")]
+impl TreeSitterIndex {
+    fn new() -> Self {
+        Self {
+            state: tokio::sync::Mutex::new(TreeSitterIndexState::Building),
+            notify: Notify::new(),
+        }
+    }
+
+    async fn set_ready(&self, index: codex_treesitter::ProjectIndex) {
+        let mut guard = self.state.lock().await;
+        *guard = TreeSitterIndexState::Ready(Arc::new(index));
+        drop(guard);
+        self.notify.notify_waiters();
+    }
+
+    async fn set_failed(&self, error: String) {
+        let mut guard = self.state.lock().await;
+        *guard = TreeSitterIndexState::Failed(error);
+        drop(guard);
+        self.notify.notify_waiters();
+    }
+
+    async fn wait_ready(&self) -> Result<Arc<codex_treesitter::ProjectIndex>, String> {
+        loop {
+            // Fast path: check current state.
+            let snapshot = {
+                let guard = self.state.lock().await;
+                (*guard).clone()
+            };
+            match snapshot {
+                TreeSitterIndexState::Ready(index) => return Ok(index),
+                TreeSitterIndexState::Failed(error) => return Err(error),
+                TreeSitterIndexState::Building => {
+                    // Wait until builder notifies, then re-check.
+                }
+            }
+            self.notify.notified().await;
+        }
+    }
+
+    async fn try_ready(&self) -> Option<Arc<codex_treesitter::ProjectIndex>> {
+        let guard = self.state.lock().await;
+        match &*guard {
+            TreeSitterIndexState::Ready(index) => Some(Arc::clone(index)),
+            TreeSitterIndexState::Building | TreeSitterIndexState::Failed(_) => None,
+        }
+    }
 }
 
 impl std::fmt::Debug for MultiRootState {
@@ -122,15 +192,52 @@ impl MultiRootState {
 
         #[cfg(feature = "treesitter")]
         let treesitter_index = if let Some(config) = &self.treesitter_config {
-            let config = config.clone();
+            // Expensive: build in the background to avoid blocking session startup.
+            let idx = Arc::new(TreeSitterIndex::new());
             let root_path = root.path.clone();
-            let index = tokio::task::spawn_blocking(move || {
-                codex_treesitter::ProjectIndex::new_with_config(root_path, config)
-            })
-            .await
-            .map_err(|error| format!("TreeSitter initialization task failed: {error}"))?
-            .map_err(|error| format!("failed to initialize TreeSitter index: {error}"))?;
-            Some(Arc::new(index))
+            let config = config.clone();
+            let idx_for_task = Arc::clone(&idx);
+            let root_name = root.name.clone();
+
+            tracing::info!(
+                root = %root_name,
+                "scheduling tree-sitter index build in background"
+            );
+
+            tokio::spawn(async move {
+                let start = std::time::Instant::now();
+                let build = tokio::task::spawn_blocking(move || {
+                    codex_treesitter::ProjectIndex::new_with_config(root_path, config)
+                })
+                .await;
+
+                match build {
+                    Ok(Ok(index)) => {
+                        let files = index.file_tree().len();
+                        let symbols = index.symbol_table().len();
+                        tracing::info!(
+                            root = %root_name,
+                            files,
+                            symbols,
+                            elapsed_ms = start.elapsed().as_millis(),
+                            "tree-sitter index built"
+                        );
+                        idx_for_task.set_ready(index).await;
+                    }
+                    Ok(Err(error)) => {
+                        let msg = format!("failed to initialize TreeSitter index: {error}");
+                        tracing::warn!(root = %root_name, "tree-sitter index build failed: {msg}");
+                        idx_for_task.set_failed(msg).await;
+                    }
+                    Err(error) => {
+                        let msg = format!("TreeSitter initialization task failed: {error}");
+                        tracing::warn!(root = %root_name, "tree-sitter index build failed: {msg}");
+                        idx_for_task.set_failed(msg).await;
+                    }
+                }
+            });
+
+            Some(idx)
         } else {
             None
         };
@@ -276,49 +383,85 @@ impl MultiRootState {
         &self,
         file: &Path,
         root_name: Option<&str>,
-    ) -> Option<(String, Arc<codex_treesitter::ProjectIndex>)> {
-        let root = self.resolve_root(root_name, Some(file)).await?;
+    ) -> Result<Option<(String, Arc<codex_treesitter::ProjectIndex>)>, String> {
+        let Some(root) = self.resolve_root(root_name, Some(file)).await else {
+            return Ok(None);
+        };
         let indices = self.treesitter_indices.read().await;
-        indices
-            .get(&root.name)
-            .cloned()
-            .map(|index| (root.name, index))
+        let idx = indices.get(&root.name).cloned();
+        drop(indices);
+
+        let Some(idx) = idx else {
+            return Ok(None);
+        };
+
+        let index = idx.wait_ready().await?;
+        Ok(Some((root.name, index)))
     }
 
     #[cfg(feature = "treesitter")]
     pub async fn treesitter_indices(
         &self,
         root_name: Option<&str>,
-    ) -> Vec<(String, Arc<codex_treesitter::ProjectIndex>)> {
+    ) -> Result<Vec<(String, Arc<codex_treesitter::ProjectIndex>)>, String> {
         if let Some(root_name) = root_name {
             let indices = self.treesitter_indices.read().await;
-            return indices
-                .get(root_name)
-                .cloned()
-                .map(|index| vec![(root_name.to_string(), index)])
-                .unwrap_or_default();
+            let idx = indices.get(root_name).cloned();
+            drop(indices);
+            let Some(idx) = idx else {
+                return Ok(Vec::new());
+            };
+            return Ok(vec![(root_name.to_string(), idx.wait_ready().await?)]);
         }
 
         let roots = self.roots().await;
         let indices = self.treesitter_indices.read().await;
-        roots
+        let idxs: Vec<(String, Arc<TreeSitterIndex>)> = roots
             .into_iter()
-            .filter_map(|root| {
-                indices
-                    .get(&root.name)
-                    .cloned()
-                    .map(|index| (root.name, index))
-            })
-            .collect()
+            .filter_map(|root| indices.get(&root.name).cloned().map(|idx| (root.name, idx)))
+            .collect();
+        drop(indices);
+
+        let mut out = Vec::with_capacity(idxs.len());
+        for (root_name, idx) in idxs {
+            out.push((root_name, idx.wait_ready().await?));
+        }
+        Ok(out)
     }
 
     #[cfg(feature = "treesitter")]
     pub async fn reindex_file(&self, file: &Path) {
-        if let Some((_, index)) = self.treesitter_index_for_file(file, None).await
-            && let Err(error) = index.reindex_absolute_path(file)
-        {
-            tracing::debug!("tree-sitter reindex failed for {}: {error}", file.display());
-        }
+        // Best-effort; don't block tool calls waiting for background index build.
+        let root = self.root_for_file(file).await;
+        let Some(root) = root else {
+            return;
+        };
+
+        let indices = self.treesitter_indices.read().await;
+        let idx = indices.get(&root.name).cloned();
+        drop(indices);
+
+        let Some(idx) = idx else {
+            return;
+        };
+        let Some(index) = idx.try_ready().await else {
+            return;
+        };
+
+        let file = file.to_path_buf();
+        let root_name = root.name.clone();
+        let index = Arc::clone(&index);
+        tokio::task::spawn_blocking(move || {
+            if let Err(error) = index.reindex_absolute_path(&file) {
+                tracing::debug!(
+                    root = %root_name,
+                    "tree-sitter reindex failed for {}: {error}",
+                    file.display()
+                );
+            }
+        })
+        .await
+        .ok();
     }
 
     #[cfg(feature = "lsp")]
