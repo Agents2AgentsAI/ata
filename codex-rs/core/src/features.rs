@@ -172,6 +172,8 @@ pub enum Feature {
     ResearchKnowledgeBase,
     /// Enable voice mode in the TUI (mic → STT → agent → TTS → speaker).
     VoiceMode,
+    /// Enable the background job scheduler for running skills on cron/event triggers.
+    Scheduler,
 }
 
 impl Feature {
@@ -837,8 +839,14 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Experimental {
             name: "Voice Mode",
             menu_description: "mic → STT → agent → TTS → speaker",
-            announcement: "Voice Mode is now enabled. Press Ctrl+M or use /voice to toggle.",
+            announcement: "Voice Mode is now enabled. Use /voice to toggle.",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Scheduler,
+        key: "scheduler",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
 ];

@@ -18,6 +18,8 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use serde::Deserialize;
 
+use crate::line_truncation::truncate_line_to_width;
+
 /// A history entry ready for case-insensitive search.
 struct SearchableEntry {
     text: String,
@@ -166,19 +168,12 @@ impl ReverseSearch {
         let separator = ": ";
         let preview = self.matched_text.as_deref().unwrap_or("");
 
-        let prefix_width = prefix.len() + separator.len();
-        let available = max_width.saturating_sub(prefix_width);
-        let truncated_preview = if preview.len() > available {
-            &preview[..available]
-        } else {
-            preview
-        };
-
-        Line::from(vec![
+        let full_line = Line::from(vec![
             Span::from(prefix).dim(),
             Span::from(separator.to_string()).dim(),
-            Span::from(truncated_preview.to_string()),
-        ])
+            Span::from(preview.to_string()),
+        ]);
+        truncate_line_to_width(full_line, max_width)
     }
 
     /// The current match text, if any.
@@ -330,5 +325,27 @@ mod tests {
         // Just verify it has 3 spans
         assert_eq!(line.spans.len(), 3);
         assert_eq!(search.query(), "hel");
+    }
+
+    #[test]
+    fn prompt_line_no_panic_on_multibyte_utf8() {
+        // En-dash (U+2013) is 3 bytes in UTF-8 but 1 column wide.
+        // Emoji (U+1F600) is 4 bytes in UTF-8 and 2 columns wide.
+        // The old code sliced at byte offsets, panicking on multi-byte chars.
+        let mut search = make_search(vec!["foo – bar 😀 baz"]);
+        for ch in "foo".chars() {
+            search.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        assert_eq!(search.current_match(), Some("foo – bar 😀 baz"));
+
+        // Use a narrow width that forces truncation mid-preview (inside multi-byte territory).
+        // Prefix "(reverse-i-search)`foo'" = 24 chars + ": " = 26 display cols.
+        // Width 30 leaves only 4 cols for the preview — must truncate safely.
+        let line = search.search_prompt_line(30);
+        assert!(!line.spans.is_empty());
+
+        // Width 0 should not panic.
+        let line = search.search_prompt_line(0);
+        assert!(line.spans.is_empty());
     }
 }
