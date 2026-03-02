@@ -123,33 +123,15 @@ pub(super) fn header_line(
         title.to_string()
     };
 
-    // Build section nav: ◀ 3/7: Heading ▶
+    // Build section nav: ◀ 3/7 ▶  (heading is shown in the content area)
     let has_prev = section_num > 1;
     let has_next = section_num < section_count;
     let left_arrow = if has_prev { "◀ " } else { "  " };
     let right_arrow = if has_next { " ▶" } else { "  " };
-    let nav_prefix = format!("{left_arrow}{section_num}/{section_count}");
-    let nav_prefix_width = unicode_width::UnicodeWidthStr::width(nav_prefix.as_str());
-    let arrow_width = unicode_width::UnicodeWidthStr::width(right_arrow);
+    let _ = section_heading; // heading already visible in content
 
+    let right = format!("{left_arrow}{section_num}/{section_count}{right_arrow}");
     let left_width = unicode_width::UnicodeWidthStr::width(left.as_str());
-    // Minimum 2 chars padding between left and right parts.
-    let available_for_right = inner_width.saturating_sub(left_width).saturating_sub(2);
-
-    // Determine how much space the section heading can use.
-    let heading_budget = available_for_right
-        .saturating_sub(nav_prefix_width)
-        .saturating_sub(arrow_width)
-        .saturating_sub(2); // ": " separator
-
-    let heading_part = if !section_heading.is_empty() && heading_budget >= 4 {
-        let truncated = truncate_str(section_heading, heading_budget);
-        format!(": {truncated}")
-    } else {
-        String::new()
-    };
-
-    let right = format!("{nav_prefix}{heading_part}{right_arrow}");
     let right_width = unicode_width::UnicodeWidthStr::width(right.as_str());
     let padding = inner_width
         .saturating_sub(left_width)
@@ -173,6 +155,7 @@ pub(super) fn header_line(
 
 /// Truncate a string to fit within `max_width` display columns, appending "…"
 /// if it was shortened.
+#[allow(dead_code)]
 fn truncate_str(s: &str, max_width: usize) -> String {
     use unicode_width::UnicodeWidthStr;
     let w = UnicodeWidthStr::width(s);

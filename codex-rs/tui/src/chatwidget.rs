@@ -3401,19 +3401,6 @@ impl ChatWidget {
                 }
                 return;
             }
-            // Ctrl+Shift+M: toggle voice mode.
-            // Requires enhanced keyboard protocol (Kitty) — works on iTerm2,
-            // Ghostty, Kitty, WezTerm.  Fallback: `/voice` command.
-            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
-            KeyEvent {
-                code: KeyCode::Char('M'),
-                modifiers,
-                kind: KeyEventKind::Press,
-                ..
-            } if modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
-                self.toggle_voice_mode();
-                return;
-            }
             // Esc: interrupt TTS when voice mode is speaking.
             // First Esc stops speech; subsequent Esc follows normal behaviour.
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]

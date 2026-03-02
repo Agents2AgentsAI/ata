@@ -640,7 +640,7 @@ impl super::ChatWidget {
             .set_document_reader_voice_status(None);
     }
 
-    /// Toggle voice mode on/off (Ctrl+Shift+M or /voice).
+    /// Toggle voice mode on/off (`/voice` command).
     pub(crate) fn toggle_voice_mode(&mut self) {
         if !self.config.features.enabled(codex_core::features::Feature::VoiceMode) {
             self.add_info_message(
@@ -698,7 +698,7 @@ impl super::ChatWidget {
             .send(AppEvent::PersistVoiceModeEnabled(true));
 
         self.add_info_message(
-            "Voice mode on. Hold Space to speak. Ctrl+Shift+M to stop.".to_string(),
+            "Voice mode on. Hold Space to speak. /voice to stop.".to_string(),
             None,
         );
 
@@ -1312,6 +1312,24 @@ impl super::ChatWidget {
     }
 
     /// Called when TTS playback is finished.
+    /// Handle a TTS error from the background worker. Surfaces the error
+    /// in the voice status / placeholder so the user knows what happened.
+    pub(crate) fn on_voice_tts_error(&mut self, error: &str) {
+        tracing::warn!("Voice TTS error surfaced to user: {error}");
+        // Show a user-friendly error in the placeholder and reading view status.
+        let msg = if error.contains("401") || error.contains("Unauthorized") {
+            "TTS error: invalid ElevenLabs API key".to_string()
+        } else if error.contains("402") || error.contains("quota") || error.contains("credit") {
+            "TTS error: ElevenLabs credits exhausted".to_string()
+        } else {
+            format!("TTS error: {}", truncate_error(error, 60))
+        };
+        self.bottom_pane
+            .set_placeholder_text(msg.clone());
+        self.bottom_pane
+            .set_document_reader_voice_status(Some(msg));
+    }
+
     pub(crate) fn on_voice_tts_finished(&mut self) {
         let Some(ref mut state) = self.voice_mode_state else {
             return;
@@ -2434,6 +2452,15 @@ fn start_tts_generation(
     Ok(chunk_rx)
 }
 
+/// Truncate an error message for display, keeping the first `max_len` chars.
+fn truncate_error(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max_len])
+    }
+}
+
 /// Compute a simple hash of text for cache invalidation.
 fn hash_text(text: &str) -> u64 {
     use std::hash::Hash;
@@ -2472,6 +2499,9 @@ async fn tts_worker_loop(
         .or_else(|| std::env::var("ELEVENLABS_API_KEY").ok());
     let Some(api_key) = api_key else {
         tracing::error!("TTS worker: missing API key");
+        event_tx.send(AppEvent::VoiceModeTtsError {
+            error: "Missing ElevenLabs API key".to_string(),
+        });
         if in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
             event_tx.send(AppEvent::VoiceModeTtsFinished);
         }
@@ -2492,6 +2522,9 @@ async fn tts_worker_loop(
         Ok(s) => s,
         Err(e) => {
             tracing::error!("TTS worker connect: {e}");
+            event_tx.send(AppEvent::VoiceModeTtsError {
+                error: format!("TTS connection failed: {e}"),
+            });
             if in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
                 event_tx.send(AppEvent::VoiceModeTtsFinished);
             }
