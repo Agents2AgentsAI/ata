@@ -278,9 +278,12 @@ impl ModelProviderInfo {
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: Some(
-                [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
-                    .into_iter()
-                    .collect(),
+                [(
+                    "version".to_string(),
+                    crate::models_manager::OPENAI_MODELS_CLIENT_VERSION.to_string(),
+                )]
+                .into_iter()
+                .collect(),
             ),
             env_http_headers: Some(
                 [
@@ -528,5 +531,18 @@ wire_api = "chat"
 
         let err = toml::from_str::<ModelProviderInfo>(provider_toml).unwrap_err();
         assert!(err.to_string().contains(CHAT_WIRE_API_REMOVED_ERROR));
+    }
+
+    #[test]
+    fn openai_provider_version_header_matches_models_client_version() {
+        let provider = ModelProviderInfo::create_openai_provider();
+        let headers = provider
+            .http_headers
+            .expect("OpenAI provider must have http_headers");
+        assert_eq!(
+            headers.get("version").map(String::as_str),
+            Some(crate::models_manager::OPENAI_MODELS_CLIENT_VERSION),
+            "version header must use OPENAI_MODELS_CLIENT_VERSION, not CARGO_PKG_VERSION"
+        );
     }
 }

@@ -3915,6 +3915,9 @@ impl ChatWidget {
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
+            SlashCommand::Jobs => {
+                self.add_jobs_output();
+            }
             SlashCommand::Apps => {
                 self.add_connectors_output();
             }
@@ -5668,6 +5671,7 @@ impl ChatWidget {
                     model.clone(),
                     Some(preset.default_reasoning_effort),
                     should_prompt_plan_mode_scope,
+                    preset.provider_id.clone(),
                 );
                 SelectionItem {
                     name: model.clone(),
@@ -5823,12 +5827,14 @@ impl ChatWidget {
         model_for_action: String,
         effort_for_action: Option<ReasoningEffortConfig>,
         should_prompt_plan_mode_scope: bool,
+        provider: Option<String>,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
             if should_prompt_plan_mode_scope {
                 tx.send(AppEvent::OpenPlanReasoningScopePrompt {
                     model: model_for_action.clone(),
                     effort: effort_for_action,
+                    provider: provider.clone(),
                 });
                 return;
             }
@@ -5838,7 +5844,7 @@ impl ChatWidget {
             tx.send(AppEvent::PersistModelSelection {
                 model: model_for_action.clone(),
                 effort: effort_for_action,
-                provider: None,
+                provider: provider.clone(),
             });
         })]
     }
@@ -5867,6 +5873,7 @@ impl ChatWidget {
         &mut self,
         model: String,
         effort: Option<ReasoningEffortConfig>,
+        provider: Option<String>,
     ) {
         let reasoning_phrase = match effort {
             Some(ReasoningEffortConfig::None) => "no reasoning".to_string(),
@@ -5919,7 +5926,7 @@ impl ChatWidget {
             tx.send(AppEvent::PersistModelSelection {
                 model: model.clone(),
                 effort,
-                provider: None,
+                provider: provider.clone(),
             });
         })];
 
@@ -5951,6 +5958,7 @@ impl ChatWidget {
     pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
+        let provider = preset.provider_id.clone();
         let in_plan_mode =
             self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan;
 
@@ -6003,9 +6011,10 @@ impl ChatWidget {
                     .send(AppEvent::OpenPlanReasoningScopePrompt {
                         model: selected_model,
                         effort: selected_effort,
+                        provider,
                     });
             } else {
-                self.apply_model_and_effort(selected_model, selected_effort);
+                self.apply_model_and_effort(selected_model, selected_effort, provider);
             }
             return;
         }
@@ -6071,6 +6080,7 @@ impl ChatWidget {
 
             let model_for_action = model_slug.clone();
             let choice_effort = choice.stored;
+            let provider_for_action = provider.clone();
             let should_prompt_plan_mode_scope =
                 self.should_prompt_plan_mode_reasoning_scope(model_slug.as_str(), choice_effort);
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -6078,6 +6088,7 @@ impl ChatWidget {
                     tx.send(AppEvent::OpenPlanReasoningScopePrompt {
                         model: model_for_action.clone(),
                         effort: choice_effort,
+                        provider: provider_for_action.clone(),
                     });
                 } else {
                     tx.send(AppEvent::UpdateModel(model_for_action.clone()));
@@ -6085,7 +6096,7 @@ impl ChatWidget {
                     tx.send(AppEvent::PersistModelSelection {
                         model: model_for_action.clone(),
                         effort: choice_effort,
-                        provider: None,
+                        provider: provider_for_action.clone(),
                     });
                 }
             })];
@@ -6137,12 +6148,17 @@ impl ChatWidget {
             .send(AppEvent::UpdateReasoningEffort(effort));
     }
 
-    fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
+    fn apply_model_and_effort(
+        &self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+        provider: Option<String>,
+    ) {
         self.apply_model_and_effort_without_persist(model.clone(), effort);
         self.app_event_tx.send(AppEvent::PersistModelSelection {
             model,
             effort,
-            provider: None,
+            provider,
         });
     }
 
@@ -7300,6 +7316,70 @@ impl ChatWidget {
         } else {
             self.submit_op(Op::ListMcpTools);
         }
+    }
+
+    pub(crate) fn add_jobs_output(&mut self) {
+        let jobs_dir = self.config.codex_home.join("jobs");
+        let pid_path = self.config.codex_home.join("scheduler.pid");
+
+        // Check daemon status from PID file.
+        let daemon_status = if pid_path.exists() {
+            match std::fs::read_to_string(&pid_path) {
+                Ok(pid_str) => {
+                    let pid_str = pid_str.trim();
+                    format!("Scheduler daemon: running (PID {pid_str})")
+                }
+                Err(_) => "Scheduler daemon: unknown (cannot read PID file)".to_string(),
+            }
+        } else {
+            "Scheduler daemon: not running".to_string()
+        };
+
+        // Read job TOML files from ~/.ata/jobs/.
+        let mut job_lines = Vec::new();
+        if jobs_dir.exists()
+            && let Ok(entries) = std::fs::read_dir(&jobs_dir)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("toml") {
+                    let name = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("?")
+                        .to_string();
+                    // Quick parse to get enabled status.
+                    let enabled = std::fs::read_to_string(&path)
+                        .ok()
+                        .and_then(|contents| {
+                            contents
+                                .lines()
+                                .find(|l| l.starts_with("enabled"))
+                                .map(|l| l.contains("true"))
+                        })
+                        .unwrap_or(true);
+                    let status = if enabled { "enabled" } else { "disabled" };
+                    job_lines.push(format!("  {name:<20} {status}"));
+                }
+            }
+        }
+
+        let message = if job_lines.is_empty() {
+            format!(
+                "{daemon_status}\n\nNo jobs found. Ask me to set up a scheduled job, or run `ata jobs create <name>` in the terminal."
+            )
+        } else {
+            let count = job_lines.len();
+            let job_list = job_lines.join("\n");
+            format!(
+                "{daemon_status}\n\n{count} job(s):\n{job_list}\n\nUse `ata jobs show <name>` or `ata jobs history <name>` for details."
+            )
+        };
+
+        self.add_info_message(
+            message,
+            Some("Tip: ask me to create, modify, or run a scheduled job.".to_string()),
+        );
     }
 
     pub(crate) fn add_connectors_output(&mut self) {

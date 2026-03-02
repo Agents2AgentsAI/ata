@@ -1554,6 +1554,7 @@ dependencies = [
  "codex-protocol",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
+ "codex-scheduler",
  "codex-stdio-to-uds",
  "codex-tui",
  "codex-utils-cargo-bin",
@@ -2275,6 +2276,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-scheduler"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "codex-secrets",
+ "codex-utils-home-dir",
+ "cron",
+ "libc",
+ "notify",
+ "pretty_assertions",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tiny_http",
+ "tokio",
+ "toml 0.9.12+spec-1.1.0",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "codex-secrets"
 version = "0.0.0"
 dependencies = [
@@ -2964,6 +2989,17 @@ name = "critical-section"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
+
+[[package]]
+name = "cron"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5877d3fbf742507b66bc2a1945106bd30dd8504019d596901ddd012a4dd01740"
+dependencies = [
+ "chrono",
+ "once_cell",
+ "winnow 0.6.26",
+]
 
 [[package]]
 name = "crossbeam-channel"
@@ -9752,7 +9788,7 @@ dependencies = [
  "toml_datetime",
  "toml_parser",
  "toml_writer",
- "winnow",
+ "winnow 0.7.14",
 ]
 
 [[package]]
@@ -9773,7 +9809,7 @@ dependencies = [
  "indexmap 2.13.0",
  "toml_datetime",
  "toml_parser",
- "winnow",
+ "winnow 0.7.14",
 ]
 
 [[package]]
@@ -9786,7 +9822,7 @@ dependencies = [
  "toml_datetime",
  "toml_parser",
  "toml_writer",
- "winnow",
+ "winnow 0.7.14",
 ]
 
 [[package]]
@@ -9795,7 +9831,7 @@ version = "1.0.9+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "702d4415e08923e7e1ef96cd5727c0dfed80b4d2fa25db9647fe5eb6f7c5a4c4"
 dependencies = [
- "winnow",
+ "winnow 0.7.14",
 ]
 
 [[package]]
@@ -11294,6 +11330,15 @@ name = "windows_x86_64_msvc"
 version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
+
+[[package]]
+name = "winnow"
+version = "0.6.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e90edd2ac1aa278a5c4599b1d89cf03074b610800f866d4026dc199d7929a28"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "winnow"
