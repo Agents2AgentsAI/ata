@@ -1695,6 +1695,10 @@ impl App {
                     }
                     // Allow widgets to process any pending timers before rendering.
                     self.chat_widget.pre_draw_tick();
+                    // Enable mouse capture only when a view that needs mouse
+                    // scrolling is active (e.g., reading view). Otherwise leave
+                    // it off so the terminal handles scrollback natively.
+                    tui.set_mouse_capture(self.chat_widget.is_document_reader_active());
                     // Flush deferred history lines once both the overlay and
                     // reading view are closed so they appear in the scrollback.
                     if !self.deferred_history_lines.is_empty()

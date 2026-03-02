@@ -81,7 +81,9 @@ pub fn set_modes() -> Result<()> {
     );
 
     let _ = execute!(stdout(), EnableFocusChange);
-    let _ = execute!(stdout(), EnableMouseCapture);
+    // Mouse capture is NOT enabled globally. It is toggled on/off dynamically
+    // via `Tui::set_mouse_capture()` so that normal terminal scrollback works
+    // when no view needs mouse scroll events (e.g., the reading view).
     Ok(())
 }
 
@@ -259,6 +261,8 @@ pub struct Tui {
     notification_backend: Option<DesktopNotificationBackend>,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
+    // Tracks whether mouse capture is currently enabled, to avoid redundant escape sequences.
+    mouse_capture_active: bool,
 }
 
 impl Tui {
@@ -287,12 +291,27 @@ impl Tui {
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             alt_screen_enabled: true,
+            mouse_capture_active: false,
         }
     }
 
     /// Set whether alternate screen is enabled. When false, enter_alt_screen() becomes a no-op.
     pub fn set_alt_screen_enabled(&mut self, enabled: bool) {
         self.alt_screen_enabled = enabled;
+    }
+
+    /// Enable or disable mouse capture. Only sends the escape sequence when
+    /// the state actually changes, so it is safe to call on every frame.
+    pub fn set_mouse_capture(&mut self, enable: bool) {
+        if enable == self.mouse_capture_active {
+            return;
+        }
+        self.mouse_capture_active = enable;
+        if enable {
+            let _ = execute!(stdout(), EnableMouseCapture);
+        } else {
+            let _ = execute!(stdout(), DisableMouseCapture);
+        }
     }
 
     pub fn set_notification_method(&mut self, method: NotificationMethod) {
