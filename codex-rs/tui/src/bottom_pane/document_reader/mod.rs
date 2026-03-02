@@ -749,7 +749,7 @@ impl DocumentReaderView {
                     document_id: self.document_id.clone(),
                     section_index: self.current_section,
                     text,
-                    selection: false,
+                    selection_word_offset: None,
                 });
         }
         // Prefetch the next section in the background.
@@ -1451,6 +1451,7 @@ impl DocumentReaderView {
                 #[cfg(not(target_os = "linux"))]
                 KeyCode::Char('r') => {
                     let inner_w = self.last_inner_width.get();
+                    let word_offset = self.count_words_before_selection(inner_w);
                     if let Some(text) = self.selected_text(inner_w) {
                         if !text.trim().is_empty() {
                             self.app_event_tx
@@ -1458,7 +1459,7 @@ impl DocumentReaderView {
                                     document_id: self.document_id.clone(),
                                     section_index: self.current_section,
                                     text,
-                                    selection: true,
+                                    selection_word_offset: Some(word_offset),
                                 });
                         }
                     }
@@ -2240,6 +2241,48 @@ impl DocumentReaderView {
                 (cursor_line, self.cursor_col, anchor_line, vs.anchor_col)
             };
         Some((start_line, start_col, end_line, end_col))
+    }
+
+    /// Count rendered words before the selection start position.
+    ///
+    /// Uses the same decorator-skipping logic as `set_voice_reading_progress`
+    /// so the returned offset can be added to a TTS word index to highlight
+    /// the correct word in the full rendered content.
+    #[cfg(not(target_os = "linux"))]
+    fn count_words_before_selection(&self, inner_width: u16) -> usize {
+        let vs = match self.visual_select.as_ref() {
+            Some(v) => v,
+            None => return 0,
+        };
+        let section = match self.sections.get(self.current_section) {
+            Some(s) => s,
+            None => return 0,
+        };
+        let lines = section.rendered_lines(inner_width);
+        if lines.is_empty() {
+            return 0;
+        }
+        let (start_line, start_col, _, _) = match self.selection_bounds(vs, lines.len()) {
+            Some(b) => b,
+            None => return 0,
+        };
+        let mut count = 0usize;
+        for (i, line) in lines.iter().enumerate() {
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            if text.starts_with("┊ [-]") || text.starts_with("┊ [+]") {
+                continue;
+            }
+            for (word_start, word) in WordOffsets::new(&text) {
+                if word == "\u{1F50A}" || word == "┊" || word == "\u{2713}" {
+                    continue;
+                }
+                if i > start_line || (i == start_line && word_start >= start_col) {
+                    return count;
+                }
+                count += 1;
+            }
+        }
+        count
     }
 }
 

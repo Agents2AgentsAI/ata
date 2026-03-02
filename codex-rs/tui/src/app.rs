@@ -2962,8 +2962,8 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             #[cfg(not(target_os = "linux"))]
-            AppEvent::VoiceModeNarrateSection { document_id, section_index, text, selection } => {
-                self.chat_widget.on_voice_narrate_section(document_id, section_index, text, selection);
+            AppEvent::VoiceModeNarrateSection { document_id, section_index, text, selection_word_offset } => {
+                self.chat_widget.on_voice_narrate_section(document_id, section_index, text, selection_word_offset);
                 tui.frame_requester().schedule_frame();
             }
             #[cfg(not(target_os = "linux"))]

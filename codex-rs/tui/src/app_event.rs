@@ -449,9 +449,11 @@ pub(crate) enum AppEvent {
         document_id: String,
         section_index: usize,
         text: String,
-        /// When true, the text is a visual selection rather than the full section.
-        /// Selection narrations skip caching and use overlay-style karaoke.
-        selection: bool,
+        /// When `Some(n)`, the text is a visual selection that starts at
+        /// rendered-word index `n` in the section.  The offset lets karaoke
+        /// highlight the correct word in the full rendered content.
+        /// `None` means full-section narration.
+        selection_word_offset: Option<usize>,
     },
 
     /// Pre-generate TTS audio for an adjacent section in the background.
