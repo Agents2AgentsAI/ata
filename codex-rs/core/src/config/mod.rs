@@ -1850,7 +1850,12 @@ impl Config {
                 model_provider_id = "openai".to_string();
                 model_providers
                     .get("openai")
-                    .expect("openai is a built-in provider")
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "built-in openai provider is missing",
+                        )
+                    })?
                     .clone()
             }
         };
