@@ -72,6 +72,35 @@ impl SymbolTable {
         })
     }
 
+    pub fn set_definition(
+        &self,
+        file: &str,
+        name: &str,
+        definition: &str,
+        overwrite: bool,
+    ) -> Result<(), String> {
+        let Some(keys) = self.by_file.get(file) else {
+            return Err(format!("file '{file}' not found in index"));
+        };
+
+        for key in keys.iter() {
+            if let Some(mut symbol) = self.symbols.get_mut(key) {
+                if symbol.name != name {
+                    continue;
+                }
+                if symbol.definition.is_some() && !overwrite {
+                    return Err(format!(
+                        "symbol '{name}' in '{file}' already has a definition"
+                    ));
+                }
+                symbol.definition = Some(definition.to_string());
+                return Ok(());
+            }
+        }
+
+        Err(format!("symbol '{name}' not found in '{file}'"))
+    }
+
     pub fn symbols_in_file(&self, rel_path: &str) -> Vec<Symbol> {
         let Some(keys) = self.by_file.get(rel_path) else {
             return Vec::new();

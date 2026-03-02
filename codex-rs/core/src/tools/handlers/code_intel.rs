@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_treesitter::FileMark;
 use codex_treesitter::GrepScope;
 use codex_treesitter::ProjectIndex;
 use serde::Deserialize;
@@ -39,6 +40,10 @@ struct CodeIntelToolArgs {
     query: Option<String>,
     #[serde(default)]
     pattern: Option<String>,
+    #[serde(default)]
+    definition: Option<String>,
+    #[serde(default)]
+    mark: Option<String>,
     #[serde(default)]
     line: Option<u32>,
     #[serde(default)]
@@ -140,9 +145,40 @@ impl ToolHandler for CodeIntelToolHandler {
                     .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
                 format_grep(&result)
             }
+            "defineSymbol" => {
+                let symbol = require_param(args.symbol.as_deref(), "symbol")?;
+                let rel_file = self.relative_file(args.file.as_deref())?;
+                let definition = require_param(args.definition.as_deref(), "definition")?;
+                self.index
+                    .define_symbol(symbol, &rel_file, definition, false)
+                    .map_err(FunctionCallError::RespondToModel)?;
+                format!("Defined symbol '{symbol}' in {rel_file}")
+            }
+            "defineFile" => {
+                let rel_file = self.relative_file(args.file.as_deref())?;
+                let definition = require_param(args.definition.as_deref(), "definition")?;
+                self.index
+                    .define_file(&rel_file, definition, false)
+                    .map_err(FunctionCallError::RespondToModel)?;
+                format!("Defined file '{rel_file}'")
+            }
+            "markFile" => {
+                let rel_file = self.relative_file(args.file.as_deref())?;
+                let mark = require_param(args.mark.as_deref(), "mark")?;
+                let mark_enum = FileMark::from_input(mark).ok_or_else(|| {
+                    FunctionCallError::RespondToModel(
+                        "`mark` must be non-empty. Built-ins: test, docs, config, generated, entryPoint; custom values are also allowed."
+                            .to_string(),
+                    )
+                })?;
+                self.index
+                    .mark_file(&rel_file, mark_enum)
+                    .map_err(FunctionCallError::RespondToModel)?;
+                format!("Marked file '{rel_file}' as {mark}")
+            }
             other => {
                 return Err(FunctionCallError::RespondToModel(format!(
-                    "unknown code_intel operation: {other}. Valid operations: symbolSearch, callers, tests, variables, implementation, structure, peek, grep"
+                    "unknown code_intel operation: {other}. Valid operations: symbolSearch, callers, tests, variables, implementation, structure, peek, grep, defineSymbol, defineFile, markFile"
                 )));
             }
         };
@@ -272,7 +308,7 @@ pub(crate) fn create_code_intel_tool() -> ToolSpec {
         "operation".to_string(),
         JsonSchema::String {
             description: Some(
-                "Operation name: symbolSearch, callers, tests, variables, implementation, structure, peek, grep"
+                "Operation name: symbolSearch, callers, tests, variables, implementation, structure, peek, grep, defineSymbol, defineFile, markFile"
                     .to_string(),
             ),
         },
@@ -299,6 +335,20 @@ pub(crate) fn create_code_intel_tool() -> ToolSpec {
         "pattern".to_string(),
         JsonSchema::String {
             description: Some("Regex pattern for grep.".to_string()),
+        },
+    );
+    properties.insert(
+        "definition".to_string(),
+        JsonSchema::String {
+            description: Some("Definition text for defineSymbol/defineFile.".to_string()),
+        },
+    );
+    properties.insert(
+        "mark".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Mark for markFile. Built-ins: test, docs, config, generated, entryPoint. Custom values are allowed.".to_string(),
+            ),
         },
     );
     properties.insert(

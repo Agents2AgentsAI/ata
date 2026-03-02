@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use dashmap::DashMap;
 
 use crate::file_entry::FileEntry;
+use crate::file_entry::FileMark;
 use crate::file_entry::Language;
 
 #[derive(Debug)]
@@ -34,6 +35,32 @@ impl FileTree {
 
     pub fn get(&self, rel_path: &str) -> Option<FileEntry> {
         self.files.get(rel_path).map(|entry| entry.value().clone())
+    }
+
+    pub fn define_file(
+        &self,
+        rel_path: &str,
+        definition: &str,
+        overwrite: bool,
+    ) -> Result<(), String> {
+        let Some(mut entry) = self.files.get_mut(rel_path) else {
+            return Err(format!("file '{rel_path}' not found in index"));
+        };
+        if entry.definition.is_some() && !overwrite {
+            return Err(format!("file '{rel_path}' already has a definition"));
+        }
+        entry.definition = Some(definition.to_string());
+        Ok(())
+    }
+
+    pub fn mark_file(&self, rel_path: &str, mark: FileMark) -> Result<(), String> {
+        let Some(mut entry) = self.files.get_mut(rel_path) else {
+            return Err(format!("file '{rel_path}' not found in index"));
+        };
+        if !entry.marks.contains(&mark) {
+            entry.marks.push(mark);
+        }
+        Ok(())
     }
 
     pub fn len(&self) -> usize {

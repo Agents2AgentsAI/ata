@@ -17,5 +17,8 @@ Supported operations:
 - structure: Render project tree for indexed files.
 - peek: Read a line window from a file.
 - grep: Regex search across indexed files.
+- defineSymbol: Add a human definition to a symbol.
+- defineFile: Add a human definition to a file.
+- markFile: Mark a file as test/docs/config/generated/entryPoint or any custom tag.
 
 Use the `lsp` tool when semantic precision is required (type-aware definitions, references, hover).

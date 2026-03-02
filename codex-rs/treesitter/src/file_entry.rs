@@ -50,11 +50,42 @@ impl Language {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileMark {
+    Test,
+    Docs,
+    Config,
+    Generated,
+    EntryPoint,
+    Custom(String),
+}
+
+impl FileMark {
+    pub fn from_input(input: &str) -> Option<Self> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        match trimmed.to_ascii_lowercase().as_str() {
+            "test" => Some(Self::Test),
+            "docs" => Some(Self::Docs),
+            "config" => Some(Self::Config),
+            "generated" => Some(Self::Generated),
+            "entrypoint" | "entry_point" => Some(Self::EntryPoint),
+            _ => Some(Self::Custom(trimmed.to_string())),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileEntry {
     pub rel_path: String,
     pub size: u64,
     pub language: Language,
+    pub definition: Option<String>,
+    pub marks: Vec<FileMark>,
 }
 
 impl FileEntry {
@@ -64,6 +95,8 @@ impl FileEntry {
             rel_path,
             size,
             language,
+            definition: None,
+            marks: Vec::new(),
         }
     }
 }
