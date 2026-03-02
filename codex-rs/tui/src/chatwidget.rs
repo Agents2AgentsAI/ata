@@ -5453,6 +5453,7 @@ impl ChatWidget {
                     model.clone(),
                     Some(preset.default_reasoning_effort),
                     should_prompt_plan_mode_scope,
+                    preset.provider_id.clone(),
                 );
                 SelectionItem {
                     name: model.clone(),
@@ -5608,12 +5609,14 @@ impl ChatWidget {
         model_for_action: String,
         effort_for_action: Option<ReasoningEffortConfig>,
         should_prompt_plan_mode_scope: bool,
+        provider: Option<String>,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
             if should_prompt_plan_mode_scope {
                 tx.send(AppEvent::OpenPlanReasoningScopePrompt {
                     model: model_for_action.clone(),
                     effort: effort_for_action,
+                    provider: provider.clone(),
                 });
                 return;
             }
@@ -5623,7 +5626,7 @@ impl ChatWidget {
             tx.send(AppEvent::PersistModelSelection {
                 model: model_for_action.clone(),
                 effort: effort_for_action,
-                provider: None,
+                provider: provider.clone(),
             });
         })]
     }
@@ -5652,6 +5655,7 @@ impl ChatWidget {
         &mut self,
         model: String,
         effort: Option<ReasoningEffortConfig>,
+        provider: Option<String>,
     ) {
         let reasoning_phrase = match effort {
             Some(ReasoningEffortConfig::None) => "no reasoning".to_string(),
@@ -5704,7 +5708,7 @@ impl ChatWidget {
             tx.send(AppEvent::PersistModelSelection {
                 model: model.clone(),
                 effort,
-                provider: None,
+                provider: provider.clone(),
             });
         })];
 
@@ -5736,6 +5740,7 @@ impl ChatWidget {
     pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
+        let provider = preset.provider_id.clone();
         let in_plan_mode =
             self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan;
 
@@ -5788,9 +5793,10 @@ impl ChatWidget {
                     .send(AppEvent::OpenPlanReasoningScopePrompt {
                         model: selected_model,
                         effort: selected_effort,
+                        provider,
                     });
             } else {
-                self.apply_model_and_effort(selected_model, selected_effort);
+                self.apply_model_and_effort(selected_model, selected_effort, provider);
             }
             return;
         }
@@ -5856,6 +5862,7 @@ impl ChatWidget {
 
             let model_for_action = model_slug.clone();
             let choice_effort = choice.stored;
+            let provider_for_action = provider.clone();
             let should_prompt_plan_mode_scope =
                 self.should_prompt_plan_mode_reasoning_scope(model_slug.as_str(), choice_effort);
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -5863,6 +5870,7 @@ impl ChatWidget {
                     tx.send(AppEvent::OpenPlanReasoningScopePrompt {
                         model: model_for_action.clone(),
                         effort: choice_effort,
+                        provider: provider_for_action.clone(),
                     });
                 } else {
                     tx.send(AppEvent::UpdateModel(model_for_action.clone()));
@@ -5870,7 +5878,7 @@ impl ChatWidget {
                     tx.send(AppEvent::PersistModelSelection {
                         model: model_for_action.clone(),
                         effort: choice_effort,
-                        provider: None,
+                        provider: provider_for_action.clone(),
                     });
                 }
             })];
@@ -5922,12 +5930,17 @@ impl ChatWidget {
             .send(AppEvent::UpdateReasoningEffort(effort));
     }
 
-    fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
+    fn apply_model_and_effort(
+        &self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+        provider: Option<String>,
+    ) {
         self.apply_model_and_effort_without_persist(model.clone(), effort);
         self.app_event_tx.send(AppEvent::PersistModelSelection {
             model,
             effort,
-            provider: None,
+            provider,
         });
     }
 
