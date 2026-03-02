@@ -33,6 +33,29 @@ pub fn workspaces_root() -> PathBuf {
     codex_home().join("workspaces")
 }
 
+/// Ensure the workspace root exists as a directory.
+pub fn ensure_workspaces_root() -> std::io::Result<PathBuf> {
+    ensure_workspaces_root_for(&codex_home())
+}
+
+/// Ensure `codex_home/workspaces` exists as a directory.
+pub fn ensure_workspaces_root_for(codex_home: &std::path::Path) -> std::io::Result<PathBuf> {
+    let root = codex_home.join("workspaces");
+    if root.exists() && !root.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!(
+                "workspaces root path exists and is not a directory: {}",
+                root.display()
+            ),
+        ));
+    }
+    if !root.is_dir() {
+        std::fs::create_dir_all(&root)?;
+    }
+    Ok(root)
+}
+
 /// Root directory for a specific workspace.
 pub fn workspace_root(workspace_id: &str) -> PathBuf {
     workspaces_root().join(workspace_id)
@@ -65,7 +88,10 @@ pub fn selection_path() -> PathBuf {
         .trim()
         .to_string();
     if !sid.is_empty() {
-        return codex_home().join("sessions").join(&sid).join("workspace.json");
+        return codex_home()
+            .join("sessions")
+            .join(&sid)
+            .join("workspace.json");
     }
     codex_home().join(".workspace_selected")
 }
@@ -92,7 +118,8 @@ pub fn lock_file_path(workspace_id: &str, level: &str, target_id: Option<&str>) 
 pub fn mirror_cache_path(url: &str) -> PathBuf {
     let key = normalize_repo_key(url);
     let digest = {
-        use sha2::{Digest, Sha256};
+        use sha2::Digest;
+        use sha2::Sha256;
         let mut hasher = Sha256::new();
         hasher.update(key.as_bytes());
         let result = hasher.finalize();
@@ -156,6 +183,7 @@ pub fn init_dirs() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn test_normalize_repo_key() {
@@ -166,6 +194,32 @@ mod tests {
         assert_eq!(
             normalize_repo_key("https://github.com/org/repo/"),
             "github.com/org/repo"
+        );
+    }
+
+    #[test]
+    fn ensure_workspaces_root_for_creates_dir() {
+        let temp = TempDir::new().expect("create temp dir");
+
+        let root = ensure_workspaces_root_for(temp.path()).expect("create workspaces root");
+
+        assert_eq!(root, temp.path().join("workspaces"));
+        assert!(root.is_dir(), "workspaces root should be a directory");
+    }
+
+    #[test]
+    fn ensure_workspaces_root_for_errors_when_path_is_file() {
+        let temp = TempDir::new().expect("create temp dir");
+        let root_file = temp.path().join("workspaces");
+        std::fs::write(&root_file, "not a directory").expect("create root file");
+
+        let err =
+            ensure_workspaces_root_for(temp.path()).expect_err("expected non-directory error");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert!(
+            err.to_string().contains("is not a directory"),
+            "error should mention non-directory root path"
         );
     }
 }

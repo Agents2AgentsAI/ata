@@ -4,10 +4,7 @@ use crate::types::WorkspaceSummary;
 
 /// List all workspaces as summaries.
 pub fn run() -> Result<Vec<WorkspaceSummary>, WorkspaceError> {
-    let root = paths::workspaces_root();
-    if !root.is_dir() {
-        return Ok(Vec::new());
-    }
+    let root = paths::ensure_workspaces_root()?;
 
     let mut results = Vec::new();
     let mut entries: Vec<_> = std::fs::read_dir(&root)?

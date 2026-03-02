@@ -1,7 +1,8 @@
 use crate::error::WorkspaceError;
 use crate::paths::workspace_root;
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
 static RESERVED_ALIASES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
@@ -12,7 +13,13 @@ static RESERVED_ALIASES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
 
 static NOTES_CATEGORIES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
-        "workspace", "repos", "papers", "datasets", "runs", "artifacts", "indexes",
+        "workspace",
+        "repos",
+        "papers",
+        "datasets",
+        "runs",
+        "artifacts",
+        "indexes",
     ]
     .into_iter()
     .collect()
@@ -114,7 +121,10 @@ pub fn resolve_at_spec(workspace_id: &str, spec: &str) -> Result<PathBuf, Worksp
 
     // @kb[/path...]
     if rest == "kb" || rest.starts_with("kb/") {
-        let suffix = rest.strip_prefix("kb").unwrap_or("").trim_start_matches('/');
+        let suffix = rest
+            .strip_prefix("kb")
+            .unwrap_or("")
+            .trim_start_matches('/');
         return safe_join(&root.join("knowledge-base"), suffix);
     }
 

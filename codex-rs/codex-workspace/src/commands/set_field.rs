@@ -12,8 +12,8 @@ pub fn run(
     path: &str,
     value_str: &str,
 ) -> Result<WorkspaceManifest, WorkspaceError> {
-    let value: Value = serde_json::from_str(value_str)
-        .map_err(|e| WorkspaceError::InvalidJson(e.to_string()))?;
+    let value: Value =
+        serde_json::from_str(value_str).map_err(|e| WorkspaceError::InvalidJson(e.to_string()))?;
     let path = path.to_string();
 
     with_locked_manifest(workspace_id, None, move |m| {

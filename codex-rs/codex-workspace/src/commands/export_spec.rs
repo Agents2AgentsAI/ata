@@ -1,6 +1,7 @@
 use crate::error::WorkspaceError;
 use crate::manifest::read_manifest;
-use crate::spec::{RepoSpec, WorkspaceSpec};
+use crate::spec::RepoSpec;
+use crate::spec::WorkspaceSpec;
 use serde_json::Map;
 use std::path::Path;
 
@@ -8,10 +9,7 @@ use std::path::Path;
 ///
 /// For each repo, extracts url, alias, current pinned/head SHA, and extra fields.
 /// Also copies policies and labels.
-pub fn run(
-    workspace_id: &str,
-    output: Option<&Path>,
-) -> Result<String, WorkspaceError> {
+pub fn run(workspace_id: &str, output: Option<&Path>) -> Result<String, WorkspaceError> {
     let manifest = read_manifest(workspace_id)?;
 
     let repos: Vec<RepoSpec> = manifest

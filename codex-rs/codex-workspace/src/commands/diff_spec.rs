@@ -1,4 +1,5 @@
-use crate::commands::materialize::{plan, ActionKind};
+use crate::commands::materialize::ActionKind;
+use crate::commands::materialize::plan;
 use crate::error::WorkspaceError;
 use crate::spec::read_spec;
 use std::path::Path;
@@ -21,10 +22,12 @@ pub fn run(workspace_id: &str, spec_path: &Path) -> Result<String, WorkspaceErro
             ActionKind::Pin {
                 current_sha,
                 target_sha,
-            } => pins.push((action.alias.as_str(), current_sha.as_str(), target_sha.as_str())),
-            ActionKind::Ref { ref_name } => {
-                refs.push((action.alias.as_str(), ref_name.as_str()))
-            }
+            } => pins.push((
+                action.alias.as_str(),
+                current_sha.as_str(),
+                target_sha.as_str(),
+            )),
+            ActionKind::Ref { ref_name } => refs.push((action.alias.as_str(), ref_name.as_str())),
             ActionKind::Skip => skips.push(action.alias.as_str()),
         }
     }

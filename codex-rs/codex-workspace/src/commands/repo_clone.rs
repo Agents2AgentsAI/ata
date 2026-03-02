@@ -1,14 +1,19 @@
 use crate::audit::write_audit;
 use crate::error::WorkspaceError;
 use crate::git;
-use crate::manifest::{read_manifest, with_locked_manifest};
+use crate::manifest::read_manifest;
+use crate::manifest::with_locked_manifest;
 use crate::paths;
 use crate::resolve::is_reserved_alias;
-use crate::types::{CloneRecord, PinState, RepoEntry};
-use crate::url_validation::{check_host_allowlist, validate_repo_url};
+use crate::types::CloneRecord;
+use crate::types::PinState;
+use crate::types::RepoEntry;
+use crate::url_validation::check_host_allowlist;
+use crate::url_validation::validate_repo_url;
 use crate::workspace_id::make_id;
 use regex::Regex;
-use serde_json::{Map, json};
+use serde_json::Map;
+use serde_json::json;
 use std::sync::LazyLock;
 
 // SAFETY: regex pattern is a compile-time string literal and is known valid.

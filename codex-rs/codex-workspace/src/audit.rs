@@ -1,12 +1,17 @@
 use crate::error::WorkspaceError;
 use crate::paths;
-use crate::types::{AuditActor, AuditEntry};
+use crate::types::AuditActor;
+use crate::types::AuditEntry;
 use serde_json::Value;
 
 /// Build the audit actor from environment variables.
 pub fn build_actor() -> AuditActor {
-    let session_id = std::env::var("CODEX_SESSION_ID").ok().filter(|s| !s.is_empty());
-    let thread_id = std::env::var("CODEX_THREAD_ID").ok().filter(|s| !s.is_empty());
+    let session_id = std::env::var("CODEX_SESSION_ID")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let thread_id = std::env::var("CODEX_THREAD_ID")
+        .ok()
+        .filter(|s| !s.is_empty());
     AuditActor {
         kind: "agent".to_string(),
         session_id,
@@ -35,10 +40,7 @@ pub fn build_audit_entry(
 }
 
 /// Append an audit entry to the workspace audit log (NDJSON).
-pub fn append_audit_entry(
-    workspace_id: &str,
-    entry: &AuditEntry,
-) -> Result<(), WorkspaceError> {
+pub fn append_audit_entry(workspace_id: &str, entry: &AuditEntry) -> Result<(), WorkspaceError> {
     let ap = paths::audit_path(workspace_id);
     if let Some(parent) = ap.parent() {
         std::fs::create_dir_all(parent)?;
@@ -101,8 +103,7 @@ pub fn query_audit(
         // Time filtering: parse ISO timestamp
         if (since.is_some() || until.is_some())
             && let Some(ts_str) = entry.get("ts").and_then(|v| v.as_str())
-            && let Ok(dt) =
-                chrono::NaiveDateTime::parse_from_str(ts_str, "%Y-%m-%dT%H:%M:%SZ")
+            && let Ok(dt) = chrono::NaiveDateTime::parse_from_str(ts_str, "%Y-%m-%dT%H:%M:%SZ")
         {
             let ts_unix = dt.and_utc().timestamp();
             if let Some(s) = since
@@ -119,10 +120,7 @@ pub fn query_audit(
 
         // Op filtering
         if let Some(ref ops_set) = ops_set {
-            let op = entry
-                .get("op")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let op = entry.get("op").and_then(|v| v.as_str()).unwrap_or("");
             if !ops_set.contains(op) {
                 continue;
             }

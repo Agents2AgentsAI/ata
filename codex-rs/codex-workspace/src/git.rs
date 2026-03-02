@@ -1,4 +1,5 @@
-use crate::types::{DefaultClonePolicy, GitState};
+use crate::types::DefaultClonePolicy;
+use crate::types::GitState;
 use std::path::Path;
 use std::process::Command;
 
@@ -128,10 +129,7 @@ pub fn git_common_dir(path: &Path) -> Option<std::path::PathBuf> {
             if p.is_absolute() {
                 p.parent().unwrap_or(&p).to_path_buf()
             } else {
-                path.join(&p)
-                    .parent()
-                    .unwrap_or(path)
-                    .to_path_buf()
+                path.join(&p).parent().unwrap_or(path).to_path_buf()
             }
         })
 }
@@ -139,7 +137,12 @@ pub fn git_common_dir(path: &Path) -> Option<std::path::PathBuf> {
 /// Resolve a git ref (branch/tag) to a commit SHA in a local checkout.
 pub fn resolve_ref(repo_dir: &Path, ref_name: &str) -> Option<String> {
     Command::new("git")
-        .args(["-C", repo_dir.to_str().unwrap_or("."), "rev-parse", ref_name])
+        .args([
+            "-C",
+            repo_dir.to_str().unwrap_or("."),
+            "rev-parse",
+            ref_name,
+        ])
         .output()
         .ok()
         .filter(|o| o.status.success())
@@ -195,9 +198,6 @@ mod tests {
             derive_repo_key("https://github.com/rust-lang/rust.git"),
             "rust-lang/rust"
         );
-        assert_eq!(
-            derive_repo_key("https://github.com/org/repo/"),
-            "org/repo"
-        );
+        assert_eq!(derive_repo_key("https://github.com/org/repo/"), "org/repo");
     }
 }

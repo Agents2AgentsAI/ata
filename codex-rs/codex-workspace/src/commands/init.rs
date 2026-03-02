@@ -2,7 +2,8 @@ use crate::error::WorkspaceError;
 use crate::manifest::write_manifest_atomic;
 use crate::paths;
 use crate::types::new_manifest;
-use crate::workspace_id::{validate_workspace_id, workspace_id_from_name};
+use crate::workspace_id::validate_workspace_id;
+use crate::workspace_id::workspace_id_from_name;
 
 /// Create a new workspace, returns the workspace ID.
 pub fn run(name: &str) -> Result<String, WorkspaceError> {

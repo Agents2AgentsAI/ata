@@ -1,10 +1,14 @@
 use crate::audit::write_audit;
 use crate::error::WorkspaceError;
-use crate::manifest::{atomic_write, read_manifest, with_locked_manifest};
+use crate::manifest::atomic_write;
+use crate::manifest::read_manifest;
+use crate::manifest::with_locked_manifest;
 use crate::paths;
-use crate::types::{RunEntry, RunSource};
+use crate::types::RunEntry;
+use crate::types::RunSource;
 use crate::workspace_id::make_id;
-use serde_json::{Map, json};
+use serde_json::Map;
+use serde_json::json;
 
 /// Full run creation: create dirs → materialize code → register → audit.
 pub fn run(
@@ -50,11 +54,8 @@ pub fn run(
             }
         }
         "clone" => {
-            let exit_code = crate::git::clone_repo(
-                repo_path.to_str().unwrap_or("."),
-                &code_root,
-                &[],
-            )?;
+            let exit_code =
+                crate::git::clone_repo(repo_path.to_str().unwrap_or("."), &code_root, &[])?;
             if exit_code != 0 {
                 let _ = std::fs::remove_dir_all(&run_root);
                 return Err(WorkspaceError::GitCloneFailed(exit_code));
@@ -144,10 +145,7 @@ pub fn run(
 }
 
 /// Simple recursive directory copy (like Python's shutil.copytree).
-fn copy_dir_recursive(
-    src: &std::path::Path,
-    dst: &std::path::Path,
-) -> Result<(), WorkspaceError> {
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<(), WorkspaceError> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;

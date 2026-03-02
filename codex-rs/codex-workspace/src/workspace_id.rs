@@ -1,5 +1,6 @@
 use crate::error::WorkspaceError;
-use sha2::{Digest, Sha256};
+use sha2::Digest;
+use sha2::Sha256;
 
 const MAX_WORKSPACE_ID_LEN: usize = 96;
 
