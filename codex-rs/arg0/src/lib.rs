@@ -14,6 +14,7 @@ const APPLY_PATCH_ARG0: &str = "apply_patch";
 const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
 #[cfg(unix)]
 const EXECVE_WRAPPER_ARG0: &str = "codex-execve-wrapper";
+const CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR: &str = "CODEX_SKIP_ARG0_PATH_HELPER";
 const LOCK_FILENAME: &str = ".lock";
 const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -109,6 +110,10 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     // This modifies the environment, which is not thread-safe, so do this
     // before creating any threads/the Tokio runtime.
     load_dotenv();
+
+    if std::env::var_os(CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR).is_some() {
+        return None;
+    }
 
     match prepend_path_entry_for_codex_aliases() {
         Ok(path_entry) => Some(path_entry),
@@ -299,28 +304,6 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
 "#,
                     exe.display()
                 ),
-            )?;
-        }
-    }
-
-    // Create an `ata` alias so that agent shell commands (e.g.
-    // `ata workspace list`) resolve to the same binary hosting this session,
-    // rather than a potentially stale install elsewhere on PATH.
-    {
-        let exe = std::env::current_exe()?;
-
-        #[cfg(unix)]
-        {
-            let link = path.join("ata");
-            symlink(&exe, &link)?;
-        }
-
-        #[cfg(windows)]
-        {
-            let batch_script = path.join("ata.bat");
-            std::fs::write(
-                &batch_script,
-                format!("@echo off\n\"{}\" %*\n", exe.display()),
             )?;
         }
     }
