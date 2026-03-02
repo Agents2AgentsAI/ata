@@ -164,14 +164,14 @@ impl ServerRegistry {
         };
 
         // Check binary existence and auto-install if needed.
-        if let Some(binary) = config.binary_name() {
-            if which::which(binary).is_err() {
-                let installed = self.try_auto_install(server_id, config, binary).await;
-                if !installed {
-                    self.spawning.lock().await.remove(key);
-                    notify.notify_waiters();
-                    return Err(LspError::BinaryNotFound(binary.into()));
-                }
+        if let Some(binary) = config.binary_name()
+            && which::which(binary).is_err()
+        {
+            let installed = self.try_auto_install(server_id, config, binary).await;
+            if !installed {
+                self.spawning.lock().await.remove(key);
+                notify.notify_waiters();
+                return Err(LspError::BinaryNotFound(binary.into()));
             }
         }
 

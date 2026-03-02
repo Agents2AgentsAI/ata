@@ -22,10 +22,12 @@ use serde::Deserialize;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::function_tool::FunctionCallError;
+use crate::state::MultiRootState;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::handlers::function_arguments_from_payload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::truncate_tool_output;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::spec::JsonSchema;
@@ -37,7 +39,7 @@ const MAX_RESULT_BYTES: usize = 8 * 1024;
 
 /// Handler for the `lsp` tool.
 pub struct LspToolHandler {
-    pub registry: Arc<ServerRegistry>,
+    pub state: Arc<MultiRootState>,
 }
 
 #[derive(Deserialize)]
@@ -51,6 +53,8 @@ struct LspToolArgs {
     character: Option<u32>,
     #[serde(default)]
     query: Option<String>,
+    #[serde(default)]
+    root: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
     /// Serialized CallHierarchyItem for incoming/outgoing calls.
@@ -92,46 +96,74 @@ impl ToolHandler for LspToolHandler {
         let result = match args.operation {
             LspOperation::GoToDefinition => {
                 let (path, line, char) = extract_position(&args)?;
-                self.sync_file_for_query(&path).await?;
-                let resp = self.registry.definition(&path, line, char).await;
+                let (root_name, registry) =
+                    self.registry_for_file(&path, args.root.as_deref()).await?;
+                self.sync_file_for_query(&registry, &root_name, &path)
+                    .await?;
+                let resp = registry.definition(&path, line, char).await;
                 format_definition(resp)
             }
             LspOperation::FindReferences => {
                 let (path, line, char) = extract_position(&args)?;
-                self.sync_file_for_query(&path).await?;
-                let refs = self.registry.references(&path, line, char).await;
+                let (root_name, registry) =
+                    self.registry_for_file(&path, args.root.as_deref()).await?;
+                self.sync_file_for_query(&registry, &root_name, &path)
+                    .await?;
+                let refs = registry.references(&path, line, char).await;
                 format_references(&refs, limit)
             }
             LspOperation::Hover => {
                 let (path, line, char) = extract_position(&args)?;
-                self.sync_file_for_query(&path).await?;
-                let hover = self.registry.hover(&path, line, char).await;
+                let (root_name, registry) =
+                    self.registry_for_file(&path, args.root.as_deref()).await?;
+                self.sync_file_for_query(&registry, &root_name, &path)
+                    .await?;
+                let hover = registry.hover(&path, line, char).await;
                 format_hover(hover)
             }
             LspOperation::DocumentSymbol => {
                 let path = extract_file(&args)?;
-                self.sync_file_for_query(&path).await?;
-                let resp = self.registry.document_symbol(&path).await;
+                let (root_name, registry) =
+                    self.registry_for_file(&path, args.root.as_deref()).await?;
+                self.sync_file_for_query(&registry, &root_name, &path)
+                    .await?;
+                let resp = registry.document_symbol(&path).await;
                 format_document_symbols(resp)
             }
             LspOperation::WorkspaceSymbol => {
                 let query = args.query.as_deref().unwrap_or("");
-                let symbols = self.registry.workspace_symbol(query).await;
+                let registries = self.state.lsp_registries(args.root.as_deref()).await;
+                if registries.is_empty() {
+                    return Err(FunctionCallError::RespondToModel(
+                        if let Some(root) = args.root.as_deref() {
+                            format!("unknown root '{root}' or root has no LSP registry")
+                        } else {
+                            "no LSP roots are configured".to_string()
+                        },
+                    ));
+                }
+                let mut symbols = Vec::new();
+                for (_, registry) in registries {
+                    symbols.extend(registry.workspace_symbol(query).await);
+                }
                 format_workspace_symbols(&symbols, limit)
             }
             LspOperation::GoToImplementation => {
                 let (path, line, char) = extract_position(&args)?;
-                self.sync_file_for_query(&path).await?;
-                let resp = self.registry.implementation(&path, line, char).await;
+                let (root_name, registry) =
+                    self.registry_for_file(&path, args.root.as_deref()).await?;
+                self.sync_file_for_query(&registry, &root_name, &path)
+                    .await?;
+                let resp = registry.implementation(&path, line, char).await;
                 format_implementation(resp)
             }
             LspOperation::PrepareCallHierarchy => {
                 let (path, line, char) = extract_position(&args)?;
-                self.sync_file_for_query(&path).await?;
-                let items = self
-                    .registry
-                    .prepare_call_hierarchy(&path, line, char)
-                    .await;
+                let (root_name, registry) =
+                    self.registry_for_file(&path, args.root.as_deref()).await?;
+                self.sync_file_for_query(&registry, &root_name, &path)
+                    .await?;
+                let items = registry.prepare_call_hierarchy(&path, line, char).await;
                 serde_json::to_string_pretty(&items.into_iter().take(limit).collect::<Vec<_>>())
                     .unwrap_or_else(|_| "[]".to_string())
             }
@@ -143,7 +175,19 @@ impl ToolHandler for LspToolHandler {
                 })?;
                 let item: CallHierarchyItem = serde_json::from_value(item_val)
                     .map_err(|e| FunctionCallError::RespondToModel(format!("invalid item: {e}")))?;
-                let calls = self.registry.incoming_calls(item).await;
+                let path = url::Url::parse(item.uri.as_str())
+                    .ok()
+                    .and_then(|uri| uri.to_file_path().ok());
+                let registry = if let Some(path) = path {
+                    self.registry_for_file(&path, args.root.as_deref()).await?.1
+                } else if let Some(root) = args.root.as_deref() {
+                    self.registry_for_root(root).await?.1
+                } else {
+                    return Err(FunctionCallError::RespondToModel(
+                        "incomingCalls could not infer a file root from item URI; pass `root` explicitly".to_string(),
+                    ));
+                };
+                let calls = registry.incoming_calls(item).await;
                 serde_json::to_string_pretty(&calls.into_iter().take(limit).collect::<Vec<_>>())
                     .unwrap_or_else(|_| "[]".to_string())
             }
@@ -155,21 +199,77 @@ impl ToolHandler for LspToolHandler {
                 })?;
                 let item: CallHierarchyItem = serde_json::from_value(item_val)
                     .map_err(|e| FunctionCallError::RespondToModel(format!("invalid item: {e}")))?;
-                let calls = self.registry.outgoing_calls(item).await;
+                let path = url::Url::parse(item.uri.as_str())
+                    .ok()
+                    .and_then(|uri| uri.to_file_path().ok());
+                let registry = if let Some(path) = path {
+                    self.registry_for_file(&path, args.root.as_deref()).await?.1
+                } else if let Some(root) = args.root.as_deref() {
+                    self.registry_for_root(root).await?.1
+                } else {
+                    return Err(FunctionCallError::RespondToModel(
+                        "outgoingCalls could not infer a file root from item URI; pass `root` explicitly".to_string(),
+                    ));
+                };
+                let calls = registry.outgoing_calls(item).await;
                 serde_json::to_string_pretty(&calls.into_iter().take(limit).collect::<Vec<_>>())
                     .unwrap_or_else(|_| "[]".to_string())
             }
         };
 
         Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(truncate_output(&result)),
+            body: FunctionCallOutputBody::Text(truncate_tool_output(&result, MAX_RESULT_BYTES)),
             success: Some(true),
         })
     }
 }
 
 impl LspToolHandler {
-    async fn sync_file_for_query(&self, path: &Path) -> Result<(), FunctionCallError> {
+    async fn registry_for_root(
+        &self,
+        root_name: &str,
+    ) -> Result<(String, Arc<ServerRegistry>), FunctionCallError> {
+        self.state
+            .lsp_registries(Some(root_name))
+            .await
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                FunctionCallError::RespondToModel(format!(
+                    "unknown root '{root_name}' or root has no LSP registry"
+                ))
+            })
+    }
+
+    async fn registry_for_file(
+        &self,
+        path: &Path,
+        root_name: Option<&str>,
+    ) -> Result<(String, Arc<ServerRegistry>), FunctionCallError> {
+        self.state
+            .lsp_registry_for_file(path, root_name)
+            .await
+            .ok_or_else(|| {
+                if let Some(root_name) = root_name {
+                    FunctionCallError::RespondToModel(format!(
+                        "file '{}' is not inside root '{root_name}', or root has no LSP registry",
+                        path.display()
+                    ))
+                } else {
+                    FunctionCallError::RespondToModel(format!(
+                        "no registered root contains file '{}'",
+                        path.display()
+                    ))
+                }
+            })
+    }
+
+    async fn sync_file_for_query(
+        &self,
+        registry: &ServerRegistry,
+        root_name: &str,
+        path: &Path,
+    ) -> Result<(), FunctionCallError> {
         if !path.exists() {
             return Err(FunctionCallError::RespondToModel(format!(
                 "file not found: {}",
@@ -182,14 +282,15 @@ impl LspToolHandler {
                 path.display()
             )));
         }
-        if !self.registry.has_servers_for(path) {
+        if !registry.has_servers_for(path) {
             return Err(FunctionCallError::RespondToModel(format!(
-                "no LSP server configured for {}",
-                path.display()
+                "no LSP server configured for {} under root '{}'",
+                path.display(),
+                root_name
             )));
         }
 
-        let _ = self.registry.touch_file(path, false).await;
+        let _ = registry.touch_file(path, false).await;
         Ok(())
     }
 }
@@ -389,29 +490,6 @@ fn format_workspace_symbols(symbols: &[SymbolInformation], limit: usize) -> Stri
         .join("\n")
 }
 
-fn truncate_output(output: &str) -> String {
-    if output.len() <= MAX_RESULT_BYTES {
-        return output.to_string();
-    }
-
-    let mut byte_cut = 0usize;
-    for (idx, ch) in output.char_indices() {
-        let end = idx + ch.len_utf8();
-        if end > MAX_RESULT_BYTES {
-            break;
-        }
-        byte_cut = end;
-    }
-
-    if byte_cut == 0 {
-        return "... truncated".to_string();
-    }
-
-    let prefix = &output[..byte_cut];
-    let cut = prefix.rfind('\n').unwrap_or(byte_cut);
-    format!("{}\n\n... truncated", &output[..cut])
-}
-
 // ---------------------------------------------------------------------------
 // Tool spec construction
 // ---------------------------------------------------------------------------
@@ -452,6 +530,15 @@ pub(crate) fn create_lsp_tool() -> ToolSpec {
         "query".to_string(),
         JsonSchema::String {
             description: Some("Search query for workspaceSymbol operation".to_string()),
+        },
+    );
+    properties.insert(
+        "root".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional root name. If omitted, root is inferred from file path or all roots are searched when supported."
+                    .to_string(),
+            ),
         },
     );
     properties.insert(

@@ -1,5 +1,6 @@
 //! Standalone tree-sitter based code-intelligence primitives for codex-rs.
 
+pub mod config;
 pub mod content;
 pub mod error;
 pub mod file_entry;
@@ -12,6 +13,7 @@ pub mod symbol;
 pub mod symbol_table;
 pub mod walker;
 
+pub use config::ProjectIndexConfig;
 pub use content::GrepMatch;
 pub use content::GrepResult;
 pub use content::GrepScope;

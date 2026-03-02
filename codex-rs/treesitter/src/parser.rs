@@ -2,6 +2,7 @@ use std::path::Path;
 
 use tree_sitter::StreamingIterator;
 
+use crate::config::ProjectIndexConfig;
 use crate::error::TreeSitterError;
 use crate::file_entry::Language;
 use crate::file_tree::FileTree;
@@ -160,12 +161,13 @@ pub fn extract_all_symbols(
     root: &Path,
     file_tree: &FileTree,
     symbol_table: &SymbolTable,
+    config: &ProjectIndexConfig,
 ) -> Result<usize, TreeSitterError> {
     let paths = file_tree.all_paths_with_language();
     let mut total = 0;
 
     for (rel_path, language) in paths {
-        if !language.has_tree_sitter_support() {
+        if !language.has_tree_sitter_support() || !config.is_language_enabled(language) {
             continue;
         }
 
@@ -190,9 +192,10 @@ pub fn reindex_file(
     symbol_table: &SymbolTable,
     rel_path: &str,
     language: Language,
+    config: &ProjectIndexConfig,
 ) -> Result<(), TreeSitterError> {
     symbol_table.remove_file(rel_path);
-    if !language.has_tree_sitter_support() {
+    if !language.has_tree_sitter_support() || !config.is_language_enabled(language) {
         return Ok(());
     }
 

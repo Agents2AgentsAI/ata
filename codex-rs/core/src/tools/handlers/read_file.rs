@@ -153,15 +153,12 @@ impl ToolHandler for ReadFileHandler {
         };
 
         // Warm up LSP client for this file (fire-and-forget, no diagnostics wait).
-        #[cfg(feature = "lsp")]
-        if let Some(ref lsp) = session.services.lsp_feedback {
-            lsp.touch_nowait(&path).await;
-        }
-        #[cfg(feature = "treesitter")]
-        if let Some(ref treesitter) = session.services.treesitter_index
-            && let Err(error) = treesitter.reindex_absolute_path(&path)
-        {
-            tracing::debug!("tree-sitter reindex failed for {}: {error}", path.display());
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        if let Some(ref multi_root_state) = session.services.multi_root_state {
+            #[cfg(feature = "lsp")]
+            multi_root_state.touch_lsp_nowait(&path).await;
+            #[cfg(feature = "treesitter")]
+            multi_root_state.reindex_file(&path).await;
         }
 
         Ok(ToolOutput::Function {

@@ -14,4 +14,5 @@ Available operations:
 For position-based operations, provide `file` (absolute path), `line` (1-based), and `character` (1-based).
 For workspaceSymbol, provide `query` (search string).
 For incomingCalls/outgoingCalls, first call prepareCallHierarchy, then pass the returned item.
+Use `root` to force a specific registered root when needed.
 Use `limit` (default 20, max 50) to cap result volume for list-heavy operations.

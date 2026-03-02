@@ -410,25 +410,19 @@ async fn append_code_intel_feedback(
     paths: &[AbsolutePathBuf],
     content: &mut String,
 ) {
-    #[cfg(feature = "lsp")]
-    if let Some(ref lsp) = session.services.lsp_feedback {
+    if let Some(ref multi_root_state) = session.services.multi_root_state {
         for p in paths {
-            let diag = lsp.touch_and_collect_errors(p.as_path()).await;
-            if !diag.is_empty() {
-                content.push_str(&diag);
+            #[cfg(feature = "lsp")]
+            {
+                let diag = multi_root_state
+                    .touch_lsp_and_collect_errors(p.as_path())
+                    .await;
+                if !diag.is_empty() {
+                    content.push_str(&diag);
+                }
             }
-        }
-    }
-
-    #[cfg(feature = "treesitter")]
-    if let Some(ref treesitter) = session.services.treesitter_index {
-        for p in paths {
-            if let Err(error) = treesitter.reindex_absolute_path(p.as_path()) {
-                tracing::debug!(
-                    "tree-sitter reindex failed for {}: {error}",
-                    p.as_path().display()
-                );
-            }
+            #[cfg(feature = "treesitter")]
+            multi_root_state.reindex_file(p.as_path()).await;
         }
     }
 }

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -6,16 +7,17 @@ use async_trait::async_trait;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_treesitter::FileMark;
 use codex_treesitter::GrepScope;
-use codex_treesitter::ProjectIndex;
 use serde::Deserialize;
 
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::function_tool::FunctionCallError;
+use crate::state::MultiRootState;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::handlers::function_arguments_from_payload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::truncate_tool_output;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::spec::JsonSchema;
@@ -26,7 +28,7 @@ const MAX_RESULTS: usize = 50;
 const MAX_RESULT_BYTES: usize = 8 * 1024;
 
 pub struct CodeIntelToolHandler {
-    pub index: Arc<ProjectIndex>,
+    pub state: Arc<MultiRootState>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,6 +54,10 @@ struct CodeIntelToolArgs {
     depth: Option<usize>,
     #[serde(default)]
     scope: Option<String>,
+    #[serde(default)]
+    root: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,6 +74,9 @@ enum CodeIntelOperation {
     DefineSymbol,
     DefineFile,
     MarkFile,
+    AddRoot,
+    RemoveRoot,
+    ListRoots,
 }
 
 #[async_trait]
@@ -91,88 +100,143 @@ impl ToolHandler for CodeIntelToolHandler {
         let output = match args.operation {
             CodeIntelOperation::SymbolSearch => {
                 let query = require_param(args.query.as_deref(), "query")?;
-                let symbols = self.index.search_symbols(query, limit);
+                let indices = self.indices_for_query(args.root.as_deref()).await?;
+                let mut symbols = Vec::new();
+                for (root, index) in indices {
+                    for symbol in index.search_symbols(query, limit) {
+                        symbols.push((root.clone(), symbol));
+                        if symbols.len() >= limit {
+                            break;
+                        }
+                    }
+                    if symbols.len() >= limit {
+                        break;
+                    }
+                }
                 format_symbols(&symbols)
             }
             CodeIntelOperation::Callers => {
                 let symbol = require_param(args.symbol.as_deref(), "symbol")?;
-                let rel_file = self.relative_file(args.file.as_deref())?;
-                let callers = self
-                    .index
+                let path = absolute_file(args.file.as_deref())?;
+                let (root, index, rel_file) =
+                    self.index_for_file(&path, args.root.as_deref()).await?;
+                let callers = index
                     .find_callers(symbol, &rel_file, limit)
                     .map_err(FunctionCallError::RespondToModel)?;
-                format_callers(&callers)
+                format_callers(&root, &callers)
             }
             CodeIntelOperation::Tests => {
                 let symbol = require_param(args.symbol.as_deref(), "symbol")?;
-                let rel_file = self.relative_file(args.file.as_deref())?;
-                let tests = self
-                    .index
+                let path = absolute_file(args.file.as_deref())?;
+                let (root, index, rel_file) =
+                    self.index_for_file(&path, args.root.as_deref()).await?;
+                let tests = index
                     .find_tests(symbol, &rel_file, limit)
                     .map_err(FunctionCallError::RespondToModel)?;
-                format_tests(&tests)
+                format_tests(&root, &tests)
             }
             CodeIntelOperation::Variables => {
                 let function = require_param(args.symbol.as_deref(), "symbol")?;
-                let rel_file = self.relative_file(args.file.as_deref())?;
-                let variables = self
-                    .index
+                let path = absolute_file(args.file.as_deref())?;
+                let (root, index, rel_file) =
+                    self.index_for_file(&path, args.root.as_deref()).await?;
+                let variables = index
                     .list_variables(function, &rel_file)
                     .map_err(FunctionCallError::RespondToModel)?;
-                format_variables(function, &variables)
+                format_variables(&root, function, &variables)
             }
             CodeIntelOperation::Implementation => {
                 let symbol = require_param(args.symbol.as_deref(), "symbol")?;
-                let rel_file = self.relative_file(args.file.as_deref())?;
-                self.index
+                let path = absolute_file(args.file.as_deref())?;
+                let (root, index, rel_file) =
+                    self.index_for_file(&path, args.root.as_deref()).await?;
+                let implementation = index
                     .implementation(symbol, &rel_file)
-                    .map_err(FunctionCallError::RespondToModel)?
+                    .map_err(FunctionCallError::RespondToModel)?;
+                format!("[{root}]\n{implementation}")
             }
             CodeIntelOperation::Structure => {
                 let depth = args.depth.unwrap_or(3);
-                self.index.structure(depth)
+                let indices = self.indices_for_query(args.root.as_deref()).await?;
+                if indices.is_empty() {
+                    return Err(FunctionCallError::RespondToModel(
+                        "no TreeSitter roots are configured".to_string(),
+                    ));
+                }
+                let mut out = Vec::new();
+                for (root, index) in indices {
+                    out.push(format!("[{root}]"));
+                    out.push(index.structure(depth));
+                }
+                out.join("\n")
             }
             CodeIntelOperation::Peek => {
-                let rel_file = self.relative_file(args.file.as_deref())?;
+                let path = absolute_file(args.file.as_deref())?;
+                let (root, index, rel_file) =
+                    self.index_for_file(&path, args.root.as_deref()).await?;
                 let start_line = args.line.unwrap_or(1) as usize;
                 let line_count = limit;
-                let peek = self
-                    .index
+                let peek = index
                     .peek(&rel_file, start_line, line_count)
                     .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
                 format!(
-                    "{}:{}-{} ({} total lines)\n{}",
+                    "[{root}] {}:{}-{} ({} total lines)\n{}",
                     peek.file, peek.start_line, peek.end_line, peek.total_lines, peek.content
                 )
             }
             CodeIntelOperation::Grep => {
                 let pattern = require_param(args.pattern.as_deref(), "pattern")?;
                 let scope = GrepScope::from_input(args.scope.as_deref());
-                let result = self
-                    .index
-                    .grep(pattern, scope, limit, 2)
-                    .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
-                format_grep(&result)
+                let indices = self.indices_for_query(args.root.as_deref()).await?;
+                let mut all_matches = Vec::new();
+                let mut total_matches = 0usize;
+                let mut truncated = false;
+
+                for (root, index) in indices {
+                    let result = index
+                        .grep(pattern, scope, limit, 2)
+                        .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
+                    total_matches += result.total_matches;
+                    truncated |= result.truncated;
+                    for matched in result.matches {
+                        all_matches.push((root.clone(), matched));
+                        if all_matches.len() >= limit {
+                            truncated = true;
+                            break;
+                        }
+                    }
+                    if all_matches.len() >= limit {
+                        break;
+                    }
+                }
+
+                format_grep(pattern, total_matches, truncated, &all_matches)
             }
             CodeIntelOperation::DefineSymbol => {
                 let symbol = require_param(args.symbol.as_deref(), "symbol")?;
-                let rel_file = self.relative_file(args.file.as_deref())?;
+                let path = absolute_file(args.file.as_deref())?;
+                let (root, index, rel_file) =
+                    self.index_for_file(&path, args.root.as_deref()).await?;
                 let definition = require_param(args.definition.as_deref(), "definition")?;
-                self.index
+                index
                     .define_symbol(symbol, &rel_file, definition, false)
                     .map_err(FunctionCallError::RespondToModel)?;
-                format!("Defined symbol '{symbol}' in {rel_file}")
+                format!("Defined symbol '{symbol}' in [{root}] {rel_file}")
             }
             CodeIntelOperation::DefineFile => {
-                let rel_file = self.relative_file(args.file.as_deref())?;
+                let path = absolute_file(args.file.as_deref())?;
+                let (root, index, rel_file) =
+                    self.index_for_file(&path, args.root.as_deref()).await?;
                 let definition = require_param(args.definition.as_deref(), "definition")?;
-                self.index
+                index
                     .define_file(&rel_file, definition, false)
                     .map_err(FunctionCallError::RespondToModel)?;
-                format!("Defined file '{rel_file}'")
+                format!("Defined file [{root}] '{rel_file}'")
             }
             CodeIntelOperation::MarkFile => {
-                let rel_file = self.relative_file(args.file.as_deref())?;
+                let path = absolute_file(args.file.as_deref())?;
+                let (root, index, rel_file) =
+                    self.index_for_file(&path, args.root.as_deref()).await?;
                 let mark = require_param(args.mark.as_deref(), "mark")?;
                 let mark_enum = FileMark::from_input(mark).ok_or_else(|| {
                     FunctionCallError::RespondToModel(
@@ -180,33 +244,112 @@ impl ToolHandler for CodeIntelToolHandler {
                             .to_string(),
                     )
                 })?;
-                self.index
+                index
                     .mark_file(&rel_file, mark_enum)
                     .map_err(FunctionCallError::RespondToModel)?;
-                format!("Marked file '{rel_file}' as {mark}")
+                format!("Marked file [{root}] '{rel_file}' as {mark}")
+            }
+            CodeIntelOperation::AddRoot => {
+                let root = require_param(args.root.as_deref(), "root")?;
+                let path = absolute_root_path(args.path.as_deref())?;
+                let added = self
+                    .state
+                    .add_root(root.to_string(), path)
+                    .await
+                    .map_err(FunctionCallError::RespondToModel)?;
+                format!("Added root '{}' at {}", added.name, added.path.display())
+            }
+            CodeIntelOperation::RemoveRoot => {
+                let root = require_param(args.root.as_deref(), "root")?;
+                self.state
+                    .remove_root(root)
+                    .await
+                    .map_err(FunctionCallError::RespondToModel)?;
+                format!("Removed root '{root}'")
+            }
+            CodeIntelOperation::ListRoots => {
+                let statuses = self.state.root_statuses().await;
+                if statuses.is_empty() {
+                    "No roots registered.".to_string()
+                } else {
+                    let mut lines = Vec::with_capacity(statuses.len() + 1);
+                    lines.push("Registered roots:".to_string());
+                    for status in statuses {
+                        let mut caps = Vec::new();
+                        #[cfg(feature = "lsp")]
+                        if status.has_lsp {
+                            caps.push("lsp");
+                        }
+                        #[cfg(feature = "treesitter")]
+                        if status.has_treesitter {
+                            caps.push("treesitter");
+                        }
+                        let marker = if status.is_primary { "*" } else { "-" };
+                        lines.push(format!(
+                            "{marker} {} -> {} [{}]",
+                            status.name,
+                            status.path.display(),
+                            if caps.is_empty() {
+                                "none".to_string()
+                            } else {
+                                caps.join(", ")
+                            }
+                        ));
+                    }
+                    lines.join("\n")
+                }
             }
         };
 
         Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(truncate_output(&output)),
+            body: FunctionCallOutputBody::Text(truncate_tool_output(&output, MAX_RESULT_BYTES)),
             success: Some(true),
         })
     }
 }
 
 impl CodeIntelToolHandler {
-    fn relative_file(&self, file: Option<&str>) -> Result<String, FunctionCallError> {
-        let file = require_param(file, "file")?;
-        let path = PathBuf::from(file);
-        if !path.is_absolute() {
-            return Err(FunctionCallError::RespondToModel(
-                "`file` must be an absolute path".to_string(),
-            ));
+    async fn indices_for_query(
+        &self,
+        root: Option<&str>,
+    ) -> Result<Vec<(String, Arc<codex_treesitter::ProjectIndex>)>, FunctionCallError> {
+        let indices = self.state.treesitter_indices(root).await;
+        if indices.is_empty() {
+            return Err(FunctionCallError::RespondToModel(match root {
+                Some(root) => format!("unknown root '{root}' or root has no TreeSitter index"),
+                None => "no TreeSitter roots are configured".to_string(),
+            }));
         }
+        Ok(indices)
+    }
 
-        self.index
-            .rel_path_for_absolute(&path)
-            .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))
+    async fn index_for_file(
+        &self,
+        file: &Path,
+        root: Option<&str>,
+    ) -> Result<(String, Arc<codex_treesitter::ProjectIndex>, String), FunctionCallError> {
+        let (root_name, index) = self
+            .state
+            .treesitter_index_for_file(file, root)
+            .await
+            .ok_or_else(|| {
+                if let Some(root) = root {
+                    FunctionCallError::RespondToModel(format!(
+                        "file '{}' is not inside root '{root}', or root has no TreeSitter index",
+                        file.display()
+                    ))
+                } else {
+                    FunctionCallError::RespondToModel(format!(
+                        "no registered root contains file '{}'",
+                        file.display()
+                    ))
+                }
+            })?;
+
+        let rel_file = index
+            .rel_path_for_absolute(file)
+            .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
+        Ok((root_name, index, rel_file))
     }
 }
 
@@ -214,25 +357,34 @@ fn require_param<'a>(value: Option<&'a str>, key: &str) -> Result<&'a str, Funct
     value.ok_or_else(|| FunctionCallError::RespondToModel(format!("`{key}` is required")))
 }
 
-fn truncate_output(output: &str) -> String {
-    if output.len() <= MAX_RESULT_BYTES {
-        return output.to_string();
-    }
-
-    let prefix = &output[..MAX_RESULT_BYTES];
-    let cut = prefix.rfind('\n').unwrap_or(MAX_RESULT_BYTES);
-    format!("{}\n\n... truncated", &output[..cut])
+fn absolute_file(file: Option<&str>) -> Result<PathBuf, FunctionCallError> {
+    absolute_path(file, "file")
 }
 
-fn format_symbols(symbols: &[codex_treesitter::Symbol]) -> String {
+fn absolute_root_path(path: Option<&str>) -> Result<PathBuf, FunctionCallError> {
+    absolute_path(path, "path")
+}
+
+fn absolute_path(path_value: Option<&str>, key: &str) -> Result<PathBuf, FunctionCallError> {
+    let path = require_param(path_value, key)?;
+    let path = PathBuf::from(path);
+    if !path.is_absolute() {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "`{key}` must be an absolute path"
+        )));
+    }
+    Ok(path)
+}
+
+fn format_symbols(symbols: &[(String, codex_treesitter::Symbol)]) -> String {
     if symbols.is_empty() {
         return "No symbols found.".to_string();
     }
 
     let mut out = vec![format!("Found {} symbol(s):", symbols.len())];
-    for symbol in symbols {
+    for (root, symbol) in symbols {
         out.push(format!(
-            "{}:{} {:?} {}",
+            "[{root}] {}:{} {:?} {}",
             symbol.file, symbol.line_range.0, symbol.kind, symbol.name
         ));
         if !symbol.signature.is_empty() {
@@ -242,24 +394,24 @@ fn format_symbols(symbols: &[codex_treesitter::Symbol]) -> String {
     out.join("\n")
 }
 
-fn format_callers(callers: &[codex_treesitter::CallerInfo]) -> String {
+fn format_callers(root: &str, callers: &[codex_treesitter::CallerInfo]) -> String {
     if callers.is_empty() {
         return "No callers found.".to_string();
     }
 
-    let mut out = vec![format!("Found {} caller(s):", callers.len())];
+    let mut out = vec![format!("Found {} caller(s) in [{root}]:", callers.len())];
     for caller in callers {
         out.push(format!("{}:{} {}", caller.file, caller.line, caller.text));
     }
     out.join("\n")
 }
 
-fn format_tests(tests: &[codex_treesitter::TestInfo]) -> String {
+fn format_tests(root: &str, tests: &[codex_treesitter::TestInfo]) -> String {
     if tests.is_empty() {
         return "No tests found.".to_string();
     }
 
-    let mut out = vec![format!("Found {} test(s):", tests.len())];
+    let mut out = vec![format!("Found {} test(s) in [{root}]:", tests.len())];
     for test in tests {
         out.push(format!("{}:{} {}", test.file, test.line, test.name));
         if !test.signature.is_empty() {
@@ -269,14 +421,18 @@ fn format_tests(tests: &[codex_treesitter::TestInfo]) -> String {
     out.join("\n")
 }
 
-fn format_variables(function: &str, variables: &[codex_treesitter::VariableInfo]) -> String {
+fn format_variables(
+    root: &str,
+    function: &str,
+    variables: &[codex_treesitter::VariableInfo],
+) -> String {
     if variables.is_empty() {
-        return format!("No local variables found in '{function}'.");
+        return format!("No local variables found in '{function}' for root [{root}].");
     }
 
     let mut out = vec![format!(
-        "Found {} variable(s) in '{function}':",
-        variables.len()
+        "Found {} variable(s) in '{function}' for root [{root}]:",
+        variables.len(),
     )];
     for variable in variables {
         out.push(variable.name.clone());
@@ -284,21 +440,26 @@ fn format_variables(function: &str, variables: &[codex_treesitter::VariableInfo]
     out.join("\n")
 }
 
-fn format_grep(result: &codex_treesitter::GrepResult) -> String {
-    if result.matches.is_empty() {
-        return format!("No matches found for '{}'.", result.pattern);
+fn format_grep(
+    pattern: &str,
+    total_matches: usize,
+    truncated: bool,
+    matches: &[(String, codex_treesitter::GrepMatch)],
+) -> String {
+    if matches.is_empty() {
+        return format!("No matches found for '{pattern}'.");
     }
 
     let mut out = vec![format!(
         "Found {} match(es) for '{}'{}:",
-        result.total_matches,
-        result.pattern,
-        if result.truncated { " (truncated)" } else { "" }
+        total_matches,
+        pattern,
+        if truncated { " (truncated)" } else { "" }
     )];
 
-    for matched in &result.matches {
+    for (root, matched) in matches {
         out.push(format!(
-            "{}:{} {}",
+            "[{root}] {}:{} {}",
             matched.file, matched.line, matched.text
         ));
     }
@@ -312,7 +473,7 @@ pub(crate) fn create_code_intel_tool() -> ToolSpec {
         "operation".to_string(),
         JsonSchema::String {
             description: Some(
-                "Operation name: symbolSearch, callers, tests, variables, implementation, structure, peek, grep, defineSymbol, defineFile, markFile"
+                "Operation name: symbolSearch, callers, tests, variables, implementation, structure, peek, grep, defineSymbol, defineFile, markFile, addRoot, removeRoot, listRoots"
                     .to_string(),
             ),
         },
@@ -377,6 +538,21 @@ pub(crate) fn create_code_intel_tool() -> ToolSpec {
         "scope".to_string(),
         JsonSchema::String {
             description: Some("Grep scope: all or code.".to_string()),
+        },
+    );
+    properties.insert(
+        "root".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional root name for query scoping. Required by removeRoot; used by addRoot as the new root name."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "path".to_string(),
+        JsonSchema::String {
+            description: Some("Absolute directory path for addRoot.".to_string()),
         },
     );
 

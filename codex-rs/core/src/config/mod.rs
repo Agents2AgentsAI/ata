@@ -1227,6 +1227,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub lsp: Option<crate::config::types::LspConfig>,
 
+    /// TreeSitter indexing configuration.
+    #[serde(default)]
+    pub treesitter: Option<crate::config::types::TreeSitterConfig>,
+
     /// Optional KB settings.
     #[serde(default)]
     pub kb: Option<KbToml>,
