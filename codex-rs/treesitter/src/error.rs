@@ -29,4 +29,13 @@ pub enum TreeSitterError {
 
     #[error("invalid ignore pattern: {0}")]
     InvalidIgnorePattern(String),
+
+    #[error("annotation serialization failed: {0}")]
+    AnnotationSerde(#[from] serde_json::Error),
+
+    #[error("invalid chunk parameters: chunk_size must be > 0")]
+    InvalidChunkSize,
+
+    #[error("invalid chunk parameters: overlap {overlap} must be less than chunk_size {chunk_size}")]
+    InvalidChunkOverlap { chunk_size: usize, overlap: usize },
 }

@@ -127,16 +127,24 @@ pub(super) fn build_treesitter_index_config(
         })
         .collect::<Vec<_>>();
 
-    Some(
-        codex_treesitter::ProjectIndexConfig {
-            max_file_size: config_map.max_file_size,
-            ignore_patterns: config_map.ignore_patterns.clone(),
-            watch: config_map.watch,
-            persist_annotations: config_map.persist_annotations,
-            ..codex_treesitter::ProjectIndexConfig::default()
-        }
-        .with_disabled_languages(disabled_languages),
-    )
+    let mut treesitter_config = codex_treesitter::ProjectIndexConfig {
+        max_file_size: config_map.max_file_size,
+        ignore_patterns: config_map.ignore_patterns.clone(),
+        annotation_store_path: config_map.annotation_store_path.clone().map(Into::into),
+        watch: config_map.watch,
+        persist_annotations: config_map.persist_annotations,
+        ..codex_treesitter::ProjectIndexConfig::default()
+    }
+    .with_disabled_languages(disabled_languages);
+
+    treesitter_config = treesitter_config.with_ignore_extensions(
+        config_map
+            .ignore_extensions
+            .iter()
+            .map(|extension| extension.to_string()),
+    );
+
+    Some(treesitter_config)
 }
 
 // ---------------------------------------------------------------------------

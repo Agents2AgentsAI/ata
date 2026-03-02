@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use regex::Regex;
+use serde::Serialize;
 use tree_sitter::StreamingIterator;
 
 use crate::error::TreeSitterError;
@@ -8,7 +9,7 @@ use crate::file_entry::Language;
 use crate::file_tree::FileTree;
 use crate::queries;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PeekResult {
     pub file: String,
     pub start_line: usize,
@@ -75,7 +76,7 @@ impl GrepScope {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct GrepMatch {
     pub file: String,
     pub line: usize,
@@ -84,7 +85,7 @@ pub struct GrepMatch {
     pub context_after: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct GrepResult {
     pub pattern: String,
     pub matches: Vec<GrepMatch>,

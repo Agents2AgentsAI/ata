@@ -10,6 +10,7 @@ Prefer this for exploration tasks:
 
 Supported operations:
 - symbolSearch: Search symbols by query string.
+- symbols: List symbols with optional kind/file filters.
 - callers: Find call sites for a symbol.
 - tests: Find test symbols referencing a symbol.
 - variables: List local variables in a function.
@@ -17,13 +18,19 @@ Supported operations:
 - structure: Render project tree for indexed files.
 - peek: Read a line window from a file.
 - grep: Regex search across indexed files.
+- chunkIndices: Compute byte-range chunks for a file.
 - defineSymbol: Add a human definition to a symbol.
+- redefineSymbol: Update an existing symbol definition.
 - defineFile: Add a human definition to a file.
+- redefineFile: Update an existing file definition.
 - markFile: Mark a file as test/docs/config/generated/entryPoint or any custom tag.
+- saveAnnotations: Persist file/symbol annotations to disk.
+- loadAnnotations: Load file/symbol annotations from disk.
 - addRoot: Register a new root (`root` + `path`).
 - removeRoot: Unregister a root (`root`).
 - listRoots: List all roots with feature status.
 
 All operations accept optional `root` for scoping; when omitted, search-style operations fan out across roots.
+Set `response_format` to `json` for machine-readable output (default is `text`).
 
 Use the `lsp` tool when semantic precision is required (type-aware definitions, references, hover).

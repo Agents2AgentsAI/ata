@@ -37,6 +37,13 @@ impl FileTree {
         self.files.get(rel_path).map(|entry| entry.value().clone())
     }
 
+    pub fn all_entries(&self) -> Vec<FileEntry> {
+        self.files
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect()
+    }
+
     pub fn define_file(
         &self,
         rel_path: &str,
@@ -60,6 +67,14 @@ impl FileTree {
         if !entry.marks.contains(&mark) {
             entry.marks.push(mark);
         }
+        Ok(())
+    }
+
+    pub fn set_marks(&self, rel_path: &str, marks: Vec<FileMark>) -> Result<(), String> {
+        let Some(mut entry) = self.files.get_mut(rel_path) else {
+            return Err(format!("file '{rel_path}' not found in index"));
+        };
+        entry.marks = marks;
         Ok(())
     }
 

@@ -4,6 +4,11 @@ use std::path::PathBuf;
 use ignore::gitignore::Gitignore;
 use ignore::gitignore::GitignoreBuilder;
 
+use crate::annotations;
+use crate::annotations::AnnotationLoadStats;
+use crate::annotations::AnnotationSaveStats;
+use crate::chunking;
+use crate::chunking::ChunkIndicesResult;
 use crate::config::ProjectIndexConfig;
 use crate::content::GrepResult;
 use crate::content::GrepScope;
@@ -19,6 +24,7 @@ use crate::ops::VariableInfo;
 use crate::ops::{self};
 use crate::parser;
 use crate::symbol::Symbol;
+use crate::symbol::SymbolKind;
 use crate::symbol_table::SymbolTable;
 use crate::walker;
 
@@ -46,13 +52,24 @@ impl ProjectIndex {
         walker::scan_directory_with_config(&root, &file_tree, &config, extra_ignores.as_ref())?;
         parser::extract_all_symbols(&root, &file_tree, &symbol_table, &config)?;
 
-        Ok(Self {
+        let index = Self {
             root,
             config,
             extra_ignores,
             file_tree,
             symbol_table,
-        })
+        };
+
+        if index.config.persist_annotations
+            && let Err(error) = index.load_annotations()
+        {
+            tracing::warn!(
+                root = %index.root.display(),
+                "failed to load treesitter annotations: {error}"
+            );
+        }
+
+        Ok(index)
     }
 
     pub fn root(&self) -> &Path {
@@ -88,6 +105,7 @@ impl ProjectIndex {
             let language = crate::file_entry::Language::from_path(path);
 
             if metadata.len() > self.config.max_file_size
+                || self.config.is_extension_ignored(&rel_path)
                 || !self.config.is_language_enabled(language)
                 || self
                     .extra_ignores
@@ -118,6 +136,15 @@ impl ProjectIndex {
 
     pub fn search_symbols(&self, query: &str, limit: usize) -> Vec<Symbol> {
         ops::search_symbols(&self.symbol_table, query, limit)
+    }
+
+    pub fn list_symbols(
+        &self,
+        kind: Option<SymbolKind>,
+        rel_file: Option<&str>,
+        limit: usize,
+    ) -> Vec<Symbol> {
+        ops::list_symbols(&self.symbol_table, kind, rel_file, limit)
     }
 
     pub fn find_callers(
@@ -215,6 +242,47 @@ impl ProjectIndex {
             max_matches,
             context_lines,
         )
+    }
+
+    pub fn chunk_indices(
+        &self,
+        rel_file: &str,
+        chunk_size: usize,
+        overlap: usize,
+    ) -> Result<ChunkIndicesResult, TreeSitterError> {
+        chunking::chunk_indices(
+            &self.root,
+            &self.file_tree,
+            rel_file,
+            chunk_size,
+            overlap,
+        )
+    }
+
+    pub fn load_annotations(&self) -> Result<AnnotationLoadStats, TreeSitterError> {
+        let path = self.annotation_store_path();
+        if !self.config.persist_annotations {
+            return Ok(AnnotationLoadStats::skipped(&path));
+        }
+        annotations::load_annotations(&path, &self.file_tree, &self.symbol_table)
+    }
+
+    pub fn save_annotations(&self) -> Result<AnnotationSaveStats, TreeSitterError> {
+        let path = self.annotation_store_path();
+        if !self.config.persist_annotations {
+            return Ok(AnnotationSaveStats::skipped(&path));
+        }
+        annotations::save_annotations(&path, &self.file_tree, &self.symbol_table)
+    }
+
+    fn annotation_store_path(&self) -> PathBuf {
+        if let Some(path) = &self.config.annotation_store_path {
+            if path.is_absolute() {
+                return path.clone();
+            }
+            return self.root.join(path);
+        }
+        annotations::default_annotation_store_path(&self.root)
     }
 }
 

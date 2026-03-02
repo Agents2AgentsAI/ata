@@ -1,5 +1,7 @@
 //! Standalone tree-sitter based code-intelligence primitives for codex-rs.
 
+pub mod annotations;
+pub mod chunking;
 pub mod config;
 pub mod content;
 pub mod error;
@@ -14,6 +16,9 @@ pub mod symbol_table;
 pub mod walker;
 
 pub use config::ProjectIndexConfig;
+pub use annotations::AnnotationLoadStats;
+pub use annotations::AnnotationSaveStats;
+pub use chunking::ChunkIndicesResult;
 pub use content::GrepMatch;
 pub use content::GrepResult;
 pub use content::GrepScope;
