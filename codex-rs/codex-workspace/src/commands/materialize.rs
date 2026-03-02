@@ -1,8 +1,9 @@
 use crate::audit::write_audit;
-use crate::commands::{repo_clone, repo_pin, set_field};
+use crate::commands::{repo_clone, repo_pin, repo_update_state, set_field};
 use crate::error::WorkspaceError;
-use crate::manifest::read_manifest;
+use crate::manifest::{read_manifest, with_locked_manifest};
 use crate::spec::{read_spec, WorkspaceSpec};
+use crate::{git, paths};
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -19,6 +20,8 @@ pub enum ActionKind {
     Add,
     /// Repo exists but pinned SHA differs — needs re-pin.
     Pin { current_sha: String, target_sha: String },
+    /// Repo has a `ref` but no `sha` — needs ref resolution at runtime.
+    Ref { ref_name: String },
     /// Repo exists and matches spec — nothing to do.
     Skip,
 }
@@ -50,6 +53,31 @@ pub fn plan(
                         }
                     } else {
                         ActionKind::Skip
+                    }
+                } else if let Some(ref_name) = &repo_spec.r#ref {
+                    // Ref without sha — resolve at runtime, but try to detect
+                    // if checkout already matches by resolving locally.
+                    let checkout = paths::workspace_root(workspace_id)
+                        .join("repos")
+                        .join(&repo_spec.alias);
+                    if let Some(resolved) = git::resolve_ref(&checkout, ref_name) {
+                        let current_sha = if !existing_repo.pin.pinned_sha.is_empty() {
+                            &existing_repo.pin.pinned_sha
+                        } else {
+                            &existing_repo.state.head_sha
+                        };
+                        if current_sha != &resolved {
+                            ActionKind::Pin {
+                                current_sha: current_sha.to_string(),
+                                target_sha: resolved,
+                            }
+                        } else {
+                            ActionKind::Skip
+                        }
+                    } else {
+                        ActionKind::Ref {
+                            ref_name: ref_name.clone(),
+                        }
                     }
                 } else {
                     ActionKind::Skip
@@ -100,12 +128,24 @@ pub fn run(
                     repo_spec.full,
                 )?;
 
-                // Pin if sha specified
-                if let Some(sha) = &repo_spec.sha {
+                let checkout_path = paths::workspace_root(workspace_id)
+                    .join("repos")
+                    .join(&repo_spec.alias);
+
+                // Determine target SHA: explicit sha, or resolve ref in fresh checkout
+                let target_sha = repo_spec.sha.clone().or_else(|| {
+                    repo_spec
+                        .r#ref
+                        .as_deref()
+                        .and_then(|r| git::resolve_ref(&checkout_path, r))
+                });
+
+                // Pin and checkout if we have a target SHA
+                if let Some(sha) = &target_sha {
                     repo_pin::run(workspace_id, &repo_spec.alias, sha)?;
+                    pin_checkout(workspace_id, &repo_spec.alias, &checkout_path, sha);
                 }
 
-                // Apply extra fields (role, metadata, etc.)
                 apply_repo_extra(workspace_id, &repo_spec.alias, &repo_spec.extra)?;
 
                 results.push(json!({
@@ -117,7 +157,11 @@ pub fn run(
             ActionKind::Pin { target_sha, .. } => {
                 repo_pin::run(workspace_id, &repo_spec.alias, target_sha)?;
 
-                // Apply extra fields in case they changed
+                let checkout_path = paths::workspace_root(workspace_id)
+                    .join("repos")
+                    .join(&repo_spec.alias);
+                pin_checkout(workspace_id, &repo_spec.alias, &checkout_path, target_sha);
+
                 apply_repo_extra(workspace_id, &repo_spec.alias, &repo_spec.extra)?;
 
                 results.push(json!({
@@ -125,6 +169,35 @@ pub fn run(
                     "action": "pinned",
                     "sha": target_sha,
                 }));
+            }
+            ActionKind::Ref { ref_name } => {
+                let checkout_path = paths::workspace_root(workspace_id)
+                    .join("repos")
+                    .join(&repo_spec.alias);
+
+                if let Some(resolved) = git::resolve_ref(&checkout_path, ref_name) {
+                    repo_pin::run(workspace_id, &repo_spec.alias, &resolved)?;
+                    pin_checkout(workspace_id, &repo_spec.alias, &checkout_path, &resolved);
+
+                    results.push(json!({
+                        "alias": repo_spec.alias,
+                        "action": "pinned",
+                        "ref": ref_name,
+                        "sha": resolved,
+                    }));
+                } else {
+                    eprintln!(
+                        "warning: could not resolve ref '{}' for {}",
+                        ref_name, repo_spec.alias
+                    );
+                    results.push(json!({
+                        "alias": repo_spec.alias,
+                        "action": "skipped",
+                        "reason": format!("could not resolve ref '{ref_name}'"),
+                    }));
+                }
+
+                apply_repo_extra(workspace_id, &repo_spec.alias, &repo_spec.extra)?;
             }
             ActionKind::Skip => {
                 // Still apply extra fields in case they changed
@@ -138,18 +211,27 @@ pub fn run(
         }
     }
 
-    // Apply spec-level policies
-    if let Some(policies) = &spec.policies {
-        let policies_json = serde_json::to_string(policies)
-            .map_err(|e| WorkspaceError::InvalidJson(e.to_string()))?;
-        set_field::run(workspace_id, "policies", &policies_json)?;
-    }
-
-    // Apply labels
-    if !spec.labels.is_empty() {
-        let labels_json = serde_json::to_string(&spec.labels)
-            .map_err(|e| WorkspaceError::InvalidJson(e.to_string()))?;
-        set_field::run(workspace_id, "labels", &labels_json)?;
+    // Merge spec-level policies and labels (additive, not overwrite)
+    if spec.policies.is_some() || !spec.labels.is_empty() {
+        let spec_policies = spec.policies.clone();
+        let spec_labels = spec.labels.clone();
+        with_locked_manifest(workspace_id, None, move |m| {
+            if let Some(sp) = spec_policies {
+                let mut existing = serde_json::to_value(&m.policies).map_err(WorkspaceError::Json)?;
+                let incoming = serde_json::to_value(&sp).map_err(WorkspaceError::Json)?;
+                if let (Some(base), Some(patch)) = (existing.as_object_mut(), incoming.as_object())
+                {
+                    for (k, v) in patch {
+                        base.insert(k.clone(), v.clone());
+                    }
+                }
+                m.policies = serde_json::from_value(existing).map_err(WorkspaceError::Json)?;
+            }
+            for (k, v) in spec_labels {
+                m.labels.insert(k, v);
+            }
+            Ok(())
+        })?;
     }
 
     // Record spec source provenance
@@ -179,27 +261,45 @@ pub fn run(
     }))
 }
 
+/// After pinning, checkout the SHA and update the repo's git state in the manifest.
+fn pin_checkout(workspace_id: &str, alias: &str, checkout_path: &Path, sha: &str) {
+    if let Err(e) = git::fetch_and_checkout(checkout_path, sha) {
+        eprintln!("warning: git checkout failed for {alias}: {e}");
+        return;
+    }
+    let git_state = git::read_git_state(checkout_path);
+    if let Err(e) = repo_update_state::run(
+        workspace_id,
+        alias,
+        &git_state.head_sha,
+        Some(git_state.head_ref.as_str()).filter(|s| !s.is_empty()),
+    ) {
+        eprintln!("warning: failed to update git state for {alias}: {e}");
+    }
+}
+
 /// Apply extra fields from a RepoSpec to the corresponding RepoEntry.
 fn apply_repo_extra(
     workspace_id: &str,
     alias: &str,
     extra: &serde_json::Map<String, Value>,
 ) -> Result<(), WorkspaceError> {
-    // Find the repo's index in the manifest to build the dotted path
-    let manifest = read_manifest(workspace_id)?;
-    let idx = manifest
-        .repos
-        .iter()
-        .position(|r| r.alias == alias)
-        .ok_or_else(|| WorkspaceError::EntryNotFound(alias.to_string()))?;
-
-    for (key, value) in extra {
-        let path = format!("repos.{idx}.{key}");
-        let value_str = serde_json::to_string(value)
-            .map_err(|e| WorkspaceError::InvalidJson(e.to_string()))?;
-        set_field::run(workspace_id, &path, &value_str)?;
+    if extra.is_empty() {
+        return Ok(());
     }
-
+    let alias = alias.to_string();
+    let extra = extra.clone();
+    with_locked_manifest(workspace_id, None, move |m| {
+        let repo = m
+            .repos
+            .iter_mut()
+            .find(|r| r.alias == alias)
+            .ok_or_else(|| WorkspaceError::EntryNotFound(alias.clone()))?;
+        for (key, value) in extra {
+            repo.extra.insert(key, value);
+        }
+        Ok(())
+    })?;
     Ok(())
 }
 
@@ -213,6 +313,7 @@ fn format_plan(actions: &[RepoAction]) -> Value {
                     current_sha,
                     target_sha,
                 } => format!("pin ({current_sha} → {target_sha})"),
+                ActionKind::Ref { ref_name } => format!("ref ({ref_name})"),
                 ActionKind::Skip => "skip".to_string(),
             };
             json!({"alias": a.alias, "action": action_str})
