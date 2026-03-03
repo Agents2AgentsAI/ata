@@ -40,17 +40,20 @@ pub(crate) const DOCUMENT_READER_VIEW_ID: &str = "doc_reader";
 /// Iterator that yields `(byte_offset, word)` for each whitespace-delimited
 /// word in a string.  Used to map TTS word indices to character positions
 /// within rendered lines.
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 struct WordOffsets<'a> {
     text: &'a str,
     pos: usize,
 }
 
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 impl<'a> WordOffsets<'a> {
     fn new(text: &'a str) -> Self {
         Self { text, pos: 0 }
     }
 }
 
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 impl<'a> Iterator for WordOffsets<'a> {
     type Item = (usize, &'a str);
     fn next(&mut self) -> Option<Self::Item> {
@@ -2353,6 +2356,7 @@ impl BottomPaneView for DocumentReaderView {
         }
     }
 
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn voice_context(&self) -> Option<super::bottom_pane_view::ReadingViewVoiceContext> {
         let section = self.sections.get(self.current_section)?;
         let heading = section.heading.clone();
@@ -2373,10 +2377,12 @@ impl BottomPaneView for DocumentReaderView {
         })
     }
 
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn set_voice_status(&mut self, status: Option<String>) {
         self.voice_status = status;
     }
 
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn set_pending_voice_question(&mut self, section: usize, question: String) {
         self.pending_sections
             .insert(section, (question, Instant::now()));
@@ -2387,6 +2393,7 @@ impl BottomPaneView for DocumentReaderView {
         }
     }
 
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn set_voice_karaoke_lines(&mut self, lines: Option<Vec<Line<'static>>>, append: bool) {
         self.voice_karaoke_lines = lines;
         self.voice_karaoke_append = append;
@@ -2410,6 +2417,7 @@ impl BottomPaneView for DocumentReaderView {
         }
     }
 
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn set_voice_reading_progress(
         &mut self,
         word_idx: Option<usize>,
@@ -2470,6 +2478,7 @@ impl BottomPaneView for DocumentReaderView {
         }
     }
 
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn is_composer_focused(&self) -> bool {
         self.focus == ReaderFocus::Composer
     }

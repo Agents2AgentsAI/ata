@@ -125,6 +125,7 @@ impl BottomPane {
     /// When the active view is a document reader, this extracts the current
     /// section context so voice transcriptions can be routed with
     /// reading-view-aware instructions.
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     pub(crate) fn reading_view_voice_context(
         &self,
     ) -> Option<bottom_pane_view::ReadingViewVoiceContext> {
@@ -135,6 +136,7 @@ impl BottomPane {
     ///
     /// Used by voice mode to skip PTT interception so Space types into the
     /// composer immediately instead of starting voice recording.
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     pub(crate) fn is_view_composer_focused(&self) -> bool {
         self.view_stack
             .last()
@@ -142,6 +144,7 @@ impl BottomPane {
     }
 
     /// Update the voice mode status text in the active document reader.
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     pub(crate) fn set_document_reader_voice_status(&mut self, status: Option<String>) {
         if let Some(view) = self.view_stack.last_mut() {
             view.set_voice_status(status);
@@ -151,6 +154,7 @@ impl BottomPane {
 
     /// Mark a section as pending a voice question answer (same inline
     /// indicator as text questions).
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     pub(crate) fn set_document_reader_pending_voice_question(
         &mut self,
         section: usize,
@@ -164,6 +168,7 @@ impl BottomPane {
 
     /// Push karaoke-highlighted lines into the active document reader's content area.
     /// When `append` is true, lines are shown after the existing content (Q&A mode).
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     pub(crate) fn set_document_reader_karaoke_lines(
         &mut self,
         lines: Option<Vec<ratatui::text::Line<'static>>>,
@@ -179,6 +184,7 @@ impl BottomPane {
     ///
     /// During narration this highlights the rendered line containing the
     /// given word, preserving full markdown formatting.
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     pub(crate) fn set_document_reader_reading_progress(
         &mut self,
         word_idx: Option<usize>,

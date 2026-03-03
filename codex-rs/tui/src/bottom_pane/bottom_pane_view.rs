@@ -11,6 +11,10 @@ use super::CancellationEvent;
 /// carries the current reading context so the agent can provide reading-view-aware
 /// explanations rather than generic voice responses.
 #[derive(Debug, Clone)]
+#[cfg_attr(
+    not(all(not(target_os = "linux"), feature = "voice-input")),
+    allow(dead_code)
+)]
 pub(crate) struct ReadingViewVoiceContext {
     pub(crate) title: String,
     pub(crate) document_id: String,
@@ -136,26 +140,21 @@ pub(crate) trait BottomPaneView: Renderable {
         None
     }
 
-    /// Return reading view context for voice mode, if this view is a document reader.
-    ///
-    /// When voice mode is active and the user speaks, the chat widget checks this
-    /// method to determine whether to use reading-view-aware voice instructions.
+    // ─── Voice-mode-only trait methods ─────────────────────────────────
+    // These exist only when voice-input is available (non-Linux + feature).
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn voice_context(&self) -> Option<ReadingViewVoiceContext> {
         None
     }
 
-    /// Update the voice mode status text displayed in this view's status area.
-    /// Only meaningful for views that show a voice indicator (e.g. document reader).
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn set_voice_status(&mut self, _status: Option<String>) {}
 
-    /// Mark a section as having a pending voice question, so the inline
-    /// "You asked: ... • thinking..." indicator shows (same as text questions).
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn set_pending_voice_question(&mut self, _section: usize, _question: String) {}
 
-    /// Replace the content area with karaoke-highlighted lines during TTS playback.
-    /// When `append` is true, lines are appended after the section content instead
-    /// of replacing it (used for Q&A responses).
-    /// Only meaningful for views that display document content (e.g. document reader).
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn set_voice_karaoke_lines(
         &mut self,
         _lines: Option<Vec<ratatui::text::Line<'static>>>,
@@ -163,11 +162,7 @@ pub(crate) trait BottomPaneView: Renderable {
     ) {
     }
 
-    /// Set the reading cursor during narration by word index.
-    ///
-    /// The view maps the word index to a rendered line internally,
-    /// preserving full markdown formatting while highlighting reading
-    /// progress.  Pass `None` to clear the reading cursor.
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn set_voice_reading_progress(
         &mut self,
         _word_idx: Option<usize>,
@@ -175,10 +170,7 @@ pub(crate) trait BottomPaneView: Renderable {
     ) {
     }
 
-    /// Return `true` when this view's internal composer/text-input has keyboard focus.
-    ///
-    /// Used by voice mode to skip PTT interception when the user is typing in
-    /// a view's embedded composer (e.g., the document reader's question input).
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn is_composer_focused(&self) -> bool {
         false
     }
