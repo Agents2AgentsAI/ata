@@ -15,6 +15,7 @@ use crate::error::Result as CodexResult;
 use crate::features::Feature;
 use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
+use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
@@ -155,6 +156,7 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
         model_catalog: Option<ModelsResponse>,
+        collaboration_modes_config: CollaborationModesConfig,
     ) -> Self {
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let skills_manager = Arc::new(SkillsManager::new(codex_home.clone()));
@@ -167,6 +169,7 @@ impl ThreadManager {
                     codex_home,
                     auth_manager.clone(),
                     model_catalog,
+                    collaboration_modes_config,
                 )),
                 research_toolkit: OnceCell::new(),
                 #[cfg(feature = "data")]
@@ -267,7 +270,7 @@ impl ThreadManager {
     }
 
     pub async fn list_thread_ids(&self) -> Vec<ThreadId> {
-        self.state.threads.read().await.keys().copied().collect()
+        self.state.list_thread_ids().await
     }
 
     pub async fn refresh_mcp_servers(&self, refresh_config: McpServerRefreshConfig) {
@@ -427,6 +430,10 @@ impl ThreadManager {
 }
 
 impl ThreadManagerState {
+    pub(crate) async fn list_thread_ids(&self) -> Vec<ThreadId> {
+        self.threads.read().await.keys().copied().collect()
+    }
+
     /// Fetch a thread by ID or return ThreadNotFound.
     pub(crate) async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
         let threads = self.threads.read().await;
@@ -505,6 +512,27 @@ impl ThreadManagerState {
             session_source,
             Vec::new(),
             false,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn fork_thread_with_source(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        agent_control: AgentControl,
+        session_source: SessionSource,
+        persist_extended_history: bool,
+    ) -> CodexResult<NewThread> {
+        self.spawn_thread_with_source(
+            config,
+            initial_history,
+            Arc::clone(&self.auth_manager),
+            agent_control,
+            session_source,
+            Vec::new(),
+            persist_extended_history,
             None,
         )
         .await
@@ -760,7 +788,7 @@ mod tests {
     #[tokio::test]
     async fn ignores_session_prefix_messages_when_truncating() {
         let (session, turn_context) = make_session_and_context().await;
-        let mut items = session.build_initial_context(&turn_context).await;
+        let mut items = session.build_initial_context(&turn_context, None).await;
         items.push(user_msg("feature request"));
         items.push(assistant_msg("ack"));
         items.push(user_msg("second question"));

@@ -171,6 +171,11 @@ impl Handle {
             .map(|_| DeveloperInstructions::new(INSTRUCTIONS).into())
     }
 
+    /// Developer instructions as plain text (for merging into developer sections).
+    pub fn developer_instructions_text(&self) -> Option<String> {
+        self.inner.as_ref().map(|_| INSTRUCTIONS.to_string())
+    }
+
     /// Stop heartbeat and deregister the session.
     pub async fn shutdown(&self, session_id: &str) {
         if let Some(ref inner) = self.inner {

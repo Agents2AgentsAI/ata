@@ -37,6 +37,39 @@ mod render;
 
 pub(crate) const DOCUMENT_READER_VIEW_ID: &str = "doc_reader";
 
+/// Iterator that yields `(byte_offset, word)` for each whitespace-delimited
+/// word in a string.  Used to map TTS word indices to character positions
+/// within rendered lines.
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+struct WordOffsets<'a> {
+    text: &'a str,
+    pos: usize,
+}
+
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+impl<'a> WordOffsets<'a> {
+    fn new(text: &'a str) -> Self {
+        Self { text, pos: 0 }
+    }
+}
+
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+impl<'a> Iterator for WordOffsets<'a> {
+    type Item = (usize, &'a str);
+    fn next(&mut self) -> Option<Self::Item> {
+        let remaining = &self.text[self.pos..];
+        // Skip leading whitespace.
+        let trimmed = remaining.trim_start();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let start = self.pos + (remaining.len() - trimmed.len());
+        let word_len = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
+        self.pos = start + word_len;
+        Some((start, &self.text[start..start + word_len]))
+    }
+}
+
 /// Saved fold state that persists across view close/reopen cycles within a
 /// single TUI session.  Stored as a process-level static so we don't need to
 /// thread it through BottomPane (which is upstream code).
@@ -240,10 +273,41 @@ pub(crate) struct DocumentReaderView {
     show_tutorial: bool,
     /// Scroll offset for the tutorial overlay (when content doesn't fit).
     tutorial_scroll: Cell<usize>,
+    /// Tracks whether Enter was pressed once in the tutorial overlay so that a
+    /// second consecutive Enter dismisses it (users may not know about Esc).
+    tutorial_pending_enter: bool,
 
     /// When `Some`, the user pressed `:` and is typing a line number.
     /// Line numbers are shown on the left margin while active.
     line_number_input: Option<String>,
+
+    /// Voice mode status text (e.g. "Recording...", "Speaking...").
+    /// Set by ChatWidget via the `set_voice_status` trait method.
+    voice_status: Option<String>,
+
+    /// Karaoke-highlighted lines pushed by voice mode during TTS playback.
+    /// When `Some`, these either replace or are appended to the section content
+    /// depending on `voice_karaoke_append`.
+    voice_karaoke_lines: Option<Vec<Line<'static>>>,
+    /// When true, karaoke lines are appended after section content (Q&A mode).
+    /// When false, they replace the content (narration mode).
+    voice_karaoke_append: bool,
+
+    /// Word-level reading highlight: (line_index, start_col, end_col).
+    /// During narration, the word at this position gets bold+underline
+    /// while all surrounding formatting is preserved.
+    voice_reading_highlight: Option<(usize, usize, usize)>,
+
+    /// Deferred narration: when auto-narration fires but the section content
+    /// is still empty (streaming hasn't filled it yet), we store the section
+    /// index here. `update_section` checks this and re-triggers narration
+    /// once content arrives.
+    pending_narration_section: Option<usize>,
+
+    /// When true, the "end of document" separator is rendered in a
+    /// highlighted style.  Set when the user presses `n` at the last
+    /// section; cleared on the next keypress.
+    end_of_doc_flash: bool,
 }
 
 impl DocumentReaderView {
@@ -294,7 +358,7 @@ impl DocumentReaderView {
             None
         };
 
-        Self {
+        let mut view = Self {
             document_id,
             title,
             sections,
@@ -325,8 +389,19 @@ impl DocumentReaderView {
             help_scroll: Cell::new(0),
             show_tutorial: !has_seen_tutorial(),
             tutorial_scroll: Cell::new(0),
+            tutorial_pending_enter: false,
             line_number_input: None,
-        }
+            voice_status: None,
+            voice_karaoke_lines: None,
+            voice_karaoke_append: false,
+            voice_reading_highlight: None,
+            pending_narration_section: None,
+            end_of_doc_flash: false,
+        };
+        // Auto-narrate the first section on open (if voice mode is active,
+        // ChatWidget will pick it up; otherwise it's a no-op).
+        view.narrate_current_section_if_voice();
+        view
     }
 
     /// If the resolved section is the one currently being viewed, dismiss
@@ -382,6 +457,12 @@ impl DocumentReaderView {
                 if set.is_empty() {
                     self.streaming_sections = None;
                 }
+            }
+
+            // Fulfill deferred narration if this section was waiting for content.
+            if self.pending_narration_section == Some(section_index) {
+                self.pending_narration_section = None;
+                self.narrate_current_section_if_voice();
             }
         }
     }
@@ -614,25 +695,116 @@ impl DocumentReaderView {
 
     fn next_section(&mut self) {
         if self.current_section + 1 < self.sections.len() {
+            self.end_of_doc_flash = false;
+            self.interrupt_tts_if_needed();
             self.clear_updated_flag();
+            let first_visit = !self.visited_sections.contains(&(self.current_section + 1));
             self.current_section += 1;
             self.scroll_offset.set(0);
             self.cursor_line = 0;
             self.cursor_col = 0;
+            self.voice_karaoke_lines = None;
+            self.voice_reading_highlight = None;
             self.visited_sections.insert(self.current_section);
+            // Only auto-narrate on first visit (going forward).
+            if first_visit {
+                self.narrate_current_section_if_voice();
+            }
+        } else {
+            // Already at the last section — flash the indicator.
+            self.end_of_doc_flash = true;
         }
     }
 
     fn prev_section(&mut self) {
         if self.current_section > 0 {
+            self.interrupt_tts_if_needed();
             self.clear_updated_flag();
             self.current_section -= 1;
             self.scroll_offset.set(0);
             self.cursor_line = 0;
             self.cursor_col = 0;
+            self.voice_karaoke_lines = None;
+            self.voice_reading_highlight = None;
             self.visited_sections.insert(self.current_section);
+            // Don't auto-narrate when going back — user can press `r`.
         }
     }
+
+    /// Interrupt TTS if voice mode is speaking (user navigated away).
+    #[cfg(not(target_os = "linux"))]
+    fn interrupt_tts_if_needed(&self) {
+        self.app_event_tx.send(AppEvent::VoiceModeInterruptTts);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn interrupt_tts_if_needed(&self) {}
+
+    /// Emit a narrate event for the current section so voice mode can TTS it.
+    /// The document reader doesn't know whether voice mode is active — ChatWidget
+    /// filters based on voice state.
+    ///
+    /// Any collapsed folds in the current section are auto-expanded so the
+    /// karaoke reading cursor can track through all visible content.
+    #[cfg(not(target_os = "linux"))]
+    fn narrate_current_section_if_voice(&mut self) {
+        // Auto-expand collapsed folds so karaoke can highlight fold content.
+        if let Some(section) = self.sections.get_mut(self.current_section) {
+            let mut expanded_any = false;
+            for fold in &mut section.folds {
+                if fold.collapsed {
+                    fold.collapsed = false;
+                    expanded_any = true;
+                }
+            }
+            if expanded_any {
+                section.invalidate_cache();
+            }
+        }
+
+        if let Some(section) = self.sections.get(self.current_section) {
+            // If content is still empty (streaming hasn't filled it yet),
+            // defer narration until update_section delivers the content.
+            let still_streaming = self
+                .streaming_sections
+                .as_ref()
+                .is_some_and(|set| set.contains(&self.current_section));
+            if section.content.trim().is_empty() && still_streaming {
+                self.pending_narration_section = Some(self.current_section);
+                return;
+            }
+
+            let text = if section.heading.is_empty() {
+                section.content.clone()
+            } else {
+                format!("{}.\n{}", section.heading, section.content)
+            };
+            self.app_event_tx.send(AppEvent::VoiceModeNarrateSection {
+                document_id: self.document_id.clone(),
+                section_index: self.current_section,
+                text,
+                selection_word_offset: None,
+            });
+        }
+        // Prefetch the next section in the background.
+        if let Some(next) = self.sections.get(self.current_section + 1) {
+            let next_text = if next.heading.is_empty() {
+                next.content.clone()
+            } else {
+                format!("{}.\n{}", next.heading, next.content)
+            };
+            if !next_text.trim().is_empty() {
+                self.app_event_tx.send(AppEvent::VoiceModePrefetchSection {
+                    document_id: self.document_id.clone(),
+                    section_index: self.current_section + 1,
+                    text: next_text,
+                });
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn narrate_current_section_if_voice(&mut self) {}
 
     fn clear_updated_flag(&mut self) {
         if let Some(section) = self.sections.get_mut(self.current_section)
@@ -646,6 +818,9 @@ impl DocumentReaderView {
     }
 
     fn exit_reading_mode(&mut self) {
+        // Stop any ongoing TTS playback immediately.
+        self.interrupt_tts_if_needed();
+
         // Insert a history cell with the final document state.
         let cell = crate::history_cell::new_document_cell(
             self.title.clone(),
@@ -913,6 +1088,9 @@ impl DocumentReaderView {
     }
 
     fn handle_content_key(&mut self, key_event: KeyEvent) {
+        // Clear the "end of document" flash on any keypress.
+        self.end_of_doc_flash = false;
+
         // Line-number jump mode (`:` prefix) — must run before overlay/quit
         // handlers so digit keys are captured instead of dismissing overlays.
         if let Some(ref mut input) = self.line_number_input {
@@ -1008,13 +1186,27 @@ impl DocumentReaderView {
                         if self.show_tutorial {
                             self.show_tutorial = false;
                             self.tutorial_scroll.set(0);
+                            self.tutorial_pending_enter = false;
                             mark_tutorial_seen();
                         } else {
                             self.show_help = false;
                             self.help_scroll.set(0);
                         }
                     }
-                    _ => {} // consume all other keys (don't dismiss)
+                    KeyCode::Enter if self.show_tutorial => {
+                        if self.tutorial_pending_enter {
+                            self.show_tutorial = false;
+                            self.tutorial_scroll.set(0);
+                            self.tutorial_pending_enter = false;
+                            mark_tutorial_seen();
+                        } else {
+                            self.tutorial_pending_enter = true;
+                        }
+                    }
+                    _ => {
+                        // Reset pending enter on any other key.
+                        self.tutorial_pending_enter = false;
+                    }
                 }
             }
             return;
@@ -1304,6 +1496,35 @@ impl DocumentReaderView {
                     self.pending_quit = false;
                     self.exit_reading_mode();
                 }
+                // Read selection aloud via TTS.
+                #[cfg(not(target_os = "linux"))]
+                KeyCode::Char('r') => {
+                    let inner_w = self.last_inner_width.get();
+                    let word_offset = self.count_words_before_selection(inner_w);
+                    if let Some(text) = self.selected_text(inner_w) {
+                        // Strip fold decorators from selected text so the TTS
+                        // word sequence matches the rendered word counter (which
+                        // skips fold headers and ┊ border prefixes).
+                        let text: String = text
+                            .lines()
+                            .filter(|line| {
+                                let t = line.trim_start();
+                                !t.starts_with("┊ [-]") && !t.starts_with("┊ [+]")
+                            })
+                            .map(|line| line.strip_prefix("┊ ").unwrap_or(line))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        if !text.trim().is_empty() {
+                            self.app_event_tx.send(AppEvent::VoiceModeNarrateSection {
+                                document_id: self.document_id.clone(),
+                                section_index: self.current_section,
+                                text,
+                                selection_word_offset: Some(word_offset),
+                            });
+                        }
+                    }
+                    self.visual_select = None;
+                }
                 // Section navigation cancels visual mode.
                 KeyCode::Char('n') | KeyCode::Char('p') | KeyCode::PageDown | KeyCode::PageUp => {
                     self.visual_select = None;
@@ -1335,6 +1556,11 @@ impl DocumentReaderView {
             }
             KeyCode::Char('p') | KeyCode::PageUp => {
                 self.prev_section();
+            }
+            KeyCode::Char('r') => {
+                // Manually trigger narration of the current section.
+                self.interrupt_tts_if_needed();
+                self.narrate_current_section_if_voice();
             }
             KeyCode::Char('v') => {
                 self.visual_select = Some(VisualSelect {
@@ -1375,7 +1601,7 @@ impl DocumentReaderView {
                     self.clear_search();
                 }
             }
-            KeyCode::Char(' ') => {
+            KeyCode::Char('f') => {
                 self.toggle_fold_at_cursor();
             }
             KeyCode::Char(']') => {
@@ -2076,6 +2302,49 @@ impl DocumentReaderView {
             };
         Some((start_line, start_col, end_line, end_col))
     }
+
+    /// Count rendered words before the selection start position.
+    ///
+    /// Uses the same decorator-skipping logic as `set_voice_reading_progress`
+    /// so the returned offset can be added to a TTS word index to highlight
+    /// the correct word in the full rendered content.
+    #[cfg(not(target_os = "linux"))]
+    fn count_words_before_selection(&self, inner_width: u16) -> usize {
+        let vs = match self.visual_select.as_ref() {
+            Some(v) => v,
+            None => return 0,
+        };
+        let section = match self.sections.get(self.current_section) {
+            Some(s) => s,
+            None => return 0,
+        };
+        let lines = section.rendered_lines(inner_width);
+        if lines.is_empty() {
+            return 0;
+        }
+        let (start_line, start_col, _, _) = match self.selection_bounds(vs, lines.len()) {
+            Some(b) => b,
+            None => return 0,
+        };
+        let mut count = 0usize;
+        for (i, line) in lines.iter().enumerate() {
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            if text.starts_with("┊ [-]") || text.starts_with("┊ [+]") {
+                continue;
+            }
+            for (word_start, word) in WordOffsets::new(&text) {
+                if word == "\u{1F50A}" || word == "┊" || word == "\u{2713}" || word == "———"
+                {
+                    continue;
+                }
+                if i > start_line || (i == start_line && word_start >= start_col) {
+                    return count;
+                }
+                count += 1;
+            }
+        }
+        count
+    }
 }
 
 impl BottomPaneView for DocumentReaderView {
@@ -2085,6 +2354,133 @@ impl BottomPaneView for DocumentReaderView {
             ReaderFocus::Composer => self.handle_composer_key(key_event),
             ReaderFocus::Search => self.handle_search_key(key_event),
         }
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    fn voice_context(&self) -> Option<super::bottom_pane_view::ReadingViewVoiceContext> {
+        let section = self.sections.get(self.current_section)?;
+        let heading = section.heading.clone();
+
+        // Only include selection if the user is actively in visual select mode.
+        let active_selection = if self.visual_select.is_some() {
+            self.selection_context.clone()
+        } else {
+            None
+        };
+
+        Some(super::bottom_pane_view::ReadingViewVoiceContext {
+            title: self.title.clone(),
+            document_id: self.document_id.clone(),
+            section_index: self.current_section,
+            heading,
+            selection: active_selection,
+        })
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    fn set_voice_status(&mut self, status: Option<String>) {
+        self.voice_status = status;
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    fn set_pending_voice_question(&mut self, section: usize, question: String) {
+        self.pending_sections
+            .insert(section, (question, Instant::now()));
+        // Invalidate the section's rendered cache so the pending indicator
+        // appears immediately.
+        if let Some(s) = self.sections.get(self.current_section) {
+            s.invalidate_cache();
+        }
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    fn set_voice_karaoke_lines(&mut self, lines: Option<Vec<Line<'static>>>, append: bool) {
+        self.voice_karaoke_lines = lines;
+        self.voice_karaoke_append = append;
+        // Auto-scroll to keep the karaoke text visible.
+        if let Some(ref karaoke) = self.voice_karaoke_lines {
+            let content_h = self.last_content_height.get();
+            if content_h == 0 {
+                return;
+            }
+            if append {
+                // Scroll to the end of the section so the fold with
+                // karaoke content is visible. Use a large offset — the
+                // render pass will clamp it to the actual max.
+                self.scroll_offset.set(u16::MAX);
+            } else {
+                let total = karaoke.len() as u16;
+                if total > content_h {
+                    self.scroll_offset.set(total.saturating_sub(content_h));
+                }
+            }
+        }
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    fn set_voice_reading_progress(
+        &mut self,
+        word_idx: Option<usize>,
+        heading_words_to_skip: usize,
+    ) {
+        let highlight = word_idx.and_then(|wi| {
+            let adj = wi.checked_sub(heading_words_to_skip)?;
+            let section = self.sections.get(self.current_section)?;
+            let inner_w = self.last_inner_width.get();
+            let lines = section.rendered_lines(inner_w);
+            // Walk ALL rendered lines (including heading) counting words
+            // to find the target word's line index and character range.
+            // Fold decorators (headers, ┊ borders) are skipped since they
+            // don't exist in the TTS text.
+            let mut cumulative_words = 0usize;
+            for (i, line) in lines.iter().enumerate() {
+                let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                // Skip fold header lines entirely — their summary text
+                // is not part of the TTS stream.
+                if text.starts_with("┊ [-]") || text.starts_with("┊ [+]") {
+                    continue;
+                }
+                for (word_start, word) in WordOffsets::new(&text) {
+                    // Skip decorators that aren't real TTS words.
+                    if word == "\u{1F50A}" || word == "┊" || word == "\u{2713}" || word == "———"
+                    {
+                        continue;
+                    }
+                    if cumulative_words == adj {
+                        return Some((i, word_start, word_start + word.len()));
+                    }
+                    cumulative_words += 1;
+                }
+            }
+            tracing::debug!(
+                "Karaoke word miss: adj={adj}, total_rendered_words={cumulative_words}, lines={}",
+                lines.len()
+            );
+            None
+        });
+
+        self.voice_reading_highlight = highlight;
+
+        // Auto-scroll so the highlighted line stays visible.
+        if let Some((line_idx, _, _)) = highlight {
+            let content_h = self.last_content_height.get();
+            if content_h > 0 {
+                let scroll = self.scroll_offset.get() as usize;
+                let visible_end = scroll + content_h as usize;
+                if line_idx >= visible_end {
+                    self.scroll_offset
+                        .set(line_idx.saturating_sub(content_h as usize / 2) as u16);
+                }
+                if line_idx < scroll {
+                    self.scroll_offset.set(line_idx.saturating_sub(2) as u16);
+                }
+            }
+        }
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    fn is_composer_focused(&self) -> bool {
+        self.focus == ReaderFocus::Composer
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
@@ -2241,8 +2637,9 @@ impl Renderable for DocumentReaderView {
             ReaderFocus::Content => 0,
         };
 
-        // --- Fixed rows from bottom: bottom_border(1) + extra_bottom_rows + hints(1) + separator(1) ---
-        let fixed_bottom = 1 + extra_bottom_rows + 1 + 1;
+        // --- Fixed rows from bottom: bottom_border(1) + extra_bottom_rows + hints(1) + voice_status(0|1) + separator(1) ---
+        let voice_status_rows: u16 = if self.voice_status.is_some() { 1 } else { 0 };
+        let fixed_bottom = 1 + extra_bottom_rows + 1 + voice_status_rows + 1;
         // --- Fixed rows from top: top_border(1) + header(1) + separator(1) ---
         let fixed_top: u16 = 3;
         let content_height = area
@@ -2389,11 +2786,89 @@ impl Renderable for DocumentReaderView {
                     .is_some_and(|set| set.contains(&self.current_section))
                     && section.content.trim().is_empty();
 
-                let mut raw_lines = if is_streaming_empty {
+                let mut raw_lines = if let Some(ref karaoke) = self.voice_karaoke_lines {
+                    if self.voice_karaoke_append {
+                        // Q&A mode: render section content normally, then
+                        // replace the last expanded fold's content lines
+                        // with karaoke-highlighted text (inside ┊ borders).
+                        let mut lines = section.rendered_lines(inner_width);
+
+                        // Find the last fold header line (starts with "┊ [-]")
+                        // and replace everything after it with karaoke lines.
+                        let last_fold_header = lines.iter().rposition(|line| {
+                            let text: String =
+                                line.spans.iter().map(|s| s.content.as_ref()).collect();
+                            text.starts_with("┊ [-]")
+                        });
+
+                        if let Some(header_idx) = last_fold_header {
+                            // Remove all lines after the fold header (the
+                            // original fold content) and replace with karaoke.
+                            // Find where the fold ends (next non-┊ line or end).
+                            let fold_end = lines[header_idx + 1..]
+                                .iter()
+                                .position(|line| {
+                                    let text: String =
+                                        line.spans.iter().map(|s| s.content.as_ref()).collect();
+                                    !text.starts_with("┊ ")
+                                })
+                                .map(|pos| header_idx + 1 + pos)
+                                .unwrap_or(lines.len());
+
+                            // Remove old fold content.
+                            lines.drain(header_idx + 1..fold_end);
+
+                            // Insert karaoke lines with ┊ borders.
+                            let insert_at = header_idx + 1;
+                            for (j, k_line) in karaoke.iter().enumerate() {
+                                let mut spans = vec![Span::from("┊ ").dim().cyan()];
+                                spans.extend(k_line.spans.clone());
+                                lines.insert(insert_at + j, Line::from(spans));
+                            }
+                        } else {
+                            // No fold found yet — append with separator.
+                            lines.push(Line::from(""));
+                            let mut spans = vec![Span::from("┊ ").dim().cyan()];
+                            spans.push(Span::from("\u{1F50A} Speaking...").dim().italic());
+                            lines.push(Line::from(spans));
+                            for k_line in karaoke {
+                                let mut spans = vec![Span::from("┊ ").dim().cyan()];
+                                spans.extend(k_line.spans.clone());
+                                lines.push(Line::from(spans));
+                            }
+                        }
+                        lines
+                    } else {
+                        // Narration mode: replace section content with
+                        // highlighted clean text, but preserve the heading.
+                        let mut lines = Vec::new();
+                        if !section.heading.is_empty() {
+                            lines.push(Line::from(vec![
+                                Span::from("\u{1F50A} "),
+                                Span::from(section.heading.clone()).bold(),
+                            ]));
+                            lines.push(Line::from(""));
+                        }
+                        lines.extend(karaoke.iter().cloned());
+                        lines
+                    }
+                } else if is_streaming_empty {
                     render::render_section_loading(&section.heading, self.animations_enabled)
                 } else {
                     section.rendered_lines(inner_width)
                 };
+
+                // Apply word-level reading highlight during narration.
+                // This runs BEFORE the 🔊 icon prepend so that character
+                // offsets computed from rendered_lines() match correctly.
+                if let Some((line_idx, col_start, col_end)) = self.voice_reading_highlight
+                    && line_idx < raw_lines.len()
+                {
+                    let line = std::mem::take(&mut raw_lines[line_idx]);
+                    raw_lines[line_idx] = render::apply_word_highlight(line, col_start, col_end);
+                }
+
+                // (Voice icon removed — too noisy.)
 
                 // On the first section, append a table of contents listing
                 // all section headings so the user knows the full structure.
@@ -2738,7 +3213,26 @@ impl Renderable for DocumentReaderView {
             ReaderFocus::Content => {}
         }
 
+        // Voice status line (above hints bar, when active).
+        // Rendered bottom-up so we calculate position after the hints bar.
+        let voice_status_line: Option<Line<'static>> = self
+            .voice_status
+            .as_deref()
+            .map(|vs| render::bordered_text_line(vs, w));
+
         // Hints bar
+        if let Some(voice_status) = voice_status_line {
+            by = by.saturating_sub(1);
+            // Render voice status above hints.
+            Paragraph::new(voice_status).render(
+                Rect {
+                    y: by,
+                    height: 1,
+                    ..area
+                },
+                buf,
+            );
+        }
         by = by.saturating_sub(1);
         let current_has_folds = self
             .sections
@@ -2752,6 +3246,7 @@ impl Renderable for DocumentReaderView {
             current_has_folds,
             self.pending_quit,
             self.line_number_input.as_deref(),
+            self.voice_status.as_deref(), // used for showing "r: read" hint
             w,
         );
         Paragraph::new(hints).render(
@@ -2784,8 +3279,16 @@ impl Renderable for DocumentReaderView {
                 format!(" n \u{25B6} {next_heading} ")
             };
             render::separator_with_indicator(w, &label)
+        } else if self.end_of_doc_flash {
+            render::separator_with_indicator_styled(
+                w,
+                " \u{2713} end of document ",
+                ratatui::style::Style::default()
+                    .fg(ratatui::style::Color::Yellow)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            )
         } else {
-            render::separator(w)
+            render::separator_with_indicator(w, " \u{2713} end of document ")
         };
         Paragraph::new(sep).render(
             Rect {
@@ -3413,6 +3916,9 @@ mod tests {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
+
+        // Drain any events emitted during construction (e.g. narrate).
+        while rx.try_recv().is_ok() {}
 
         view.focus = ReaderFocus::Composer;
         // Submit without typing anything.

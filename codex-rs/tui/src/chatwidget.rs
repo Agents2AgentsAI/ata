@@ -37,6 +37,9 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::app_event::RealtimeAudioDeviceKind;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::status::RateLimitWindowDisplay;
@@ -48,6 +51,7 @@ use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
+use codex_core::auth::PROVIDER_OPENAI;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintResult;
@@ -263,6 +267,8 @@ use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
 mod realtime;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+pub(crate) mod voice_mode;
 use self::realtime::RealtimeConversationUiState;
 use self::realtime::RenderedUserMessageEvent;
 use crate::mention_codec::LinkedMention;
@@ -461,6 +467,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) is_first_run: bool,
     pub(crate) feedback_audience: FeedbackAudience,
     pub(crate) model: Option<String>,
+    pub(crate) startup_tooltip_override: Option<String>,
     // Shared latch so we only warn once about invalid status-line item IDs.
     pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
     pub(crate) otel_manager: OtelManager,
@@ -602,6 +609,8 @@ pub(crate) struct ChatWidget {
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
+    // One-shot tooltip override for the primary startup session.
+    startup_tooltip_override: Option<String>,
     // When resuming an existing session (selected via resume picker), avoid an
     // immediate redraw on SessionConfigured to prevent a gratuitous UI flicker.
     suppress_session_configured_redraw: bool,
@@ -675,6 +684,24 @@ pub(crate) struct ChatWidget {
     external_editor_state: ExternalEditorState,
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    voice_mode_state: Option<voice_mode::VoiceModeState>,
+    /// Cached ElevenLabs language_code from the last voice-setup save.
+    /// Overrides config when `Some`.
+    #[cfg(not(target_os = "linux"))]
+    cached_elevenlabs_language: Option<Option<String>>,
+    /// Cached ElevenLabs speed from the last voice-setup save.
+    /// Overrides config when `Some`.
+    #[cfg(not(target_os = "linux"))]
+    cached_elevenlabs_speed: Option<f64>,
+    /// Voice response cells stashed during karaoke playback.
+    /// Flushed to history when the karaoke overlay finishes.
+    #[cfg(not(target_os = "linux"))]
+    deferred_voice_cells: Vec<Box<dyn HistoryCell>>,
+    /// Voice startup cells (warning + info) stashed before the session is
+    /// configured so they appear after the welcome/Tip box.
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    pending_voice_startup_cells: Vec<Box<dyn HistoryCell>>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -712,6 +739,9 @@ pub(crate) struct UserMessage {
     remote_image_urls: Vec<String>,
     text_elements: Vec<TextElement>,
     mention_bindings: Vec<MentionBinding>,
+    /// When true, the voice mode instruction prefix is injected into the
+    /// model-facing input (but not shown in the chat display or history).
+    voice_input: bool,
 }
 
 impl From<String> for UserMessage {
@@ -723,6 +753,7 @@ impl From<String> for UserMessage {
             // Plain text conversion has no UI element ranges.
             text_elements: Vec::new(),
             mention_bindings: Vec::new(),
+            voice_input: false,
         }
     }
 }
@@ -736,6 +767,7 @@ impl From<&str> for UserMessage {
             // Plain text conversion has no UI element ranges.
             text_elements: Vec::new(),
             mention_bindings: Vec::new(),
+            voice_input: false,
         }
     }
 }
@@ -763,6 +795,7 @@ pub(crate) fn create_initial_user_message(
             remote_image_urls: Vec::new(),
             text_elements,
             mention_bindings: Vec::new(),
+            voice_input: false,
         })
     }
 }
@@ -778,6 +811,7 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         local_images,
         remote_image_urls,
         mention_bindings,
+        voice_input,
     } = message;
     if local_images.is_empty() {
         return UserMessage {
@@ -786,6 +820,7 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
             local_images,
             remote_image_urls,
             mention_bindings,
+            voice_input,
         };
     }
 
@@ -842,6 +877,7 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         remote_image_urls,
         text_elements: rebuilt_elements,
         mention_bindings,
+        voice_input,
     }
 }
 
@@ -855,6 +891,10 @@ impl ChatWidget {
     fn realtime_conversation_enabled(&self) -> bool {
         self.config.features.enabled(Feature::RealtimeConversation)
             && cfg!(not(target_os = "linux"))
+    }
+
+    fn realtime_audio_device_selection_enabled(&self) -> bool {
+        self.realtime_conversation_enabled() && cfg!(feature = "voice-input")
     }
 
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
@@ -1139,16 +1179,28 @@ impl ChatWidget {
         );
         self.refresh_model_display();
         self.sync_personality_command_enabled();
+        let startup_tooltip_override = self.startup_tooltip_override.take();
         let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
             event,
             self.show_welcome_banner,
+            startup_tooltip_override,
             self.auth_manager
                 .auth_cached()
                 .and_then(|auth| auth.account_plan_type()),
         );
         self.apply_session_info_cell(session_info_cell);
+
+        // Flush voice startup cells that were stashed before the session was
+        // configured so they appear after the welcome/Tip box.
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        {
+            let cells: Vec<_> = self.pending_voice_startup_cells.drain(..).collect();
+            for cell in cells {
+                self.add_boxed_history(cell);
+            }
+        }
 
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
@@ -1284,9 +1336,12 @@ impl ChatWidget {
         if self.is_suppressing_streaming_for_reader() {
             return;
         }
-        // If we have a stream_controller, then the final agent message is redundant and will be a
-        // duplicate of what has already been streamed.
+        // If we have a stream_controller, the final agent message is redundant
+        // — streaming deltas already processed the text (including voice tag
+        // parsing). Only strip <voice> tags and display when no streaming occurred.
         if self.stream_controller.is_none() && !message.is_empty() {
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            let message = self.on_voice_mode_agent_delta(&message).unwrap_or(message);
             self.handle_streaming_delta(message);
         }
         self.flush_answer_stream_with_separator();
@@ -1294,7 +1349,19 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_agent_message_delta(&mut self, delta: String) {
+    fn on_agent_message_delta(&mut self, delta: String, from_replay: bool) {
+        // When voice mode is active, the parser strips <voice> tags from the
+        // display text and routes tagged content to TTS.  Skip during replay
+        // so resuming a session doesn't re-narrate old messages.
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        let delta = if from_replay {
+            delta
+        } else {
+            self.on_voice_mode_agent_delta(&delta).unwrap_or(delta)
+        };
+        #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
+        let _ = from_replay;
+
         if self.is_suppressing_streaming_for_reader() {
             return;
         }
@@ -1435,6 +1502,9 @@ impl ChatWidget {
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        self.on_voice_mode_turn_complete();
+
         if let Some(message) = last_agent_message.as_ref()
             && !message.trim().is_empty()
         {
@@ -1866,6 +1936,7 @@ impl ChatWidget {
             local_images: self.bottom_pane.composer_local_images(),
             remote_image_urls: self.bottom_pane.remote_image_urls(),
             mention_bindings: self.bottom_pane.composer_mention_bindings(),
+            voice_input: false,
         };
 
         let mut to_merge: Vec<UserMessage> = self.queued_user_messages.drain(..).collect();
@@ -1882,6 +1953,7 @@ impl ChatWidget {
             local_images: Vec::new(),
             remote_image_urls: Vec::new(),
             mention_bindings: Vec::new(),
+            voice_input: false,
         };
         let mut combined_offset = 0usize;
         let total_remote_images = to_merge
@@ -1921,6 +1993,7 @@ impl ChatWidget {
             remote_image_urls,
             text_elements,
             mention_bindings,
+            voice_input: _,
         } = user_message;
         let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
         self.set_remote_image_urls(remote_image_urls);
@@ -2595,13 +2668,13 @@ impl ChatWidget {
             .unwrap_or_else(|_| ev.command.join(" "));
         self.notify(Notification::ExecApprovalRequested { command });
 
+        let available_decisions = ev.effective_available_decisions();
         let request = ApprovalRequest::Exec {
             id: ev.effective_approval_id(),
             command: ev.command,
             reason: ev.reason,
+            available_decisions,
             network_approval_context: ev.network_approval_context,
-            proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
-            proposed_network_policy_amendments: ev.proposed_network_policy_amendments,
             additional_permissions: ev.additional_permissions,
         };
         self.bottom_pane
@@ -2775,6 +2848,7 @@ impl ChatWidget {
             is_first_run,
             feedback_audience,
             model,
+            startup_tooltip_override,
             status_line_invalid_items_warned,
             otel_manager,
         } = common;
@@ -2872,6 +2946,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
+            startup_tooltip_override,
             suppress_session_configured_redraw: false,
             pending_notification: None,
             quit_shortcut_expires_at: None,
@@ -2900,21 +2975,31 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            voice_mode_state: None,
+            #[cfg(not(target_os = "linux"))]
+            cached_elevenlabs_language: None,
+            #[cfg(not(target_os = "linux"))]
+            cached_elevenlabs_speed: None,
+            #[cfg(not(target_os = "linux"))]
+            deferred_voice_cells: Vec::new(),
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            pending_voice_startup_cells: Vec::new(),
         };
 
         widget.prefetch_rate_limits();
         widget
             .bottom_pane
             .set_history_path(widget.config.codex_home.join("history.jsonl"));
-        widget
-            .bottom_pane
-            .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
         widget
             .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
+        widget
+            .bottom_pane
+            .set_audio_device_selection_enabled(widget.realtime_audio_device_selection_enabled());
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -2937,6 +3022,28 @@ impl ChatWidget {
             .bottom_pane
             .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
 
+        // Auto-enable voice mode if persisted in config.
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        {
+            if widget.config.features.enabled(Feature::VoiceMode) {
+                let voice_config = widget
+                    .config
+                    .config_layer_stack
+                    .effective_config()
+                    .as_table()
+                    .and_then(|t| t.get("voice_mode"))
+                    .and_then(|v| {
+                        v.clone()
+                            .try_into::<codex_core::config::types::VoiceModeToml>()
+                            .ok()
+                    })
+                    .unwrap_or_default();
+                if voice_config.enabled == Some(true) {
+                    widget.toggle_voice_mode();
+                }
+            }
+        }
+
         widget
     }
 
@@ -2956,6 +3063,7 @@ impl ChatWidget {
             is_first_run,
             feedback_audience,
             model,
+            startup_tooltip_override,
             status_line_invalid_items_warned,
             otel_manager,
         } = common;
@@ -3056,6 +3164,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
+            startup_tooltip_override,
             suppress_session_configured_redraw: false,
             pending_notification: None,
             quit_shortcut_expires_at: None,
@@ -3080,21 +3189,31 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            voice_mode_state: None,
+            #[cfg(not(target_os = "linux"))]
+            cached_elevenlabs_language: None,
+            #[cfg(not(target_os = "linux"))]
+            cached_elevenlabs_speed: None,
+            #[cfg(not(target_os = "linux"))]
+            deferred_voice_cells: Vec::new(),
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            pending_voice_startup_cells: Vec::new(),
         };
 
         widget.prefetch_rate_limits();
         widget
             .bottom_pane
             .set_history_path(widget.config.codex_home.join("history.jsonl"));
-        widget
-            .bottom_pane
-            .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
         widget
             .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
+        widget
+            .bottom_pane
+            .set_audio_device_selection_enabled(widget.realtime_audio_device_selection_enabled());
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -3125,6 +3244,7 @@ impl ChatWidget {
             is_first_run: _,
             feedback_audience,
             model,
+            startup_tooltip_override: _,
             status_line_invalid_items_warned,
             otel_manager,
         } = common;
@@ -3221,6 +3341,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
             show_welcome_banner: false,
+            startup_tooltip_override: None,
             suppress_session_configured_redraw: true,
             pending_notification: None,
             quit_shortcut_expires_at: None,
@@ -3249,21 +3370,31 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            voice_mode_state: None,
+            #[cfg(not(target_os = "linux"))]
+            cached_elevenlabs_language: None,
+            #[cfg(not(target_os = "linux"))]
+            cached_elevenlabs_speed: None,
+            #[cfg(not(target_os = "linux"))]
+            deferred_voice_cells: Vec::new(),
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            pending_voice_startup_cells: Vec::new(),
         };
 
         widget.prefetch_rate_limits();
         widget
             .bottom_pane
             .set_history_path(widget.config.codex_home.join("history.jsonl"));
-        widget
-            .bottom_pane
-            .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
         widget
             .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
+        widget
+            .bottom_pane
+            .set_audio_device_selection_enabled(widget.realtime_audio_device_selection_enabled());
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -3281,6 +3412,28 @@ impl ChatWidget {
                 ),
         );
         widget.update_collaboration_mode_indicator();
+
+        // Auto-enable voice mode if persisted in config (mirrors logic in `new()`).
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        {
+            if widget.config.features.enabled(Feature::VoiceMode) {
+                let voice_config = widget
+                    .config
+                    .config_layer_stack
+                    .effective_config()
+                    .as_table()
+                    .and_then(|t| t.get("voice_mode"))
+                    .and_then(|v| {
+                        v.clone()
+                            .try_into::<codex_core::config::types::VoiceModeToml>()
+                            .ok()
+                    })
+                    .unwrap_or_default();
+                if voice_config.enabled == Some(true) {
+                    widget.toggle_voice_mode();
+                }
+            }
+        }
 
         widget
     }
@@ -3336,6 +3489,49 @@ impl ChatWidget {
                 }
                 return;
             }
+            // Esc: interrupt TTS when voice mode is speaking.
+            // First Esc stops speech; subsequent Esc follows normal behaviour.
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            KeyEvent {
+                code: KeyCode::Esc,
+                kind: KeyEventKind::Press,
+                ..
+            } if self.is_voice_speaking() => {
+                self.on_voice_interrupt_tts();
+                return;
+            }
+            // Space: push-to-talk (PTT) when voice mode is active and STT is enabled.
+            // Intercept before the input_enabled guard so PTT works during agent turns.
+            // Skip interception when the main composer has text (user is typing)
+            // or when a popup is active (e.g. voice setup view).
+            // PTT is allowed in the reading view (document reader) since it
+            // supports voice questions.
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            KeyEvent {
+                code: KeyCode::Char(' '),
+                kind,
+                modifiers,
+                ..
+            } if modifiers.is_empty()
+                && self.bottom_pane.ptt_space_allowed()
+                && self
+                    .voice_mode_state
+                    .as_ref()
+                    .is_some_and(|s| s.is_active() && s.stt_enabled)
+                && !self.is_main_composer_typing() =>
+            {
+                match kind {
+                    KeyEventKind::Press => self.on_ptt_press(),
+                    KeyEventKind::Release => {
+                        if let Some(ref mut s) = self.voice_mode_state {
+                            s.key_release_supported = true;
+                        }
+                        self.on_ptt_release();
+                    }
+                    KeyEventKind::Repeat => self.on_ptt_repeat(),
+                }
+                return; // Don't pass Space to composer.
+            }
             other if other.kind == KeyEventKind::Press => {
                 self.bottom_pane.clear_quit_shortcut_hint();
                 self.quit_shortcut_expires_at = None;
@@ -3384,13 +3580,14 @@ impl ChatWidget {
                         mention_bindings: self
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
+                        voice_input: false,
                     };
                     let Some(user_message) =
                         self.maybe_defer_user_message_for_realtime(user_message)
                     else {
                         return;
                     };
-                    // Steer submissions during active final-answer streaming can race with turn
+                    // Submissions during active final-answer streaming can race with turn
                     // completion and strand the UI in a running state. Queue those inputs instead
                     // of injecting immediately; `on_task_complete()` drains this FIFO via
                     // `maybe_send_next_queued_input()`, so no typed prompt is dropped.
@@ -3398,7 +3595,7 @@ impl ChatWidget {
                         && !self.is_plan_streaming_in_tui()
                         && self.stream_controller.is_none();
                     if should_submit_now {
-                        // Submitted is only emitted when steer is enabled.
+                        // Submitted is emitted when user submits.
                         // Reset any reasoning header only when we are actually submitting a turn.
                         self.reasoning_buffer.clear();
                         self.full_reasoning_buffer.clear();
@@ -3424,6 +3621,7 @@ impl ChatWidget {
                         mention_bindings: self
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
+                        voice_input: false,
                     };
                     let Some(user_message) =
                         self.maybe_defer_user_message_for_realtime(user_message)
@@ -3503,6 +3701,27 @@ impl ChatWidget {
         false
     }
 
+    fn clear_model_selection_for_logout(&self) {
+        // Clear the model selection before logout so the next provider gets its default.
+        // Clear both global config and active profile (if any) to ensure the model is fully reset.
+        let mut builder =
+            codex_core::config::edit::ConfigEditsBuilder::new(&self.config.codex_home);
+        if let Some(profile) = self.config.active_profile.as_deref() {
+            builder = builder.with_profile(Some(profile));
+        }
+        if let Err(e) = builder.set_model(None, None, None).apply_blocking() {
+            tracing::error!("failed to clear model on logout: {e}");
+        }
+        if self.config.active_profile.is_some()
+            && let Err(e) =
+                codex_core::config::edit::ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_model(None, None, None)
+                    .apply_blocking()
+        {
+            tracing::error!("failed to clear global model on logout: {e}");
+        }
+    }
+
     fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
@@ -3575,6 +3794,34 @@ impl ChatWidget {
                 } else {
                     self.start_realtime_conversation();
                 }
+            }
+            SlashCommand::Settings => {
+                if !self.realtime_audio_device_selection_enabled() {
+                    return;
+                }
+                self.open_realtime_audio_popup();
+            }
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            SlashCommand::Voice => {
+                self.toggle_voice_mode();
+            }
+            #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
+            SlashCommand::Voice => {
+                self.add_info_message(
+                    "Voice mode is not available in this build.".to_string(),
+                    None,
+                );
+            }
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            SlashCommand::VoiceSetup => {
+                self.open_voice_setup_popup();
+            }
+            #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
+            SlashCommand::VoiceSetup => {
+                self.add_info_message(
+                    "Voice mode is not available in this build.".to_string(),
+                    None,
+                );
             }
             SlashCommand::Personality => {
                 self.open_personality_popup();
@@ -3677,6 +3924,7 @@ impl ChatWidget {
                 self.request_quit_without_confirmation();
             }
             SlashCommand::Logout => {
+                self.clear_model_selection_for_logout();
                 if let Err(e) = self.auth_manager.logout() {
                     tracing::error!("failed to logout: {e}");
                 }
@@ -3765,6 +4013,9 @@ impl ChatWidget {
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
+            }
+            SlashCommand::Jobs => {
+                self.add_jobs_output();
             }
             SlashCommand::Apps => {
                 self.add_connectors_output();
@@ -3880,6 +4131,7 @@ impl ChatWidget {
                     remote_image_urls,
                     text_elements: prepared_elements,
                     mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
+                    voice_input: false,
                 };
                 if self.is_session_configured() {
                     self.reasoning_buffer.clear();
@@ -3983,7 +4235,24 @@ impl ChatWidget {
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.active_cell.take() {
             self.needs_final_message_separator = true;
+            // During voice karaoke, stash the cell instead of sending it to
+            // history immediately — the karaoke overlay is showing this content.
+            // Non-voice cells (tool outputs, exec results) are never the active
+            // cell at this point; they flow through InsertHistoryCell normally.
+            #[cfg(not(target_os = "linux"))]
+            if self.is_voice_speaking() {
+                self.deferred_voice_cells.push(active);
+                return;
+            }
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
+        }
+    }
+
+    /// Flush any voice cells that were deferred during karaoke playback.
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn flush_deferred_voice_cells(&mut self) {
+        for cell in self.deferred_voice_cells.drain(..) {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
         }
     }
 
@@ -4034,7 +4303,31 @@ impl ChatWidget {
             remote_image_urls,
             text_elements,
             mention_bindings,
+            voice_input,
         } = user_message;
+
+        // If TTS is playing, interrupt it — new user message is a barge-in.
+        // Set tts_suppressed so deltas from the still-running old turn don't
+        // restart TTS. Cleared in on_voice_mode_turn_complete().
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        if self.is_voice_speaking() {
+            self.on_voice_interrupt_tts();
+            if let Some(ref mut state) = self.voice_mode_state {
+                state.tts_suppressed = true;
+            }
+        }
+
+        // Check if voice mode is active so we prepend voice instructions
+        // (for TTS) even on typed messages — but do NOT flip `voice_input`
+        // to true, since that flag controls the 🎙️ display icon.
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        let voice_mode_active = self
+            .voice_mode_state
+            .as_ref()
+            .is_some_and(voice_mode::VoiceModeState::is_active);
+        #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
+        let _voice_mode_active = false;
+
         if text.is_empty() && local_images.is_empty() && remote_image_urls.is_empty() {
             return;
         }
@@ -4084,6 +4377,69 @@ impl ChatWidget {
         }
 
         if !text.is_empty() {
+            // For voice input (or typed messages when voice mode is active),
+            // prepend the voice mode instruction so the model wraps spoken
+            // content in <voice> tags for TTS. NOT shown in chat display.
+            // Only inject when TTS is enabled — otherwise the tags are wasted.
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            let tts_on = self
+                .voice_mode_state
+                .as_ref()
+                .is_some_and(|s| s.tts_enabled);
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            if (voice_input || voice_mode_active) && tts_on {
+                let prefix = crate::chatwidget::voice_mode::VOICE_MODE_INSTRUCTION;
+                let prefix_len = prefix.len();
+                let model_text = format!("{}{}", prefix, &text);
+                // Shift text_elements byte ranges forward by the prefix length
+                // so they still point to the correct spans in the prefixed text.
+                let shifted_elements: Vec<TextElement> = text_elements
+                    .iter()
+                    .map(|el| {
+                        el.map_range(|r| codex_protocol::user_input::ByteRange {
+                            start: r.start + prefix_len,
+                            end: r.end + prefix_len,
+                        })
+                    })
+                    .collect();
+                items.push(UserInput::Text {
+                    text: model_text,
+                    text_elements: shifted_elements,
+                });
+            } else {
+                // Voice mode was previously on but now off (or TTS disabled) —
+                // tell the agent to stop using <voice> tags.
+                #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+                let voice_was_on = self
+                    .voice_mode_state
+                    .as_ref()
+                    .is_some_and(|s| !s.is_active() || !s.tts_enabled);
+                #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
+                let voice_was_on = false;
+
+                let (model_text, shifted_elements) = if voice_was_on {
+                    let off_prefix = crate::chatwidget::voice_mode::VOICE_MODE_OFF_INSTRUCTION;
+                    let off_prefix_len = off_prefix.len();
+                    let shifted: Vec<TextElement> = text_elements
+                        .iter()
+                        .map(|el| {
+                            el.map_range(|r| codex_protocol::user_input::ByteRange {
+                                start: r.start + off_prefix_len,
+                                end: r.end + off_prefix_len,
+                            })
+                        })
+                        .collect();
+                    (format!("{}{}", off_prefix, &text), shifted)
+                } else {
+                    (text.clone(), text_elements.clone())
+                };
+                items.push(UserInput::Text {
+                    text: model_text,
+                    text_elements: shifted_elements,
+                });
+            }
+
+            #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
             items.push(UserInput::Text {
                 text: text.clone(),
                 text_elements: text_elements.clone(),
@@ -4191,7 +4547,7 @@ impl ChatWidget {
             sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
             model: effective_mode.model().to_string(),
             effort: effective_mode.reasoning_effort(),
-            summary: self.config.model_reasoning_summary,
+            summary: None,
             final_output_json_schema: None,
             collaboration_mode,
             personality,
@@ -4226,15 +4582,21 @@ impl ChatWidget {
                 .into_iter()
                 .map(|img| img.path)
                 .collect::<Vec<_>>();
+            // Prefix voice input with 🎙️ in the display prompt.
+            let display_text = if voice_input {
+                format!("🎙️ {text}")
+            } else {
+                text
+            };
             self.last_rendered_user_message_event =
                 Some(Self::rendered_user_message_event_from_parts(
-                    text.clone(),
+                    display_text.clone(),
                     text_elements.clone(),
                     local_image_paths.clone(),
                     remote_image_urls.clone(),
                 ));
             self.add_to_history(history_cell::new_user_prompt(
-                text,
+                display_text,
                 text_elements,
                 local_image_paths,
                 remote_image_urls,
@@ -4356,7 +4718,7 @@ impl ChatWidget {
                 self.on_agent_message(message)
             }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
-                self.on_agent_message_delta(delta)
+                self.on_agent_message_delta(delta, from_replay)
             }
             EventMsg::PlanDelta(event) => self.on_plan_delta(event.delta),
             EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta })
@@ -4513,7 +4875,7 @@ impl ChatWidget {
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_)
-            | EventMsg::SkillRequestApproval(_) => {}
+            | EventMsg::DynamicToolCallResponse(_) => {}
             EventMsg::RealtimeConversationStarted(ev) => {
                 if !from_replay {
                     self.on_realtime_conversation_started(ev);
@@ -4602,13 +4964,18 @@ impl ChatWidget {
         self.last_rendered_user_message_event =
             Some(Self::rendered_user_message_event_from_event(&event));
         let remote_image_urls = event.images.unwrap_or_default();
-        if !event.message.trim().is_empty()
-            || !event.text_elements.is_empty()
-            || !remote_image_urls.is_empty()
+
+        // Strip system instruction prefixes that were injected for the model
+        // but should not be visible to the user (e.g. voice mode instructions,
+        // document reader close feedback).
+        let (message, text_elements) =
+            strip_system_instruction_prefix(event.message, event.text_elements);
+
+        if !message.trim().is_empty() || !text_elements.is_empty() || !remote_image_urls.is_empty()
         {
             self.add_to_history(history_cell::new_user_prompt(
-                event.message,
-                event.text_elements,
+                message,
+                text_elements,
                 event.local_images,
                 remote_image_urls,
             ));
@@ -5149,11 +5516,35 @@ impl ChatWidget {
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
-        let models = self.models_manager.try_list_models().ok()?;
+        let models = self
+            .filter_model_presets_for_current_provider(self.models_manager.try_list_models().ok()?);
         models
             .iter()
             .find(|preset| preset.show_in_picker && preset.model == NUDGE_MODEL_SLUG)
             .cloned()
+    }
+
+    fn filter_model_presets_for_current_provider(
+        &self,
+        presets: Vec<ModelPreset>,
+    ) -> Vec<ModelPreset> {
+        let current_provider = self.config.model_provider_id.as_str();
+        let current_model = self.current_model().to_string();
+        let has_provider_specific_presets = presets
+            .iter()
+            .any(|preset| preset.provider_id.as_deref() == Some(current_provider));
+
+        presets
+            .into_iter()
+            .filter(|preset| match preset.provider_id.as_deref() {
+                Some(provider_id) => provider_id == current_provider,
+                None => {
+                    current_provider == PROVIDER_OPENAI
+                        || !has_provider_specific_presets
+                        || preset.model == current_model
+                }
+            })
+            .collect()
     }
 
     fn rate_limit_switch_prompt_hidden(&self) -> bool {
@@ -5278,6 +5669,7 @@ impl ChatWidget {
                 return;
             }
         };
+        let presets = self.filter_model_presets_for_current_provider(presets);
         self.open_model_popup_with_presets(presets);
     }
 
@@ -5341,6 +5733,161 @@ impl ChatWidget {
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Select Personality".bold()));
         header.push(Line::from("Choose a communication style for Codex.".dim()));
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            header: Box::new(header),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_realtime_audio_popup(&mut self) {
+        let items = [
+            RealtimeAudioDeviceKind::Microphone,
+            RealtimeAudioDeviceKind::Speaker,
+        ]
+        .into_iter()
+        .map(|kind| {
+            let description = Some(format!(
+                "Current: {}",
+                self.current_realtime_audio_selection_label(kind)
+            ));
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::OpenRealtimeAudioDeviceSelection { kind });
+            })];
+            SelectionItem {
+                name: kind.title().to_string(),
+                description,
+                actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            }
+        })
+        .collect();
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Settings".to_string()),
+            subtitle: Some("Configure settings for Codex.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    pub(crate) fn open_realtime_audio_device_selection(&mut self, kind: RealtimeAudioDeviceKind) {
+        match list_realtime_audio_device_names(kind) {
+            Ok(device_names) => {
+                self.open_realtime_audio_device_selection_with_names(kind, device_names);
+            }
+            Err(err) => {
+                self.add_error_message(format!(
+                    "Failed to load realtime {} devices: {err}",
+                    kind.noun()
+                ));
+            }
+        }
+    }
+
+    #[cfg(any(target_os = "linux", not(feature = "voice-input")))]
+    pub(crate) fn open_realtime_audio_device_selection(&mut self, kind: RealtimeAudioDeviceKind) {
+        let _ = kind;
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    fn open_realtime_audio_device_selection_with_names(
+        &mut self,
+        kind: RealtimeAudioDeviceKind,
+        device_names: Vec<String>,
+    ) {
+        let current_selection = self.current_realtime_audio_device_name(kind);
+        let current_available = current_selection
+            .as_deref()
+            .is_some_and(|name| device_names.iter().any(|device_name| device_name == name));
+        let mut items = vec![SelectionItem {
+            name: "System default".to_string(),
+            description: Some("Use your operating system default device.".to_string()),
+            is_current: current_selection.is_none(),
+            actions: vec![Box::new(move |tx| {
+                tx.send(AppEvent::PersistRealtimeAudioDeviceSelection { kind, name: None });
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+
+        if let Some(selection) = current_selection.as_deref()
+            && !current_available
+        {
+            items.push(SelectionItem {
+                name: format!("Unavailable: {selection}"),
+                description: Some("Configured device is not currently available.".to_string()),
+                is_current: true,
+                is_disabled: true,
+                disabled_reason: Some("Reconnect the device or choose another one.".to_string()),
+                ..Default::default()
+            });
+        }
+
+        items.extend(device_names.into_iter().map(|device_name| {
+            let persisted_name = device_name.clone();
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::PersistRealtimeAudioDeviceSelection {
+                    kind,
+                    name: Some(persisted_name.clone()),
+                });
+            })];
+            SelectionItem {
+                is_current: current_selection.as_deref() == Some(device_name.as_str()),
+                name: device_name,
+                actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            }
+        }));
+
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from(format!("Select {}", kind.title()).bold()));
+        header.push(Line::from(
+            "Saved devices apply to realtime voice only.".dim(),
+        ));
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            header: Box::new(header),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_realtime_audio_restart_prompt(&mut self, kind: RealtimeAudioDeviceKind) {
+        let restart_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            tx.send(AppEvent::RestartRealtimeAudioDevice { kind });
+        })];
+        let items = vec![
+            SelectionItem {
+                name: "Restart now".to_string(),
+                description: Some(format!("Restart local {} audio now.", kind.noun())),
+                actions: restart_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Apply later".to_string(),
+                description: Some(format!(
+                    "Keep the current {} until local audio starts again.",
+                    kind.noun()
+                )),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from(format!("Restart {} now?", kind.title()).bold()));
+        header.push(Line::from(
+            "Configuration is saved. Restart local audio to use it immediately.".dim(),
+        ));
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             header: Box::new(header),
@@ -5426,6 +5973,7 @@ impl ChatWidget {
                     model.clone(),
                     Some(preset.default_reasoning_effort),
                     should_prompt_plan_mode_scope,
+                    preset.provider_id.clone(),
                 );
                 SelectionItem {
                     name: model.clone(),
@@ -5581,12 +6129,14 @@ impl ChatWidget {
         model_for_action: String,
         effort_for_action: Option<ReasoningEffortConfig>,
         should_prompt_plan_mode_scope: bool,
+        provider: Option<String>,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
             if should_prompt_plan_mode_scope {
                 tx.send(AppEvent::OpenPlanReasoningScopePrompt {
                     model: model_for_action.clone(),
                     effort: effort_for_action,
+                    provider: provider.clone(),
                 });
                 return;
             }
@@ -5596,7 +6146,7 @@ impl ChatWidget {
             tx.send(AppEvent::PersistModelSelection {
                 model: model_for_action.clone(),
                 effort: effort_for_action,
-                provider: None,
+                provider: provider.clone(),
             });
         })]
     }
@@ -5625,6 +6175,7 @@ impl ChatWidget {
         &mut self,
         model: String,
         effort: Option<ReasoningEffortConfig>,
+        provider: Option<String>,
     ) {
         let reasoning_phrase = match effort {
             Some(ReasoningEffortConfig::None) => "no reasoning".to_string(),
@@ -5677,7 +6228,7 @@ impl ChatWidget {
             tx.send(AppEvent::PersistModelSelection {
                 model: model.clone(),
                 effort,
-                provider: None,
+                provider: provider.clone(),
             });
         })];
 
@@ -5709,6 +6260,7 @@ impl ChatWidget {
     pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
+        let provider = preset.provider_id.clone();
         let in_plan_mode =
             self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan;
 
@@ -5761,9 +6313,10 @@ impl ChatWidget {
                     .send(AppEvent::OpenPlanReasoningScopePrompt {
                         model: selected_model,
                         effort: selected_effort,
+                        provider,
                     });
             } else {
-                self.apply_model_and_effort(selected_model, selected_effort);
+                self.apply_model_and_effort(selected_model, selected_effort, provider);
             }
             return;
         }
@@ -5829,6 +6382,7 @@ impl ChatWidget {
 
             let model_for_action = model_slug.clone();
             let choice_effort = choice.stored;
+            let provider_for_action = provider.clone();
             let should_prompt_plan_mode_scope =
                 self.should_prompt_plan_mode_reasoning_scope(model_slug.as_str(), choice_effort);
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -5836,6 +6390,7 @@ impl ChatWidget {
                     tx.send(AppEvent::OpenPlanReasoningScopePrompt {
                         model: model_for_action.clone(),
                         effort: choice_effort,
+                        provider: provider_for_action.clone(),
                     });
                 } else {
                     tx.send(AppEvent::UpdateModel(model_for_action.clone()));
@@ -5843,7 +6398,7 @@ impl ChatWidget {
                     tx.send(AppEvent::PersistModelSelection {
                         model: model_for_action.clone(),
                         effort: choice_effort,
-                        provider: None,
+                        provider: provider_for_action.clone(),
                     });
                 }
             })];
@@ -5895,12 +6450,17 @@ impl ChatWidget {
             .send(AppEvent::UpdateReasoningEffort(effort));
     }
 
-    fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
+    fn apply_model_and_effort(
+        &self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+        provider: Option<String>,
+    ) {
         self.apply_model_and_effort_without_persist(model.clone(), effort);
         self.app_event_tx.send(AppEvent::PersistModelSelection {
             model,
             effort,
-            provider: None,
+            provider,
         });
     }
 
@@ -6611,9 +7171,6 @@ impl ChatWidget {
         } else {
             self.config.features.disable(feature);
         }
-        if feature == Feature::Steer {
-            self.bottom_pane.set_steer_enabled(enabled);
-        }
         if feature == Feature::VoiceTranscription {
             self.bottom_pane.set_voice_transcription_enabled(enabled);
         }
@@ -6621,6 +7178,8 @@ impl ChatWidget {
             let realtime_conversation_enabled = self.realtime_conversation_enabled();
             self.bottom_pane
                 .set_realtime_conversation_enabled(realtime_conversation_enabled);
+            self.bottom_pane
+                .set_audio_device_selection_enabled(self.realtime_audio_device_selection_enabled());
             if !realtime_conversation_enabled && self.realtime_conversation.is_live() {
                 self.request_realtime_conversation_close(Some(
                     "Realtime voice mode was closed because the feature was disabled.".to_string(),
@@ -6710,6 +7269,17 @@ impl ChatWidget {
         self.config.personality = Some(personality);
     }
 
+    pub(crate) fn set_realtime_audio_device(
+        &mut self,
+        kind: RealtimeAudioDeviceKind,
+        name: Option<String>,
+    ) {
+        match kind {
+            RealtimeAudioDeviceKind::Microphone => self.config.realtime_audio.microphone = name,
+            RealtimeAudioDeviceKind::Speaker => self.config.realtime_audio.speaker = name,
+        }
+    }
+
     /// Set the syntax theme override in the widget's config copy.
     pub(crate) fn set_tui_theme(&mut self, theme: Option<String>) {
         self.config.tui_theme = theme;
@@ -6736,6 +7306,22 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.model.as_deref())
             .unwrap_or_else(|| self.current_collaboration_mode.model())
+    }
+
+    pub(crate) fn realtime_conversation_is_live(&self) -> bool {
+        self.realtime_conversation.is_active()
+    }
+
+    fn current_realtime_audio_device_name(&self, kind: RealtimeAudioDeviceKind) -> Option<String> {
+        match kind {
+            RealtimeAudioDeviceKind::Microphone => self.config.realtime_audio.microphone.clone(),
+            RealtimeAudioDeviceKind::Speaker => self.config.realtime_audio.speaker.clone(),
+        }
+    }
+
+    fn current_realtime_audio_selection_label(&self, kind: RealtimeAudioDeviceKind) -> String {
+        self.current_realtime_audio_device_name(kind)
+            .unwrap_or_else(|| "System default".to_string())
     }
 
     fn sync_personality_command_enabled(&mut self) {
@@ -7060,6 +7646,70 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn add_jobs_output(&mut self) {
+        let jobs_dir = self.config.codex_home.join("jobs");
+        let pid_path = self.config.codex_home.join("scheduler.pid");
+
+        // Check daemon status from PID file.
+        let daemon_status = if pid_path.exists() {
+            match std::fs::read_to_string(&pid_path) {
+                Ok(pid_str) => {
+                    let pid_str = pid_str.trim();
+                    format!("Scheduler daemon: running (PID {pid_str})")
+                }
+                Err(_) => "Scheduler daemon: unknown (cannot read PID file)".to_string(),
+            }
+        } else {
+            "Scheduler daemon: not running".to_string()
+        };
+
+        // Read job TOML files from ~/.ata/jobs/.
+        let mut job_lines = Vec::new();
+        if jobs_dir.exists()
+            && let Ok(entries) = std::fs::read_dir(&jobs_dir)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("toml") {
+                    let name = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("?")
+                        .to_string();
+                    // Quick parse to get enabled status.
+                    let enabled = std::fs::read_to_string(&path)
+                        .ok()
+                        .and_then(|contents| {
+                            contents
+                                .lines()
+                                .find(|l| l.starts_with("enabled"))
+                                .map(|l| l.contains("true"))
+                        })
+                        .unwrap_or(true);
+                    let status = if enabled { "enabled" } else { "disabled" };
+                    job_lines.push(format!("  {name:<20} {status}"));
+                }
+            }
+        }
+
+        let message = if job_lines.is_empty() {
+            format!(
+                "{daemon_status}\n\nNo jobs found. Ask me to set up a scheduled job, or run `ata jobs create <name>` in the terminal."
+            )
+        } else {
+            let count = job_lines.len();
+            let job_list = job_lines.join("\n");
+            format!(
+                "{daemon_status}\n\n{count} job(s):\n{job_list}\n\nUse `ata jobs show <name>` or `ata jobs history <name>` for details."
+            )
+        };
+
+        self.add_info_message(
+            message,
+            Some("Tip: ask me to create, modify, or run a scheduled job.".to_string()),
+        );
+    }
+
     pub(crate) fn add_connectors_output(&mut self) {
         if !self.connectors_enabled() {
             self.add_info_message(
@@ -7377,6 +8027,7 @@ impl ChatWidget {
             remote_image_urls: Vec::new(),
             text_elements: Vec::new(),
             mention_bindings: Vec::new(),
+            voice_input: false,
         };
         if should_queue {
             self.queue_user_message(user_message);
@@ -7390,6 +8041,23 @@ impl ChatWidget {
     /// In this state Esc-Esc backtracking is enabled.
     pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
         self.bottom_pane.is_normal_backtrack_mode()
+    }
+
+    /// True when the main chat composer is focused (no modal/view active) and
+    /// has meaningful (non-whitespace) text — indicating the user is actively
+    /// typing. Used to avoid intercepting Space for PTT while the user types.
+    ///
+    /// Whitespace-only content is treated as "empty" so that a stale space
+    /// left by a quick PTT tap doesn't block subsequent PTT activations.
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    fn is_main_composer_typing(&self) -> bool {
+        self.bottom_pane.no_modal_or_popup_active()
+            && !self.bottom_pane.composer_is_empty()
+            && self
+                .bottom_pane
+                .composer_text()
+                .chars()
+                .any(|c| !c.is_whitespace())
     }
 
     pub(crate) fn insert_str(&mut self, text: &str) {
@@ -7773,12 +8441,46 @@ impl ChatWidget {
     }
 
     fn as_renderable(&self) -> RenderableItem<'_> {
-        let active_cell_renderable = match &self.active_cell {
-            Some(cell) => RenderableItem::Borrowed(cell).inset(Insets::tlbr(1, 0, 0, 0)),
-            None => RenderableItem::Owned(Box::new(())),
-        };
         let mut flex = FlexRenderable::new();
-        flex.push(1, active_cell_renderable);
+
+        // During TTS karaoke playback, the karaoke renderable replaces the
+        // active cell visually (the same text is shown with word-level
+        // highlighting). Skip the active cell to avoid duplicate text.
+        // When the document reader is active, karaoke is rendered inside
+        // the reader's content area instead, so skip the overlay entirely.
+        #[cfg(not(target_os = "linux"))]
+        let karaoke_active = {
+            let width = self.last_rendered_width.get().unwrap_or(80) as u16;
+            if self.bottom_pane.is_document_reader_active() {
+                false
+            } else if let Some(lines) = self.voice_karaoke_lines(width) {
+                if !lines.is_empty() {
+                    // Push an empty flex=1 spacer in place of the active cell.
+                    flex.push(1, RenderableItem::Owned(Box::new(())));
+                    flex.push(
+                        0,
+                        RenderableItem::Owned(Box::new(VoiceKaraokeRenderable { lines }))
+                            .inset(Insets::tlbr(1, 0, 0, 0)),
+                    );
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+        #[cfg(target_os = "linux")]
+        let karaoke_active = false;
+
+        if !karaoke_active {
+            let active_cell_renderable = match &self.active_cell {
+                Some(cell) => RenderableItem::Borrowed(cell).inset(Insets::tlbr(1, 0, 0, 0)),
+                None => RenderableItem::Owned(Box::new(())),
+            };
+            flex.push(1, active_cell_renderable);
+        }
+
         flex.push(
             0,
             RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(1, 0, 0, 0)),
@@ -7817,6 +8519,28 @@ fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
         || summary.responses_api_engine_service_ttft_ms > 0
         || summary.responses_api_engine_iapi_tbt_ms > 0
         || summary.responses_api_engine_service_tbt_ms > 0
+}
+
+// ─── Voice mode karaoke renderable ────────────────────────────────────────────
+
+/// A simple renderable that displays pre-built Lines (used for the voice
+/// playback karaoke text displayed in the viewport during TTS).
+#[cfg(not(target_os = "linux"))]
+struct VoiceKaraokeRenderable {
+    lines: Vec<ratatui::text::Line<'static>>,
+}
+
+#[cfg(not(target_os = "linux"))]
+impl Renderable for VoiceKaraokeRenderable {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        use ratatui::widgets::Paragraph;
+        use ratatui::widgets::Widget;
+        Paragraph::new(self.lines.clone()).render(area, buf);
+    }
+
+    fn desired_height(&self, _width: u16) -> u16 {
+        self.lines.len() as u16
+    }
 }
 
 impl Drop for ChatWidget {
@@ -8151,6 +8875,45 @@ async fn build_team_lines(
         }
         Ok(lines)
     }
+}
+
+/// Strip system instruction prefixes that were injected for the model but
+/// should not be visible to the user in chat history.
+///
+/// Handles:
+/// - `[VOICE MODE] ...` / `[VOICE MODE OFF] ...` — prefix stripped, user text preserved
+/// - `[The user closed the document reader ...]` — entire message hidden
+fn strip_system_instruction_prefix(
+    message: String,
+    text_elements: Vec<codex_protocol::user_input::TextElement>,
+) -> (String, Vec<codex_protocol::user_input::TextElement>) {
+    // Voice mode instruction prefixes end with a double newline.
+    if message.starts_with("[VOICE MODE")
+        && let Some(pos) = message.find("\n\n")
+    {
+        let prefix_len = pos + 2;
+        let stripped = message[prefix_len..].to_string();
+        let adjusted = text_elements
+            .into_iter()
+            .filter_map(|el| {
+                if el.byte_range.end <= prefix_len {
+                    return None; // element is entirely within the prefix
+                }
+                Some(el.map_range(|r| codex_protocol::user_input::ByteRange {
+                    start: r.start.saturating_sub(prefix_len),
+                    end: r.end.saturating_sub(prefix_len),
+                }))
+            })
+            .collect();
+        return (stripped, adjusted);
+    }
+
+    // Document reader close feedback is entirely a system instruction.
+    if message.starts_with("[The user closed the document reader") {
+        return (String::new(), Vec::new());
+    }
+
+    (message, text_elements)
 }
 
 #[cfg(test)]

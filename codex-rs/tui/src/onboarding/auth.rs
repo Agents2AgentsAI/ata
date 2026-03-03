@@ -572,12 +572,11 @@ impl AuthModeWidget {
             "  Before you start:".into(),
             "".into(),
             "  Decide how much autonomy you want to grant Ata".into(),
-            "  For more details see the Ata docs:".dim().into(),
-            "  https://github.com/Agents2AgentsAI/ata"
-                .cyan()
-                .underlined()
-                .dim()
-                .into(),
+            Line::from(vec![
+                "  For more details see the ".into(),
+                "\u{1b}]8;;https://github.com/Agents2AgentsAI/ata\u{7}Ata docs\u{1b}]8;;\u{7}".underlined(),
+            ])
+            .dim(),
             "".into(),
             "  Ata can make mistakes".into(),
             "  Review the code it writes and commands it runs".dim().into(),
