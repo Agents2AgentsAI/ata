@@ -942,16 +942,15 @@ impl ServerRegistry {
         if clients.is_empty() {
             return Vec::new();
         }
-
-        for client in clients {
-            let items = client
-                .code_action(path, range, only.clone(), diagnostics.clone())
-                .await;
-            if !items.is_empty() {
-                return items;
-            }
-        }
-        Vec::new()
+        let path = path.to_path_buf();
+        self.fan_out_all(clients, "code_action", move |client| {
+            let path = path.clone();
+            let range = range;
+            let only = only.clone();
+            let diagnostics = diagnostics.clone();
+            async move { client.code_action(&path, range, only, diagnostics).await }
+        })
+        .await
     }
 
     // -----------------------------------------------------------------------

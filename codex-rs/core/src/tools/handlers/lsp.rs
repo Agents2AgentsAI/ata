@@ -1,9 +1,10 @@
 //! LSP tool handler exposing code intelligence and preview refactor operations to the agent.
 
+use std::fmt::Write;
+use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::{fmt::Write, future::Future};
 
 use async_trait::async_trait;
 use codex_lsp_client::ServerRegistry;
@@ -31,6 +32,10 @@ use crate::function_tool::FunctionCallError;
 use crate::state::MultiRootState;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
+use crate::tools::handlers::HANDLER_DEFAULT_LIMIT;
+use crate::tools::handlers::HANDLER_MAX_RESULT_BYTES;
+use crate::tools::handlers::HANDLER_MAX_RESULTS;
+use crate::tools::handlers::absolute_path_argument;
 use crate::tools::handlers::function_arguments_from_payload;
 use crate::tools::handlers::lsp_workspace_edit::PatchLimits;
 use crate::tools::handlers::lsp_workspace_edit::workspace_edit_to_apply_patch;
@@ -41,9 +46,6 @@ use crate::tools::registry::ToolKind;
 use crate::tools::spec::JsonSchema;
 
 const LSP_TOOL_DESCRIPTION: &str = include_str!("tool_lsp.txt");
-const DEFAULT_LIMIT: usize = 20;
-const MAX_RESULTS: usize = 50;
-const MAX_RESULT_BYTES: usize = 8 * 1024;
 const MAX_PATCH_BYTES: usize = 256 * 1024;
 const FUZZ_ATTEMPTS_SHORT: usize = 12;
 const FUZZ_ATTEMPTS_LONG: usize = 25;
@@ -63,6 +65,21 @@ struct PositionedQueryContext {
     registry: Arc<ServerRegistry>,
     line: u32,
     character: u32,
+}
+
+#[derive(Clone, Copy)]
+enum CallHierarchyDirection {
+    Incoming,
+    Outgoing,
+}
+
+impl CallHierarchyDirection {
+    fn operation_name(self) -> &'static str {
+        match self {
+            Self::Incoming => "incomingCalls",
+            Self::Outgoing => "outgoingCalls",
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -131,7 +148,10 @@ impl ToolHandler for LspToolHandler {
 
         let arguments = function_arguments_from_payload(payload, "lsp")?;
         let args: LspToolArgs = parse_arguments(&arguments)?;
-        let limit = args.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_RESULTS);
+        let limit = args
+            .limit
+            .unwrap_or(HANDLER_DEFAULT_LIMIT)
+            .clamp(1, HANDLER_MAX_RESULTS);
         let fuzz = args.fuzz.unwrap_or(true);
 
         let (result, is_patch) = match args.operation {
@@ -262,64 +282,16 @@ impl ToolHandler for LspToolHandler {
                     false,
                 )
             }
-            LspOperation::IncomingCalls => {
-                let item_val = args.item.ok_or_else(|| {
-                    FunctionCallError::RespondToModel(
-                        "incomingCalls requires `item` from prepareCallHierarchy".to_string(),
-                    )
-                })?;
-                let item: CallHierarchyItem = serde_json::from_value(item_val)
-                    .map_err(|e| FunctionCallError::RespondToModel(format!("invalid item: {e}")))?;
-                let path = url::Url::parse(item.uri.as_str())
-                    .ok()
-                    .and_then(|uri| uri.to_file_path().ok());
-                let registry = if let Some(path) = path {
-                    self.registry_for_file(&path, args.root.as_deref()).await?.1
-                } else if let Some(root) = args.root.as_deref() {
-                    self.registry_for_root(root).await?.1
-                } else {
-                    return Err(FunctionCallError::RespondToModel(
-                        "incomingCalls could not infer a file root from item URI; pass `root` explicitly".to_string(),
-                    ));
-                };
-                let calls = registry.incoming_calls(item).await;
-                (
-                    serde_json::to_string_pretty(
-                        &calls.into_iter().take(limit).collect::<Vec<_>>(),
-                    )
-                    .unwrap_or_else(|_| "[]".to_string()),
-                    false,
-                )
-            }
-            LspOperation::OutgoingCalls => {
-                let item_val = args.item.ok_or_else(|| {
-                    FunctionCallError::RespondToModel(
-                        "outgoingCalls requires `item` from prepareCallHierarchy".to_string(),
-                    )
-                })?;
-                let item: CallHierarchyItem = serde_json::from_value(item_val)
-                    .map_err(|e| FunctionCallError::RespondToModel(format!("invalid item: {e}")))?;
-                let path = url::Url::parse(item.uri.as_str())
-                    .ok()
-                    .and_then(|uri| uri.to_file_path().ok());
-                let registry = if let Some(path) = path {
-                    self.registry_for_file(&path, args.root.as_deref()).await?.1
-                } else if let Some(root) = args.root.as_deref() {
-                    self.registry_for_root(root).await?.1
-                } else {
-                    return Err(FunctionCallError::RespondToModel(
-                        "outgoingCalls could not infer a file root from item URI; pass `root` explicitly".to_string(),
-                    ));
-                };
-                let calls = registry.outgoing_calls(item).await;
-                (
-                    serde_json::to_string_pretty(
-                        &calls.into_iter().take(limit).collect::<Vec<_>>(),
-                    )
-                    .unwrap_or_else(|_| "[]".to_string()),
-                    false,
-                )
-            }
+            LspOperation::IncomingCalls => (
+                self.call_hierarchy_query(&args, limit, CallHierarchyDirection::Incoming)
+                    .await?,
+                false,
+            ),
+            LspOperation::OutgoingCalls => (
+                self.call_hierarchy_query(&args, limit, CallHierarchyDirection::Outgoing)
+                    .await?,
+                false,
+            ),
             LspOperation::PrepareRename => {
                 let context = self.prepare_position_query_context(&args).await?;
                 let (resp, resolved) = fuzz_query(
@@ -483,7 +455,7 @@ impl ToolHandler for LspToolHandler {
             }
             result
         } else {
-            truncate_tool_output(&result, MAX_RESULT_BYTES)
+            truncate_tool_output(&result, HANDLER_MAX_RESULT_BYTES)
         };
 
         Ok(ToolOutput::Function {
@@ -537,7 +509,7 @@ impl LspToolHandler {
         &self,
         args: &LspToolArgs,
     ) -> Result<FileQueryContext, FunctionCallError> {
-        let path = extract_file(args)?;
+        let path = absolute_path_argument(args.file.as_deref(), "file")?;
         let (root_name, registry) = self.registry_for_file(&path, args.root.as_deref()).await?;
         self.sync_file_for_query(&registry, &root_name, &path)
             .await?;
@@ -548,7 +520,7 @@ impl LspToolHandler {
         &self,
         args: &LspToolArgs,
     ) -> Result<PositionedQueryContext, FunctionCallError> {
-        let path = extract_file(args)?;
+        let path = absolute_path_argument(args.file.as_deref(), "file")?;
         let (root_name, registry) = self.registry_for_file(&path, args.root.as_deref()).await?;
         self.sync_file_for_query(&registry, &root_name, &path)
             .await?;
@@ -561,6 +533,47 @@ impl LspToolHandler {
             line,
             character,
         })
+    }
+
+    async fn call_hierarchy_query(
+        &self,
+        args: &LspToolArgs,
+        limit: usize,
+        direction: CallHierarchyDirection,
+    ) -> Result<String, FunctionCallError> {
+        let operation_name = direction.operation_name();
+        let item_value = args.item.clone().ok_or_else(|| {
+            FunctionCallError::RespondToModel(format!(
+                "{operation_name} requires `item` from prepareCallHierarchy"
+            ))
+        })?;
+        let item: CallHierarchyItem = serde_json::from_value(item_value)
+            .map_err(|error| FunctionCallError::RespondToModel(format!("invalid item: {error}")))?;
+
+        let path = url::Url::parse(item.uri.as_str())
+            .ok()
+            .and_then(|uri| uri.to_file_path().ok());
+        let registry = if let Some(path) = path {
+            self.registry_for_file(&path, args.root.as_deref()).await?.1
+        } else if let Some(root) = args.root.as_deref() {
+            self.registry_for_root(root).await?.1
+        } else {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "{operation_name} could not infer a file root from item URI; pass `root` explicitly"
+            )));
+        };
+
+        let pretty = match direction {
+            CallHierarchyDirection::Incoming => {
+                let calls = registry.incoming_calls(item).await;
+                serde_json::to_string_pretty(&calls.into_iter().take(limit).collect::<Vec<_>>())
+            }
+            CallHierarchyDirection::Outgoing => {
+                let calls = registry.outgoing_calls(item).await;
+                serde_json::to_string_pretty(&calls.into_iter().take(limit).collect::<Vec<_>>())
+            }
+        };
+        Ok(pretty.unwrap_or_else(|_| "[]".to_string()))
     }
 
     async fn sync_file_for_query(
@@ -710,24 +723,6 @@ impl LspToolHandler {
             lines.join("\n- ")
         )))
     }
-}
-
-// ---------------------------------------------------------------------------
-// Argument extraction
-// ---------------------------------------------------------------------------
-
-fn extract_file(args: &LspToolArgs) -> Result<PathBuf, FunctionCallError> {
-    let file = args
-        .file
-        .as_deref()
-        .ok_or_else(|| FunctionCallError::RespondToModel("`file` is required".to_string()))?;
-    let path = PathBuf::from(file);
-    if !path.is_absolute() {
-        return Err(FunctionCallError::RespondToModel(
-            "`file` must be an absolute path".to_string(),
-        ));
-    }
-    Ok(path)
 }
 
 // ---------------------------------------------------------------------------

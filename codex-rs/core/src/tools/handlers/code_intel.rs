@@ -17,6 +17,10 @@ use crate::function_tool::FunctionCallError;
 use crate::state::MultiRootState;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
+use crate::tools::handlers::HANDLER_DEFAULT_LIMIT;
+use crate::tools::handlers::HANDLER_MAX_RESULT_BYTES;
+use crate::tools::handlers::HANDLER_MAX_RESULTS;
+use crate::tools::handlers::absolute_path_argument;
 use crate::tools::handlers::function_arguments_from_payload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::truncate_tool_output;
@@ -25,9 +29,6 @@ use crate::tools::registry::ToolKind;
 use crate::tools::spec::JsonSchema;
 
 const CODE_INTEL_TOOL_DESCRIPTION: &str = include_str!("tool_code_intel.txt");
-const DEFAULT_LIMIT: usize = 20;
-const MAX_RESULTS: usize = 50;
-const MAX_RESULT_BYTES: usize = 8 * 1024;
 const DEFAULT_CHUNK_SIZE: usize = 5000;
 const DEFAULT_CHUNK_OVERLAP: usize = 200;
 
@@ -146,7 +147,10 @@ impl ToolHandler for CodeIntelToolHandler {
         let arguments = function_arguments_from_payload(payload, "code_intel")?;
 
         let args: CodeIntelToolArgs = parse_arguments(&arguments)?;
-        let limit = args.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_RESULTS);
+        let limit = args
+            .limit
+            .unwrap_or(HANDLER_DEFAULT_LIMIT)
+            .min(HANDLER_MAX_RESULTS);
         let response_format = args.response_format.unwrap_or_default();
 
         let (output_text, output_json) = match args.operation {
@@ -372,59 +376,42 @@ impl ToolHandler for CodeIntelToolHandler {
                     json!({"root": root, "chunk_indices": result}),
                 )
             }
-            CodeIntelOperation::DefineSymbol => {
+            op @ (CodeIntelOperation::DefineSymbol | CodeIntelOperation::RedefineSymbol) => {
+                let allow_overwrite = matches!(op, CodeIntelOperation::RedefineSymbol);
+                let verb = if allow_overwrite {
+                    "Redefined"
+                } else {
+                    "Defined"
+                };
                 let symbol = require_param(args.symbol.as_deref(), "symbol")?;
                 let path = absolute_file(args.file.as_deref())?;
                 let (root, index, rel_file) =
                     self.index_for_file(&path, args.root.as_deref()).await?;
                 let definition = require_param(args.definition.as_deref(), "definition")?;
                 index
-                    .define_symbol(symbol, &rel_file, definition, false)
+                    .define_symbol(symbol, &rel_file, definition, allow_overwrite)
                     .map_err(FunctionCallError::RespondToModel)?;
-                let message = format!("Defined symbol '{symbol}' in [{root}] {rel_file}");
+                let message = format!("{verb} symbol '{symbol}' in [{root}] {rel_file}");
                 (
                     message.clone(),
                     json!({"ok": true, "root": root, "file": rel_file, "symbol": symbol, "message": message}),
                 )
             }
-            CodeIntelOperation::RedefineSymbol => {
-                let symbol = require_param(args.symbol.as_deref(), "symbol")?;
+            op @ (CodeIntelOperation::DefineFile | CodeIntelOperation::RedefineFile) => {
+                let allow_overwrite = matches!(op, CodeIntelOperation::RedefineFile);
+                let verb = if allow_overwrite {
+                    "Redefined"
+                } else {
+                    "Defined"
+                };
                 let path = absolute_file(args.file.as_deref())?;
                 let (root, index, rel_file) =
                     self.index_for_file(&path, args.root.as_deref()).await?;
                 let definition = require_param(args.definition.as_deref(), "definition")?;
                 index
-                    .define_symbol(symbol, &rel_file, definition, true)
+                    .define_file(&rel_file, definition, allow_overwrite)
                     .map_err(FunctionCallError::RespondToModel)?;
-                let message = format!("Redefined symbol '{symbol}' in [{root}] {rel_file}");
-                (
-                    message.clone(),
-                    json!({"ok": true, "root": root, "file": rel_file, "symbol": symbol, "message": message}),
-                )
-            }
-            CodeIntelOperation::DefineFile => {
-                let path = absolute_file(args.file.as_deref())?;
-                let (root, index, rel_file) =
-                    self.index_for_file(&path, args.root.as_deref()).await?;
-                let definition = require_param(args.definition.as_deref(), "definition")?;
-                index
-                    .define_file(&rel_file, definition, false)
-                    .map_err(FunctionCallError::RespondToModel)?;
-                let message = format!("Defined file [{root}] '{rel_file}'");
-                (
-                    message.clone(),
-                    json!({"ok": true, "root": root, "file": rel_file, "message": message}),
-                )
-            }
-            CodeIntelOperation::RedefineFile => {
-                let path = absolute_file(args.file.as_deref())?;
-                let (root, index, rel_file) =
-                    self.index_for_file(&path, args.root.as_deref()).await?;
-                let definition = require_param(args.definition.as_deref(), "definition")?;
-                index
-                    .define_file(&rel_file, definition, true)
-                    .map_err(FunctionCallError::RespondToModel)?;
-                let message = format!("Redefined file [{root}] '{rel_file}'");
+                let message = format!("{verb} file [{root}] '{rel_file}'");
                 (
                     message.clone(),
                     json!({"ok": true, "root": root, "file": rel_file, "message": message}),
@@ -584,7 +571,10 @@ impl ToolHandler for CodeIntelToolHandler {
         };
 
         Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(truncate_tool_output(&output, MAX_RESULT_BYTES)),
+            body: FunctionCallOutputBody::Text(truncate_tool_output(
+                &output,
+                HANDLER_MAX_RESULT_BYTES,
+            )),
             success: Some(true),
         })
     }
@@ -672,22 +662,11 @@ fn parse_symbol_kind(value: Option<&str>) -> Result<Option<SymbolKind>, Function
 }
 
 fn absolute_file(file: Option<&str>) -> Result<PathBuf, FunctionCallError> {
-    absolute_path(file, "file")
+    absolute_path_argument(file, "file")
 }
 
 fn absolute_root_path(path: Option<&str>) -> Result<PathBuf, FunctionCallError> {
-    absolute_path(path, "path")
-}
-
-fn absolute_path(path_value: Option<&str>, key: &str) -> Result<PathBuf, FunctionCallError> {
-    let path = require_param(path_value, key)?;
-    let path = PathBuf::from(path);
-    if !path.is_absolute() {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "`{key}` must be an absolute path"
-        )));
-    }
-    Ok(path)
+    absolute_path_argument(path, "path")
 }
 
 fn format_symbols(symbols: &[(String, codex_treesitter::Symbol)]) -> String {
