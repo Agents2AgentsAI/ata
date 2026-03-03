@@ -3,7 +3,9 @@ use std::collections::HashSet;
 use dashmap::DashMap;
 use dashmap::DashSet;
 
+#[cfg(test)]
 use crate::file_entry::Language;
+use crate::queries;
 use crate::symbol::Symbol;
 
 /// Thread-safe symbol table with secondary indices for fast lookups.
@@ -201,32 +203,7 @@ impl SymbolTable {
 }
 
 fn is_test_symbol(symbol: &Symbol) -> bool {
-    match symbol.language {
-        Language::Rust => {
-            symbol.name.starts_with("test_")
-                || symbol.file.contains("/tests/")
-                || symbol.file.contains("\\tests\\")
-                || symbol.file.ends_with("_test.rs")
-        }
-        Language::Python => {
-            symbol.name.starts_with("test_")
-                || symbol.file.contains("test_")
-                || symbol.file.contains("_test.")
-        }
-        Language::TypeScript | Language::JavaScript => {
-            symbol.file.contains(".test.")
-                || symbol.file.contains(".spec.")
-                || symbol.file.contains("__tests__")
-        }
-        Language::Go => symbol.name.starts_with("Test") || symbol.file.ends_with("_test.go"),
-        Language::Java => symbol.file.contains("Test") || symbol.file.contains("/test/"),
-        Language::Scala => {
-            symbol.file.contains("Spec")
-                || symbol.file.contains("Test")
-                || symbol.file.contains("/test/")
-        }
-        Language::Other => false,
-    }
+    queries::is_test_symbol(symbol.language, &symbol.name, &symbol.file)
 }
 
 #[cfg(test)]

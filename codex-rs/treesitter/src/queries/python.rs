@@ -1,4 +1,5 @@
 use crate::queries::LanguageConfig;
+use crate::queries::VariableRegexPattern;
 
 const SYMBOLS_QUERY: &str = r#"
 (module
@@ -69,6 +70,23 @@ const NON_CODE_QUERY: &str = r#"
 (string) @skip
 "#;
 
+const VARIABLE_REGEX_PATTERNS: &[VariableRegexPattern] = &[VariableRegexPattern {
+    regex: r"(?m)^\s+(\w+)\s*=",
+    capture_group: 1,
+}];
+
+fn is_definition_line(line: &str, name: &str) -> bool {
+    line.contains(&format!("def {name}"))
+}
+
+fn is_test_symbol(name: &str, file: &str) -> bool {
+    name.starts_with("test_") || file.contains("test_") || file.contains("_test.")
+}
+
+fn variable_name_filter(name: &str) -> bool {
+    !name.is_empty() && name != "_" && name != "self" && !name.starts_with('_')
+}
+
 pub fn config() -> LanguageConfig {
     LanguageConfig {
         language: tree_sitter_python::LANGUAGE.into(),
@@ -76,5 +94,9 @@ pub fn config() -> LanguageConfig {
         callers_query: CALLERS_QUERY,
         variables_query: VARIABLES_QUERY,
         non_code_query: NON_CODE_QUERY,
+        definition_matcher: is_definition_line,
+        test_symbol_matcher: is_test_symbol,
+        variable_regex_patterns: VARIABLE_REGEX_PATTERNS,
+        variable_name_filter,
     }
 }

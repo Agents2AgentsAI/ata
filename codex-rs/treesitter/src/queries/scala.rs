@@ -1,4 +1,5 @@
 use crate::queries::LanguageConfig;
+use crate::queries::VariableRegexPattern;
 
 const SYMBOLS_QUERY: &str = r#"
 (class_definition
@@ -44,6 +45,26 @@ const NON_CODE_QUERY: &str = r#"
 (interpolated_string_expression) @skip
 "#;
 
+const VARIABLE_REGEX_PATTERNS: &[VariableRegexPattern] = &[VariableRegexPattern {
+    regex: r"\b(?:val|var)\s+(\w+)",
+    capture_group: 1,
+}];
+
+fn is_definition_line(line: &str, name: &str) -> bool {
+    line.contains(&format!("def {name}"))
+        || line.contains(&format!("object {name}"))
+        || line.contains(&format!("class {name}"))
+        || line.contains(&format!("trait {name}"))
+}
+
+fn is_test_symbol(_name: &str, file: &str) -> bool {
+    file.contains("Spec") || file.contains("Test") || file.contains("/test/")
+}
+
+fn variable_name_filter(name: &str) -> bool {
+    !name.is_empty() && name != "_"
+}
+
 pub fn config() -> LanguageConfig {
     LanguageConfig {
         language: tree_sitter_scala::LANGUAGE.into(),
@@ -51,5 +72,9 @@ pub fn config() -> LanguageConfig {
         callers_query: CALLERS_QUERY,
         variables_query: VARIABLES_QUERY,
         non_code_query: NON_CODE_QUERY,
+        definition_matcher: is_definition_line,
+        test_symbol_matcher: is_test_symbol,
+        variable_regex_patterns: VARIABLE_REGEX_PATTERNS,
+        variable_name_filter,
     }
 }

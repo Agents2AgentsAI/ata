@@ -8,13 +8,14 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::RwLock;
 
 use lsp_types::request::GotoImplementationResponse;
 use lsp_types::*;
 use serde_json::Value;
 use tokio::io::AsyncReadExt;
-use tokio::sync::Mutex;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinSet;
 use tracing;
 
@@ -38,6 +39,40 @@ enum PreflightResult {
     Installed,
     NeedsInstall(&'static str),
     Inconclusive,
+}
+
+fn lock_unpoisoned<T>(mutex: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+struct SpawnCleanupGuard<'a> {
+    spawning: &'a StdMutex<HashMap<ClientKey, Arc<tokio::sync::Notify>>>,
+    key: ClientKey,
+    notify: Arc<tokio::sync::Notify>,
+}
+
+impl<'a> SpawnCleanupGuard<'a> {
+    fn new(
+        spawning: &'a StdMutex<HashMap<ClientKey, Arc<tokio::sync::Notify>>>,
+        key: ClientKey,
+        notify: Arc<tokio::sync::Notify>,
+    ) -> Self {
+        Self {
+            spawning,
+            key,
+            notify,
+        }
+    }
+}
+
+impl Drop for SpawnCleanupGuard<'_> {
+    fn drop(&mut self) {
+        lock_unpoisoned(self.spawning).remove(&self.key);
+        self.notify.notify_waiters();
+    }
 }
 
 fn codex_home_dir() -> Option<PathBuf> {
@@ -136,11 +171,11 @@ pub struct ServerRegistry {
     /// Server configurations keyed by server_id.
     servers: HashMap<String, LspServerConfig>,
     /// Active clients keyed by (server_id, root).
-    clients: Mutex<HashMap<ClientKey, Arc<LspClient>>>,
+    clients: AsyncMutex<HashMap<ClientKey, Arc<LspClient>>>,
     /// Servers that failed to start (never retry within session), with reason.
-    broken: Mutex<HashMap<ClientKey, String>>,
+    broken: AsyncMutex<HashMap<ClientKey, String>>,
     /// In-flight spawns for dedup.
-    spawning: Mutex<HashMap<ClientKey, Arc<tokio::sync::Notify>>>,
+    spawning: StdMutex<HashMap<ClientKey, Arc<tokio::sync::Notify>>>,
     /// Workspace root directory.
     workspace_root: PathBuf,
     /// Optional install confirmation callback.
@@ -165,9 +200,9 @@ impl ServerRegistry {
     ) -> Self {
         Self {
             servers,
-            clients: Mutex::new(HashMap::new()),
-            broken: Mutex::new(HashMap::new()),
-            spawning: Mutex::new(HashMap::new()),
+            clients: AsyncMutex::new(HashMap::new()),
+            broken: AsyncMutex::new(HashMap::new()),
+            spawning: StdMutex::new(HashMap::new()),
             workspace_root,
             install_confirm: RwLock::new(install_confirm),
         }
@@ -374,24 +409,29 @@ impl ServerRegistry {
         key: &ClientKey,
     ) -> Result<Arc<LspClient>, LspError> {
         // Check if someone else is already spawning this.
-        let notify = {
-            let mut spawning = self.spawning.lock().await;
+        let (notify, should_spawn) = {
+            let mut spawning = lock_unpoisoned(&self.spawning);
             if let Some(existing) = spawning.get(key) {
-                let n = existing.clone();
-                drop(spawning);
-                // Wait for the other spawn to finish.
-                n.notified().await;
-                // Now check the clients map.
-                let clients = self.clients.lock().await;
-                if let Some(client) = clients.get(key) {
-                    return Ok(client.clone());
-                }
-                return Err(LspError::SpawnFailed("concurrent spawn failed".into()));
+                (existing.clone(), false)
+            } else {
+                let n = Arc::new(tokio::sync::Notify::new());
+                spawning.insert(key.clone(), n.clone());
+                (n, true)
             }
-            let n = Arc::new(tokio::sync::Notify::new());
-            spawning.insert(key.clone(), n.clone());
-            n
         };
+        if !should_spawn {
+            // Wait for the other spawn to finish.
+            notify.notified().await;
+            // Now check the clients map.
+            let clients = self.clients.lock().await;
+            if let Some(client) = clients.get(key) {
+                return Ok(client.clone());
+            }
+            return Err(LspError::SpawnFailed("concurrent spawn failed".into()));
+        }
+
+        // Ensure `spawning` is always cleared, even if this task is cancelled.
+        let _cleanup = SpawnCleanupGuard::new(&self.spawning, key.clone(), notify);
 
         let result: Result<Arc<LspClient>, LspError> = async {
             let binary = config.binary_name().map(ToOwned::to_owned);
@@ -498,10 +538,6 @@ impl ServerRegistry {
             create_result
         }
         .await;
-
-        // Always clear in-flight spawn bookkeeping.
-        self.spawning.lock().await.remove(key);
-        notify.notify_waiters();
 
         match result {
             Ok(client) => {
@@ -1169,6 +1205,28 @@ help: run `rustup component add rust-analyzer`\n"
         clear_call_hierarchy_server_id(&mut item);
         assert_eq!(call_hierarchy_server_id(&item), None);
         assert_eq!(item.data, Some(serde_json::json!({"foo": "bar"})));
+    }
+
+    #[tokio::test]
+    async fn spawn_cleanup_guard_clears_entry_and_notifies_waiters() {
+        let spawning: StdMutex<HashMap<ClientKey, Arc<tokio::sync::Notify>>> =
+            StdMutex::new(HashMap::new());
+        let key: ClientKey = ("test-server".to_string(), PathBuf::from("/tmp/workspace"));
+        let notify = Arc::new(tokio::sync::Notify::new());
+        lock_unpoisoned(&spawning).insert(key.clone(), notify.clone());
+
+        let waiter = notify.notified();
+        {
+            let _guard = SpawnCleanupGuard::new(&spawning, key.clone(), notify.clone());
+        }
+
+        assert!(!lock_unpoisoned(&spawning).contains_key(&key));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+                .await
+                .is_ok(),
+            "waiters should be notified when guard drops"
+        );
     }
 
     #[cfg(unix)]

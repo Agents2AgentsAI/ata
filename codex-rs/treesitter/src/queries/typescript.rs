@@ -1,4 +1,5 @@
 use crate::queries::LanguageConfig;
+use crate::queries::VariableRegexPattern;
 
 const SYMBOLS_QUERY: &str = r#"
 (function_declaration
@@ -106,6 +107,32 @@ const JS_VARIABLES_QUERY: &str = r#"
   (identifier) @var.name)
 "#;
 
+const TS_VARIABLE_REGEX_PATTERNS: &[VariableRegexPattern] = &[VariableRegexPattern {
+    regex: r"(?:let|const|var)\s+(\w+)",
+    capture_group: 1,
+}];
+
+const JS_VARIABLE_REGEX_PATTERNS: &[VariableRegexPattern] = &[VariableRegexPattern {
+    regex: r"(?:let|const|var)\s+(\w+)",
+    capture_group: 1,
+}];
+
+fn ts_definition_line(line: &str, name: &str) -> bool {
+    line.contains(&format!("function {name}")) || line.contains(&format!("{name} ="))
+}
+
+fn js_definition_line(line: &str, name: &str) -> bool {
+    line.contains(&format!("function {name}")) || line.contains(&format!("{name} ="))
+}
+
+fn is_test_symbol(_name: &str, file: &str) -> bool {
+    file.contains(".test.") || file.contains(".spec.") || file.contains("__tests__")
+}
+
+fn variable_name_filter(name: &str) -> bool {
+    !name.is_empty() && name != "_"
+}
+
 pub fn config() -> LanguageConfig {
     LanguageConfig {
         language: tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
@@ -113,6 +140,10 @@ pub fn config() -> LanguageConfig {
         callers_query: CALLERS_QUERY,
         variables_query: VARIABLES_QUERY,
         non_code_query: NON_CODE_QUERY,
+        definition_matcher: ts_definition_line,
+        test_symbol_matcher: is_test_symbol,
+        variable_regex_patterns: TS_VARIABLE_REGEX_PATTERNS,
+        variable_name_filter,
     }
 }
 
@@ -123,5 +154,9 @@ pub fn javascript_config() -> LanguageConfig {
         callers_query: JS_CALLERS_QUERY,
         variables_query: JS_VARIABLES_QUERY,
         non_code_query: JS_NON_CODE_QUERY,
+        definition_matcher: js_definition_line,
+        test_symbol_matcher: is_test_symbol,
+        variable_regex_patterns: JS_VARIABLE_REGEX_PATTERNS,
+        variable_name_filter,
     }
 }
