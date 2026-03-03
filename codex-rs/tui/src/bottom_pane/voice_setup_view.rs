@@ -462,10 +462,11 @@ impl VoiceSetupView {
     /// Extract the current API key value (if changed from original).
     fn changed_api_key(&self) -> Option<String> {
         for item in &self.items {
-            if let VoiceSetupItemKind::ApiKey { value, .. } = &item.kind {
-                if !value.is_empty() && *value != self.original_api_key {
-                    return Some(value.clone());
-                }
+            if let VoiceSetupItemKind::ApiKey { value, .. } = &item.kind
+                && !value.is_empty()
+                && *value != self.original_api_key
+            {
+                return Some(value.clone());
             }
         }
         None
@@ -479,14 +480,13 @@ impl VoiceSetupView {
                 current_idx,
                 options,
             } = &item.kind
+                && item.name == "Language"
             {
-                if item.name == "Language" {
-                    let current_value = options.get(*current_idx).map(|(v, _)| v.as_str());
-                    return match current_value {
-                        Some("auto") | None => None,
-                        Some(code) => Some(code.to_string()),
-                    };
-                }
+                let current_value = options.get(*current_idx).map(|(v, _)| v.as_str());
+                return match current_value {
+                    Some("auto") | None => None,
+                    Some(code) => Some(code.to_string()),
+                };
             }
         }
         None
@@ -495,10 +495,10 @@ impl VoiceSetupView {
     /// Extract the current speed value.
     fn current_speed(&self) -> f64 {
         for item in &self.items {
-            if let VoiceSetupItemKind::Stepper { value, .. } = &item.kind {
-                if item.name == "Speed" {
-                    return (*value * 10.0).round() / 10.0;
-                }
+            if let VoiceSetupItemKind::Stepper { value, .. } = &item.kind
+                && item.name == "Speed"
+            {
+                return (*value * 10.0).round() / 10.0;
             }
         }
         1.0
