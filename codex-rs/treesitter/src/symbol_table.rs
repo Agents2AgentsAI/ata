@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 
 use dashmap::DashMap;
+use dashmap::DashSet;
 
+use crate::file_entry::Language;
 use crate::symbol::Symbol;
 
 /// Thread-safe symbol table with secondary indices for fast lookups.
@@ -10,6 +12,7 @@ pub struct SymbolTable {
     symbols: DashMap<String, Symbol>,
     by_name: DashMap<String, HashSet<String>>,
     by_file: DashMap<String, HashSet<String>>,
+    test_keys: DashSet<String>,
 }
 
 impl Default for SymbolTable {
@@ -24,6 +27,7 @@ impl SymbolTable {
             symbols: DashMap::new(),
             by_name: DashMap::new(),
             by_file: DashMap::new(),
+            test_keys: DashSet::new(),
         }
     }
 
@@ -42,6 +46,9 @@ impl SymbolTable {
             .entry(symbol.file.clone())
             .or_default()
             .insert(key.clone());
+        if is_test_symbol(&symbol) {
+            self.test_keys.insert(key.clone());
+        }
 
         self.symbols.insert(key, symbol);
     }
@@ -49,13 +56,14 @@ impl SymbolTable {
     pub fn remove_file(&self, rel_path: &str) {
         if let Some((_, keys)) = self.by_file.remove(rel_path) {
             for key in keys {
-                if let Some((_, symbol)) = self.symbols.remove(&key)
-                    && let Some(mut by_name_keys) = self.by_name.get_mut(&symbol.name)
-                {
-                    by_name_keys.remove(&key);
-                    if by_name_keys.is_empty() {
-                        drop(by_name_keys);
-                        self.by_name.remove(&symbol.name);
+                if let Some((_, symbol)) = self.symbols.remove(&key) {
+                    self.test_keys.remove(&key);
+                    if let Some(mut by_name_keys) = self.by_name.get_mut(&symbol.name) {
+                        by_name_keys.remove(&key);
+                        if by_name_keys.is_empty() {
+                            drop(by_name_keys);
+                            self.by_name.remove(&symbol.name);
+                        }
                     }
                 }
             }
@@ -133,6 +141,16 @@ impl SymbolTable {
             .collect()
     }
 
+    pub fn test_symbols(&self) -> Vec<Symbol> {
+        self.test_keys
+            .iter()
+            .filter_map(|key| {
+                let key = key.key().clone();
+                self.symbols.get(&key).map(|entry| entry.value().clone())
+            })
+            .collect()
+    }
+
     pub fn all_symbol_definitions(&self) -> Vec<(String, String)> {
         self.symbols
             .iter()
@@ -189,5 +207,71 @@ impl SymbolTable {
 
     pub fn is_empty(&self) -> bool {
         self.symbols.is_empty()
+    }
+}
+
+fn is_test_symbol(symbol: &Symbol) -> bool {
+    match symbol.language {
+        Language::Rust => symbol.name.starts_with("test") || symbol.file.contains("/tests/"),
+        Language::Python => {
+            symbol.name.starts_with("test_")
+                || symbol.file.contains("test_")
+                || symbol.file.contains("_test.")
+        }
+        Language::TypeScript | Language::JavaScript => {
+            symbol.file.contains(".test.")
+                || symbol.file.contains(".spec.")
+                || symbol.file.contains("__tests__")
+        }
+        Language::Go => symbol.name.starts_with("Test") || symbol.file.ends_with("_test.go"),
+        Language::Java => symbol.file.contains("Test") || symbol.file.contains("/test/"),
+        Language::Scala => {
+            symbol.file.contains("Spec")
+                || symbol.file.contains("Test")
+                || symbol.file.contains("/test/")
+        }
+        Language::Other => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::symbol::SymbolKind;
+
+    fn make_symbol(name: &str, file: &str, language: Language) -> Symbol {
+        Symbol {
+            name: name.to_string(),
+            kind: SymbolKind::Function,
+            file: file.to_string(),
+            byte_range: (0, 10),
+            line_range: (1, 1),
+            language,
+            signature: name.to_string(),
+            definition: None,
+            parent: None,
+        }
+    }
+
+    #[test]
+    fn tracks_test_symbols_in_secondary_index() {
+        let table = SymbolTable::new();
+        table.insert(make_symbol("test_works", "src/test_example.py", Language::Python));
+        table.insert(make_symbol("helper", "src/main.py", Language::Python));
+
+        let test_names: std::collections::HashSet<String> =
+            table.test_symbols().into_iter().map(|symbol| symbol.name).collect();
+        assert!(test_names.contains("test_works"));
+        assert!(!test_names.contains("helper"));
+    }
+
+    #[test]
+    fn remove_file_clears_test_symbol_entries() {
+        let table = SymbolTable::new();
+        table.insert(make_symbol("TestThing", "pkg/foo_test.go", Language::Go));
+        assert_eq!(table.test_symbols().len(), 1);
+
+        table.remove_file("pkg/foo_test.go");
+        assert!(table.test_symbols().is_empty());
     }
 }

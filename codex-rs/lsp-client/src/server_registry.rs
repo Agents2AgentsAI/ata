@@ -1,7 +1,9 @@
 //! Registry that manages a pool of LSP clients, one per (server_id, root) pair.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::future::Future;
+use std::hash::Hash;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -287,6 +289,118 @@ impl ServerRegistry {
         result
     }
 
+    async fn first_match<T, F, Fut>(&self, path: &Path, mut query: F) -> Option<T>
+    where
+        F: FnMut(Arc<LspClient>) -> Fut,
+        Fut: Future<Output = Option<T>>,
+    {
+        let clients = self.get_clients(path).await;
+        for (_, client) in clients {
+            if let Some(result) = query(client).await {
+                return Some(result);
+            }
+        }
+        None
+    }
+
+    async fn fan_out_all<T, F, Fut>(
+        &self,
+        clients: Vec<Arc<LspClient>>,
+        query_name: &'static str,
+        mut query: F,
+    ) -> Vec<T>
+    where
+        T: Send + 'static,
+        F: FnMut(Arc<LspClient>) -> Fut,
+        Fut: Future<Output = Vec<T>> + Send + 'static,
+    {
+        if clients.is_empty() {
+            return Vec::new();
+        }
+
+        let mut tasks = JoinSet::new();
+        for client in clients {
+            tasks.spawn(query(client));
+        }
+
+        let mut all = Vec::new();
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(mut items) => all.append(&mut items),
+                Err(e) => tracing::debug!("{query_name} query task failed: {e}"),
+            }
+        }
+        all
+    }
+
+    fn dedup_by_key<T, K, F>(items: Vec<T>, mut key_fn: F) -> Vec<T>
+    where
+        K: Eq + Hash,
+        F: FnMut(&T) -> K,
+    {
+        let mut seen = HashSet::with_capacity(items.len());
+        let mut deduped = Vec::with_capacity(items.len());
+        for item in items {
+            if seen.insert(key_fn(&item)) {
+                deduped.push(item);
+            }
+        }
+        deduped
+    }
+
+    pub async fn prewarm_most_relevant_server(&self) {
+        let candidate = self
+            .servers
+            .iter()
+            .filter_map(|(server_id, config)| {
+                if config.disabled {
+                    return None;
+                }
+                let score = prewarm_candidate_score(&self.workspace_root, config);
+                if score == 0 {
+                    return None;
+                }
+                Some((server_id.clone(), config.clone(), score))
+            })
+            .max_by_key(|(_, _, score)| *score)
+            .map(|(server_id, config, _)| (server_id, config));
+
+        let Some((server_id, config)) = candidate else {
+            return;
+        };
+
+        let root = self.workspace_root.clone();
+        let key: ClientKey = (server_id.clone(), root.clone());
+
+        if self.broken.lock().await.contains_key(&key) {
+            return;
+        }
+
+        {
+            let clients = self.clients.lock().await;
+            if clients.contains_key(&key) {
+                return;
+            }
+        }
+
+        match self.spawn_client(&server_id, &config, &root, &key).await {
+            Ok(_) => {
+                tracing::debug!(
+                    server = %server_id,
+                    root = %root.display(),
+                    "prewarmed LSP server"
+                );
+            }
+            Err(e) => {
+                tracing::debug!(
+                    server = %server_id,
+                    root = %root.display(),
+                    "failed to prewarm LSP server: {e}"
+                );
+            }
+        }
+    }
+
     /// Spawn a client with deduplication.
     async fn spawn_client(
         &self,
@@ -378,18 +492,11 @@ impl ServerRegistry {
                     "server binary appears to be a broken shim, \
                      attempting auto-install. stderr: {stderr}"
                 );
-                if let Some(binary) = binary.as_deref() {
-                    if self.try_auto_install(server_id, config, binary).await {
-                        if let Some(re_resolved) = self.resolve_start_command(config) {
-                            let mut retry_config = config.clone();
-                            retry_config.command = re_resolved;
-                            LspClient::create(server_id, &retry_config, root).await
-                        } else {
-                            result
-                        }
-                    } else {
-                        result
-                    }
+                if let Some(recovered) = self
+                    .attempt_recovery_install(server_id, config, binary.as_deref(), root)
+                    .await
+                {
+                    recovered
                 } else {
                     result
                 }
@@ -405,14 +512,11 @@ impl ServerRegistry {
                                 binary = %binary,
                                 "server exited during init; preflight indicates missing install ({reason}); attempting auto-install"
                             );
-                            if self.try_auto_install(server_id, config, binary).await {
-                                if let Some(re_resolved) = self.resolve_start_command(config) {
-                                    let mut retry_config = config.clone();
-                                    retry_config.command = re_resolved;
-                                    LspClient::create(server_id, &retry_config, root).await
-                                } else {
-                                    result
-                                }
+                            if let Some(recovered) = self
+                                .attempt_recovery_install(server_id, config, Some(binary), root)
+                                .await
+                            {
+                                recovered
                             } else {
                                 result
                             }
@@ -471,6 +575,23 @@ impl ServerRegistry {
 
         // Verify the binary is now available.
         self.binary_available(binary)
+    }
+
+    async fn attempt_recovery_install(
+        &self,
+        server_id: &str,
+        config: &LspServerConfig,
+        binary: Option<&str>,
+        root: &Path,
+    ) -> Option<Result<Arc<LspClient>, LspError>> {
+        let binary = binary?;
+        if !self.try_auto_install(server_id, config, binary).await {
+            return None;
+        }
+        let re_resolved = self.resolve_start_command(config)?;
+        let mut retry_config = config.clone();
+        retry_config.command = re_resolved;
+        Some(LspClient::create(server_id, &retry_config, root).await)
     }
 
     async fn preflight_version_check(
@@ -581,13 +702,10 @@ impl ServerRegistry {
     // -----------------------------------------------------------------------
 
     pub async fn hover(&self, path: &Path, line: u32, character: u32) -> Option<Hover> {
-        let clients = self.get_clients(path).await;
-        for (_, client) in clients {
-            if let Some(result) = client.hover(path, line, character).await {
-                return Some(result);
-            }
-        }
-        None
+        self.first_match(path, |client| async move {
+            client.hover(path, line, character).await
+        })
+        .await
     }
 
     pub async fn definition(
@@ -596,46 +714,35 @@ impl ServerRegistry {
         line: u32,
         character: u32,
     ) -> Option<GotoDefinitionResponse> {
-        let clients = self.get_clients(path).await;
-        for (_, client) in clients {
-            if let Some(result) = client.definition(path, line, character).await {
-                return Some(result);
-            }
-        }
-        None
+        self.first_match(path, |client| async move {
+            client.definition(path, line, character).await
+        })
+        .await
     }
 
     pub async fn references(&self, path: &Path, line: u32, character: u32) -> Vec<Location> {
-        let clients = self.get_clients(path).await;
-        if clients.is_empty() {
-            return Vec::new();
-        }
-
+        let clients: Vec<Arc<LspClient>> = self
+            .get_clients(path)
+            .await
+            .into_iter()
+            .map(|(_, client)| client)
+            .collect();
         let path = path.to_path_buf();
-        let mut tasks = JoinSet::new();
-        for (_, client) in clients {
-            let path = path.clone();
-            tasks.spawn(async move { client.references(&path, line, character).await });
-        }
-
-        let mut all = Vec::new();
-        while let Some(result) = tasks.join_next().await {
-            match result {
-                Ok(mut refs) => all.append(&mut refs),
-                Err(e) => tracing::debug!("references query task failed: {e}"),
-            }
-        }
-        all
+        let references = self
+            .fan_out_all(clients, "references", move |client| {
+                let path = path.clone();
+                async move { client.references(&path, line, character).await }
+            })
+            .await;
+        Self::dedup_by_key(references, location_key)
     }
 
     pub async fn document_symbol(&self, path: &Path) -> Option<DocumentSymbolResponse> {
-        let clients = self.get_clients(path).await;
-        for (_, client) in clients {
-            if let Some(result) = client.document_symbol(path).await {
-                return Some(result);
-            }
-        }
-        None
+        self.first_match(
+            path,
+            |client| async move { client.document_symbol(path).await },
+        )
+        .await
     }
 
     pub async fn workspace_symbol(&self, query: &str) -> Vec<SymbolInformation> {
@@ -644,25 +751,12 @@ impl ServerRegistry {
             let clients_map = self.clients.lock().await;
             clients_map.values().cloned().collect()
         };
-
-        if clients.is_empty() {
-            return Vec::new();
-        }
-
-        let mut tasks = JoinSet::new();
-        for client in clients {
-            let query = query.to_string();
-            tasks.spawn(async move { client.workspace_symbol(&query).await });
-        }
-
-        let mut all = Vec::new();
-        while let Some(result) = tasks.join_next().await {
-            match result {
-                Ok(mut symbols) => all.append(&mut symbols),
-                Err(e) => tracing::debug!("workspace_symbol query task failed: {e}"),
-            }
-        }
-        all
+        let query = query.to_string();
+        self.fan_out_all(clients, "workspace_symbol", move |client| {
+            let query = query.clone();
+            async move { client.workspace_symbol(&query).await }
+        })
+        .await
     }
 
     async fn ensure_workspace_clients_started(&self) {
@@ -715,13 +809,10 @@ impl ServerRegistry {
         line: u32,
         character: u32,
     ) -> Option<GotoImplementationResponse> {
-        let clients = self.get_clients(path).await;
-        for (_, client) in clients {
-            if let Some(result) = client.implementation(path, line, character).await {
-                return Some(result);
-            }
-        }
-        None
+        self.first_match(path, |client| async move {
+            client.implementation(path, line, character).await
+        })
+        .await
     }
 
     pub async fn prepare_call_hierarchy(
@@ -730,26 +821,20 @@ impl ServerRegistry {
         line: u32,
         character: u32,
     ) -> Vec<CallHierarchyItem> {
-        let clients = self.get_clients(path).await;
-        if clients.is_empty() {
-            return Vec::new();
-        }
-
+        let clients: Vec<Arc<LspClient>> = self
+            .get_clients(path)
+            .await
+            .into_iter()
+            .map(|(_, client)| client)
+            .collect();
         let path = path.to_path_buf();
-        let mut tasks = JoinSet::new();
-        for (_, client) in clients {
-            let path = path.clone();
-            tasks.spawn(async move { client.prepare_call_hierarchy(&path, line, character).await });
-        }
-
-        let mut all = Vec::new();
-        while let Some(result) = tasks.join_next().await {
-            match result {
-                Ok(mut items) => all.append(&mut items),
-                Err(e) => tracing::debug!("prepare_call_hierarchy query task failed: {e}"),
-            }
-        }
-        all
+        let items = self
+            .fan_out_all(clients, "prepare_call_hierarchy", move |client| {
+                let path = path.clone();
+                async move { client.prepare_call_hierarchy(&path, line, character).await }
+            })
+            .await;
+        Self::dedup_by_key(items, call_hierarchy_item_key)
     }
 
     pub async fn incoming_calls(&self, item: CallHierarchyItem) -> Vec<CallHierarchyIncomingCall> {
@@ -758,25 +843,19 @@ impl ServerRegistry {
             Some(p) => p,
             None => return Vec::new(),
         };
-        let clients = self.get_clients(&path).await;
-        if clients.is_empty() {
-            return Vec::new();
-        }
-
-        let mut tasks = JoinSet::new();
-        for (_, client) in clients {
-            let item = item.clone();
-            tasks.spawn(async move { client.incoming_calls(item).await });
-        }
-
-        let mut all = Vec::new();
-        while let Some(result) = tasks.join_next().await {
-            match result {
-                Ok(mut calls) => all.append(&mut calls),
-                Err(e) => tracing::debug!("incoming_calls query task failed: {e}"),
-            }
-        }
-        all
+        let clients: Vec<Arc<LspClient>> = self
+            .get_clients(&path)
+            .await
+            .into_iter()
+            .map(|(_, client)| client)
+            .collect();
+        let calls = self
+            .fan_out_all(clients, "incoming_calls", move |client| {
+                let item = item.clone();
+                async move { client.incoming_calls(item).await }
+            })
+            .await;
+        Self::dedup_by_key(calls, incoming_call_key)
     }
 
     pub async fn outgoing_calls(&self, item: CallHierarchyItem) -> Vec<CallHierarchyOutgoingCall> {
@@ -784,25 +863,19 @@ impl ServerRegistry {
             Some(p) => p,
             None => return Vec::new(),
         };
-        let clients = self.get_clients(&path).await;
-        if clients.is_empty() {
-            return Vec::new();
-        }
-
-        let mut tasks = JoinSet::new();
-        for (_, client) in clients {
-            let item = item.clone();
-            tasks.spawn(async move { client.outgoing_calls(item).await });
-        }
-
-        let mut all = Vec::new();
-        while let Some(result) = tasks.join_next().await {
-            match result {
-                Ok(mut calls) => all.append(&mut calls),
-                Err(e) => tracing::debug!("outgoing_calls query task failed: {e}"),
-            }
-        }
-        all
+        let clients: Vec<Arc<LspClient>> = self
+            .get_clients(&path)
+            .await
+            .into_iter()
+            .map(|(_, client)| client)
+            .collect();
+        let calls = self
+            .fan_out_all(clients, "outgoing_calls", move |client| {
+                let item = item.clone();
+                async move { client.outgoing_calls(item).await }
+            })
+            .await;
+        Self::dedup_by_key(calls, outgoing_call_key)
     }
 
     // -----------------------------------------------------------------------
@@ -828,32 +901,98 @@ fn output_indicates_missing_install(binary: &str, combined_output: &str) -> Opti
     // Primary target: rustup proxy for rust-analyzer.
     let bin_lc = binary.to_ascii_lowercase();
     let out_lc = combined_output.to_ascii_lowercase();
+    let mentions_binary = output_mentions_binary(&bin_lc, &out_lc);
 
     // rustup shim patterns
-    if out_lc.contains("unknown binary") && out_lc.contains(&bin_lc) {
+    if out_lc.contains("unknown binary") && mentions_binary {
         return Some("rustup shim: unknown binary/component");
     }
-    if out_lc.contains("not installed for the toolchain") && out_lc.contains(&bin_lc) {
+    if out_lc.contains("not installed for the toolchain") && mentions_binary {
         return Some("rustup shim: component not installed");
     }
-    if out_lc.contains("rustup component add") && out_lc.contains(&bin_lc) {
+    if out_lc.contains("rustup component add") && mentions_binary {
         return Some("rustup shim: suggests rustup component add");
     }
 
     // node/npm global module missing patterns (best-effort)
-    if out_lc.contains("cannot find module") && out_lc.contains(&bin_lc) {
+    if out_lc.contains("cannot find module") && mentions_binary {
         return Some("node shim: cannot find module");
     }
 
     // python/pip missing module patterns (best-effort)
-    if out_lc.contains("modulenotfounderror") && out_lc.contains(&bin_lc) {
+    if out_lc.contains("modulenotfounderror") && mentions_binary {
         return Some("python shim: module not found");
     }
-    if out_lc.contains("no module named") && out_lc.contains(&bin_lc) {
+    if out_lc.contains("no module named") && mentions_binary {
         return Some("python shim: module not found");
     }
 
     None
+}
+
+fn output_mentions_binary(binary_lowercase: &str, output_lowercase: &str) -> bool {
+    let pattern = format!(r"\b{}\b", regex::escape(binary_lowercase));
+    regex::Regex::new(&pattern)
+        .map(|regex| regex.is_match(output_lowercase))
+        .unwrap_or_else(|_| output_lowercase.contains(binary_lowercase))
+}
+
+fn range_key(range: &Range) -> (u32, u32, u32, u32) {
+    (
+        range.start.line,
+        range.start.character,
+        range.end.line,
+        range.end.character,
+    )
+}
+
+fn location_key(location: &Location) -> (String, (u32, u32, u32, u32)) {
+    (
+        location.uri.as_str().to_string(),
+        range_key(&location.range),
+    )
+}
+
+fn call_hierarchy_item_key(item: &CallHierarchyItem) -> (String, (u32, u32, u32, u32)) {
+    (item.uri.as_str().to_string(), range_key(&item.range))
+}
+
+fn incoming_call_key(call: &CallHierarchyIncomingCall) -> (String, (u32, u32, u32, u32)) {
+    (
+        call.from.uri.as_str().to_string(),
+        range_key(&call.from.range),
+    )
+}
+
+fn outgoing_call_key(call: &CallHierarchyOutgoingCall) -> (String, (u32, u32, u32, u32)) {
+    (call.to.uri.as_str().to_string(), range_key(&call.to.range))
+}
+
+fn prewarm_candidate_score(workspace_root: &Path, config: &LspServerConfig) -> usize {
+    if config.root_markers.is_empty() || !dir_has_any_marker(workspace_root, &config.root_markers) {
+        return 0;
+    }
+
+    let mut score = 0usize;
+    let mut has_non_git_glob = false;
+    for marker in &config.root_markers {
+        if marker == ".git" {
+            continue;
+        }
+        if marker.contains('*') || marker.contains('?') || marker.contains('[') {
+            has_non_git_glob = true;
+            continue;
+        }
+        if workspace_root.join(marker).exists() {
+            score += 3;
+        }
+    }
+
+    if score == 0 && has_non_git_glob {
+        1
+    } else {
+        score
+    }
 }
 
 #[cfg(test)]
@@ -874,6 +1013,12 @@ help: run `rustup component add rust-analyzer`\n"
     fn detects_rustup_missing_component() {
         let out = rust_analyzer_like_rustup_error();
         assert!(output_indicates_missing_install("rust-analyzer", out).is_some());
+    }
+
+    #[test]
+    fn does_not_false_positive_on_substring_binary_names() {
+        let out = "error: Unknown binary 'false' in toolchain";
+        assert!(output_indicates_missing_install("ls", out).is_none());
     }
 
     #[cfg(unix)]

@@ -2127,6 +2127,7 @@ dependencies = [
  "globset",
  "lsp-types 0.97.0",
  "phf",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

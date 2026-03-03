@@ -41,6 +41,35 @@ pub struct LspServerConfig {
 }
 
 impl LspServerConfig {
+    /// Construct a server config with sensible defaults.
+    pub fn new(extensions: Vec<String>, command: Vec<String>, root_markers: Vec<String>) -> Self {
+        Self {
+            extensions,
+            command,
+            command_candidates: Vec::new(),
+            env: HashMap::new(),
+            root_markers,
+            initialization_options: None,
+            disabled: false,
+            install: None,
+        }
+    }
+
+    pub fn with_command_candidates(mut self, command_candidates: Vec<Vec<String>>) -> Self {
+        self.command_candidates = command_candidates;
+        self
+    }
+
+    pub fn with_initialization_options(mut self, options: serde_json::Value) -> Self {
+        self.initialization_options = Some(options);
+        self
+    }
+
+    pub fn with_install(mut self, method: InstallMethod) -> Self {
+        self.install = Some(InstallConfig { method });
+        self
+    }
+
     /// Returns `true` if this server handles files with the given extension
     /// (including the leading dot).
     pub fn matches_extension(&self, ext: &str) -> bool {
@@ -177,10 +206,12 @@ impl InstallMethod {
                 vec!["brew".into(), "install".into(), pkg.into()]
             }
             InstallMethod::GithubRelease { repo } => {
-                // Placeholder — real implementation would download from GitHub releases.
+                // Explicitly fail: this install method requires manual setup.
                 vec![
-                    "echo".into(),
-                    format!("Download {binary_name} from https://github.com/{repo}/releases"),
+                    "__codex_manual_install_required__".into(),
+                    format!(
+                        "download {binary_name} from https://github.com/{repo}/releases manually"
+                    ),
                 ]
             }
         }
@@ -193,16 +224,11 @@ mod tests {
     use std::path::Path;
 
     fn test_config() -> LspServerConfig {
-        LspServerConfig {
-            extensions: vec![".rs".into(), ".toml".into()],
-            command: vec!["rust-analyzer".into()],
-            command_candidates: Vec::new(),
-            env: HashMap::new(),
-            root_markers: vec!["Cargo.toml".into()],
-            initialization_options: None,
-            disabled: false,
-            install: None,
-        }
+        LspServerConfig::new(
+            vec![".rs".into(), ".toml".into()],
+            vec!["rust-analyzer".into()],
+            vec!["Cargo.toml".into()],
+        )
     }
 
     #[test]
@@ -341,5 +367,15 @@ mod tests {
             formula: Some("llvm".into()),
         };
         assert_eq!(m.install_command("clangd"), vec!["brew", "install", "llvm"]);
+    }
+
+    #[test]
+    fn install_command_github_release_is_explicit_failure_placeholder() {
+        let m = InstallMethod::GithubRelease {
+            repo: "owner/repo".into(),
+        };
+        let cmd = m.install_command("example-lsp");
+        assert_eq!(cmd[0], "__codex_manual_install_required__");
+        assert!(cmd[1].contains("https://github.com/owner/repo/releases"));
     }
 }
