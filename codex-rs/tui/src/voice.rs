@@ -572,7 +572,7 @@ impl RealtimeAudioPlayer {
         if pcm.is_empty() || sample_rate == 0 || channels == 0 {
             return;
         }
-        let converted = convert_pcm16_for_output(
+        let converted = convert_pcm16(
             pcm,
             sample_rate,
             channels,

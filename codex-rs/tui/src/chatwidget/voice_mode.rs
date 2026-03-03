@@ -771,7 +771,7 @@ impl super::ChatWidget {
         }
 
         // Start audio player for TTS output.
-        match crate::voice::RealtimeAudioPlayer::start() {
+        match crate::voice::RealtimeAudioPlayer::start(&self.config) {
             Ok(player) => {
                 state.audio_player = Some(player);
             }
