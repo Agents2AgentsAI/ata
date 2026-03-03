@@ -15,10 +15,10 @@ pub mod symbol;
 pub mod symbol_table;
 pub mod walker;
 
-pub use config::ProjectIndexConfig;
 pub use annotations::AnnotationLoadStats;
 pub use annotations::AnnotationSaveStats;
 pub use chunking::ChunkIndicesResult;
+pub use config::ProjectIndexConfig;
 pub use content::GrepMatch;
 pub use content::GrepResult;
 pub use content::GrepScope;

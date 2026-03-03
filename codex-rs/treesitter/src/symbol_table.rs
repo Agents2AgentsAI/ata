@@ -256,11 +256,18 @@ mod tests {
     #[test]
     fn tracks_test_symbols_in_secondary_index() {
         let table = SymbolTable::new();
-        table.insert(make_symbol("test_works", "src/test_example.py", Language::Python));
+        table.insert(make_symbol(
+            "test_works",
+            "src/test_example.py",
+            Language::Python,
+        ));
         table.insert(make_symbol("helper", "src/main.py", Language::Python));
 
-        let test_names: std::collections::HashSet<String> =
-            table.test_symbols().into_iter().map(|symbol| symbol.name).collect();
+        let test_names: std::collections::HashSet<String> = table
+            .test_symbols()
+            .into_iter()
+            .map(|symbol| symbol.name)
+            .collect();
         assert!(test_names.contains("test_works"));
         assert!(!test_names.contains("helper"));
     }

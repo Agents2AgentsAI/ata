@@ -792,26 +792,37 @@ impl LspClient {
                             tracing::debug!(
                                 server = %server_id,
                                 method = %req.method,
-                                "unhandled server request"
+                                "unhandled server request; replying with MethodNotFound"
                             );
                             None
                         }
                     };
 
-                    if let Some(result) = response_result {
-                        let resp = JsonRpcResponse {
+                    let resp = if let Some(result) = response_result {
+                        JsonRpcResponse {
                             jsonrpc: "2.0".into(),
                             id: Some(req.id),
                             result: Some(result),
                             error: None,
-                        };
-                        if let Ok(body) = serde_json::to_vec(&resp) {
-                            let header = format!("Content-Length: {}\r\n\r\n", body.len());
-                            let mut w = writer.lock().await;
-                            let _ = w.write_all(header.as_bytes()).await;
-                            let _ = w.write_all(&body).await;
-                            let _ = w.flush().await;
                         }
+                    } else {
+                        JsonRpcResponse {
+                            jsonrpc: "2.0".into(),
+                            id: Some(req.id),
+                            result: None,
+                            error: Some(JsonRpcError {
+                                code: -32601,
+                                message: format!("method not found: {}", req.method),
+                                data: None,
+                            }),
+                        }
+                    };
+                    if let Ok(body) = serde_json::to_vec(&resp) {
+                        let header = format!("Content-Length: {}\r\n\r\n", body.len());
+                        let mut w = writer.lock().await;
+                        let _ = w.write_all(header.as_bytes()).await;
+                        let _ = w.write_all(&body).await;
+                        let _ = w.flush().await;
                     }
                 }
             }

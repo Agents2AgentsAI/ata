@@ -257,8 +257,11 @@ mod tests {
         let ws = tmp.path();
         let crate_dir = ws.join("crates/foo");
         std::fs::create_dir_all(&crate_dir).expect("mkdir");
-        std::fs::write(ws.join("Cargo.toml"), "[workspace]\nmembers = [\"crates/*\"]")
-            .expect("write ws");
+        std::fs::write(
+            ws.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/*\"]",
+        )
+        .expect("write ws");
         std::fs::write(crate_dir.join("Cargo.toml"), "[package]\nname = \"foo\"")
             .expect("write pkg");
 
@@ -299,8 +302,11 @@ mod tests {
         let crate_dir = ws.join("crates/foo");
         std::fs::create_dir_all(&crate_dir).expect("mkdir");
         // Workspace toml above bound
-        std::fs::write(outer.join("Cargo.toml"), "[workspace]\nmembers = [\"repo/*\"]")
-            .expect("write");
+        std::fs::write(
+            outer.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"repo/*\"]",
+        )
+        .expect("write");
         std::fs::write(crate_dir.join("Cargo.toml"), "[package]\nname = \"foo\"").expect("write");
 
         let strategy = RootStrategy::WalkUpForContent {

@@ -1299,9 +1299,7 @@ impl Session {
         let multi_root_fut = {
             let cwd = session_configuration.cwd.clone();
             let config_for_multi_root = Arc::clone(&config);
-            async move {
-                code_intel::init_multi_root_state(cwd, config_for_multi_root.as_ref()).await
-            }
+            async move { code_intel::init_multi_root_state(cwd, config_for_multi_root.as_ref()).await }
         };
 
         // Join all independent futures.

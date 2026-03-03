@@ -850,15 +850,12 @@ fn apply_post_root_hook(config: &mut LspServerConfig, root: &Path) {
                     .initialization_options
                     .get_or_insert_with(|| serde_json::json!({}));
                 if let Some(obj) = opts.as_object_mut() {
-                    obj.entry("python")
-                        .or_insert_with(|| serde_json::json!({}));
+                    obj.entry("python").or_insert_with(|| serde_json::json!({}));
                     if let Some(python_obj) = obj.get_mut("python").and_then(|v| v.as_object_mut())
                     {
-                        python_obj
-                            .entry("pythonPath".to_string())
-                            .or_insert(serde_json::Value::String(
-                                python_path.to_string_lossy().to_string(),
-                            ));
+                        python_obj.entry("pythonPath".to_string()).or_insert(
+                            serde_json::Value::String(python_path.to_string_lossy().to_string()),
+                        );
                     }
                 }
             }
@@ -1122,11 +1119,7 @@ sleep 60\n",
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path();
         // No venv exists, so nothing should be injected.
-        let mut config = LspServerConfig::new(
-            vec![".py".into()],
-            vec!["pyright".into()],
-            vec![],
-        );
+        let mut config = LspServerConfig::new(vec![".py".into()], vec!["pyright".into()], vec![]);
         config.initialization_options = Some(serde_json::json!({"diagnostics": true}));
         config.post_root_hook = crate::server_config::PostRootHook::PythonVenvProbe;
 
@@ -1148,11 +1141,7 @@ sleep 60\n",
         let python3 = bin_dir.join("python3");
         std::fs::write(&python3, "").unwrap();
 
-        let mut config = LspServerConfig::new(
-            vec![".py".into()],
-            vec!["pyright".into()],
-            vec![],
-        );
+        let mut config = LspServerConfig::new(vec![".py".into()], vec!["pyright".into()], vec![]);
         config.post_root_hook = crate::server_config::PostRootHook::PythonVenvProbe;
 
         apply_post_root_hook(&mut config, root);
