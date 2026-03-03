@@ -123,33 +123,15 @@ pub(super) fn header_line(
         title.to_string()
     };
 
-    // Build section nav: ◀ 3/7: Heading ▶
+    // Build section nav: ◀ 3/7 ▶  (heading is shown in the content area)
     let has_prev = section_num > 1;
     let has_next = section_num < section_count;
     let left_arrow = if has_prev { "◀ " } else { "  " };
     let right_arrow = if has_next { " ▶" } else { "  " };
-    let nav_prefix = format!("{left_arrow}{section_num}/{section_count}");
-    let nav_prefix_width = unicode_width::UnicodeWidthStr::width(nav_prefix.as_str());
-    let arrow_width = unicode_width::UnicodeWidthStr::width(right_arrow);
+    let _ = section_heading; // heading already visible in content
 
+    let right = format!("{left_arrow}{section_num}/{section_count}{right_arrow}");
     let left_width = unicode_width::UnicodeWidthStr::width(left.as_str());
-    // Minimum 2 chars padding between left and right parts.
-    let available_for_right = inner_width.saturating_sub(left_width).saturating_sub(2);
-
-    // Determine how much space the section heading can use.
-    let heading_budget = available_for_right
-        .saturating_sub(nav_prefix_width)
-        .saturating_sub(arrow_width)
-        .saturating_sub(2); // ": " separator
-
-    let heading_part = if !section_heading.is_empty() && heading_budget >= 4 {
-        let truncated = truncate_str(section_heading, heading_budget);
-        format!(": {truncated}")
-    } else {
-        String::new()
-    };
-
-    let right = format!("{nav_prefix}{heading_part}{right_arrow}");
     let right_width = unicode_width::UnicodeWidthStr::width(right.as_str());
     let padding = inner_width
         .saturating_sub(left_width)
@@ -173,6 +155,7 @@ pub(super) fn header_line(
 
 /// Truncate a string to fit within `max_width` display columns, appending "…"
 /// if it was shortened.
+#[allow(dead_code)]
 fn truncate_str(s: &str, max_width: usize) -> String {
     use unicode_width::UnicodeWidthStr;
     let w = UnicodeWidthStr::width(s);
@@ -231,6 +214,27 @@ pub(super) fn separator_with_indicator(width: u16, label: &str) -> Line<'static>
     ])
 }
 
+/// Build a separator with a centered text indicator in a custom style.
+pub(super) fn separator_with_indicator_styled(
+    width: u16,
+    label: &str,
+    style: ratatui::style::Style,
+) -> Line<'static> {
+    let inner = (width as usize).saturating_sub(2);
+    let label_width = unicode_width::UnicodeWidthStr::width(label);
+    if inner <= label_width {
+        return separator(width);
+    }
+    let remaining = inner - label_width;
+    let left = remaining / 2;
+    let right = remaining - left;
+    Line::from(vec![
+        Span::from(format!("├{}", "─".repeat(left))).dim(),
+        Span::styled(label.to_string(), style),
+        Span::from(format!("{}┤", "─".repeat(right))).dim(),
+    ])
+}
+
 /// Build the keyboard hints line shown below the content area.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn hints_line(
@@ -241,6 +245,7 @@ pub(super) fn hints_line(
     has_folds: bool,
     pending_quit: bool,
     line_number_input: Option<&str>,
+    voice_status: Option<&str>,
     width: u16,
 ) -> Line<'static> {
     let hints: Vec<Span<'static>> = if let Some(input) = line_number_input {
@@ -303,26 +308,27 @@ pub(super) fn hints_line(
             ": done".dim(),
         ]
     } else {
-        let mut h = vec![
+        let mut h: Vec<Span<'static>> = Vec::new();
+        h.extend([
             "↑↓/jk".dim().bold(),
             ": scroll".dim(),
             " | ".dim(),
             "n/p".dim().bold(),
-            ": next/prev section".dim(),
-        ];
+            ": section".dim(),
+        ]);
+        if voice_status.is_some() {
+            h.extend([" | ".dim(), "r".dim().bold(), ": read".dim()]);
+        }
         if has_folds {
-            h.extend([" | ".dim(), "Space".dim().bold(), ": toggle fold".dim()]);
+            h.extend([" | ".dim(), "f".dim().bold(), ": fold".dim()]);
         }
         h.extend([
             " | ".dim(),
             "v".dim().bold(),
-            ": select text".dim(),
+            ": select".dim(),
             " | ".dim(),
             "Tab".dim().bold(),
-            ": ask question".dim(),
-            " | ".dim(),
-            "?".dim().bold(),
-            ": help".dim(),
+            ": ask".dim(),
             " | ".dim(),
             "q".dim().bold(),
             ": close".dim(),
@@ -378,6 +384,23 @@ pub(super) fn bordered_line(inner: Line<'static>, width: u16, updated: bool) -> 
     } else {
         spans.push(" │".dim());
     }
+    Line::from(spans)
+}
+
+/// Render a text string inside card borders (for status lines).
+pub(super) fn bordered_text_line(text: &str, width: u16) -> Line<'static> {
+    let text_width = unicode_width::UnicodeWidthStr::width(text);
+    let pad = (width as usize)
+        .saturating_sub(4) // "│ " + " │"
+        .saturating_sub(text_width);
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(4);
+    spans.push("│ ".dim());
+    spans.push(Span::from(text.to_string()).cyan().bold());
+    if pad > 0 {
+        spans.push(Span::from(" ".repeat(pad)));
+    }
+    spans.push(" │".dim());
     Line::from(spans)
 }
 
@@ -486,6 +509,56 @@ pub(super) fn apply_char_selection(
         if extra > 0 {
             new_spans.push(Span::from(" ".repeat(extra)).on_dark_gray());
         }
+    }
+
+    Line::from(new_spans)
+}
+
+/// Apply bold+underline highlight to a character range within a rendered line.
+///
+/// Used for word-level karaoke during narration.  The highlighted word gets
+/// bold+underline added to its existing style; all other spans keep their
+/// original formatting (bold, italic, colors, etc.) untouched.
+pub(super) fn apply_word_highlight(
+    line: Line<'static>,
+    start_col: usize,
+    end_col: usize,
+) -> Line<'static> {
+    use ratatui::style::Modifier;
+
+    let hl = Modifier::BOLD | Modifier::UNDERLINED;
+    let mut new_spans: Vec<Span<'static>> = Vec::new();
+    let mut char_pos = 0usize;
+
+    for span in line.spans {
+        let span_text: &str = span.content.as_ref();
+        let span_start = char_pos;
+        let span_end = span_start + span_text.len();
+        let base_style = span.style;
+
+        if span_end <= start_col || span_start >= end_col {
+            // Entirely outside highlight.
+            new_spans.push(span);
+        } else {
+            // Partially or fully inside highlight — split.
+            let local_start = start_col.saturating_sub(span_start);
+            let local_end = end_col.saturating_sub(span_start).min(span_text.len());
+
+            if local_start > 0 {
+                new_spans.push(Span::styled(
+                    span_text[..local_start].to_string(),
+                    base_style,
+                ));
+            }
+            new_spans.push(Span::styled(
+                span_text[local_start..local_end].to_string(),
+                base_style.add_modifier(hl),
+            ));
+            if local_end < span_text.len() {
+                new_spans.push(Span::styled(span_text[local_end..].to_string(), base_style));
+            }
+        }
+        char_pos = span_end;
     }
 
     Line::from(new_spans)
@@ -758,7 +831,7 @@ pub(super) fn apply_folds(
             out.push(Line::from(vec![
                 "┊ ".dim().cyan(),
                 "[+] ".dim().cyan(),
-                lf.summary.clone().dim().cyan(),
+                Span::from(lf.summary.clone()).dim().cyan(),
             ]));
             skip_until = lf.end_line;
             continue;
@@ -772,7 +845,7 @@ pub(super) fn apply_folds(
             out.push(Line::from(vec![
                 "┊ ".dim().cyan(),
                 "[-] ".dim().cyan(),
-                lf.summary.clone().dim().cyan(),
+                Span::from(lf.summary.clone()).dim().cyan(),
             ]));
         }
 
@@ -941,7 +1014,7 @@ pub(super) fn help_overlay_lines(width: u16, section_count: Option<usize>) -> Ve
     push_binding(&mut lines, "Esc", "Clear search");
 
     push_section(&mut lines, "Folds");
-    push_binding(&mut lines, "Space", "Toggle fold at cursor");
+    push_binding(&mut lines, "f", "Toggle fold at cursor");
     push_binding(&mut lines, "[ / ]", "Jump to prev / next fold");
     push_binding(&mut lines, "zM / zR", "Collapse / expand all");
 

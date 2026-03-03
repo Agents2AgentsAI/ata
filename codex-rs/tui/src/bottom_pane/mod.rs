@@ -53,6 +53,8 @@ pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
 pub(crate) use request_user_input::RequestUserInputOverlay;
 mod bottom_pane_view;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+pub(crate) use bottom_pane_view::ReadingViewVoiceContext;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LocalImageAttachment {
@@ -72,6 +74,10 @@ mod chat_composer_history;
 mod command_popup;
 pub mod custom_prompt_view;
 mod experimental_features_view;
+#[cfg(not(target_os = "linux"))]
+mod voice_setup_view;
+#[cfg(not(target_os = "linux"))]
+pub(crate) use voice_setup_view::VoiceSetupView;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;
@@ -555,6 +561,17 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    pub(crate) fn set_placeholder_text(&mut self, placeholder: String) {
+        self.composer.set_placeholder_text(placeholder);
+        self.request_redraw();
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    pub(crate) fn set_force_hide_cursor(&mut self, hide: bool) {
+        self.composer.set_force_hide_cursor(hide);
+    }
+
     pub(crate) fn clear_composer_for_ctrl_c(&mut self) {
         self.composer.clear_for_ctrl_c();
         self.request_redraw();
@@ -856,6 +873,22 @@ impl BottomPane {
     /// running and some are not.
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
         self.can_launch_external_editor()
+    }
+
+    /// Returns true when PTT (hold-Space-to-speak) should be allowed.
+    ///
+    /// PTT is allowed when either no view is active (normal chat mode) or the
+    /// active view supports voice (e.g. the document reader). Composer popups
+    /// block PTT so Space can operate toggles/steppers.
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    pub(crate) fn ptt_space_allowed(&self) -> bool {
+        if self.composer.popup_active() {
+            return false;
+        }
+        match self.view_stack.last() {
+            None => true,
+            Some(view) => view.voice_context().is_some(),
+        }
     }
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {

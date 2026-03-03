@@ -1,0 +1,20 @@
+[package]
+name = "codex-elevenlabs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+codex-utils-rustls-provider = { workspace = true }
+futures = { workspace = true, default-features = false, features = ["std"] }
+reqwest = { workspace = true, features = ["json", "multipart"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "macros", "rt"] }
+tokio-tungstenite = { workspace = true }
+tracing = { workspace = true }

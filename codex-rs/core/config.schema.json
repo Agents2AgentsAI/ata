@@ -461,6 +461,9 @@
             "use_linux_sandbox_bwrap": {
               "type": "boolean"
             },
+            "voice_mode": {
+              "type": "boolean"
+            },
             "voice_transcription": {
               "type": "boolean"
             },
@@ -571,6 +574,34 @@
           "type": "string"
         },
         "kaggle_username": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ElevenLabsToml": {
+      "additionalProperties": false,
+      "description": "ElevenLabs-specific configuration nested under `[voice_mode.elevenlabs]`.",
+      "properties": {
+        "api_key": {
+          "description": "ElevenLabs API key. Falls back to `ELEVENLABS_API_KEY` env var.",
+          "type": "string"
+        },
+        "language_code": {
+          "description": "ISO 639-1 language code (e.g. \"en\", \"es\"). None = auto-detect.",
+          "type": "string"
+        },
+        "model_id": {
+          "description": "Model ID for TTS. Defaults to `eleven_turbo_v2_5`.",
+          "type": "string"
+        },
+        "speed": {
+          "description": "Speech speed multiplier. Range: 0.7–1.2, default 1.0.",
+          "format": "double",
+          "type": "number"
+        },
+        "voice_id": {
+          "description": "Voice ID for TTS. Defaults to ElevenLabs' \"Rachel\".",
           "type": "string"
         }
       },
@@ -1581,6 +1612,84 @@
       ],
       "type": "string"
     },
+    "VoiceModeToml": {
+      "additionalProperties": false,
+      "description": "Voice mode configuration nested under `[voice_mode]` in config.toml.",
+      "properties": {
+        "auto_submit": {
+          "description": "When true, transcribed speech is auto-submitted to the agent.",
+          "type": "boolean"
+        },
+        "elevenlabs": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ElevenLabsToml"
+            }
+          ],
+          "default": null,
+          "description": "ElevenLabs API settings."
+        },
+        "enabled": {
+          "description": "When true, voice mode is automatically enabled on startup.",
+          "type": "boolean"
+        },
+        "output": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/VoiceOutput"
+            }
+          ],
+          "default": null,
+          "description": "Controls what output is produced: \"voice\", \"text\", or \"both\"."
+        },
+        "silence_duration_ms": {
+          "description": "Milliseconds of silence before a recording is finalized.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "stt_enabled": {
+          "description": "When false, STT (speech-to-text / push-to-talk) is disabled even when voice mode is on.",
+          "type": "boolean"
+        },
+        "tts_enabled": {
+          "description": "When false, TTS (text-to-speech) is disabled even when voice mode is on.",
+          "type": "boolean"
+        },
+        "vad_threshold": {
+          "description": "RMS energy threshold for voice activity detection (0.0–1.0).",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "VoiceOutput": {
+      "description": "Output mode for the voice mode pipeline.",
+      "oneOf": [
+        {
+          "description": "Only play TTS audio, suppress text streaming.",
+          "enum": [
+            "voice"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Only show text, no TTS playback.",
+          "enum": [
+            "text"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Show text AND play TTS audio (default).",
+          "enum": [
+            "both"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "WebSearchMode": {
       "enum": [
         "disabled",
@@ -1905,6 +2014,9 @@
           "type": "boolean"
         },
         "use_linux_sandbox_bwrap": {
+          "type": "boolean"
+        },
+        "voice_mode": {
           "type": "boolean"
         },
         "voice_transcription": {
@@ -2280,6 +2392,15 @@
         }
       ],
       "description": "Collection of settings that are specific to the TUI."
+    },
+    "voice_mode": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/VoiceModeToml"
+        }
+      ],
+      "default": null,
+      "description": "Voice mode settings (mic → STT → agent → TTS → speaker)."
     },
     "web_search": {
       "allOf": [

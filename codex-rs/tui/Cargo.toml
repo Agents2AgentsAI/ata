@@ -108,6 +108,7 @@ codex-windows-sandbox = { workspace = true }
 tokio-util = { workspace = true, features = ["time"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
+codex-elevenlabs = { workspace = true }
 cpal = { version = "0.15", optional = true }
 hound = { version = "3.5", optional = true }
 
