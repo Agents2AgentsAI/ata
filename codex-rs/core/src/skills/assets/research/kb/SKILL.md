@@ -13,9 +13,9 @@ The knowledge base is a directory of markdown files with YAML frontmatter, organ
 
 ## KB Path
 
-The KB directory is `~/.ata/knowledge-base`. Use this path directly — do not read config.toml to determine it.
-
-Resolve `~` to the user's home directory. The KB path is referred to as `<kb_path>` throughout this document.
+Use `${CODEX_KB_PATH}` as the KB directory. The runtime injects this variable per turn.
+If `${CODEX_KB_PATH}` is missing, fall back to `~/.ata/knowledge-base`.
+The resolved KB path is referred to as `<kb_path>` throughout this document.
 
 ## Directory Layout
 

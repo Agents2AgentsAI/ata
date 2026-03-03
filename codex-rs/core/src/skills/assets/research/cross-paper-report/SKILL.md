@@ -55,7 +55,7 @@ Before diving into full technical detail, each card explanation should establish
 
 ## Prerequisites
 
-Determine `<kb_path>` per the `$kb` skill (default `~/.ata/knowledge-base` unless configured otherwise).
+Determine `<kb_path>` per the `$kb` skill (default `${CODEX_KB_PATH}` unless configured otherwise).
 
 ## Scale Detection
 

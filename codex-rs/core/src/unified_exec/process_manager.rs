@@ -12,6 +12,7 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use crate::exec_env::CODEX_SESSION_ID_ENV_VAR;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::protocol::ExecCommandSource;
@@ -51,6 +52,8 @@ use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::UnifiedExecProcess;
 use crate::unified_exec::resolve_max_tokens;
+use crate::workspace_kb::CODEX_KB_PATH_ENV_VAR;
+use crate::workspace_kb::resolve_kb_path;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
     ("NO_COLOR", "1"),
@@ -564,10 +567,34 @@ impl UnifiedExecProcessManager {
         cwd: PathBuf,
         context: &UnifiedExecContext,
     ) -> Result<(UnifiedExecProcess, Option<DeferredNetworkApproval>), UnifiedExecError> {
-        let env = apply_unified_exec_env(create_env(
+        let mut env = apply_unified_exec_env(create_env(
             &context.turn.shell_environment_policy,
             Some(context.session.conversation_id),
         ));
+        let thread_id = context.session.conversation_id.to_string();
+        let kb_path = resolve_kb_path(
+            context.turn.config.codex_home.as_path(),
+            cwd.as_path(),
+            context
+                .turn
+                .config
+                .kb
+                .as_ref()
+                .and_then(|kb| kb.kb_path.as_deref()),
+            context
+                .turn
+                .shell_environment_policy
+                .r#set
+                .get(CODEX_SESSION_ID_ENV_VAR)
+                .map(String::as_str),
+            Some(thread_id.as_str()),
+        )
+        .to_string_lossy()
+        .to_string();
+        env.insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_path.clone());
+        let mut explicit_env_overrides = context.turn.shell_environment_policy.r#set.clone();
+        explicit_env_overrides.insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_path);
+
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
         let exec_approval_requirement = context
@@ -586,7 +613,7 @@ impl UnifiedExecProcessManager {
             command: request.command.clone(),
             cwd,
             env,
-            explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),
+            explicit_env_overrides,
             network: request.network.clone(),
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,

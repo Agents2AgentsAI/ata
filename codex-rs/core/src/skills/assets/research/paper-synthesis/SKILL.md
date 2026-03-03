@@ -19,7 +19,7 @@ You are the ORCHESTRATOR. You do NOT read papers. You do NOT call `attach_url_fi
 
 ## Single-Paper Flow (exactly 6 tool calls)
 
-1. `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` (KB check)
+1. `exec_command: rg "PAPER_ID" ${CODEX_KB_PATH}/cards/` (KB check)
 2. `spawn_agent` with `agent_type: "synthesizer"`
 3. `wait`
 4. `exec_command: cat staging_file`
@@ -57,14 +57,14 @@ That's all the subagent needs. Do NOT read `research-context.md` to add context 
 
 ### Single-Paper Path
 1. Resolve identifier via Pre-Synthesis.
-2. **Quick KB check (1 tool call max)** — run `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` where PAPER_ID is the arXiv ID, DOI, or identifier. If it finds a match, read that one card. If the card has substantial body content (more than just frontmatter — e.g., method details, results, multiple paragraphs) → present it directly via `present_reading_view` → done. If the card is just a stub with only frontmatter and a capsule → continue to step 3. Do NOT read the KB skill docs. Do NOT list the KB directory. Do NOT read multiple cards.
+2. **Quick KB check (1 tool call max)** — run `exec_command: rg "PAPER_ID" ${CODEX_KB_PATH}/cards/` where PAPER_ID is the arXiv ID, DOI, or identifier. If it finds a match, read that one card. If the card has substantial body content (more than just frontmatter — e.g., method details, results, multiple paragraphs) → present it directly via `present_reading_view` → done. If the card is just a stub with only frontmatter and a capsule → continue to step 3. Do NOT read the KB skill docs. Do NOT list the KB directory. Do NOT read multiple cards.
 3. Spawn one subagent via `spawn_agent`. Then call `wait` for the subagent to complete — it returns a staging file path.
-4. **Read the staging file** via `exec_command` (e.g., `cat ~/.ata/knowledge-base/staging/paper-1706.03762.md`).
+4. **Read the staging file** via `exec_command` (e.g., `cat ${CODEX_KB_PATH}/staging/paper-1706.03762.md`).
 5. **Present the result immediately** — your VERY NEXT tool call after reading the staging file MUST be `present_reading_view`. Do NOT write to KB before presenting. Do NOT output text before presenting. Do NOT plan all sections in your reasoning first — call the tool NOW with just the section headings, then fill each section one at a time.
 6. **MANDATORY: Persist to KB directly** — after presenting and filling ALL sections, you MUST write the KB card. Do NOT skip this step. Do NOT end the turn without persisting. If you skip persistence, the user will have to re-synthesize the paper next time, which wastes minutes. Write the card using `exec_command` with a heredoc:
 
 ```
-exec_command: cat <<'CARD_EOF' > ~/.ata/knowledge-base/cards/paper-[slug].md
+exec_command: cat <<'CARD_EOF' > ${CODEX_KB_PATH}/cards/paper-[slug].md
 ---
 id: paper-[slug]
 title: "[title]"
@@ -86,10 +86,10 @@ Then in a second `exec_command`, append to `research-journal.md` and delete the 
 
 ### Multi-Paper Path
 1. **Collect identifiers** — gather all URLs, DOIs, and arXiv IDs you already have. Only call `paper_search` for papers where you have nothing but a title, and run those searches in one parallel batch.
-2. **Quick KB check** — run `exec_command: rg "ID1\|ID2\|ID3" ~/.ata/knowledge-base/cards/` to check all papers in one call. Skip papers that already have cards.
+2. **Quick KB check** — run `exec_command: rg "ID1\|ID2\|ID3" ${CODEX_KB_PATH}/cards/` to check all papers in one call. Skip papers that already have cards.
 3. **Spawn ALL subagents at once** — one per missing paper, all in a single parallel batch. Do not spawn sequentially or in multiple rounds.
 4. **Single wait** — call `wait` once for all subagents. Each returns a staging file path.
-5. **Read all staging files** via `exec_command` (e.g., `cat ~/.ata/knowledge-base/staging/paper-*.md`).
+5. **Read all staging files** via `exec_command` (e.g., `cat ${CODEX_KB_PATH}/staging/paper-*.md`).
 6. Present results to the user.
 7. **Persist to KB** — for multi-paper, spawn a KB subagent (fire-and-forget) with ALL card contents embedded in the prompt so it can write immediately without disk reads:
 
