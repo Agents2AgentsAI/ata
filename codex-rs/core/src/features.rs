@@ -170,6 +170,8 @@ pub enum Feature {
     ReadingView,
     /// Enable knowledge base persistence (cards, journal, research-context).
     ResearchKnowledgeBase,
+    /// Enable voice mode in the TUI (mic → STT → agent → TTS → speaker).
+    VoiceMode,
     /// Enable the background job scheduler for running skills on cron/event triggers.
     Scheduler,
 }
@@ -832,9 +834,23 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::VoiceMode,
+        key: "voice_mode",
+        stage: Stage::Experimental {
+            name: "Voice Mode",
+            menu_description: "mic → STT → agent → TTS → speaker",
+            announcement: "Voice Mode is now enabled. Use /voice to toggle.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Scheduler,
         key: "scheduler",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Scheduler",
+            menu_description: "Background job scheduler for cron/event triggers",
+            announcement: "Scheduler is now enabled.",
+        },
         default_enabled: false,
     },
 ];
