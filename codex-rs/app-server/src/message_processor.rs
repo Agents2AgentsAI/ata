@@ -49,6 +49,7 @@ use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
+use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
@@ -87,7 +88,7 @@ impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
 
         let (request_id, rx) = self
             .outgoing
-            .send_request_with_id(ServerRequestPayload::ChatgptAuthTokensRefresh(params))
+            .send_request(ServerRequestPayload::ChatgptAuthTokensRefresh(params))
             .await;
 
         let result = match timeout(EXTERNAL_AUTH_REFRESH_TIMEOUT, rx).await {
@@ -139,6 +140,7 @@ pub(crate) struct ConnectionSessionState {
     pub(crate) initialized: bool,
     pub(crate) experimental_api_enabled: bool,
     pub(crate) opted_out_notification_methods: HashSet<String>,
+    pub(crate) app_server_client_name: Option<String>,
 }
 
 pub(crate) struct MessageProcessorArgs {
@@ -182,6 +184,11 @@ impl MessageProcessor {
             auth_manager.clone(),
             SessionSource::VSCode,
             config.model_catalog.clone(),
+            CollaborationModesConfig {
+                default_mode_request_user_input: config
+                    .features
+                    .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
+            },
         ));
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
@@ -323,6 +330,7 @@ impl MessageProcessor {
                     if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
                         *suffix = Some(user_agent_suffix);
                     }
+                    session.app_server_client_name = Some(name.clone());
 
                     let user_agent = get_codex_user_agent();
                     let response = InitializeResponse { user_agent };
@@ -330,6 +338,9 @@ impl MessageProcessor {
 
                     session.initialized = true;
                     outbound_initialized.store(true, Ordering::Release);
+                    self.codex_message_processor
+                        .connection_initialized(connection_id)
+                        .await;
                     return;
                 }
             }
@@ -424,7 +435,7 @@ impl MessageProcessor {
                 // inline the full `CodexMessageProcessor::process_request` future, which
                 // can otherwise push worker-thread stack usage over the edge.
                 self.codex_message_processor
-                    .process_request(connection_id, other)
+                    .process_request(connection_id, other, session.app_server_client_name.clone())
                     .boxed()
                     .await;
             }

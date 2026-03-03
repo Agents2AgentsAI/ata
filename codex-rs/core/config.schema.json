@@ -332,6 +332,9 @@
             "data": {
               "type": "boolean"
             },
+            "default_mode_request_user_input": {
+              "type": "boolean"
+            },
             "elevated_windows_sandbox": {
               "type": "boolean"
             },
@@ -435,9 +438,6 @@
               "type": "boolean"
             },
             "shell_zsh_fork": {
-              "type": "boolean"
-            },
-            "skill_approval": {
               "type": "boolean"
             },
             "skill_env_var_dependency_prompt": {
@@ -701,6 +701,10 @@
       "additionalProperties": false,
       "description": "Memories settings loaded from config.toml.",
       "properties": {
+        "generate_memories": {
+          "description": "When `false`, newly created threads are stored with `memory_mode = \"disabled\"` in the state DB.",
+          "type": "boolean"
+        },
         "max_raw_memories_for_global": {
           "description": "Maximum number of recent raw memories retained for global consolidation.",
           "format": "uint",
@@ -718,6 +722,11 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "max_unused_days": {
+          "description": "Maximum number of days since a memory was last used before it becomes ineligible for phase 2 selection.",
+          "format": "int64",
+          "type": "integer"
+        },
         "min_rollout_idle_hours": {
           "description": "Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.",
           "format": "int64",
@@ -730,7 +739,19 @@
         "phase_2_model": {
           "description": "Model used for memory consolidation.",
           "type": "string"
+        },
+        "use_memories": {
+          "description": "When `false`, skip injecting memory usage instructions into developer prompts.",
+          "type": "boolean"
         }
+      },
+      "type": "object"
+    },
+    "ModelAvailabilityNuxConfig": {
+      "additionalProperties": {
+        "format": "uint32",
+        "minimum": 0.0,
+        "type": "integer"
       },
       "type": "object"
     },
@@ -1229,6 +1250,10 @@
           },
           "type": "object"
         },
+        "oauth_resource": {
+          "default": null,
+          "type": "string"
+        },
         "required": {
           "default": null,
           "type": "boolean"
@@ -1257,6 +1282,18 @@
           "type": "number"
         },
         "url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "RealtimeAudioToml": {
+      "additionalProperties": false,
+      "properties": {
+        "microphone": {
+          "type": "string"
+        },
+        "speaker": {
           "type": "string"
         }
       },
@@ -1498,6 +1535,15 @@
           "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
           "type": "boolean"
         },
+        "model_availability_nux": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelAvailabilityNuxConfig"
+            }
+          ],
+          "default": {},
+          "description": "Startup tooltip availability NUX state persisted by the TUI."
+        },
         "notification_method": {
           "allOf": [
             {
@@ -1734,6 +1780,15 @@
       "default": null,
       "description": "Settings for app-specific controls."
     },
+    "audio": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RealtimeAudioToml"
+        }
+      ],
+      "default": null,
+      "description": "Machine-local realtime audio device preferences used by realtime voice."
+    },
     "background_terminal_max_timeout": {
       "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `300000` (5 minutes).",
       "format": "uint64",
@@ -1830,6 +1885,9 @@
           "type": "boolean"
         },
         "data": {
+          "type": "boolean"
+        },
+        "default_mode_request_user_input": {
           "type": "boolean"
         },
         "elevated_windows_sandbox": {
@@ -1935,9 +1993,6 @@
           "type": "boolean"
         },
         "shell_zsh_fork": {
-          "type": "boolean"
-        },
-        "skill_approval": {
           "type": "boolean"
         },
         "skill_env_var_dependency_prompt": {
