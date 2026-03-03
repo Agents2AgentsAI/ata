@@ -178,7 +178,7 @@ impl MultiRootState {
         };
 
         {
-            let roots = self.roots.read().await;
+            let mut roots = self.roots.write().await;
             if roots.iter().any(|existing| existing.name == root.name) {
                 return Err(format!("root '{}' already exists", root.name));
             }
@@ -188,6 +188,7 @@ impl MultiRootState {
                     root.path.display()
                 ));
             }
+            roots.push(root.clone());
         }
 
         #[cfg(feature = "treesitter")]
@@ -259,20 +260,6 @@ impl MultiRootState {
         } else {
             None
         };
-
-        {
-            let mut roots = self.roots.write().await;
-            if roots.iter().any(|existing| existing.name == root.name) {
-                return Err(format!("root '{}' already exists", root.name));
-            }
-            if roots.iter().any(|existing| existing.path == root.path) {
-                return Err(format!(
-                    "root path already registered: {}",
-                    root.path.display()
-                ));
-            }
-            roots.push(root.clone());
-        }
 
         #[cfg(feature = "treesitter")]
         if let Some(index) = treesitter_index {

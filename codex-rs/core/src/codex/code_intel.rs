@@ -55,10 +55,19 @@ pub(super) fn build_lsp_server_configs(
         .effective_config()
         .get("lsp")
         .cloned()
-        .and_then(|value| value.try_into::<LspConfig>().ok());
+        .and_then(|value| match value.try_into::<LspConfig>() {
+            Ok(parsed) => Some(parsed),
+            Err(error) => {
+                tracing::warn!("ignoring invalid `lsp` config: {error}");
+                None
+            }
+        });
 
     match lsp_config.as_ref() {
+        // `lsp = false` (parsed as `Disabled(false)`) disables all LSP integration.
         Some(LspConfig::Disabled(false)) => return std::collections::HashMap::new(),
+        // `lsp = true` keeps builtin defaults enabled.
+        Some(LspConfig::Disabled(true)) => {}
         Some(LspConfig::Servers(servers)) => {
             for (server_id, server_cfg) in servers {
                 let override_cfg = match server_cfg {
@@ -106,10 +115,19 @@ pub(super) fn build_treesitter_index_config(
         .effective_config()
         .get("treesitter")
         .cloned()
-        .and_then(|value| value.try_into::<TreeSitterConfig>().ok());
+        .and_then(|value| match value.try_into::<TreeSitterConfig>() {
+            Ok(parsed) => Some(parsed),
+            Err(error) => {
+                tracing::warn!("ignoring invalid `treesitter` config: {error}");
+                None
+            }
+        });
 
     let config_map = match treesitter_config {
+        // `treesitter = false` disables indexing.
         Some(TreeSitterConfig::Disabled(false)) => return None,
+        // `treesitter = true` keeps default TreeSitter settings enabled.
+        Some(TreeSitterConfig::Disabled(true)) => TreeSitterConfigMap::default(),
         Some(TreeSitterConfig::Config(map)) => map,
         _ => TreeSitterConfigMap::default(),
     };
@@ -208,20 +226,22 @@ pub(super) async fn init_multi_root_state(
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "lsp")]
-fn lsp_toolchain_paths(codex_home: &Path) -> (PathBuf, PathBuf, PathBuf) {
+fn lsp_toolchain_paths(codex_home: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     let lsp_root = codex_home.join("lsp");
     let bin_dir = lsp_root.join("bin");
     let npm_prefix = lsp_root.join("npm");
     let npm_cache = lsp_root.join("cache").join("npm");
-    (bin_dir, npm_prefix, npm_cache)
+    let pip_prefix = lsp_root.join("pip");
+    (bin_dir, npm_prefix, npm_cache, pip_prefix)
 }
 
 #[cfg(feature = "lsp")]
 async fn ensure_lsp_toolchain_dirs(codex_home: &Path) {
-    let (bin_dir, npm_prefix, npm_cache) = lsp_toolchain_paths(codex_home);
+    let (bin_dir, npm_prefix, npm_cache, pip_prefix) = lsp_toolchain_paths(codex_home);
     let _ = tokio::fs::create_dir_all(&bin_dir).await;
     let _ = tokio::fs::create_dir_all(&npm_prefix).await;
     let _ = tokio::fs::create_dir_all(&npm_cache).await;
+    let _ = tokio::fs::create_dir_all(&pip_prefix).await;
 }
 
 #[cfg(feature = "lsp")]
@@ -244,6 +264,16 @@ fn shell_quote(arg: &str) -> String {
                 | b'>'
                 | b'('
                 | b')'
+                | b'$'
+                | b'`'
+                | b'!'
+                | b'*'
+                | b'?'
+                | b'['
+                | b']'
+                | b'{'
+                | b'}'
+                | b'#'
         )
     }) {
         return arg.to_string();
@@ -253,7 +283,7 @@ fn shell_quote(arg: &str) -> String {
 
 #[cfg(feature = "lsp")]
 fn rewrite_lsp_install_command(codex_home: &Path, command: &[String]) -> Vec<String> {
-    let (bin_dir, npm_prefix, npm_cache) = lsp_toolchain_paths(codex_home);
+    let (bin_dir, npm_prefix, npm_cache, pip_prefix) = lsp_toolchain_paths(codex_home);
 
     match command {
         [a, b, c, rest @ ..] if a == "npm" && b == "install" && c == "-g" => {
@@ -302,13 +332,16 @@ fn rewrite_lsp_install_command(codex_home: &Path, command: &[String]) -> Vec<Str
             }
         }
         [a, b, rest @ ..] if a == "pip" && b == "install" => {
-            if which::which("pip").is_err() && which::which("pip3").is_ok() {
-                let mut out = vec!["pip3".into(), b.clone()];
-                out.extend(rest.iter().cloned());
-                out
+            let binary = if which::which("pip").is_err() && which::which("pip3").is_ok() {
+                "pip3".to_string()
             } else {
-                command.to_vec()
-            }
+                a.clone()
+            };
+            let mut out = vec![binary, b.clone()];
+            out.extend(rest.iter().cloned());
+            out.push("--prefix".into());
+            out.push(pip_prefix.to_string_lossy().to_string());
+            out
         }
         _ => command.to_vec(),
     }
@@ -541,6 +574,21 @@ mod tests {
             rewritten
                 .windows(2)
                 .any(|w| w == ["--bindir", "/tmp/codex-home-test/lsp/bin"])
+        );
+    }
+
+    #[test]
+    fn rewrites_pip_install_to_managed_prefix() {
+        let cmd = vec![
+            "pip".to_string(),
+            "install".to_string(),
+            "python-lsp-server".to_string(),
+        ];
+        let rewritten = rewrite_lsp_install_command(codex_home().as_path(), &cmd);
+        assert!(
+            rewritten
+                .windows(2)
+                .any(|w| w == ["--prefix", "/tmp/codex-home-test/lsp/pip"])
         );
     }
 

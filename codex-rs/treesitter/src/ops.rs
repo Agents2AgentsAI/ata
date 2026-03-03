@@ -1,5 +1,8 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use rayon::prelude::*;
 use serde::Serialize;
@@ -16,6 +19,22 @@ pub fn search_symbols(symbol_table: &SymbolTable, query: &str, limit: usize) -> 
     symbol_table.search(query, limit)
 }
 
+fn bounded_range(byte_range: (usize, usize), source_len: usize) -> Option<(usize, usize)> {
+    if byte_range.0 > source_len {
+        return None;
+    }
+    let end = byte_range.1.min(source_len);
+    if byte_range.0 > end {
+        return None;
+    }
+    Some((byte_range.0, end))
+}
+
+fn source_slice(source: &str, byte_range: (usize, usize)) -> Option<&str> {
+    let (start, end) = bounded_range(byte_range, source.len())?;
+    source.get(start..end)
+}
+
 pub fn get_implementation(
     root: &Path,
     symbol_table: &SymbolTable,
@@ -29,8 +48,13 @@ pub fn get_implementation(
     let source = std::fs::read_to_string(root.join(&symbol.file))
         .map_err(|error| format!("failed to read '{}': {error}", symbol.file))?;
 
-    let end = symbol.byte_range.1.min(source.len());
-    Ok(source[symbol.byte_range.0..end].to_string())
+    let implementation = source_slice(&source, symbol.byte_range).ok_or_else(|| {
+        format!(
+            "invalid byte range {}..{} for '{}' in '{}'",
+            symbol.byte_range.0, symbol.byte_range.1, symbol.name, symbol.file
+        )
+    })?;
+    Ok(implementation.to_string())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -84,56 +108,55 @@ fn find_callers_ast(
     symbol_name: &str,
     definition_file: &str,
 ) -> Vec<CallerInfo> {
-    let Some((tree, query)) = try_parse_with_query(source, language, QueryKind::Callers) else {
+    let lines: Vec<&str> = source.lines().collect();
+    let Some(callers) = with_parsed_query(
+        source,
+        language,
+        QueryKind::Callers,
+        |tree, query, capture_names| {
+            let callee_index = capture_names.iter().position(|name| name == "callee");
+            let mut callers = Vec::new();
+            let mut cursor = tree_sitter::QueryCursor::new();
+            let mut matches = cursor.matches(query, tree.root_node(), source.as_bytes());
+
+            while let Some(match_) = matches.next() {
+                for capture in match_.captures {
+                    if Some(capture.index as usize) != callee_index {
+                        continue;
+                    }
+
+                    let text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
+                    if text != symbol_name {
+                        continue;
+                    }
+
+                    let line = capture.node.start_position().row + 1;
+                    let line_text = lines
+                        .get(line.saturating_sub(1))
+                        .copied()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+
+                    if rel_path == definition_file
+                        && is_definition_line(&line_text, symbol_name, language)
+                    {
+                        continue;
+                    }
+
+                    callers.push(CallerInfo {
+                        file: rel_path.to_string(),
+                        line,
+                        text: line_text,
+                    });
+                }
+            }
+
+            callers
+        },
+    ) else {
         return find_callers_regex(source, rel_path, language, symbol_name, definition_file);
     };
-
-    let capture_names: Vec<String> = query
-        .capture_names()
-        .iter()
-        .map(ToString::to_string)
-        .collect();
-    let callee_index = capture_names.iter().position(|name| name == "callee");
-
-    let mut callers = Vec::new();
-    let mut cursor = tree_sitter::QueryCursor::new();
-    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-
-    while let Some(match_) = matches.next() {
-        for capture in match_.captures {
-            if Some(capture.index as usize) != callee_index {
-                continue;
-            }
-
-            let text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
-            if text != symbol_name {
-                continue;
-            }
-
-            let line = capture.node.start_position().row + 1;
-            if rel_path == definition_file
-                && source
-                    .lines()
-                    .nth(line - 1)
-                    .is_some_and(|line_text| is_definition_line(line_text, symbol_name, language))
-            {
-                continue;
-            }
-
-            let line_text = source
-                .lines()
-                .nth(line - 1)
-                .map(|line_text| line_text.trim().to_string())
-                .unwrap_or_default();
-
-            callers.push(CallerInfo {
-                file: rel_path.to_string(),
-                line,
-                text: line_text,
-            });
-        }
-    }
-
     callers
 }
 
@@ -179,20 +202,34 @@ fn is_definition_line(line: &str, name: &str, language: Language) -> bool {
         }
         Language::Go => line.contains(&format!("func {name}")),
         Language::Java => {
-            line.contains(&format!("class {name}"))
-                || line.contains(&format!("interface {name}"))
-                || line.contains(&format!("enum {name}"))
-                || (line.contains(name)
-                    && (line.contains("void ")
-                        || line.contains("int ")
-                        || line.contains("String ")
-                        || line.contains("boolean ")
-                        || line.contains("long ")
-                        || line.contains("double ")
-                        || line.contains("float ")
-                        || line.contains("public ")
-                        || line.contains("private ")
-                        || line.contains("protected ")))
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+                return false;
+            }
+
+            trimmed.contains(&format!("class {name}"))
+                || trimmed.contains(&format!("interface {name}"))
+                || trimmed.contains(&format!("enum {name}"))
+                || (trimmed.contains(&format!("{name}("))
+                    && (trimmed.contains("void ")
+                        || trimmed.contains("int ")
+                        || trimmed.contains("String ")
+                        || trimmed.contains("boolean ")
+                        || trimmed.contains("long ")
+                        || trimmed.contains("double ")
+                        || trimmed.contains("float ")
+                        || trimmed.contains("char ")
+                        || trimmed.contains("byte ")
+                        || trimmed.contains("short ")
+                        || trimmed.contains("public ")
+                        || trimmed.contains("private ")
+                        || trimmed.contains("protected ")
+                        || trimmed.contains("static ")
+                        || trimmed.contains("final ")
+                        || trimmed.contains("abstract ")
+                        || trimmed.contains("default ")
+                        || trimmed.contains("synchronized ")
+                        || trimmed.contains("native ")))
         }
         Language::Scala => {
             line.contains(&format!("def {name}"))
@@ -210,24 +247,70 @@ enum QueryKind {
     Variables,
 }
 
-fn try_parse_with_query(
+struct OpsQueryCache {
+    parser: tree_sitter::Parser,
+    callers_query: tree_sitter::Query,
+    callers_capture_names: Vec<String>,
+    variables_query: tree_sitter::Query,
+    variables_capture_names: Vec<String>,
+}
+
+thread_local! {
+    static OPS_QUERY_CACHE: RefCell<HashMap<Language, OpsQueryCache>> = RefCell::new(HashMap::new());
+}
+
+fn with_parsed_query<R>(
     source: &str,
     language: Language,
     query_kind: QueryKind,
-) -> Option<(tree_sitter::Tree, tree_sitter::Query)> {
-    let config = queries::get_language_config(language)?;
-    let query_str = match query_kind {
-        QueryKind::Callers => config.callers_query,
-        QueryKind::Variables => config.variables_query,
-    };
+    handler: impl FnOnce(tree_sitter::Tree, &tree_sitter::Query, &[String]) -> R,
+) -> Option<R> {
+    OPS_QUERY_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if !cache.contains_key(&language) {
+            let config = queries::get_language_config(language)?;
+            let mut parser = tree_sitter::Parser::new();
+            parser.set_language(&config.language).ok()?;
 
-    let mut parser = tree_sitter::Parser::new();
-    parser.set_language(&config.language).ok()?;
+            let callers_query =
+                tree_sitter::Query::new(&config.language, config.callers_query).ok()?;
+            let callers_capture_names = callers_query
+                .capture_names()
+                .iter()
+                .map(ToString::to_string)
+                .collect();
 
-    let tree = parser.parse(source, None)?;
-    let query = tree_sitter::Query::new(&config.language, query_str).ok()?;
+            let variables_query =
+                tree_sitter::Query::new(&config.language, config.variables_query).ok()?;
+            let variables_capture_names = variables_query
+                .capture_names()
+                .iter()
+                .map(ToString::to_string)
+                .collect();
 
-    Some((tree, query))
+            cache.insert(
+                language,
+                OpsQueryCache {
+                    parser,
+                    callers_query,
+                    callers_capture_names,
+                    variables_query,
+                    variables_capture_names,
+                },
+            );
+        }
+
+        let entry = cache.get_mut(&language)?;
+        let tree = entry.parser.parse(source, None)?;
+        let (query, capture_names) = match query_kind {
+            QueryKind::Callers => (&entry.callers_query, entry.callers_capture_names.as_slice()),
+            QueryKind::Variables => (
+                &entry.variables_query,
+                entry.variables_capture_names.as_slice(),
+            ),
+        };
+        Some(handler(tree, query, capture_names))
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -254,8 +337,7 @@ pub fn find_tests(
         .into_par_iter()
         .filter_map(|symbol| {
             let source = std::fs::read_to_string(root.join(&symbol.file)).ok()?;
-            let end = symbol.byte_range.1.min(source.len());
-            let body = &source[symbol.byte_range.0..end];
+            let body = source_slice(&source, symbol.byte_range)?;
             if !body.contains(symbol_name) {
                 return None;
             }
@@ -296,22 +378,30 @@ pub fn list_variables(
     let source = std::fs::read_to_string(root.join(&symbol.file))
         .map_err(|error| format!("failed to read '{}': {error}", symbol.file))?;
 
-    let end = symbol.byte_range.1.min(source.len());
+    let (start, end) = bounded_range(symbol.byte_range, source.len()).ok_or_else(|| {
+        format!(
+            "invalid byte range {}..{} for '{}' in '{}'",
+            symbol.byte_range.0, symbol.byte_range.1, symbol.name, symbol.file
+        )
+    })?;
+    let body = source_slice(&source, symbol.byte_range).ok_or_else(|| {
+        format!(
+            "invalid UTF-8 slice {}..{} for '{}' in '{}'",
+            symbol.byte_range.0, symbol.byte_range.1, symbol.name, symbol.file
+        )
+    })?;
+
     if symbol.language.has_tree_sitter_support() {
         return Ok(list_variables_ast(
             &source,
             symbol.language,
-            symbol.byte_range.0,
+            start,
             end,
             function_name,
         ));
     }
 
-    Ok(list_variables_regex(
-        &source[symbol.byte_range.0..end],
-        symbol.language,
-        function_name,
-    ))
+    Ok(list_variables_regex(body, symbol.language, function_name))
 }
 
 fn list_variables_ast(
@@ -321,123 +411,140 @@ fn list_variables_ast(
     function_end: usize,
     function_name: &str,
 ) -> Vec<VariableInfo> {
-    let Some((tree, query)) = try_parse_with_query(source, language, QueryKind::Variables) else {
-        return list_variables_regex(
-            &source[function_start..function_end],
-            language,
-            function_name,
-        );
+    let body = source.get(function_start..function_end).unwrap_or("");
+    let Some(variables) = with_parsed_query(
+        source,
+        language,
+        QueryKind::Variables,
+        |tree, query, capture_names| {
+            let variable_capture_index = capture_names.iter().position(|name| name == "var.name");
+
+            let mut variables = Vec::new();
+            let mut seen = HashSet::new();
+            let mut cursor = tree_sitter::QueryCursor::new();
+            cursor.set_byte_range(function_start..function_end);
+
+            let mut matches = cursor.matches(query, tree.root_node(), source.as_bytes());
+            while let Some(match_) = matches.next() {
+                for capture in match_.captures {
+                    if Some(capture.index as usize) != variable_capture_index {
+                        continue;
+                    }
+
+                    let name = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
+                    if name.is_empty()
+                        || name == "self"
+                        || name == "_"
+                        || !seen.insert(name.to_string())
+                    {
+                        continue;
+                    }
+
+                    variables.push(VariableInfo {
+                        name: name.to_string(),
+                        function: function_name.to_string(),
+                    });
+                }
+            }
+
+            variables
+        },
+    ) else {
+        return list_variables_regex(body, language, function_name);
     };
-
-    let capture_names: Vec<String> = query
-        .capture_names()
-        .iter()
-        .map(ToString::to_string)
-        .collect();
-    let variable_capture_index = capture_names.iter().position(|name| name == "var.name");
-
-    let mut variables = Vec::new();
-    let mut seen = HashSet::new();
-    let mut cursor = tree_sitter::QueryCursor::new();
-    cursor.set_byte_range(function_start..function_end);
-
-    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-    while let Some(match_) = matches.next() {
-        for capture in match_.captures {
-            if Some(capture.index as usize) != variable_capture_index {
-                continue;
-            }
-
-            let name = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
-            if name.is_empty() || name == "self" || name == "_" || !seen.insert(name.to_string()) {
-                continue;
-            }
-
-            variables.push(VariableInfo {
-                name: name.to_string(),
-                function: function_name.to_string(),
-            });
-        }
-    }
-
     variables
 }
 
 fn list_variables_regex(body: &str, language: Language, function_name: &str) -> Vec<VariableInfo> {
+    static RUST_VAR_REGEX: OnceLock<regex::Regex> = OnceLock::new();
+    static PYTHON_VAR_REGEX: OnceLock<regex::Regex> = OnceLock::new();
+    static JS_VAR_REGEX: OnceLock<regex::Regex> = OnceLock::new();
+    static GO_SHORT_VAR_REGEX: OnceLock<regex::Regex> = OnceLock::new();
+    static GO_VAR_REGEX: OnceLock<regex::Regex> = OnceLock::new();
+    static JAVA_VAR_REGEX: OnceLock<regex::Regex> = OnceLock::new();
+    static SCALA_VAR_REGEX: OnceLock<regex::Regex> = OnceLock::new();
+
     let mut variables = Vec::new();
 
     match language {
         Language::Rust => {
-            if let Ok(pattern) = regex::Regex::new(r"let\s+(mut\s+)?(\w+)") {
-                for captures in pattern.captures_iter(body) {
-                    variables.push(VariableInfo {
-                        name: captures[2].to_string(),
-                        function: function_name.to_string(),
-                    });
-                }
+            let pattern = RUST_VAR_REGEX.get_or_init(|| {
+                regex::Regex::new(r"let\s+(mut\s+)?(\w+)").expect("valid rust variable regex")
+            });
+            for captures in pattern.captures_iter(body) {
+                variables.push(VariableInfo {
+                    name: captures[2].to_string(),
+                    function: function_name.to_string(),
+                });
             }
         }
         Language::Python => {
-            if let Ok(pattern) = regex::Regex::new(r"^\s+(\w+)\s*=") {
-                for captures in pattern.captures_iter(body) {
-                    let name = captures[1].to_string();
-                    if name != "self" && !name.starts_with('_') {
-                        variables.push(VariableInfo {
-                            name,
-                            function: function_name.to_string(),
-                        });
-                    }
+            let pattern = PYTHON_VAR_REGEX.get_or_init(|| {
+                regex::Regex::new(r"^\s+(\w+)\s*=").expect("valid python variable regex")
+            });
+            for captures in pattern.captures_iter(body) {
+                let name = captures[1].to_string();
+                if name != "self" && !name.starts_with('_') {
+                    variables.push(VariableInfo {
+                        name,
+                        function: function_name.to_string(),
+                    });
                 }
             }
         }
         Language::TypeScript | Language::JavaScript => {
-            if let Ok(pattern) = regex::Regex::new(r"(?:let|const|var)\s+(\w+)") {
-                for captures in pattern.captures_iter(body) {
-                    variables.push(VariableInfo {
-                        name: captures[1].to_string(),
-                        function: function_name.to_string(),
-                    });
-                }
+            let pattern = JS_VAR_REGEX.get_or_init(|| {
+                regex::Regex::new(r"(?:let|const|var)\s+(\w+)").expect("valid js/ts variable regex")
+            });
+            for captures in pattern.captures_iter(body) {
+                variables.push(VariableInfo {
+                    name: captures[1].to_string(),
+                    function: function_name.to_string(),
+                });
             }
         }
         Language::Go => {
-            if let Ok(short_pattern) = regex::Regex::new(r"(\w+)\s*:=") {
-                for captures in short_pattern.captures_iter(body) {
-                    variables.push(VariableInfo {
-                        name: captures[1].to_string(),
-                        function: function_name.to_string(),
-                    });
-                }
+            let short_pattern = GO_SHORT_VAR_REGEX.get_or_init(|| {
+                regex::Regex::new(r"(\w+)\s*:=").expect("valid go short var regex")
+            });
+            for captures in short_pattern.captures_iter(body) {
+                variables.push(VariableInfo {
+                    name: captures[1].to_string(),
+                    function: function_name.to_string(),
+                });
             }
-            if let Ok(var_pattern) = regex::Regex::new(r"var\s+(\w+)") {
-                for captures in var_pattern.captures_iter(body) {
-                    variables.push(VariableInfo {
-                        name: captures[1].to_string(),
-                        function: function_name.to_string(),
-                    });
-                }
+            let var_pattern = GO_VAR_REGEX
+                .get_or_init(|| regex::Regex::new(r"var\s+(\w+)").expect("valid go var regex"));
+            for captures in var_pattern.captures_iter(body) {
+                variables.push(VariableInfo {
+                    name: captures[1].to_string(),
+                    function: function_name.to_string(),
+                });
             }
         }
         Language::Java => {
-            if let Ok(pattern) = regex::Regex::new(
+            let pattern = JAVA_VAR_REGEX.get_or_init(|| {
+                regex::Regex::new(
                 r"\b(?:int|long|float|double|boolean|char|byte|short|String|var|final\s+\w+)\s+(\w+)\s*[=;,)]",
-            ) {
-                for captures in pattern.captures_iter(body) {
-                    variables.push(VariableInfo {
-                        name: captures[1].to_string(),
-                        function: function_name.to_string(),
-                    });
-                }
+            )
+                .expect("valid java variable regex")
+            });
+            for captures in pattern.captures_iter(body) {
+                variables.push(VariableInfo {
+                    name: captures[1].to_string(),
+                    function: function_name.to_string(),
+                });
             }
         }
         Language::Scala => {
-            if let Ok(pattern) = regex::Regex::new(r"\b(?:val|var)\s+(\w+)") {
-                for captures in pattern.captures_iter(body) {
-                    variables.push(VariableInfo {
-                        name: captures[1].to_string(),
-                        function: function_name.to_string(),
-                    });
-                }
+            let pattern = SCALA_VAR_REGEX.get_or_init(|| {
+                regex::Regex::new(r"\b(?:val|var)\s+(\w+)").expect("valid scala variable regex")
+            });
+            for captures in pattern.captures_iter(body) {
+                variables.push(VariableInfo {
+                    name: captures[1].to_string(),
+                    function: function_name.to_string(),
+                });
             }
         }
         Language::Other => {}

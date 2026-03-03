@@ -20,6 +20,33 @@ struct SymbolExtractCache {
     capture_names: Vec<String>,
 }
 
+fn symbol_kind_from_capture(capture_name: &str) -> Option<SymbolKind> {
+    let kind_name = capture_name.strip_suffix(".name")?;
+    match kind_name {
+        "function" => Some(SymbolKind::Function),
+        "method" => Some(SymbolKind::Method),
+        "class" => Some(SymbolKind::Class),
+        "struct" => Some(SymbolKind::Struct),
+        "enum" => Some(SymbolKind::Enum),
+        "trait" => Some(SymbolKind::Trait),
+        "interface" => Some(SymbolKind::Interface),
+        "type" => Some(SymbolKind::Type),
+        "const" => Some(SymbolKind::Constant),
+        "mod" => Some(SymbolKind::Module),
+        _ => None,
+    }
+}
+
+fn symbol_kind_priority(kind: SymbolKind) -> u8 {
+    match kind {
+        SymbolKind::Method => 5,
+        SymbolKind::Struct | SymbolKind::Interface => 4,
+        SymbolKind::Function | SymbolKind::Class | SymbolKind::Trait | SymbolKind::Enum => 3,
+        SymbolKind::Constant | SymbolKind::Module | SymbolKind::Variable => 2,
+        SymbolKind::Type => 1,
+    }
+}
+
 thread_local! {
     static SYMBOL_EXTRACT_CACHE: RefCell<HashMap<Language, SymbolExtractCache>> =
         RefCell::new(HashMap::new());
@@ -72,95 +99,45 @@ pub fn extract_symbols_from_file(
         let mut matches = cursor.matches(&entry.query, tree.root_node(), source.as_bytes());
 
         let mut symbols = Vec::new();
-        let mut current_impl_type: Option<String> = None;
 
         while let Some(match_) = matches.next() {
             let mut name: Option<String> = None;
             let mut kind: Option<SymbolKind> = None;
             let mut def_node: Option<tree_sitter::Node> = None;
             let mut parent: Option<String> = None;
+            let mut impl_type: Option<String> = None;
+            let mut class_name: Option<String> = None;
 
             for capture in match_.captures {
                 let capture_name = entry.capture_names[capture.index as usize].as_str();
                 let text = capture.node.utf8_text(source.as_bytes()).unwrap_or("");
 
-                match capture_name {
-                    "function.name" => {
-                        name = Some(text.to_string());
-                        kind = Some(SymbolKind::Function);
-                    }
-                    "function.def" => {
-                        def_node = Some(capture.node);
-                    }
-                    "method.name" => {
-                        name = Some(text.to_string());
-                        kind = Some(SymbolKind::Method);
-                        parent = current_impl_type.clone();
-                    }
-                    "method.def" => {
-                        def_node = Some(capture.node);
-                    }
-                    "impl.type" => {
-                        current_impl_type = Some(text.to_string());
-                    }
-                    "class.name" => {
-                        name = Some(text.to_string());
-                        kind = Some(SymbolKind::Class);
-                    }
-                    "class.def" => {
-                        def_node = Some(capture.node);
-                    }
-                    "struct.name" => {
-                        name = Some(text.to_string());
-                        kind = Some(SymbolKind::Struct);
-                    }
-                    "struct.def" => {
-                        def_node = Some(capture.node);
-                    }
-                    "enum.name" => {
-                        name = Some(text.to_string());
-                        kind = Some(SymbolKind::Enum);
-                    }
-                    "enum.def" => {
-                        def_node = Some(capture.node);
-                    }
-                    "trait.name" => {
-                        name = Some(text.to_string());
-                        kind = Some(SymbolKind::Trait);
-                    }
-                    "trait.def" => {
-                        def_node = Some(capture.node);
-                    }
-                    "interface.name" => {
-                        name = Some(text.to_string());
-                        kind = Some(SymbolKind::Interface);
-                    }
-                    "interface.def" => {
-                        def_node = Some(capture.node);
-                    }
-                    "type.name" => {
-                        name = Some(text.to_string());
-                        kind = Some(SymbolKind::Type);
-                    }
-                    "type.def" => {
-                        def_node = Some(capture.node);
-                    }
-                    "const.name" => {
-                        name = Some(text.to_string());
-                        kind = Some(SymbolKind::Constant);
-                    }
-                    "const.def" => {
-                        def_node = Some(capture.node);
-                    }
-                    "mod.name" => {
-                        name = Some(text.to_string());
-                        kind = Some(SymbolKind::Module);
-                    }
-                    "mod.def" => {
-                        def_node = Some(capture.node);
-                    }
-                    _ => {}
+                if capture_name == "impl.type" {
+                    impl_type = Some(text.to_string());
+                    continue;
                 }
+
+                if capture_name == "class.name" {
+                    class_name = Some(text.to_string());
+                }
+
+                if capture_name == "method.parent" {
+                    class_name = Some(text.to_string());
+                }
+
+                if let Some(capture_kind) = symbol_kind_from_capture(capture_name) {
+                    name = Some(text.to_string());
+                    kind = Some(capture_kind);
+                    continue;
+                }
+
+                if capture_name.ends_with(".def") {
+                    def_node = Some(capture.node);
+                }
+            }
+
+            if matches!(kind, Some(SymbolKind::Method)) {
+                parent = impl_type.or(class_name);
             }
 
             if let (Some(name), Some(kind), Some(def_node)) = (name, kind, def_node) {
@@ -185,7 +162,23 @@ pub fn extract_symbols_from_file(
             }
         }
 
-        Ok(symbols)
+        let mut dedup_indices: HashMap<(String, (usize, usize)), usize> = HashMap::new();
+        let mut deduped: Vec<Symbol> = Vec::with_capacity(symbols.len());
+        for symbol in symbols {
+            let key = (symbol.name.clone(), symbol.byte_range);
+            if let Some(existing_idx) = dedup_indices.get(&key).copied() {
+                let existing_priority = symbol_kind_priority(deduped[existing_idx].kind);
+                let new_priority = symbol_kind_priority(symbol.kind);
+                if new_priority > existing_priority {
+                    deduped[existing_idx] = symbol;
+                }
+            } else {
+                dedup_indices.insert(key, deduped.len());
+                deduped.push(symbol);
+            }
+        }
+
+        Ok(deduped)
     })
 }
 
@@ -246,4 +239,142 @@ pub fn reindex_file(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    fn write_source(root: &Path, rel_path: &str, source: &str) {
+        let abs = root.join(rel_path);
+        if let Some(parent) = abs.parent() {
+            std::fs::create_dir_all(parent).expect("create parent directory");
+        }
+        std::fs::write(abs, source).expect("write source file");
+    }
+
+    #[cfg(feature = "rust")]
+    #[test]
+    fn rust_method_parent_tracks_each_impl_block() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+        let rel_path = "src/lib.rs";
+        write_source(
+            root,
+            rel_path,
+            r#"
+impl Foo {
+    fn bar(&self) {}
+}
+
+impl Baz {
+    fn qux(&self) {}
+}
+
+fn free() {}
+"#,
+        );
+
+        let symbols =
+            extract_symbols_from_file(root, rel_path, Language::Rust).expect("extract symbols");
+
+        let by_name: HashMap<_, _> = symbols
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol))
+            .collect();
+
+        assert_eq!(
+            by_name
+                .get("bar")
+                .and_then(|symbol| symbol.parent.as_deref()),
+            Some("Foo")
+        );
+        assert_eq!(
+            by_name
+                .get("qux")
+                .and_then(|symbol| symbol.parent.as_deref()),
+            Some("Baz")
+        );
+        assert_eq!(
+            by_name
+                .get("free")
+                .and_then(|symbol| symbol.parent.as_deref()),
+            None
+        );
+    }
+
+    #[cfg(feature = "python")]
+    #[test]
+    fn python_methods_include_enclosing_class_parent() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+        let rel_path = "pkg/mod.py";
+        write_source(
+            root,
+            rel_path,
+            r#"
+class Greeter:
+    def hello(self):
+        return "hi"
+
+def free():
+    return 1
+"#,
+        );
+
+        let symbols =
+            extract_symbols_from_file(root, rel_path, Language::Python).expect("extract symbols");
+
+        let by_name: HashMap<_, _> = symbols
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol))
+            .collect();
+
+        assert_eq!(
+            by_name
+                .get("hello")
+                .and_then(|symbol| symbol.parent.as_deref()),
+            Some("Greeter")
+        );
+        assert_eq!(
+            by_name
+                .get("free")
+                .and_then(|symbol| symbol.parent.as_deref()),
+            None
+        );
+    }
+
+    #[cfg(feature = "go")]
+    #[test]
+    fn go_struct_and_interface_type_decls_are_not_duplicated() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+        let rel_path = "pkg/types.go";
+        write_source(
+            root,
+            rel_path,
+            r#"
+package pkg
+
+type Foo struct{}
+type Bar interface{}
+type Baz int
+"#,
+        );
+
+        let symbols =
+            extract_symbols_from_file(root, rel_path, Language::Go).expect("extract symbols");
+
+        let foo = symbols.iter().filter(|symbol| symbol.name == "Foo").count();
+        let bar = symbols.iter().filter(|symbol| symbol.name == "Bar").count();
+        let baz = symbols.iter().filter(|symbol| symbol.name == "Baz").count();
+
+        assert_eq!(foo, 1, "expected one symbol for struct type Foo");
+        assert_eq!(bar, 1, "expected one symbol for interface type Bar");
+        assert_eq!(baz, 1, "expected one symbol for alias type Baz");
+    }
 }

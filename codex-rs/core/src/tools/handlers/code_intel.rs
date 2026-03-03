@@ -116,8 +116,28 @@ impl ToolHandler for CodeIntelToolHandler {
         ToolKind::Function
     }
 
-    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
-        false
+    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
+        let Ok(arguments) =
+            function_arguments_from_payload(invocation.payload.clone(), "code_intel")
+        else {
+            return false;
+        };
+        let Ok(args) = parse_arguments::<CodeIntelToolArgs>(&arguments) else {
+            return false;
+        };
+
+        matches!(
+            args.operation,
+            CodeIntelOperation::DefineSymbol
+                | CodeIntelOperation::RedefineSymbol
+                | CodeIntelOperation::DefineFile
+                | CodeIntelOperation::RedefineFile
+                | CodeIntelOperation::MarkFile
+                | CodeIntelOperation::SaveAnnotations
+                | CodeIntelOperation::LoadAnnotations
+                | CodeIntelOperation::AddRoot
+                | CodeIntelOperation::RemoveRoot
+        )
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
@@ -264,12 +284,13 @@ impl ToolHandler for CodeIntelToolHandler {
                 let mut out = Vec::new();
                 let mut roots = Vec::new();
                 for (root, index) in indices {
+                    let structure = index.structure(depth);
                     out.push(format!("[{root}]"));
-                    out.push(index.structure(depth));
+                    out.push(structure.clone());
                     roots.push(json!({
                         "root": root,
                         "depth": depth,
-                        "tree": index.structure(depth),
+                        "tree": structure,
                         "file_count": index.file_tree().len(),
                         "language_breakdown": index
                             .file_tree()

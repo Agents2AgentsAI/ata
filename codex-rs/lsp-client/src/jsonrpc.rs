@@ -75,6 +75,7 @@ impl LspCodec {
 }
 
 const HEADER_SEPARATOR: &[u8] = b"\r\n\r\n";
+const MAX_CONTENT_LENGTH: usize = 16 * 1024 * 1024;
 
 impl Decoder for LspCodec {
     type Item = JsonRpcMessage;
@@ -110,12 +111,18 @@ impl Decoder for LspCodec {
 
             let mut content_length = None;
             for line in header_str.split("\r\n") {
-                if let Some(val) = line.strip_prefix("Content-Length: ") {
-                    content_length = Some(
-                        val.trim()
-                            .parse::<usize>()
-                            .map_err(|_| LspError::InvalidHeader)?,
-                    );
+                let Some((name, value)) = line.split_once(':') else {
+                    continue;
+                };
+                if name.trim().eq_ignore_ascii_case("Content-Length") {
+                    let len = value
+                        .trim()
+                        .parse::<usize>()
+                        .map_err(|_| LspError::InvalidHeader)?;
+                    if len > MAX_CONTENT_LENGTH {
+                        return Err(LspError::InvalidHeader);
+                    }
+                    content_length = Some(len);
                 }
             }
 
@@ -199,6 +206,31 @@ mod tests {
         let mut codec = LspCodec::new();
         let mut buf = BytesMut::from("Content-Length: 100\r\n\r\n{\"jsonrpc\"");
         assert!(codec.decode(&mut buf).expect("ok").is_none());
+    }
+
+    #[test]
+    fn decode_lowercase_content_length_header() {
+        let mut codec = LspCodec::new();
+        let body = br#"{"jsonrpc":"2.0","id":1,"result":null}"#;
+        let mut bytes = format!("content-length: {}\r\n\r\n", body.len()).into_bytes();
+        bytes.extend_from_slice(body);
+        let mut buf = BytesMut::from(bytes.as_slice());
+        let msg = codec
+            .decode(&mut buf)
+            .expect("decode")
+            .expect("some message");
+        assert!(matches!(msg, JsonRpcMessage::Response(_)));
+    }
+
+    #[test]
+    fn reject_oversized_content_length() {
+        let mut codec = LspCodec::new();
+        let oversized = format!("Content-Length: {}\r\n\r\n", MAX_CONTENT_LENGTH + 1);
+        let mut buf = BytesMut::from(oversized.as_bytes());
+        let err = codec
+            .decode(&mut buf)
+            .expect_err("must reject oversized content length");
+        assert!(matches!(err, LspError::InvalidHeader));
     }
 
     #[test]

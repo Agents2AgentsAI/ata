@@ -19,7 +19,10 @@ const SYMBOLS_QUERY: &str = r#"
 
 (type_declaration
   (type_spec
-    name: (type_identifier) @type.name)) @type.def
+    name: (type_identifier) @type.name
+    type: (_) @type.target)) @type.def
+(#not-match? @type.def "^type\\s+\\w+\\s+struct\\b")
+(#not-match? @type.def "^type\\s+\\w+\\s+interface\\b")
 
 (const_declaration
   (const_spec
@@ -56,11 +59,18 @@ const VARIABLES_QUERY: &str = r#"
   name: (identifier) @var.name)
 "#;
 
+const NON_CODE_QUERY: &str = r#"
+(comment) @skip
+(raw_string_literal) @skip
+(interpreted_string_literal) @skip
+"#;
+
 pub fn config() -> LanguageConfig {
     LanguageConfig {
         language: tree_sitter_go::LANGUAGE.into(),
         symbols_query: SYMBOLS_QUERY,
         callers_query: CALLERS_QUERY,
         variables_query: VARIABLES_QUERY,
+        non_code_query: NON_CODE_QUERY,
     }
 }
