@@ -650,6 +650,23 @@ fn voice_mode_config(config: &codex_core::config::Config) -> VoiceModeToml {
 }
 
 impl super::ChatWidget {
+    /// Return the voice mode config with in-session overrides (speed, language)
+    /// applied on top of the on-disk config.  `/voice-setup` writes to disk but
+    /// the in-memory `config_layer_stack` isn't reloaded, so we patch the cached
+    /// values in here to make changes take effect immediately.
+    fn effective_voice_config(&self) -> VoiceModeToml {
+        let mut vc = voice_mode_config(&self.config);
+        if let Some(speed) = self.cached_elevenlabs_speed {
+            let el = vc.elevenlabs.get_or_insert_with(Default::default);
+            el.speed = Some(speed);
+        }
+        if let Some(ref lang) = self.cached_elevenlabs_language {
+            let el = vc.elevenlabs.get_or_insert_with(Default::default);
+            el.language_code = lang.clone();
+        }
+        vc
+    }
+
     /// Sync the composer placeholder text to reflect the current voice mode phase.
     /// Also syncs the voice status indicator in the reading view (if active).
     fn sync_voice_placeholder(&mut self) {
@@ -729,7 +746,7 @@ impl super::ChatWidget {
         }
 
         // Initialize voice mode state from config.
-        let voice_config = voice_mode_config(&self.config);
+        let voice_config = self.effective_voice_config();
 
         // Show a friendly API key hint if TTS won't work (STT still works
         // without ElevenLabs because it uses the built-in Whisper path).
@@ -742,10 +759,7 @@ impl super::ChatWidget {
         if api_key.is_none() {
             let warning_cell = history_cell::new_warning_event(
                 "ElevenLabs API key not found — TTS will not work.\n\
-                 Set ELEVENLABS_API_KEY or add to config.toml:\n  \
-                 [voice_mode.elevenlabs]\n  \
-                 api_key = \"your-key\"\n\
-                 Get a key at: https://elevenlabs.io/app/settings/api-keys"
+                 Set ELEVENLABS_API_KEY or run /voice-setup to paste your key."
                     .to_string(),
             );
             if session_not_ready {
@@ -867,7 +881,7 @@ impl super::ChatWidget {
 
     /// Open the voice setup popup.
     pub(crate) fn open_voice_setup_popup(&mut self) {
-        let voice_config = voice_mode_config(&self.config);
+        let voice_config = self.effective_voice_config();
 
         let tts_enabled = self
             .voice_mode_state
@@ -878,12 +892,10 @@ impl super::ChatWidget {
             .as_ref()
             .map_or(voice_config.stt_enabled.unwrap_or(true), |s| s.stt_enabled);
 
-        let api_key_available = voice_config
+        let api_key = voice_config
             .elevenlabs
             .as_ref()
-            .and_then(|e| e.api_key.as_ref())
-            .is_some()
-            || std::env::var("ELEVENLABS_API_KEY").is_ok();
+            .and_then(|e| e.api_key.clone());
 
         // Prefer cached values (set from the last save) over the stale in-memory config.
         let language_code = self.cached_elevenlabs_language.clone().unwrap_or_else(|| {
@@ -899,7 +911,7 @@ impl super::ChatWidget {
         let view = crate::bottom_pane::VoiceSetupView::new(
             tts_enabled,
             stt_enabled,
-            api_key_available,
+            api_key,
             language_code,
             speed,
             self.app_event_tx.clone(),
@@ -1158,7 +1170,7 @@ impl super::ChatWidget {
         };
 
         let tx = self.app_event_tx.clone();
-        let voice_config = voice_mode_config(&self.config);
+        let voice_config = self.effective_voice_config();
 
         // Spawn STT transcription on a background thread (network I/O).
         std::thread::spawn(move || {
@@ -1316,6 +1328,7 @@ impl super::ChatWidget {
     /// Returns `Some(display_text)` when voice mode is active (caller should use
     /// this instead of the raw delta), or `None` when voice mode is inactive.
     pub(crate) fn on_voice_mode_agent_delta(&mut self, delta: &str) -> Option<String> {
+        let vc = self.effective_voice_config();
         let state = self.voice_mode_state.as_mut()?;
         if !state.is_active() {
             // Voice mode was previously on but is now off.  The agent may
@@ -1375,7 +1388,6 @@ impl super::ChatWidget {
 
             // Ensure TTS worker is running (one persistent WebSocket per voice turn).
             if state.tts_worker_tx.is_none() {
-                let vc = voice_mode_config(&self.config);
                 let tx = self.app_event_tx.clone();
                 let in_flight = state.tts_in_flight.clone();
                 let gen_ref = state.tts_generation.clone();
@@ -1409,6 +1421,7 @@ impl super::ChatWidget {
 
     /// Called when agent turn completes — flush remaining buffer to TTS.
     pub(crate) fn on_voice_mode_turn_complete(&mut self) {
+        let vc = self.effective_voice_config();
         let Some(ref mut state) = self.voice_mode_state else {
             return;
         };
@@ -1430,7 +1443,6 @@ impl super::ChatWidget {
 
             // If there's remaining text but no worker, start one.
             if has_remaining && state.tts_worker_tx.is_none() {
-                let vc = voice_mode_config(&self.config);
                 let tx = self.app_event_tx.clone();
                 let in_flight = state.tts_in_flight.clone();
                 let gen_ref = state.tts_generation.clone();
@@ -1764,7 +1776,9 @@ impl super::ChatWidget {
         }
 
         // Word-wrap each paragraph independently to respect block boundaries.
-        let wrap_width = width.saturating_sub(4) as usize;
+        // Reserve 2 extra columns for the "• " / "  " prefix that mirrors the
+        // history cell indent so the karaoke text aligns with normal messages.
+        let wrap_width = width.saturating_sub(4).saturating_sub(2) as usize;
         if wrap_width < 10 {
             return None;
         }
@@ -1805,24 +1819,42 @@ impl super::ChatWidget {
                 need_space = true;
                 if i == idx {
                     let word_len = entry.word.len();
-                    return Some(Self::build_karaoke_lines_inner(
+                    let mut lines = Self::build_karaoke_lines_inner(
                         &wrapped,
                         char_offset,
                         char_offset + word_len,
                         highlight_style,
-                    ));
+                    );
+                    Self::prepend_bullet_indent(&mut lines);
+                    return Some(lines);
                 }
                 char_offset += entry.word.len();
             }
         }
 
         // No highlight — render plain text.
-        Some(
-            wrapped
-                .iter()
-                .map(|line| Line::from(Span::raw(line.to_string())))
-                .collect(),
-        )
+        let mut lines: Vec<Line<'static>> = wrapped
+            .iter()
+            .map(|line| Line::from(Span::raw(line.to_string())))
+            .collect();
+        Self::prepend_bullet_indent(&mut lines);
+        Some(lines)
+    }
+
+    /// Prepend "• " (dimmed) to the first line and "  " to subsequent lines,
+    /// matching the indent used by normal assistant history cells.
+    #[cfg(not(target_os = "linux"))]
+    fn prepend_bullet_indent(lines: &mut [ratatui::text::Line<'static>]) {
+        use ratatui::style::Stylize as _;
+        use ratatui::text::Span;
+        for (i, line) in lines.iter_mut().enumerate() {
+            let prefix = if i == 0 {
+                Span::from("◆ ").dim()
+            } else {
+                Span::raw("  ")
+            };
+            line.spans.insert(0, prefix);
+        }
     }
 
     /// Build wrapped Lines with a highlighted byte range.
@@ -1935,8 +1967,15 @@ impl super::ChatWidget {
             self.bottom_pane
                 .set_document_reader_reading_progress(adjusted, heading_words);
         }
-        // Non-narrating Q&A responses go through normal voice mode
-        // karaoke in the scrollback — no reading view overlay.
+        // Non-narrating Q&A responses: push karaoke into the reading view
+        // in append mode so the user sees the spoken text below the section
+        // content, even though chat streaming is suppressed.
+        if !is_narrating {
+            let width = self.last_rendered_width.get().unwrap_or(80) as u16;
+            let lines = self.voice_karaoke_lines(width);
+            self.bottom_pane
+                .set_document_reader_karaoke_lines(lines, true);
+        }
     }
 
     /// Called when ElevenLabs STT returns transcribed text.
@@ -2173,6 +2212,7 @@ impl super::ChatWidget {
         }
 
         // Phase 3: cache miss — use persistent TTS worker (single WebSocket).
+        let narration_vc = self.effective_voice_config();
         let Some(ref mut state) = self.voice_mode_state else {
             return;
         };
@@ -2197,7 +2237,7 @@ impl super::ChatWidget {
 
         // Start the persistent TTS worker if not running.
         if state.tts_worker_tx.is_none() {
-            let vc = voice_mode_config(&self.config);
+            let vc = narration_vc;
             let tx = self.app_event_tx.clone();
             let in_flight = state.tts_in_flight.clone();
             let gen_ref = state.tts_generation.clone();
@@ -2268,7 +2308,7 @@ impl super::ChatWidget {
             sentences.push(remaining);
         }
 
-        let vc = voice_mode_config(&self.config);
+        let vc = self.effective_voice_config();
         let cache = state.tts_section_cache.clone();
         let pending = state.prefetch_pending.clone();
 
