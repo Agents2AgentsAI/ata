@@ -349,7 +349,15 @@ impl MultiRootState {
     ) -> Option<ProjectRoot> {
         if let Some(root_name) = root_name {
             let roots = self.roots.read().await;
-            return roots.iter().find(|root| root.name == root_name).cloned();
+            let root = roots.iter().find(|root| root.name == root_name).cloned();
+            // When both root name and file are provided, enforce that the file
+            // actually lives inside the requested root.
+            if let (Some(root), Some(file)) = (&root, file) {
+                if !file.starts_with(&root.path) {
+                    return None;
+                }
+            }
+            return root;
         }
 
         if let Some(file) = file {

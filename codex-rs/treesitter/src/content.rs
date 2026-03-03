@@ -55,7 +55,12 @@ pub fn peek(
     let lines: Vec<&str> = source.lines().collect();
     let total_lines = lines.len();
 
-    let start_idx = start_line.saturating_sub(1).min(total_lines);
+    // If start_line is beyond EOF, clamp to show the last `line_count` lines.
+    let start_idx = if start_line.saturating_sub(1) >= total_lines {
+        total_lines.saturating_sub(line_count)
+    } else {
+        start_line.saturating_sub(1)
+    };
     let end_idx = (start_idx + line_count).min(total_lines);
 
     let content = lines[start_idx..end_idx]
@@ -114,7 +119,8 @@ pub fn grep(
     max_matches: usize,
     context_lines: usize,
 ) -> Result<GrepResult, TreeSitterError> {
-    let regex = Regex::new(pattern).map_err(|_| TreeSitterError::ParseFailed)?;
+    let regex = Regex::new(pattern)
+        .map_err(|e| TreeSitterError::InvalidPattern(e.to_string()))?;
 
     let mut paths = file_tree.all_paths_with_language();
     paths.sort_by(|a, b| a.0.cmp(&b.0));

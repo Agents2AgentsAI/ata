@@ -12,6 +12,9 @@ pub enum TreeSitterError {
     #[error("failed to parse source")]
     ParseFailed,
 
+    #[error("invalid regex pattern: {0}")]
+    InvalidPattern(String),
+
     #[error("tree-sitter language error: {0}")]
     Language(#[from] tree_sitter::LanguageError),
 

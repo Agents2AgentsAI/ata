@@ -2082,6 +2082,7 @@ pub(crate) fn build_specs_with_toolkits(
             use crate::tools::handlers::lsp::create_lsp_tool;
             let lsp_handler = Arc::new(LspToolHandler {
                 state: Arc::clone(multi_root_state),
+                warmed_files: tokio::sync::Mutex::new(std::collections::HashSet::new()),
             });
             builder.push_spec_with_parallel_support(create_lsp_tool(), true);
             builder.register_handler("lsp", lsp_handler);
