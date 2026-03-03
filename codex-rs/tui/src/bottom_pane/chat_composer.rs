@@ -1033,6 +1033,7 @@ impl ChatComposer {
     }
 
     /// Force the terminal cursor hidden (or visible) regardless of focus/input state.
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     pub(crate) fn set_force_hide_cursor(&mut self, hide: bool) {
         self.force_hide_cursor = hide;
     }

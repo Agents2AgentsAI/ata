@@ -7820,6 +7820,7 @@ impl ChatWidget {
     ///
     /// Whitespace-only content is treated as "empty" so that a stale space
     /// left by a quick PTT tap doesn't block subsequent PTT activations.
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn is_main_composer_typing(&self) -> bool {
         self.bottom_pane.no_modal_or_popup_active()
             && !self.bottom_pane.composer_is_empty()

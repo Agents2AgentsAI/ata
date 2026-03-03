@@ -560,11 +560,13 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     pub(crate) fn set_placeholder_text(&mut self, placeholder: String) {
         self.composer.set_placeholder_text(placeholder);
         self.request_redraw();
     }
 
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     pub(crate) fn set_force_hide_cursor(&mut self, hide: bool) {
         self.composer.set_force_hide_cursor(hide);
     }
@@ -877,6 +879,7 @@ impl BottomPane {
     /// PTT is allowed when either no view is active (normal chat mode) or the
     /// active view supports voice (e.g. the document reader). Composer popups
     /// block PTT so Space can operate toggles/steppers.
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     pub(crate) fn ptt_space_allowed(&self) -> bool {
         if self.composer.popup_active() {
             return false;
