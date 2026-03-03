@@ -91,11 +91,7 @@ pub fn voice_mode_stt_edit(enabled: bool) -> ConfigEdit {
 /// Produces a config edit that sets `[voice_mode.elevenlabs] api_key = "<key>"`.
 pub fn voice_mode_elevenlabs_api_key_edit(key: &str) -> ConfigEdit {
     ConfigEdit::SetPath {
-        segments: vec![
-            "voice_mode".into(),
-            "elevenlabs".into(),
-            "api_key".into(),
-        ],
+        segments: vec!["voice_mode".into(), "elevenlabs".into(), "api_key".into()],
         value: value(key),
     }
 }
@@ -126,11 +122,7 @@ pub fn voice_mode_elevenlabs_language_clear() -> ConfigEdit {
 /// Produces a config edit that sets `[voice_mode.elevenlabs] speed = <speed>`.
 pub fn voice_mode_elevenlabs_speed_edit(speed: f64) -> ConfigEdit {
     ConfigEdit::SetPath {
-        segments: vec![
-            "voice_mode".into(),
-            "elevenlabs".into(),
-            "speed".into(),
-        ],
+        segments: vec!["voice_mode".into(), "elevenlabs".into(), "speed".into()],
         value: value(speed),
     }
 }

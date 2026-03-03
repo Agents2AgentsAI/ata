@@ -731,8 +731,7 @@ impl DocumentReaderView {
     /// Interrupt TTS if voice mode is speaking (user navigated away).
     #[cfg(not(target_os = "linux"))]
     fn interrupt_tts_if_needed(&self) {
-        self.app_event_tx
-            .send(AppEvent::VoiceModeInterruptTts);
+        self.app_event_tx.send(AppEvent::VoiceModeInterruptTts);
     }
 
     #[cfg(target_os = "linux")]
@@ -777,13 +776,12 @@ impl DocumentReaderView {
             } else {
                 format!("{}.\n{}", section.heading, section.content)
             };
-            self.app_event_tx
-                .send(AppEvent::VoiceModeNarrateSection {
-                    document_id: self.document_id.clone(),
-                    section_index: self.current_section,
-                    text,
-                    selection_word_offset: None,
-                });
+            self.app_event_tx.send(AppEvent::VoiceModeNarrateSection {
+                document_id: self.document_id.clone(),
+                section_index: self.current_section,
+                text,
+                selection_word_offset: None,
+            });
         }
         // Prefetch the next section in the background.
         if let Some(next) = self.sections.get(self.current_section + 1) {
@@ -793,12 +791,11 @@ impl DocumentReaderView {
                 format!("{}.\n{}", next.heading, next.content)
             };
             if !next_text.trim().is_empty() {
-                self.app_event_tx
-                    .send(AppEvent::VoiceModePrefetchSection {
-                        document_id: self.document_id.clone(),
-                        section_index: self.current_section + 1,
-                        text: next_text,
-                    });
+                self.app_event_tx.send(AppEvent::VoiceModePrefetchSection {
+                    document_id: self.document_id.clone(),
+                    section_index: self.current_section + 1,
+                    text: next_text,
+                });
             }
         }
     }
@@ -1081,7 +1078,6 @@ impl DocumentReaderView {
         *self.textarea_state.borrow_mut() = TextAreaState::default();
         // Keep composer focused — it will render the question + spinner while pending.
     }
-
 
     fn input_height(&self, width: u16) -> u16 {
         let max_h = (self.last_content_height.get() / 3).max(4);
@@ -1516,13 +1512,12 @@ impl DocumentReaderView {
                             .collect::<Vec<_>>()
                             .join("\n");
                         if !text.trim().is_empty() {
-                            self.app_event_tx
-                                .send(AppEvent::VoiceModeNarrateSection {
-                                    document_id: self.document_id.clone(),
-                                    section_index: self.current_section,
-                                    text,
-                                    selection_word_offset: Some(word_offset),
-                                });
+                            self.app_event_tx.send(AppEvent::VoiceModeNarrateSection {
+                                document_id: self.document_id.clone(),
+                                section_index: self.current_section,
+                                text,
+                                selection_word_offset: Some(word_offset),
+                            });
                         }
                     }
                     self.visual_select = None;
@@ -2335,10 +2330,7 @@ impl DocumentReaderView {
                 continue;
             }
             for (word_start, word) in WordOffsets::new(&text) {
-                if word == "\u{1F50A}"
-                    || word == "┊"
-                    || word == "\u{2713}"
-                    || word == "———"
+                if word == "\u{1F50A}" || word == "┊" || word == "\u{2713}" || word == "———"
                 {
                     continue;
                 }
@@ -2442,10 +2434,7 @@ impl BottomPaneView for DocumentReaderView {
                 }
                 for (word_start, word) in WordOffsets::new(&text) {
                     // Skip decorators that aren't real TTS words.
-                    if word == "\u{1F50A}"
-                        || word == "┊"
-                        || word == "\u{2713}"
-                        || word == "———"
+                    if word == "\u{1F50A}" || word == "┊" || word == "\u{2713}" || word == "———"
                     {
                         continue;
                     }
@@ -2810,11 +2799,8 @@ impl Renderable for DocumentReaderView {
                             let fold_end = lines[header_idx + 1..]
                                 .iter()
                                 .position(|line| {
-                                    let text: String = line
-                                        .spans
-                                        .iter()
-                                        .map(|s| s.content.as_ref())
-                                        .collect();
+                                    let text: String =
+                                        line.spans.iter().map(|s| s.content.as_ref()).collect();
                                     !text.starts_with("┊ ")
                                 })
                                 .map(|pos| header_idx + 1 + pos)
@@ -2834,9 +2820,7 @@ impl Renderable for DocumentReaderView {
                             // No fold found yet — append with separator.
                             lines.push(Line::from(""));
                             let mut spans = vec![Span::from("┊ ").dim().cyan()];
-                            spans.push(
-                                Span::from("\u{1F50A} Speaking...").dim().italic(),
-                            );
+                            spans.push(Span::from("\u{1F50A} Speaking...").dim().italic());
                             lines.push(Line::from(spans));
                             for k_line in karaoke {
                                 let mut spans = vec![Span::from("┊ ").dim().cyan()];
@@ -3223,16 +3207,16 @@ impl Renderable for DocumentReaderView {
 
         // Voice status line (above hints bar, when active).
         // Rendered bottom-up so we calculate position after the hints bar.
-        let voice_status_line: Option<Line<'static>> =
-            self.voice_status.as_deref().map(|vs| {
-                render::bordered_text_line(vs, w)
-            });
+        let voice_status_line: Option<Line<'static>> = self
+            .voice_status
+            .as_deref()
+            .map(|vs| render::bordered_text_line(vs, w));
 
         // Hints bar
-        if voice_status_line.is_some() {
+        if let Some(voice_status) = voice_status_line {
             by = by.saturating_sub(1);
             // Render voice status above hints.
-            Paragraph::new(voice_status_line.unwrap()).render(
+            Paragraph::new(voice_status).render(
                 Rect {
                     y: by,
                     height: 1,

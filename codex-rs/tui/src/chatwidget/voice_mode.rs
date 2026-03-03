@@ -6,10 +6,10 @@
 //! OUTPUT: AgentMessageDelta → VoiceTagParser → <voice> content → TTS → PCM → speaker
 //! ```
 
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -58,7 +58,6 @@ pub(crate) const VOICE_MODE_OFF_INSTRUCTION: &str = "\
 [VOICE MODE OFF] Voice mode has been turned off. \
 Do NOT use <voice></voice> tags in your responses. \
 Respond normally with plain text.\n\n";
-
 
 // ─── Voice mode phase ────────────────────────────────────────────────────────
 
@@ -401,7 +400,6 @@ pub(crate) struct VoiceModeState {
     pub(crate) tts_suppressed: bool,
 
     // ─── PTT (push-to-talk) fields ──────────────────────────────────────
-
     /// Set `true` on the first `KeyEventKind::Release` we receive.
     /// Terminals that don't support Release events will never set this,
     /// and we fall back to a timeout-based end-of-recording.
@@ -441,12 +439,12 @@ pub(crate) struct VoiceModeState {
     pub(crate) tts_worker_tx: Option<tokio::sync::mpsc::UnboundedSender<TtsWorkerCommand>>,
 
     /// Cache of pre-generated TTS audio. Key: (document_id, section_index).
-    pub(crate) tts_section_cache: Arc<std::sync::Mutex<std::collections::HashMap<(String, usize), TtsCacheEntry>>>,
+    pub(crate) tts_section_cache:
+        Arc<std::sync::Mutex<std::collections::HashMap<(String, usize), TtsCacheEntry>>>,
     /// Sections currently being prefetched (to avoid duplicates).
     pub(crate) prefetch_pending: Arc<std::sync::Mutex<std::collections::HashSet<(String, usize)>>>,
 
     // ─── Reading view narration cache collection ───────────────────────
-
     /// When narrating a section, tracks the (document_id, section_index)
     /// and content hash so chunks can be collected for caching.
     pub(crate) narrating_section: Option<(String, usize, u64)>,
@@ -466,7 +464,6 @@ pub(crate) struct VoiceModeState {
     pub(crate) narrating_chunks: Vec<Vec<i16>>,
 
     // ─── Word-level alignment highlighting ──────────────────────────────
-
     /// Timeline of word-level alignment entries for the current voice turn.
     pub(crate) tts_alignment_timeline: Vec<AlignmentEntry>,
     /// Cumulative audio duration in ms (converts per-chunk relative times to absolute).
@@ -699,15 +696,20 @@ impl super::ChatWidget {
         self.bottom_pane
             .set_placeholder_text(placeholders[idx].to_string());
         // Clear reading view voice status.
-        self.bottom_pane
-            .set_document_reader_voice_status(None);
+        self.bottom_pane.set_document_reader_voice_status(None);
     }
 
     /// Toggle voice mode on/off (`/voice` command).
     pub(crate) fn toggle_voice_mode(&mut self) {
         // Auto-enable the VoiceMode feature flag on first use.
-        if !self.config.features.enabled(codex_core::features::Feature::VoiceMode) {
-            self.config.features.enable(codex_core::features::Feature::VoiceMode);
+        if !self
+            .config
+            .features
+            .enabled(codex_core::features::Feature::VoiceMode)
+        {
+            self.config
+                .features
+                .enable(codex_core::features::Feature::VoiceMode);
             self.app_event_tx.send(AppEvent::UpdateFeatureFlags {
                 updates: vec![(codex_core::features::Feature::VoiceMode, true)],
             });
@@ -755,7 +757,8 @@ impl super::ChatWidget {
                     .to_string(),
             );
             if session_not_ready {
-                self.pending_voice_startup_cells.push(Box::new(warning_cell));
+                self.pending_voice_startup_cells
+                    .push(Box::new(warning_cell));
             } else {
                 self.add_to_history(warning_cell);
             }
@@ -797,12 +800,11 @@ impl super::ChatWidget {
             .send(AppEvent::PersistVoiceModeEnabled(true));
 
         if session_not_ready {
-            self.pending_voice_startup_cells.push(Box::new(
-                history_cell::new_info_event(
+            self.pending_voice_startup_cells
+                .push(Box::new(history_cell::new_info_event(
                     "Voice mode on. Hold Space to speak. /voice to stop.".to_string(),
                     None,
-                ),
-            ));
+                )));
         } else {
             self.add_info_message(
                 "Voice mode on. Hold Space to speak. /voice to stop.".to_string(),
@@ -818,11 +820,10 @@ impl super::ChatWidget {
     /// Update the ElevenLabs API key for the current process.
     pub(crate) fn update_elevenlabs_api_key(&mut self, key: String) {
         // SAFETY: single-threaded TUI — no other threads read this concurrently.
-        unsafe { std::env::set_var("ELEVENLABS_API_KEY", &key); }
-        self.add_info_message(
-            "ElevenLabs API key saved.".to_string(),
-            None,
-        );
+        unsafe {
+            std::env::set_var("ELEVENLABS_API_KEY", &key);
+        }
+        self.add_info_message("ElevenLabs API key saved.".to_string(), None);
     }
 
     /// Cache the last-saved ElevenLabs language and speed so re-opening
@@ -861,7 +862,10 @@ impl super::ChatWidget {
                 state.reset();
                 self.app_event_tx
                     .send(AppEvent::PersistVoiceModeEnabled(false));
-                self.add_info_message("Voice mode off (TTS and STT both disabled).".to_string(), None);
+                self.add_info_message(
+                    "Voice mode off (TTS and STT both disabled).".to_string(),
+                    None,
+                );
                 self.restore_default_placeholder();
                 self.bottom_pane.set_force_hide_cursor(false);
                 self.request_redraw();
@@ -891,11 +895,14 @@ impl super::ChatWidget {
 
         // Prefer cached values (set from the last save) over the stale in-memory config.
         let language_code = self.cached_elevenlabs_language.clone().unwrap_or_else(|| {
-            voice_config.elevenlabs.as_ref().and_then(|e| e.language_code.clone())
+            voice_config
+                .elevenlabs
+                .as_ref()
+                .and_then(|e| e.language_code.clone())
         });
-        let speed = self.cached_elevenlabs_speed.or_else(|| {
-            voice_config.elevenlabs.as_ref().and_then(|e| e.speed)
-        });
+        let speed = self
+            .cached_elevenlabs_speed
+            .or_else(|| voice_config.elevenlabs.as_ref().and_then(|e| e.speed));
 
         let view = crate::bottom_pane::VoiceSetupView::new(
             tts_enabled,
@@ -932,7 +939,7 @@ impl super::ChatWidget {
             || state
                 .audio_player
                 .as_ref()
-                .is_some_and(|p| p.has_buffered_audio())
+                .is_some_and(super::super::voice::RealtimeAudioPlayer::has_buffered_audio)
         {
             state.interrupt_tts();
             state.tts_suppressed = true;
@@ -1007,7 +1014,11 @@ impl super::ChatWidget {
         // Clear any whitespace-only content from the composer (stale spaces
         // left by previous quick-tap PTT attempts).
         if !self.bottom_pane.composer_is_empty()
-            && !self.bottom_pane.composer_text().chars().any(|c| !c.is_whitespace())
+            && !self
+                .bottom_pane
+                .composer_text()
+                .chars()
+                .any(|c| !c.is_whitespace())
         {
             self.bottom_pane
                 .set_composer_text(String::new(), Vec::new(), Vec::new());
@@ -1517,10 +1528,9 @@ impl super::ChatWidget {
         }
 
         // Start highlight tick if not already running.
-        let needs_tick = self
-            .voice_mode_state
-            .as_ref()
-            .is_some_and(|s| s.highlight_tick_cancel.is_none() && !s.tts_alignment_timeline.is_empty());
+        let needs_tick = self.voice_mode_state.as_ref().is_some_and(|s| {
+            s.highlight_tick_cancel.is_none() && !s.tts_alignment_timeline.is_empty()
+        });
         if needs_tick {
             self.start_highlight_tick();
         }
@@ -1546,10 +1556,8 @@ impl super::ChatWidget {
         } else {
             format!("TTS error: {}", truncate_error(error, 60))
         };
-        self.bottom_pane
-            .set_placeholder_text(msg.clone());
-        self.bottom_pane
-            .set_document_reader_voice_status(Some(msg));
+        self.bottom_pane.set_placeholder_text(msg.clone());
+        self.bottom_pane.set_document_reader_voice_status(Some(msg));
     }
 
     pub(crate) fn on_voice_tts_finished(&mut self) {
@@ -1571,7 +1579,7 @@ impl super::ChatWidget {
         let has_audio = state
             .audio_player
             .as_ref()
-            .is_some_and(|p| p.has_buffered_audio());
+            .is_some_and(super::super::voice::RealtimeAudioPlayer::has_buffered_audio);
         if has_audio && !state.tts_alignment_timeline.is_empty() {
             state.tts_data_complete = true;
             return;
@@ -1673,7 +1681,10 @@ impl super::ChatWidget {
         let should_finalize = self.voice_mode_state.as_ref().is_some_and(|s| {
             s.phase == VoiceModePhase::Speaking
                 && s.tts_data_complete
-                && !s.audio_player.as_ref().is_some_and(|p| p.has_buffered_audio())
+                && !s
+                    .audio_player
+                    .as_ref()
+                    .is_some_and(super::super::voice::RealtimeAudioPlayer::has_buffered_audio)
         });
         if should_finalize {
             self.finalize_voice_turn();
@@ -1690,7 +1701,7 @@ impl super::ChatWidget {
         let pos_ms = state
             .audio_player
             .as_ref()
-            .map(|p| p.playback_position_ms())
+            .map(super::super::voice::RealtimeAudioPlayer::playback_position_ms)
             .unwrap_or(0);
 
         if state.tts_alignment_timeline.is_empty() {
@@ -1719,10 +1730,13 @@ impl super::ChatWidget {
     /// Instead we render the text directly in the viewport with the current
     /// word styled as bold+underline.
     #[cfg(not(target_os = "linux"))]
-    pub(crate) fn voice_karaoke_lines(&self, width: u16) -> Option<Vec<ratatui::text::Line<'static>>> {
+    pub(crate) fn voice_karaoke_lines(
+        &self,
+        width: u16,
+    ) -> Option<Vec<ratatui::text::Line<'static>>> {
         use ratatui::style::{Modifier, Style};
         use ratatui::text::{Line, Span};
-        use textwrap::{wrap, Options as WrapOptions};
+        use textwrap::{Options as WrapOptions, wrap};
 
         let state = self.voice_mode_state.as_ref()?;
         if state.phase != VoiceModePhase::Speaking {
@@ -1800,7 +1814,10 @@ impl super::ChatWidget {
                 if i == idx {
                     let word_len = entry.word.len();
                     return Some(Self::build_karaoke_lines_inner(
-                        &wrapped, char_offset, char_offset + word_len, highlight_style,
+                        &wrapped,
+                        char_offset,
+                        char_offset + word_len,
+                        highlight_style,
                     ));
                 }
                 char_offset += entry.word.len();
@@ -1808,9 +1825,12 @@ impl super::ChatWidget {
         }
 
         // No highlight — render plain text.
-        Some(wrapped.iter().map(|line| {
-            Line::from(Span::raw(line.to_string()))
-        }).collect())
+        Some(
+            wrapped
+                .iter()
+                .map(|line| Line::from(Span::raw(line.to_string())))
+                .collect(),
+        )
     }
 
     /// Build wrapped Lines with a highlighted byte range.
@@ -1911,7 +1931,11 @@ impl super::ChatWidget {
                 .as_ref()
                 .map(|s| {
                     let hw = s.narrating_heading_words;
-                    (s.tts_highlight_word_idx, s.selection_word_offset.unwrap_or(0), hw)
+                    (
+                        s.tts_highlight_word_idx,
+                        s.selection_word_offset.unwrap_or(0),
+                        hw,
+                    )
                 })
                 .unwrap_or((None, 0, 0));
             let adjusted = word_idx.map(|w| w + sel_offset);
@@ -1960,10 +1984,7 @@ impl super::ChatWidget {
         if let Some(question) = reading_view_question {
             if let Some(ctx) = self.bottom_pane.reading_view_voice_context() {
                 self.bottom_pane
-                    .set_document_reader_pending_voice_question(
-                        ctx.section_index,
-                        question,
-                    );
+                    .set_document_reader_pending_voice_question(ctx.section_index, question);
             }
         }
         self.request_redraw();
@@ -2063,7 +2084,7 @@ impl super::ChatWidget {
                 || (s.is_active()
                     && s.audio_player
                         .as_ref()
-                        .is_some_and(|p| p.has_buffered_audio()))
+                        .is_some_and(super::super::voice::RealtimeAudioPlayer::has_buffered_audio))
         })
     }
 
@@ -2123,22 +2144,14 @@ impl super::ChatWidget {
 
         // Phase 2: check cache (works for both full sections and selections —
         // the content_hash distinguishes different text under the same key).
-        let cached: Option<(Vec<Vec<i16>>, Vec<AlignmentEntry>)> = self
-            .voice_mode_state
-            .as_ref()
-            .and_then(|state| {
-                state
-                    .tts_section_cache
-                    .lock()
-                    .ok()
-                    .and_then(|cache| {
-                        cache
-                            .get(&(document_id.clone(), section_index))
-                            .filter(|entry| entry.content_hash == content_hash)
-                            .map(|entry| {
-                                (entry.chunks.clone(), entry.alignment_timeline.clone())
-                            })
-                    })
+        let cached: Option<(Vec<Vec<i16>>, Vec<AlignmentEntry>)> =
+            self.voice_mode_state.as_ref().and_then(|state| {
+                state.tts_section_cache.lock().ok().and_then(|cache| {
+                    cache
+                        .get(&(document_id.clone(), section_index))
+                        .filter(|entry| entry.content_hash == content_hash)
+                        .map(|entry| (entry.chunks.clone(), entry.alignment_timeline.clone()))
+                })
             });
 
         // Heading words to skip = 0: the heading exists in BOTH the TTS
@@ -2150,8 +2163,7 @@ impl super::ChatWidget {
             // Cache hit — play cached chunks and restore alignment for karaoke.
             if let Some(ref mut state) = self.voice_mode_state {
                 state.phase = VoiceModePhase::Speaking;
-                state.narrating_section =
-                    Some((document_id, section_index, content_hash));
+                state.narrating_section = Some((document_id, section_index, content_hash));
                 state.narrating_heading_words = heading_words;
                 state.selection_word_offset = selection_word_offset;
                 state.narrating_cleaned_text = Some(cleaned);
@@ -2172,7 +2184,10 @@ impl super::ChatWidget {
             return;
         };
         state.phase = VoiceModePhase::Speaking;
-        tracing::debug!("Narrate section: cache miss, starting TTS worker for text ({} chars)", cleaned.len());
+        tracing::debug!(
+            "Narrate section: cache miss, starting TTS worker for text ({} chars)",
+            cleaned.len()
+        );
 
         // Track narration for chunk collection / caching.
         state.narrating_section = Some((document_id, section_index, content_hash));
@@ -2236,7 +2251,7 @@ impl super::ChatWidget {
         }
 
         let content_hash = hash_text(&cleaned);
-        let key = (document_id.clone(), section_index);
+        let key = (document_id, section_index);
 
         // Already cached with matching hash?
         if let Ok(cache) = state.tts_section_cache.lock() {
@@ -2286,11 +2301,14 @@ impl super::ChatWidget {
             }
             // Write to cache with alignment for karaoke on replay.
             if let Ok(mut c) = cache.lock() {
-                c.insert(key.clone(), TtsCacheEntry {
-                    content_hash,
-                    chunks: all_chunks,
-                    alignment_timeline: all_timeline,
-                });
+                c.insert(
+                    key.clone(),
+                    TtsCacheEntry {
+                        content_hash,
+                        chunks: all_chunks,
+                        alignment_timeline: all_timeline,
+                    },
+                );
             }
             // Remove from pending.
             if let Ok(mut p) = pending.lock() {
@@ -2538,7 +2556,10 @@ async fn prefetch_sentence_tts(
 fn start_tts_generation(
     voice_config: &codex_core::config::types::VoiceModeToml,
     sentence: &str,
-) -> Result<tokio::sync::mpsc::UnboundedReceiver<codex_elevenlabs::TtsChunk>, codex_elevenlabs::ElevenLabsError> {
+) -> Result<
+    tokio::sync::mpsc::UnboundedReceiver<codex_elevenlabs::TtsChunk>,
+    codex_elevenlabs::ElevenLabsError,
+> {
     let api_key = voice_config
         .elevenlabs
         .as_ref()
@@ -2785,38 +2806,37 @@ fn build_alignment_entries(
     let mut word_chars: Vec<&str> = Vec::new();
     let mut is_first_word = true;
 
-    let flush_word =
-        |start_idx: usize,
-         end_idx: usize,
-         chars: &mut Vec<&str>,
-         timeline: &mut Vec<AlignmentEntry>,
-         pending: &mut Option<AlignmentEntry>,
-         first: &mut bool| {
-            let abs_start = align.char_start_times_ms[start_idx];
-            let last_start = align.char_start_times_ms[end_idx];
-            let last_dur = align.char_durations_ms[end_idx];
-            let abs_end = last_start + last_dur;
-            let word: String = chars.iter().copied().collect();
-            chars.clear();
+    let flush_word = |start_idx: usize,
+                      end_idx: usize,
+                      chars: &mut Vec<&str>,
+                      timeline: &mut Vec<AlignmentEntry>,
+                      pending: &mut Option<AlignmentEntry>,
+                      first: &mut bool| {
+        let abs_start = align.char_start_times_ms[start_idx];
+        let last_start = align.char_start_times_ms[end_idx];
+        let last_dur = align.char_durations_ms[end_idx];
+        let abs_end = last_start + last_dur;
+        let word: String = chars.iter().copied().collect();
+        chars.clear();
 
-            // If this is the first word in the chunk and there's a pending
-            // partial word from the previous chunk, merge them.
-            if *first {
-                *first = false;
-                if let Some(mut prev) = pending.take() {
-                    prev.word.push_str(&word);
-                    prev.duration_ms = abs_end.saturating_sub(prev.start_ms);
-                    timeline.push(prev);
-                    return;
-                }
+        // If this is the first word in the chunk and there's a pending
+        // partial word from the previous chunk, merge them.
+        if *first {
+            *first = false;
+            if let Some(mut prev) = pending.take() {
+                prev.word.push_str(&word);
+                prev.duration_ms = abs_end.saturating_sub(prev.start_ms);
+                timeline.push(prev);
+                return;
             }
+        }
 
-            timeline.push(AlignmentEntry {
-                start_ms: abs_start,
-                duration_ms: abs_end.saturating_sub(abs_start),
-                word,
-            });
-        };
+        timeline.push(AlignmentEntry {
+            start_ms: abs_start,
+            duration_ms: abs_end.saturating_sub(abs_start),
+            word,
+        });
+    };
 
     // Track whether we've seen any non-whitespace character in this chunk.
     // This distinguishes true leading whitespace (pending word is complete)
@@ -2836,7 +2856,14 @@ fn build_alignment_entries(
             }
             // Whitespace: flush current word if any.
             if let Some(ws) = word_start_idx.take() {
-                flush_word(ws, word_end_idx, &mut word_chars, timeline, pending_word, &mut is_first_word);
+                flush_word(
+                    ws,
+                    word_end_idx,
+                    &mut word_chars,
+                    timeline,
+                    pending_word,
+                    &mut is_first_word,
+                );
             }
         } else {
             seen_non_ws = true;
@@ -2851,7 +2878,7 @@ fn build_alignment_entries(
     // Final partial word: might span into the next chunk.
     // Check if the chunk ended mid-word (last char was not whitespace).
     if let Some(ws) = word_start_idx {
-        let last_char = align.chars.last().map(|s| s.as_str()).unwrap_or("");
+        let last_char = align.chars.last().map(String::as_str).unwrap_or("");
         let ends_mid_word = !last_char.trim().is_empty();
 
         if ends_mid_word {
@@ -2878,7 +2905,14 @@ fn build_alignment_entries(
             });
         } else {
             // Chunk ends with whitespace after this word — flush it.
-            flush_word(ws, word_end_idx, &mut word_chars, timeline, pending_word, &mut is_first_word);
+            flush_word(
+                ws,
+                word_end_idx,
+                &mut word_chars,
+                timeline,
+                pending_word,
+                &mut is_first_word,
+            );
         }
     } else if is_first_word {
         // Chunk was all whitespace but we have a pending word — flush it now.
@@ -2924,11 +2958,7 @@ mod tests {
         let sentences = buf.push("Hello world. This is a test! Are you ready? ");
         assert_eq!(
             sentences,
-            vec![
-                "Hello world.",
-                "This is a test!",
-                "Are you ready?",
-            ]
+            vec!["Hello world.", "This is a test!", "Are you ready?",]
         );
     }
 
@@ -2946,10 +2976,7 @@ mod tests {
     fn sentence_buffer_flush() {
         let mut buf = SentenceBuffer::new();
         buf.push("partial text without ending");
-        assert_eq!(
-            buf.flush(),
-            Some("partial text without ending".to_string())
-        );
+        assert_eq!(buf.flush(), Some("partial text without ending".to_string()));
         assert_eq!(buf.flush(), None);
     }
 
@@ -3101,6 +3128,9 @@ mod tests {
         // Markdown heading at the start of a new line should be stripped.
         let text = "Results.\n### General benchmarks\n\nThe model achieved";
         let cleaned = clean_for_tts(text);
-        assert_eq!(cleaned, "Results.\nGeneral benchmarks\n\nThe model achieved");
+        assert_eq!(
+            cleaned,
+            "Results.\nGeneral benchmarks\n\nThe model achieved"
+        );
     }
 }

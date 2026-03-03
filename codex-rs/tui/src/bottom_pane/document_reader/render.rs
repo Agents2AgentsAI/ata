@@ -555,10 +555,7 @@ pub(super) fn apply_word_highlight(
                 base_style.add_modifier(hl),
             ));
             if local_end < span_text.len() {
-                new_spans.push(Span::styled(
-                    span_text[local_end..].to_string(),
-                    base_style,
-                ));
+                new_spans.push(Span::styled(span_text[local_end..].to_string(), base_style));
             }
         }
         char_pos = span_end;

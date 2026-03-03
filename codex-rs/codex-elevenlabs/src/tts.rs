@@ -58,7 +58,7 @@ impl TtsStream {
             config.voice_id, config.model_id
         );
         if let Some(ref lang) = config.language_code {
-            url.push_str(&format!("&language_code={}", lang));
+            url.push_str(&format!("&language_code={lang}"));
         }
 
         let request = tokio_tungstenite::tungstenite::http::Request::builder()
@@ -84,7 +84,10 @@ impl TtsStream {
         // Send BOS (beginning of stream) message.
         // Clamp speed to the ElevenLabs API range (0.7–1.2). Omit if
         // default (1.0) to maximize compatibility.
-        let clamped_speed = config.speed.map(|s| s.clamp(0.7, 1.2)).filter(|&s| (s - 1.0).abs() > f64::EPSILON);
+        let clamped_speed = config
+            .speed
+            .map(|s| s.clamp(0.7, 1.2))
+            .filter(|&s| (s - 1.0).abs() > f64::EPSILON);
         let bos = TtsBosMessage {
             text: " ".to_string(),
             voice_settings: VoiceSettings {
@@ -105,10 +108,7 @@ impl TtsStream {
             while let Some(cmd) = text_rx.recv().await {
                 let msg = match cmd {
                     TtsCommand::Text(text) => {
-                        let m = TtsTextMessage {
-                            text,
-                            flush: None,
-                        };
+                        let m = TtsTextMessage { text, flush: None };
                         match serde_json::to_string(&m) {
                             Ok(json) => Message::Text(json.into()),
                             Err(e) => {
@@ -181,9 +181,8 @@ impl TtsStream {
                                                 // normalizedAlignment has session-absolute timestamps,
                                                 // but our consumer accumulates cumulative_ms from PCM
                                                 // duration, so per-chunk (relative) times are needed.
-                                                let alignment = resp
-                                                    .alignment
-                                                    .or(resp.normalized_alignment);
+                                                let alignment =
+                                                    resp.alignment.or(resp.normalized_alignment);
                                                 let chunk = TtsChunk { pcm, alignment };
                                                 if audio_tx.send(chunk).await.is_err() {
                                                     trace!("TTS audio receiver dropped");
@@ -265,7 +264,7 @@ impl TtsStream {
 
 /// Convert raw LE bytes to i16 PCM samples.
 fn bytes_to_pcm_i16(bytes: &[u8]) -> Vec<i16> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return Vec::new();
     }
     bytes
@@ -335,6 +334,9 @@ mod tests {
 
         eprintln!("total chunks: {total_chunks}, got_alignment: {got_alignment}");
         assert!(total_chunks > 0, "expected at least one audio chunk");
-        assert!(got_alignment, "expected alignment data with sync_alignment=true");
+        assert!(
+            got_alignment,
+            "expected alignment data with sync_alignment=true"
+        );
     }
 }

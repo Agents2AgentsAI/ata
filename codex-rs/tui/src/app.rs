@@ -1989,8 +1989,8 @@ impl App {
                             self.has_emitted_history_lines = true;
                         }
                     }
-                    let defer = self.overlay.is_some()
-                        || self.chat_widget.is_document_reader_active();
+                    let defer =
+                        self.overlay.is_some() || self.chat_widget.is_document_reader_active();
                     if defer {
                         self.deferred_history_lines.extend(display);
                     } else {
@@ -2917,7 +2917,13 @@ impl App {
             }
             // ─── Voice mode events ───────────────────────────────────────
             #[cfg(not(target_os = "linux"))]
-            AppEvent::UpdateVoiceSettings { tts_enabled, stt_enabled, elevenlabs_api_key, language_code, speed } => {
+            AppEvent::UpdateVoiceSettings {
+                tts_enabled,
+                stt_enabled,
+                elevenlabs_api_key,
+                language_code,
+                speed,
+            } => {
                 // Persist to config.
                 let tts_edit = codex_core::config::edit::voice_mode_tts_edit(tts_enabled);
                 let stt_edit = codex_core::config::edit::voice_mode_stt_edit(stt_enabled);
@@ -2927,12 +2933,17 @@ impl App {
                 }
                 if let Some(ref lang) = language_code {
                     match lang {
-                        Some(code) => edits.push(codex_core::config::edit::voice_mode_elevenlabs_language_edit(code)),
-                        None => edits.push(codex_core::config::edit::voice_mode_elevenlabs_language_clear()),
+                        Some(code) => edits.push(
+                            codex_core::config::edit::voice_mode_elevenlabs_language_edit(code),
+                        ),
+                        None => edits
+                            .push(codex_core::config::edit::voice_mode_elevenlabs_language_clear()),
                     }
                 }
                 if let Some(speed_val) = speed {
-                    edits.push(codex_core::config::edit::voice_mode_elevenlabs_speed_edit(speed_val));
+                    edits.push(codex_core::config::edit::voice_mode_elevenlabs_speed_edit(
+                        speed_val,
+                    ));
                 }
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_edits(edits)
@@ -2949,20 +2960,27 @@ impl App {
                     self.chat_widget.update_elevenlabs_api_key(key);
                 }
                 // Cache language/speed so re-opening voice-setup reflects saved values.
-                self.chat_widget.update_elevenlabs_voice_settings(language_code, speed);
+                self.chat_widget
+                    .update_elevenlabs_voice_settings(language_code, speed);
                 // Update in-memory state.
-                self.chat_widget.apply_voice_settings(tts_enabled, stt_enabled);
+                self.chat_widget
+                    .apply_voice_settings(tts_enabled, stt_enabled);
                 // If both off, deactivate voice mode entirely.
                 if !tts_enabled && !stt_enabled {
                     self.chat_widget.deactivate_voice_mode_if_active();
                 }
                 // If either on and Feature::VoiceMode not enabled, auto-enable it.
                 if (tts_enabled || stt_enabled)
-                    && !self.config.features.enabled(codex_core::features::Feature::VoiceMode)
+                    && !self
+                        .config
+                        .features
+                        .enabled(codex_core::features::Feature::VoiceMode)
                 {
-                    self.apply_feature_flag_updates(vec![
-                        (codex_core::features::Feature::VoiceMode, true),
-                    ]).await;
+                    self.apply_feature_flag_updates(vec![(
+                        codex_core::features::Feature::VoiceMode,
+                        true,
+                    )])
+                    .await;
                 }
                 tui.frame_requester().schedule_frame();
             }
@@ -3025,13 +3043,28 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             #[cfg(not(target_os = "linux"))]
-            AppEvent::VoiceModeNarrateSection { document_id, section_index, text, selection_word_offset } => {
-                self.chat_widget.on_voice_narrate_section(document_id, section_index, text, selection_word_offset);
+            AppEvent::VoiceModeNarrateSection {
+                document_id,
+                section_index,
+                text,
+                selection_word_offset,
+            } => {
+                self.chat_widget.on_voice_narrate_section(
+                    document_id,
+                    section_index,
+                    text,
+                    selection_word_offset,
+                );
                 tui.frame_requester().schedule_frame();
             }
             #[cfg(not(target_os = "linux"))]
-            AppEvent::VoiceModePrefetchSection { document_id, section_index, text } => {
-                self.chat_widget.on_voice_prefetch_section(document_id, section_index, text);
+            AppEvent::VoiceModePrefetchSection {
+                document_id,
+                section_index,
+                text,
+            } => {
+                self.chat_widget
+                    .on_voice_prefetch_section(document_id, section_index, text);
                 // No schedule_frame needed — prefetch is silent background work.
             }
             AppEvent::StatusLineSetup { items } => {

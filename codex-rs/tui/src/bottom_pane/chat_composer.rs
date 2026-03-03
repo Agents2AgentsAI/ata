@@ -693,7 +693,10 @@ impl ChatComposer {
             use unicode_width::UnicodeWidthStr;
             let w = UnicodeWidthStr::width(self.placeholder_text.as_str()) as u16;
             let x = textarea_rect.x.saturating_add(w);
-            return Some((x.min(textarea_rect.right().saturating_sub(1)), textarea_rect.y));
+            return Some((
+                x.min(textarea_rect.right().saturating_sub(1)),
+                textarea_rect.y,
+            ));
         }
 
         let state = *self.textarea_state.borrow();
@@ -4091,7 +4094,10 @@ impl Renderable for ChatComposer {
             use unicode_width::UnicodeWidthStr;
             let w = UnicodeWidthStr::width(self.placeholder_text.as_str()) as u16;
             let x = textarea_rect.x.saturating_add(w);
-            return Some((x.min(textarea_rect.right().saturating_sub(1)), textarea_rect.y));
+            return Some((
+                x.min(textarea_rect.right().saturating_sub(1)),
+                textarea_rect.y,
+            ));
         }
 
         let state = *self.textarea_state.borrow();
