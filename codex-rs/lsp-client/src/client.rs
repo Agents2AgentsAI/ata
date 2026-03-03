@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
@@ -90,6 +91,8 @@ pub struct LspClient {
     initialization_options: Option<Value>,
     /// Handle to the child process (for kill on shutdown).
     child: Arc<Mutex<Option<Child>>>,
+    /// Optional JSONL trace writer for requests/responses (debug-only).
+    trace: Option<Arc<Mutex<tokio::fs::File>>>,
 }
 
 impl LspClient {
@@ -165,6 +168,8 @@ impl LspClient {
         let diagnostics: Arc<RwLock<HashMap<String, Vec<Diagnostic>>>> =
             Arc::new(RwLock::new(HashMap::new()));
 
+        let trace = open_trace_file().await;
+
         let client = Arc::new(Self {
             writer: Arc::new(Mutex::new(stdin)),
             next_id: AtomicI64::new(1),
@@ -176,6 +181,7 @@ impl LspClient {
             root_uri: root_uri.clone(),
             initialization_options: config.initialization_options.clone(),
             child: Arc::new(Mutex::new(Some(child))),
+            trace,
         });
 
         // Spawn the reader task.
@@ -285,6 +291,15 @@ impl LspClient {
             }),
             workspace: Some(WorkspaceClientCapabilities {
                 configuration: Some(true),
+                workspace_edit: Some(WorkspaceEditClientCapabilities {
+                    document_changes: Some(true),
+                    resource_operations: Some(vec![
+                        ResourceOperationKind::Create,
+                        ResourceOperationKind::Rename,
+                        ResourceOperationKind::Delete,
+                    ]),
+                    ..Default::default()
+                }),
                 did_change_watched_files: Some(DidChangeWatchedFilesClientCapabilities {
                     dynamic_registration: Some(true),
                     relative_pattern_support: Some(false),
@@ -321,6 +336,15 @@ impl LspClient {
                 implementation: Some(GotoCapability {
                     dynamic_registration: Some(false),
                     link_support: Some(false),
+                }),
+                code_action: Some(CodeActionClientCapabilities {
+                    dynamic_registration: Some(false),
+                    ..Default::default()
+                }),
+                rename: Some(RenameClientCapabilities {
+                    dynamic_registration: Some(false),
+                    prepare_support: Some(true),
+                    ..Default::default()
                 }),
                 call_hierarchy: Some(CallHierarchyClientCapabilities {
                     dynamic_registration: Some(false),
@@ -636,6 +660,72 @@ impl LspClient {
         serde_json::from_value(val).unwrap_or_default()
     }
 
+    pub async fn prepare_rename(
+        &self,
+        path: &Path,
+        line: u32,
+        character: u32,
+    ) -> Option<PrepareRenameResponse> {
+        let params = self.text_doc_pos(path, line, character)?;
+        let val = self.query("textDocument/prepareRename", params).await?;
+        if val.is_null() {
+            return None;
+        }
+        serde_json::from_value(val).ok()
+    }
+
+    pub async fn rename(
+        &self,
+        path: &Path,
+        line: u32,
+        character: u32,
+        new_name: &str,
+    ) -> Option<WorkspaceEdit> {
+        let params = RenameParams {
+            text_document_position: self.text_doc_pos(path, line, character)?,
+            new_name: new_name.to_string(),
+            work_done_progress_params: Default::default(),
+        };
+        let val = self.query("textDocument/rename", params).await?;
+        if val.is_null() {
+            return None;
+        }
+        serde_json::from_value(val).ok()
+    }
+
+    pub async fn code_action(
+        &self,
+        path: &Path,
+        range: Range,
+        only: Option<Vec<CodeActionKind>>,
+        diagnostics: Vec<Diagnostic>,
+    ) -> Vec<CodeActionOrCommand> {
+        let Some(uri) = uri_from_path(path) else {
+            return Vec::new();
+        };
+
+        let params = CodeActionParams {
+            text_document: TextDocumentIdentifier { uri },
+            range,
+            context: CodeActionContext {
+                diagnostics,
+                only,
+                trigger_kind: None,
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        let val = match self.query("textDocument/codeAction", params).await {
+            Some(v) => v,
+            None => return Vec::new(),
+        };
+        if val.is_null() {
+            return Vec::new();
+        }
+        serde_json::from_value(val).unwrap_or_default()
+    }
+
     // -----------------------------------------------------------------------
     // Shutdown
     // -----------------------------------------------------------------------
@@ -690,6 +780,9 @@ impl LspClient {
             params,
         };
 
+        self.trace_event("request", method, id, request.params.as_ref(), None)
+            .await;
+
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
 
@@ -699,16 +792,29 @@ impl LspClient {
         let response = rx.await.map_err(|_| LspError::ServerExited)?;
 
         if let Some(err) = response.error {
+            self.trace_event(
+                "response",
+                method,
+                id,
+                None,
+                Some(serde_json::json!({ "error": err })),
+            )
+            .await;
             return Err(LspError::ServerError {
                 code: err.code,
                 message: err.message,
             });
         }
 
-        Ok(response.result.unwrap_or(Value::Null))
+        let result = response.result.unwrap_or(Value::Null);
+        self.trace_event("response", method, id, None, Some(result.clone()))
+            .await;
+        Ok(result)
     }
 
     async fn send_notification(&self, method: &str, params: Option<Value>) -> Result<(), LspError> {
+        self.trace_event("notification", method, 0, params.as_ref(), None)
+            .await;
         let notification = JsonRpcNotification {
             jsonrpc: "2.0".into(),
             method: method.to_string(),
@@ -716,6 +822,43 @@ impl LspClient {
         };
         let body = serde_json::to_vec(&notification)?;
         self.write_message(body).await
+    }
+
+    async fn trace_event(
+        &self,
+        kind: &'static str,
+        method: &str,
+        id: i64,
+        params: Option<&Value>,
+        result: Option<Value>,
+    ) {
+        let Some(trace) = &self.trace else {
+            return;
+        };
+
+        let redacted_params = params.map(|v| redact_params(method, v));
+        let record = serde_json::json!({
+            "kind": kind,
+            "server": self.server_id,
+            "method": method,
+            "id": if id == 0 { Value::Null } else { Value::from(id) },
+            "params": redacted_params,
+            "result": result,
+        });
+
+        let mut line = match serde_json::to_string(&record) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        line.push('\n');
+
+        if line.len() > 1024 * 1024 {
+            return;
+        }
+
+        let mut file = trace.lock().await;
+        let _ = file.write_all(line.as_bytes()).await;
+        let _ = file.flush().await;
     }
 
     async fn write_message(&self, body: Vec<u8>) -> Result<(), LspError> {
@@ -843,4 +986,51 @@ impl LspClient {
             });
         }
     }
+}
+
+async fn open_trace_file() -> Option<Arc<Mutex<tokio::fs::File>>> {
+    let path = std::env::var("CODEX_LSP_TRACE_JSONL").ok()?;
+    let path = path.trim();
+    if path.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(path);
+    let file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await
+        .ok()?;
+    Some(Arc::new(Mutex::new(file)))
+}
+
+fn redact_params(method: &str, params: &Value) -> Value {
+    // Best-effort redaction to avoid logging entire file contents.
+    if method == "textDocument/didOpen" {
+        let mut v = params.clone();
+        if let Some(obj) = v.as_object_mut()
+            && let Some(td) = obj.get_mut("textDocument")
+            && let Some(td_obj) = td.as_object_mut()
+        {
+            td_obj.remove("text");
+        }
+        return v;
+    }
+
+    if method == "textDocument/didChange" {
+        let mut v = params.clone();
+        if let Some(obj) = v.as_object_mut()
+            && let Some(changes) = obj.get_mut("contentChanges")
+            && let Some(arr) = changes.as_array_mut()
+        {
+            for item in arr.iter_mut() {
+                if let Some(change_obj) = item.as_object_mut() {
+                    change_obj.remove("text");
+                }
+            }
+        }
+        return v;
+    }
+
+    params.clone()
 }

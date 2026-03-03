@@ -1612,9 +1612,22 @@
       "additionalProperties": false,
       "description": "TreeSitter index behavior in config.toml.",
       "properties": {
+        "annotation_store_path": {
+          "default": null,
+          "description": "Optional annotation persistence path. Relative paths are resolved from root.",
+          "type": "string"
+        },
         "disabled_languages": {
           "default": [],
           "description": "Language names to disable (e.g. \"rust\", \"python\", \"typescript\").",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ignore_extensions": {
+          "default": [],
+          "description": "Extra ignored file extensions/suffixes (for example: \"pdf\", \"min.js\").",
           "items": {
             "type": "string"
           },

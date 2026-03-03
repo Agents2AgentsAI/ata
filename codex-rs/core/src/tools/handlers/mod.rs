@@ -12,6 +12,8 @@ mod js_repl;
 mod list_dir;
 #[cfg(feature = "lsp")]
 pub(crate) mod lsp;
+#[cfg(feature = "lsp")]
+pub(crate) mod lsp_workspace_edit;
 mod mcp;
 mod mcp_resource;
 pub(crate) mod multi_agents;
