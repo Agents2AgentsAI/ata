@@ -182,6 +182,7 @@ fn fake_config(script: &PathBuf) -> LspServerConfig {
     LspServerConfig {
         extensions: vec![".rs".into()],
         command: vec!["python3".into(), script.to_string_lossy().to_string()],
+        command_candidates: Vec::new(),
         env: HashMap::new(),
         root_markers: vec!["Cargo.toml".into()],
         initialization_options: None,

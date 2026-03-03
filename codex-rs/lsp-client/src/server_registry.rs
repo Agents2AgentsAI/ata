@@ -1,7 +1,6 @@
 //! Registry that manages a pool of LSP clients, one per (server_id, root) pair.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
@@ -36,6 +35,76 @@ enum PreflightResult {
     Inconclusive,
 }
 
+fn codex_home_dir() -> Option<PathBuf> {
+    if let Ok(home) = std::env::var("CODEX_HOME")
+        && !home.trim().is_empty()
+    {
+        return Some(PathBuf::from(home));
+    }
+    dirs::home_dir().map(|h| h.join(".ata"))
+}
+
+fn managed_lsp_bin_dirs() -> Vec<PathBuf> {
+    let Some(codex_home) = codex_home_dir() else {
+        return Vec::new();
+    };
+    vec![
+        codex_home.join("lsp").join("bin"),
+        codex_home.join("lsp").join("npm").join("bin"),
+    ]
+}
+
+fn program_has_path_separator(program: &str) -> bool {
+    program.contains(std::path::MAIN_SEPARATOR) || program.contains('/')
+}
+
+fn resolve_program_on_system_or_managed(program: &str) -> Option<PathBuf> {
+    if program_has_path_separator(program) {
+        let path = PathBuf::from(program);
+        return path.exists().then_some(path);
+    }
+
+    if let Ok(path) = which::which(program) {
+        return Some(path);
+    }
+
+    #[cfg(not(windows))]
+    let names = vec![program.to_string()];
+    #[cfg(windows)]
+    let mut names = vec![program.to_string()];
+    #[cfg(windows)]
+    {
+        if !program.ends_with(".exe") {
+            names.push(format!("{program}.exe"));
+        }
+        if !program.ends_with(".cmd") {
+            names.push(format!("{program}.cmd"));
+        }
+        if !program.ends_with(".bat") {
+            names.push(format!("{program}.bat"));
+        }
+    }
+
+    for dir in managed_lsp_bin_dirs() {
+        for name in &names {
+            let path = dir.join(name);
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
+fn resolve_command_variant(variant: &[String]) -> Option<Vec<String>> {
+    let first = variant.first()?;
+    let mut out = variant.to_vec();
+    let resolved = resolve_program_on_system_or_managed(first)?;
+    out[0] = resolved.to_string_lossy().to_string();
+    Some(out)
+}
+
 /// Callback type for handling auto-install.
 ///
 /// The callback is expected to *perform the install* (including any user
@@ -52,8 +121,8 @@ pub struct ServerRegistry {
     servers: HashMap<String, LspServerConfig>,
     /// Active clients keyed by (server_id, root).
     clients: Mutex<HashMap<ClientKey, Arc<LspClient>>>,
-    /// Servers that failed to start (never retry within session).
-    broken: Mutex<HashSet<ClientKey>>,
+    /// Servers that failed to start (never retry within session), with reason.
+    broken: Mutex<HashMap<ClientKey, String>>,
     /// In-flight spawns for dedup.
     spawning: Mutex<HashMap<ClientKey, Arc<tokio::sync::Notify>>>,
     /// Workspace root directory.
@@ -81,7 +150,7 @@ impl ServerRegistry {
         Self {
             servers,
             clients: Mutex::new(HashMap::new()),
-            broken: Mutex::new(HashSet::new()),
+            broken: Mutex::new(HashMap::new()),
             spawning: Mutex::new(HashMap::new()),
             workspace_root,
             install_confirm: RwLock::new(install_confirm),
@@ -107,6 +176,66 @@ impl ServerRegistry {
         self.clients.lock().await.len()
     }
 
+    fn resolve_start_command(&self, config: &LspServerConfig) -> Option<Vec<String>> {
+        for variant in config.command_variants() {
+            if let Some(resolved) = resolve_command_variant(variant) {
+                return Some(resolved);
+            }
+        }
+        None
+    }
+
+    fn binary_available(&self, binary: &str) -> bool {
+        resolve_program_on_system_or_managed(binary).is_some()
+    }
+
+    /// Best-effort explanation for why servers are currently unavailable.
+    pub async fn explain_unavailable_servers(&self, file: &Path) -> Vec<String> {
+        let ext = match file.extension().and_then(|e| e.to_str()) {
+            Some(e) => format!(".{e}"),
+            None => {
+                return vec!["file has no extension and does not match configured servers".into()];
+            }
+        };
+
+        let mut lines = Vec::new();
+        for (server_id, config) in &self.servers {
+            if config.disabled || !config.matches_extension(&ext) {
+                continue;
+            }
+
+            let root = nearest_root(file, &self.workspace_root, &config.root_markers);
+            let key: ClientKey = (server_id.clone(), root);
+            if let Some(reason) = self.broken.lock().await.get(&key).cloned() {
+                lines.push(format!(
+                    "{server_id}: previous startup failure in this session: {reason}"
+                ));
+                continue;
+            }
+
+            if self.resolve_start_command(config).is_some() {
+                continue;
+            }
+
+            if let Some(binary) = config.binary_name() {
+                if let Some(install) = &config.install {
+                    lines.push(format!(
+                        "{server_id}: `{binary}` not found on PATH or managed bins; auto-install is configured via {}",
+                        install.method.label()
+                    ));
+                } else {
+                    lines.push(format!(
+                        "{server_id}: `{binary}` not found on PATH or managed bins and no auto-install is configured"
+                    ));
+                }
+            } else {
+                lines.push(format!("{server_id}: empty command configuration"));
+            }
+        }
+
+        lines
+    }
+
     /// Get or spawn all applicable clients for a given file.
     /// Returns a list of (server_id, client) pairs.
     pub async fn get_clients(&self, file: &Path) -> Vec<(String, Arc<LspClient>)> {
@@ -126,7 +255,7 @@ impl ServerRegistry {
             let key: ClientKey = (server_id.clone(), root.clone());
 
             // Check if broken.
-            if self.broken.lock().await.contains(&key) {
+            if self.broken.lock().await.contains_key(&key) {
                 continue;
             }
 
@@ -150,7 +279,7 @@ impl ServerRegistry {
                         root = %root.display(),
                         "failed to spawn LSP client: {e}"
                     );
-                    self.broken.lock().await.insert(key);
+                    self.broken.lock().await.insert(key, e.to_string());
                 }
             }
         }
@@ -186,40 +315,56 @@ impl ServerRegistry {
             n
         };
 
-        // Check binary existence and auto-install if needed.
-        if let Some(binary) = config.binary_name() {
-            if config.install.is_some() {
-                // If the binary isn't on PATH at all, try installing it.
-                if which::which(binary).is_err() {
-                    let installed = self.try_auto_install(server_id, config, binary).await;
-                    if !installed {
-                        self.spawning.lock().await.remove(key);
-                        notify.notify_waiters();
-                        return Err(LspError::BinaryNotFound(binary.into()));
-                    }
-                } else {
-                    // Binary exists, but may be a shim (e.g. rustup proxy) that fails
-                    // because the actual component isn't installed.
-                    if let PreflightResult::NeedsInstall(reason) =
-                        self.preflight_version_check(binary, config, root).await
-                    {
-                        tracing::debug!(
-                            server = %server_id,
-                            binary = %binary,
-                            "preflight indicates missing install ({reason}); attempting auto-install"
-                        );
-                        let installed = self.try_auto_install(server_id, config, binary).await;
-                        if !installed {
-                            self.spawning.lock().await.remove(key);
-                            notify.notify_waiters();
-                            return Err(LspError::BinaryNotFound(binary.into()));
-                        }
-                    }
-                }
+        let binary = config.binary_name().map(ToOwned::to_owned);
+
+        // Check command availability and auto-install when configured.
+        let mut resolved_command = self.resolve_start_command(config);
+        if resolved_command.is_none() && config.install.is_some() {
+            let install_target = binary.clone().unwrap_or_else(|| server_id.to_string());
+            let installed = self
+                .try_auto_install(server_id, config, &install_target)
+                .await;
+            if !installed {
+                self.spawning.lock().await.remove(key);
+                notify.notify_waiters();
+                return Err(LspError::BinaryNotFound(install_target));
+            }
+            resolved_command = self.resolve_start_command(config);
+        }
+
+        let Some(resolved_command) = resolved_command else {
+            self.spawning.lock().await.remove(key);
+            notify.notify_waiters();
+            return Err(LspError::BinaryNotFound(
+                binary.unwrap_or_else(|| server_id.to_string()),
+            ));
+        };
+
+        // Binary exists on PATH, but may be a shim (e.g. rustup proxy) that fails
+        // because the actual component isn't installed.
+        if config.install.is_some()
+            && let Some(binary_name) = binary.as_deref()
+            && which::which(binary_name).is_ok()
+            && let PreflightResult::NeedsInstall(reason) = self
+                .preflight_version_check(binary_name, config, root)
+                .await
+        {
+            tracing::debug!(
+                server = %server_id,
+                binary = %binary_name,
+                "preflight indicates missing install ({reason}); attempting auto-install"
+            );
+            let installed = self.try_auto_install(server_id, config, binary_name).await;
+            if !installed {
+                self.spawning.lock().await.remove(key);
+                notify.notify_waiters();
+                return Err(LspError::BinaryNotFound(binary_name.to_string()));
             }
         }
 
-        let result = LspClient::create(server_id, config, root).await;
+        let mut runtime_config = config.clone();
+        runtime_config.command = resolved_command;
+        let result = LspClient::create(server_id, &runtime_config, root).await;
 
         // If the process exited immediately (broken shim), try auto-install and retry.
         let result = match result {
@@ -233,9 +378,15 @@ impl ServerRegistry {
                     "server binary appears to be a broken shim, \
                      attempting auto-install. stderr: {stderr}"
                 );
-                if let Some(binary) = config.binary_name() {
+                if let Some(binary) = binary.as_deref() {
                     if self.try_auto_install(server_id, config, binary).await {
-                        LspClient::create(server_id, config, root).await
+                        if let Some(re_resolved) = self.resolve_start_command(config) {
+                            let mut retry_config = config.clone();
+                            retry_config.command = re_resolved;
+                            LspClient::create(server_id, &retry_config, root).await
+                        } else {
+                            result
+                        }
                     } else {
                         result
                     }
@@ -246,7 +397,7 @@ impl ServerRegistry {
             // Some shims don't exit within the 30ms early-death window but still
             // terminate before responding to `initialize`.
             Err(LspError::ServerExited) if config.install.is_some() => {
-                if let Some(binary) = config.binary_name() {
+                if let Some(binary) = binary.as_deref() {
                     match self.preflight_version_check(binary, config, root).await {
                         PreflightResult::NeedsInstall(reason) => {
                             tracing::warn!(
@@ -255,7 +406,13 @@ impl ServerRegistry {
                                 "server exited during init; preflight indicates missing install ({reason}); attempting auto-install"
                             );
                             if self.try_auto_install(server_id, config, binary).await {
-                                LspClient::create(server_id, config, root).await
+                                if let Some(re_resolved) = self.resolve_start_command(config) {
+                                    let mut retry_config = config.clone();
+                                    retry_config.command = re_resolved;
+                                    LspClient::create(server_id, &retry_config, root).await
+                                } else {
+                                    result
+                                }
                             } else {
                                 result
                             }
@@ -313,7 +470,7 @@ impl ServerRegistry {
         }
 
         // Verify the binary is now available.
-        which::which(binary).is_ok()
+        self.binary_available(binary)
     }
 
     async fn preflight_version_check(
@@ -527,7 +684,7 @@ impl ServerRegistry {
             let root = self.workspace_root.clone();
             let key: ClientKey = (server_id.clone(), root.clone());
 
-            if self.broken.lock().await.contains(&key) {
+            if self.broken.lock().await.contains_key(&key) {
                 continue;
             }
 
@@ -546,7 +703,7 @@ impl ServerRegistry {
                         root = %root.display(),
                         "failed to spawn LSP client for workspace_symbol: {e}"
                     );
-                    self.broken.lock().await.insert(key);
+                    self.broken.lock().await.insert(key, e.to_string());
                 }
             }
         }
@@ -783,6 +940,7 @@ sleep 60\n",
         let config = LspServerConfig {
             extensions: vec![".rs".into()],
             command: vec!["rust-analyzer".into()],
+            command_candidates: Vec::new(),
             env: HashMap::new(),
             root_markers: Vec::new(),
             initialization_options: None,

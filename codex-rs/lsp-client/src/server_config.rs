@@ -14,6 +14,11 @@ pub struct LspServerConfig {
     /// Command to spawn the server (e.g. `["rust-analyzer"]`).
     pub command: Vec<String>,
 
+    /// Fallback command vectors attempted when `command` is unavailable.
+    /// Useful for platform/toolchain alternatives, e.g. `xcrun sourcekit-lsp`.
+    #[serde(default)]
+    pub command_candidates: Vec<Vec<String>>,
+
     /// Environment variables to set for the server process.
     #[serde(default)]
     pub env: HashMap<String, String>,
@@ -57,6 +62,12 @@ impl LspServerConfig {
     pub fn binary_name(&self) -> Option<&str> {
         self.command.first().map(|s| s.as_str())
     }
+
+    /// Iterate startup command variants (primary command first, then fallbacks).
+    pub fn command_variants(&self) -> impl Iterator<Item = &[String]> {
+        std::iter::once(self.command.as_slice())
+            .chain(self.command_candidates.iter().map(std::vec::Vec::as_slice))
+    }
 }
 
 /// Install configuration for an LSP server binary.
@@ -82,6 +93,14 @@ pub enum InstallMethod {
         #[serde(default)]
         package: Option<String>,
     },
+    DotnetTool {
+        #[serde(default)]
+        package: Option<String>,
+    },
+    Gem {
+        #[serde(default)]
+        package: Option<String>,
+    },
     Pip {
         #[serde(default)]
         package: Option<String>,
@@ -99,6 +118,21 @@ pub enum InstallMethod {
 }
 
 impl InstallMethod {
+    /// A short method label for diagnostics and user-facing messages.
+    pub fn label(&self) -> &'static str {
+        match self {
+            InstallMethod::Cargo { .. } => "cargo",
+            InstallMethod::RustupComponent { .. } => "rustup_component",
+            InstallMethod::Npm { .. } => "npm",
+            InstallMethod::DotnetTool { .. } => "dotnet_tool",
+            InstallMethod::Gem { .. } => "gem",
+            InstallMethod::Pip { .. } => "pip",
+            InstallMethod::Go { .. } => "go",
+            InstallMethod::Brew { .. } => "brew",
+            InstallMethod::GithubRelease { .. } => "github_release",
+        }
+    }
+
     /// Construct the shell command to install the binary.
     pub fn install_command(&self, binary_name: &str) -> Vec<String> {
         match self {
@@ -108,11 +142,24 @@ impl InstallMethod {
             }
             InstallMethod::RustupComponent { component } => {
                 let comp = component.as_deref().unwrap_or(binary_name);
-                vec!["rustup".into(), "component".into(), "add".into(), comp.into()]
+                vec![
+                    "rustup".into(),
+                    "component".into(),
+                    "add".into(),
+                    comp.into(),
+                ]
             }
             InstallMethod::Npm { package } => {
                 let pkg = package.as_deref().unwrap_or(binary_name);
                 vec!["npm".into(), "install".into(), "-g".into(), pkg.into()]
+            }
+            InstallMethod::DotnetTool { package } => {
+                let pkg = package.as_deref().unwrap_or(binary_name);
+                vec!["dotnet".into(), "tool".into(), "install".into(), pkg.into()]
+            }
+            InstallMethod::Gem { package } => {
+                let pkg = package.as_deref().unwrap_or(binary_name);
+                vec!["gem".into(), "install".into(), pkg.into()]
             }
             InstallMethod::Pip { package } => {
                 let pkg = package.as_deref().unwrap_or(binary_name);
@@ -149,6 +196,7 @@ mod tests {
         LspServerConfig {
             extensions: vec![".rs".into(), ".toml".into()],
             command: vec!["rust-analyzer".into()],
+            command_candidates: Vec::new(),
             env: HashMap::new(),
             root_markers: vec!["Cargo.toml".into()],
             initialization_options: None,
@@ -196,6 +244,20 @@ mod tests {
     }
 
     #[test]
+    fn command_variants_includes_primary_then_fallbacks() {
+        let mut c = test_config();
+        c.command_candidates = vec![
+            vec!["xcrun".into(), "sourcekit-lsp".into()],
+            vec!["/opt/custom/bin/sourcekit-lsp".into()],
+        ];
+        let variants: Vec<Vec<String>> = c.command_variants().map(|v| v.to_vec()).collect();
+        assert_eq!(variants.len(), 3);
+        assert_eq!(variants[0], vec!["rust-analyzer"]);
+        assert_eq!(variants[1], vec!["xcrun", "sourcekit-lsp"]);
+        assert_eq!(variants[2], vec!["/opt/custom/bin/sourcekit-lsp"]);
+    }
+
+    #[test]
     fn install_command_cargo() {
         let m = InstallMethod::Cargo { package: None };
         assert_eq!(m.install_command("ra"), vec!["cargo", "install", "ra"]);
@@ -217,6 +279,28 @@ mod tests {
         assert_eq!(
             m.install_command("ts"),
             vec!["npm", "install", "-g", "ts-server"]
+        );
+    }
+
+    #[test]
+    fn install_command_dotnet_tool() {
+        let m = InstallMethod::DotnetTool {
+            package: Some("csharp-ls".into()),
+        };
+        assert_eq!(
+            m.install_command("csharp-ls"),
+            vec!["dotnet", "tool", "install", "csharp-ls"]
+        );
+    }
+
+    #[test]
+    fn install_command_gem() {
+        let m = InstallMethod::Gem {
+            package: Some("rubocop".into()),
+        };
+        assert_eq!(
+            m.install_command("rubocop"),
+            vec!["gem", "install", "rubocop"]
         );
     }
 

@@ -2,6 +2,8 @@
 //! tool-router injection.  Extracted from `codex.rs` to keep the main session
 //! orchestration file focused.
 
+#[cfg(feature = "lsp")]
+use std::path::Path;
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
 use std::path::PathBuf;
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
@@ -206,6 +208,128 @@ pub(super) async fn init_multi_root_state(
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "lsp")]
+fn lsp_toolchain_paths(codex_home: &Path) -> (PathBuf, PathBuf, PathBuf) {
+    let lsp_root = codex_home.join("lsp");
+    let bin_dir = lsp_root.join("bin");
+    let npm_prefix = lsp_root.join("npm");
+    let npm_cache = lsp_root.join("cache").join("npm");
+    (bin_dir, npm_prefix, npm_cache)
+}
+
+#[cfg(feature = "lsp")]
+async fn ensure_lsp_toolchain_dirs(codex_home: &Path) {
+    let (bin_dir, npm_prefix, npm_cache) = lsp_toolchain_paths(codex_home);
+    let _ = tokio::fs::create_dir_all(&bin_dir).await;
+    let _ = tokio::fs::create_dir_all(&npm_prefix).await;
+    let _ = tokio::fs::create_dir_all(&npm_cache).await;
+}
+
+#[cfg(feature = "lsp")]
+fn shell_quote(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+    if !arg.bytes().any(|b| {
+        matches!(
+            b,
+            b' ' | b'\t'
+                | b'\n'
+                | b'\''
+                | b'"'
+                | b'\\'
+                | b'|'
+                | b'&'
+                | b';'
+                | b'<'
+                | b'>'
+                | b'('
+                | b')'
+        )
+    }) {
+        return arg.to_string();
+    }
+    format!("'{}'", arg.replace('\'', "'\"'\"'"))
+}
+
+#[cfg(feature = "lsp")]
+fn rewrite_lsp_install_command(codex_home: &Path, command: &[String]) -> Vec<String> {
+    let (bin_dir, npm_prefix, npm_cache) = lsp_toolchain_paths(codex_home);
+
+    match command {
+        [a, b, c, rest @ ..] if a == "npm" && b == "install" && c == "-g" => {
+            let mut out = vec![a.clone(), b.clone(), c.clone()];
+            out.extend(rest.iter().cloned());
+            out.push("--prefix".into());
+            out.push(npm_prefix.to_string_lossy().to_string());
+            out.push("--cache".into());
+            out.push(npm_cache.to_string_lossy().to_string());
+            out
+        }
+        [a, b, c, rest @ ..] if a == "dotnet" && b == "tool" && c == "install" => {
+            let mut out = vec![a.clone(), b.clone(), c.clone()];
+            out.extend(rest.iter().cloned());
+            out.push("--tool-path".into());
+            out.push(bin_dir.to_string_lossy().to_string());
+            out
+        }
+        [a, b, rest @ ..] if a == "gem" && b == "install" => {
+            let mut out = vec![a.clone(), b.clone()];
+            out.extend(rest.iter().cloned());
+            out.push("--bindir".into());
+            out.push(bin_dir.to_string_lossy().to_string());
+            out
+        }
+        [a, b, rest @ ..] if a == "go" && b == "install" => {
+            #[cfg(unix)]
+            {
+                let mut cmd = format!("GOBIN={} {}", shell_quote(&bin_dir.to_string_lossy()), a);
+                cmd.push(' ');
+                cmd.push_str(b);
+                for item in rest {
+                    cmd.push(' ');
+                    cmd.push_str(&shell_quote(item));
+                }
+                vec!["sh".into(), "-lc".into(), cmd]
+            }
+            #[cfg(windows)]
+            {
+                let mut cmd = format!("set GOBIN={}&& {} {}", bin_dir.display(), a, b);
+                for item in rest {
+                    cmd.push(' ');
+                    cmd.push_str(item);
+                }
+                vec!["cmd".into(), "/C".into(), cmd]
+            }
+        }
+        [a, b, rest @ ..] if a == "pip" && b == "install" => {
+            if which::which("pip").is_err() && which::which("pip3").is_ok() {
+                let mut out = vec!["pip3".into(), b.clone()];
+                out.extend(rest.iter().cloned());
+                out
+            } else {
+                command.to_vec()
+            }
+        }
+        _ => command.to_vec(),
+    }
+}
+
+#[cfg(feature = "lsp")]
+fn install_prefix_rule(command: &[String]) -> Option<Vec<String>> {
+    match command {
+        [a, b, c, ..] if a == "npm" && b == "install" && c == "-g" => {
+            Some(vec![a.clone(), b.clone(), c.clone()])
+        }
+        [a, b, c, ..] if a == "dotnet" && b == "tool" && c == "install" => {
+            Some(vec![a.clone(), b.clone(), c.clone()])
+        }
+        [a, b, ..] => Some(vec![a.clone(), b.clone()]),
+        [a] => Some(vec![a.clone()]),
+        [] => None,
+    }
+}
+
+#[cfg(feature = "lsp")]
 pub(super) async fn setup_lsp_install_callback(sess: &Arc<super::Session>) {
     use uuid::Uuid;
 
@@ -221,6 +345,12 @@ pub(super) async fn setup_lsp_install_callback(sess: &Arc<super::Session>) {
                     let command = command.to_vec();
 
                     Box::pin(async move {
+                        if *crate::flags::CODEX_DISABLE_LSP_DOWNLOAD {
+                            tracing::info!(
+                                "skipping LSP auto-install because CODEX_DISABLE_LSP_DOWNLOAD is set"
+                            );
+                            return false;
+                        }
                         let Some(sess) = weak_sess.upgrade() else {
                             return false;
                         };
@@ -242,16 +372,17 @@ pub(super) async fn setup_lsp_install_callback(sess: &Arc<super::Session>) {
                             .allocate_process_id()
                             .await;
 
+                        ensure_lsp_toolchain_dirs(turn_context.config.codex_home.as_path()).await;
+                        let original_command = command.clone();
+                        let command = rewrite_lsp_install_command(
+                            turn_context.config.codex_home.as_path(),
+                            &original_command,
+                        );
+
                         // Offer a stable "approve once" choice for install commands.
                         // Keep this conservative to avoid over-broad allowlisting.
-                        let prefix_rule: Option<Vec<String>> = match command.as_slice() {
-                            [a, b, c, ..] if a == "npm" && b == "install" && c == "-g" => {
-                                Some(vec![a.clone(), b.clone(), c.clone()])
-                            }
-                            [a, b, ..] => Some(vec![a.clone(), b.clone()]),
-                            [a] => Some(vec![a.clone()]),
-                            [] => None,
-                        };
+                        let prefix_rule: Option<Vec<String>> =
+                            install_prefix_rule(original_command.as_slice());
 
                         let justification =
                             Some(format!("{prompt} Command: `{}`", command.join(" ")));
@@ -347,11 +478,90 @@ pub(super) async fn shutdown_code_intel(services: &SessionServices) {
 // ---------------------------------------------------------------------------
 
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
-pub(super) fn inject_multi_root_state(
-    tools_config: &mut ToolsConfig,
-    services: &SessionServices,
-) {
+pub(super) fn inject_multi_root_state(tools_config: &mut ToolsConfig, services: &SessionServices) {
     if let Some(ref multi_root_state) = services.multi_root_state {
         tools_config.multi_root_state = Some(Arc::clone(multi_root_state));
+    }
+}
+
+#[cfg(all(test, feature = "lsp"))]
+mod tests {
+    use super::*;
+
+    fn codex_home() -> PathBuf {
+        PathBuf::from("/tmp/codex-home-test")
+    }
+
+    #[test]
+    fn rewrites_npm_global_to_managed_prefix() {
+        let cmd = vec![
+            "npm".to_string(),
+            "install".to_string(),
+            "-g".to_string(),
+            "pyright".to_string(),
+        ];
+        let rewritten = rewrite_lsp_install_command(codex_home().as_path(), &cmd);
+        assert!(
+            rewritten
+                .windows(2)
+                .any(|w| w == ["--prefix", "/tmp/codex-home-test/lsp/npm"])
+        );
+        assert!(
+            rewritten
+                .windows(2)
+                .any(|w| w == ["--cache", "/tmp/codex-home-test/lsp/cache/npm"])
+        );
+    }
+
+    #[test]
+    fn rewrites_dotnet_tool_install_to_tool_path() {
+        let cmd = vec![
+            "dotnet".to_string(),
+            "tool".to_string(),
+            "install".to_string(),
+            "csharp-ls".to_string(),
+        ];
+        let rewritten = rewrite_lsp_install_command(codex_home().as_path(), &cmd);
+        assert!(
+            rewritten
+                .windows(2)
+                .any(|w| w == ["--tool-path", "/tmp/codex-home-test/lsp/bin"])
+        );
+    }
+
+    #[test]
+    fn rewrites_gem_install_to_bindir() {
+        let cmd = vec![
+            "gem".to_string(),
+            "install".to_string(),
+            "rubocop".to_string(),
+        ];
+        let rewritten = rewrite_lsp_install_command(codex_home().as_path(), &cmd);
+        assert!(
+            rewritten
+                .windows(2)
+                .any(|w| w == ["--bindir", "/tmp/codex-home-test/lsp/bin"])
+        );
+    }
+
+    #[test]
+    fn install_prefix_rule_prefers_stable_install_prefixes() {
+        let npm = vec![
+            "npm".to_string(),
+            "install".to_string(),
+            "-g".to_string(),
+            "pyright".to_string(),
+        ];
+        let rule = install_prefix_rule(&npm).expect("rule");
+        assert_eq!(rule, vec!["npm", "install", "-g"]);
+
+        let dotnet = vec![
+            "dotnet".to_string(),
+            "tool".to_string(),
+            "install".to_string(),
+            "csharp-ls".to_string(),
+        ];
+        let rule = install_prefix_rule(&dotnet).expect("rule");
+        assert_eq!(rule, vec!["dotnet", "tool", "install"]);
     }
 }
