@@ -759,10 +759,7 @@ impl super::ChatWidget {
         if api_key.is_none() {
             let warning_cell = history_cell::new_warning_event(
                 "ElevenLabs API key not found — TTS will not work.\n\
-                 Set ELEVENLABS_API_KEY or add to config.toml:\n  \
-                 [voice_mode.elevenlabs]\n  \
-                 api_key = \"your-key\"\n\
-                 Get a key at: https://elevenlabs.io/app/settings/api-keys"
+                 Set ELEVENLABS_API_KEY or run /voice-setup to paste your key."
                     .to_string(),
             );
             if session_not_ready {
