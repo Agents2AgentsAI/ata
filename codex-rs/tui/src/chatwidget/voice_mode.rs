@@ -1779,7 +1779,9 @@ impl super::ChatWidget {
         }
 
         // Word-wrap each paragraph independently to respect block boundaries.
-        let wrap_width = width.saturating_sub(4) as usize;
+        // Reserve 2 extra columns for the "• " / "  " prefix that mirrors the
+        // history cell indent so the karaoke text aligns with normal messages.
+        let wrap_width = width.saturating_sub(4).saturating_sub(2) as usize;
         if wrap_width < 10 {
             return None;
         }
@@ -1820,24 +1822,42 @@ impl super::ChatWidget {
                 need_space = true;
                 if i == idx {
                     let word_len = entry.word.len();
-                    return Some(Self::build_karaoke_lines_inner(
+                    let mut lines = Self::build_karaoke_lines_inner(
                         &wrapped,
                         char_offset,
                         char_offset + word_len,
                         highlight_style,
-                    ));
+                    );
+                    Self::prepend_bullet_indent(&mut lines);
+                    return Some(lines);
                 }
                 char_offset += entry.word.len();
             }
         }
 
         // No highlight — render plain text.
-        Some(
-            wrapped
-                .iter()
-                .map(|line| Line::from(Span::raw(line.to_string())))
-                .collect(),
-        )
+        let mut lines: Vec<Line<'static>> = wrapped
+            .iter()
+            .map(|line| Line::from(Span::raw(line.to_string())))
+            .collect();
+        Self::prepend_bullet_indent(&mut lines);
+        Some(lines)
+    }
+
+    /// Prepend "• " (dimmed) to the first line and "  " to subsequent lines,
+    /// matching the indent used by normal assistant history cells.
+    #[cfg(not(target_os = "linux"))]
+    fn prepend_bullet_indent(lines: &mut [ratatui::text::Line<'static>]) {
+        use ratatui::style::Stylize as _;
+        use ratatui::text::Span;
+        for (i, line) in lines.iter_mut().enumerate() {
+            let prefix = if i == 0 {
+                Span::from("• ").dim()
+            } else {
+                Span::raw("  ")
+            };
+            line.spans.insert(0, prefix);
+        }
     }
 
     /// Build wrapped Lines with a highlighted byte range.
