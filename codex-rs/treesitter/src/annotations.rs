@@ -75,7 +75,8 @@ pub fn save_annotations(
 
     for entry in file_tree.all_entries() {
         if let Some(definition) = entry.definition {
-            data.file_definitions.insert(entry.rel_path.clone(), definition);
+            data.file_definitions
+                .insert(entry.rel_path.clone(), definition);
         }
         if !entry.marks.is_empty() {
             data.file_marks.insert(entry.rel_path, entry.marks);
@@ -119,10 +120,7 @@ pub fn load_annotations(
     let mut symbol_definitions_applied = 0usize;
 
     for (rel_path, definition) in data.file_definitions {
-        if file_tree
-            .define_file(&rel_path, &definition, true)
-            .is_ok()
-        {
+        if file_tree.define_file(&rel_path, &definition, true).is_ok() {
             file_definitions_applied += 1;
         }
     }
@@ -163,10 +161,10 @@ mod tests {
     use crate::symbol::Symbol;
     use crate::symbol::SymbolKind;
 
-    use super::load_annotations;
-    use super::save_annotations;
     use super::AnnotationLoadStats;
     use super::default_annotation_store_path;
+    use super::load_annotations;
+    use super::save_annotations;
     use crate::file_tree::FileTree;
     use crate::symbol_table::SymbolTable;
 

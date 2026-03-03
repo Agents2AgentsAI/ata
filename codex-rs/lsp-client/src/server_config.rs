@@ -20,9 +20,7 @@ pub enum RootStrategy {
     },
     /// Walk up looking for `preferred_marker`. Returns the FIRST ancestor
     /// directory containing it. Used for `go.work` detection.
-    PreferAncestorMarker {
-        preferred_marker: &'static str,
-    },
+    PreferAncestorMarker { preferred_marker: &'static str },
 }
 
 /// Hook executed after root discovery to modify server configuration.
@@ -203,9 +201,6 @@ pub enum InstallMethod {
         #[serde(default)]
         formula: Option<String>,
     },
-    GithubRelease {
-        repo: String,
-    },
 }
 
 impl InstallMethod {
@@ -220,7 +215,6 @@ impl InstallMethod {
             InstallMethod::Pip { .. } => "pip",
             InstallMethod::Go { .. } => "go",
             InstallMethod::Brew { .. } => "brew",
-            InstallMethod::GithubRelease { .. } => "github_release",
         }
     }
 
@@ -271,15 +265,6 @@ impl InstallMethod {
             InstallMethod::Brew { formula } => {
                 let pkg = formula.as_deref().unwrap_or(binary_name);
                 vec!["brew".into(), "install".into(), pkg.into()]
-            }
-            InstallMethod::GithubRelease { repo } => {
-                // Explicitly fail: this install method requires manual setup.
-                vec![
-                    "__codex_manual_install_required__".into(),
-                    format!(
-                        "download {binary_name} from https://github.com/{repo}/releases manually"
-                    ),
-                ]
             }
         }
     }
@@ -397,15 +382,19 @@ mod tests {
         };
         assert_eq!(
             m.install_command("typescript-language-server"),
-            vec!["npm", "install", "-g", "typescript-language-server", "typescript"]
+            vec![
+                "npm",
+                "install",
+                "-g",
+                "typescript-language-server",
+                "typescript"
+            ]
         );
     }
 
     #[test]
     fn install_command_npm_empty_fallback() {
-        let m = InstallMethod::Npm {
-            packages: vec![],
-        };
+        let m = InstallMethod::Npm { packages: vec![] };
         assert_eq!(
             m.install_command("my-server"),
             vec!["npm", "install", "-g", "my-server"]
@@ -471,15 +460,5 @@ mod tests {
             formula: Some("llvm".into()),
         };
         assert_eq!(m.install_command("clangd"), vec!["brew", "install", "llvm"]);
-    }
-
-    #[test]
-    fn install_command_github_release_is_explicit_failure_placeholder() {
-        let m = InstallMethod::GithubRelease {
-            repo: "owner/repo".into(),
-        };
-        let cmd = m.install_command("example-lsp");
-        assert_eq!(cmd[0], "__codex_manual_install_required__");
-        assert!(cmd[1].contains("https://github.com/owner/repo/releases"));
     }
 }

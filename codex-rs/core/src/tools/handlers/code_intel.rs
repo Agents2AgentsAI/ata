@@ -548,13 +548,18 @@ impl ToolHandler for CodeIntelToolHandler {
                     })
                     .collect::<Vec<_>>();
 
-                (text, json!({"count": statuses_json.len(), "roots": statuses_json}))
+                (
+                    text,
+                    json!({"count": statuses_json.len(), "roots": statuses_json}),
+                )
             }
         };
 
         let output = match response_format {
             ResponseFormat::Text => output_text,
-            ResponseFormat::Json => serde_json::to_string_pretty(&output_json).unwrap_or(output_text),
+            ResponseFormat::Json => {
+                serde_json::to_string_pretty(&output_json).unwrap_or(output_text)
+            }
         };
 
         Ok(ToolOutput::Function {
@@ -773,7 +778,10 @@ fn format_chunk_indices(root: &str, result: &codex_treesitter::ChunkIndicesResul
     )];
 
     for chunk in &result.chunks {
-        out.push(format!("  #{} [{}..{})", chunk.index, chunk.start, chunk.end));
+        out.push(format!(
+            "  #{} [{}..{})",
+            chunk.index, chunk.start, chunk.end
+        ));
     }
 
     out.join("\n")

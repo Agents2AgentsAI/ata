@@ -36,6 +36,8 @@ pub enum TreeSitterError {
     #[error("invalid chunk parameters: chunk_size must be > 0")]
     InvalidChunkSize,
 
-    #[error("invalid chunk parameters: overlap {overlap} must be less than chunk_size {chunk_size}")]
+    #[error(
+        "invalid chunk parameters: overlap {overlap} must be less than chunk_size {chunk_size}"
+    )]
     InvalidChunkOverlap { chunk_size: usize, overlap: usize },
 }

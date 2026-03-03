@@ -250,13 +250,7 @@ impl ProjectIndex {
         chunk_size: usize,
         overlap: usize,
     ) -> Result<ChunkIndicesResult, TreeSitterError> {
-        chunking::chunk_indices(
-            &self.root,
-            &self.file_tree,
-            rel_file,
-            chunk_size,
-            overlap,
-        )
+        chunking::chunk_indices(&self.root, &self.file_tree, rel_file, chunk_size, overlap)
     }
 
     pub fn load_annotations(&self) -> Result<AnnotationLoadStats, TreeSitterError> {
