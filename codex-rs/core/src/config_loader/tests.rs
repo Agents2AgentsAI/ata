@@ -1386,6 +1386,7 @@ prefix_rules = [
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["rm"]),
                     decision: Decision::Forbidden,
+                    resolved_program: None,
                     justification: None,
                 }],
             }
@@ -1411,6 +1412,7 @@ prefix_rules = [
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git", "status"]),
                     decision: Decision::Prompt,
+                    resolved_program: None,
                     justification: None,
                 }],
             }
@@ -1422,6 +1424,7 @@ prefix_rules = [
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["hg", "status"]),
                     decision: Decision::Prompt,
+                    resolved_program: None,
                     justification: None,
                 }],
             }
@@ -1505,6 +1508,7 @@ prefix_rules = []
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: vec!["rm".to_string()],
                     decision: Decision::Forbidden,
+                    resolved_program: None,
                     justification: None,
                 }],
             }
@@ -1543,6 +1547,7 @@ prefix_rules = []
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: vec!["rm".to_string()],
                     decision: Decision::Forbidden,
+                    resolved_program: None,
                     justification: None,
                 }],
             }
@@ -1557,6 +1562,7 @@ prefix_rules = []
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: vec!["git".to_string(), "push".to_string()],
                     decision: Decision::Prompt,
+                    resolved_program: None,
                     justification: None,
                 }],
             }

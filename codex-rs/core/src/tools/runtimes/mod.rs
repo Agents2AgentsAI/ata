@@ -9,6 +9,7 @@ use crate::path_utils;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
+use crate::skills::SkillMetadata;
 use crate::tools::sandboxing::ToolError;
 use codex_protocol::models::PermissionProfile;
 use std::collections::HashMap;
@@ -19,6 +20,14 @@ pub mod shell;
 pub mod unified_exec;
 
 pub(crate) const CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR: &str = "CODEX_SKIP_ARG0_PATH_HELPER";
+
+#[derive(Debug, Clone)]
+pub(crate) struct ExecveSessionApproval {
+    /// If this execve session approval is associated with a skill script, this
+    /// field contains metadata about the skill.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub skill: Option<SkillMetadata>,
+}
 
 fn is_ata_program(program: &str) -> bool {
     let name = Path::new(program)

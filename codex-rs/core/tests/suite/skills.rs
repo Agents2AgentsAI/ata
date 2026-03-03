@@ -78,7 +78,7 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
             model: session_model,
             model_provider: None,
             effort: None,
-            summary: codex_protocol::config_types::ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
