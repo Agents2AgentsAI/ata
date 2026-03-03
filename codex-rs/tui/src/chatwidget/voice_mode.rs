@@ -892,12 +892,10 @@ impl super::ChatWidget {
             .as_ref()
             .map_or(voice_config.stt_enabled.unwrap_or(true), |s| s.stt_enabled);
 
-        let api_key_available = voice_config
+        let api_key = voice_config
             .elevenlabs
             .as_ref()
-            .and_then(|e| e.api_key.as_ref())
-            .is_some()
-            || std::env::var("ELEVENLABS_API_KEY").is_ok();
+            .and_then(|e| e.api_key.clone());
 
         // Prefer cached values (set from the last save) over the stale in-memory config.
         let language_code = self.cached_elevenlabs_language.clone().unwrap_or_else(|| {
@@ -913,7 +911,7 @@ impl super::ChatWidget {
         let view = crate::bottom_pane::VoiceSetupView::new(
             tts_enabled,
             stt_enabled,
-            api_key_available,
+            api_key,
             language_code,
             speed,
             self.app_event_tx.clone(),
@@ -1852,7 +1850,7 @@ impl super::ChatWidget {
         use ratatui::text::Span;
         for (i, line) in lines.iter_mut().enumerate() {
             let prefix = if i == 0 {
-                Span::from("♪ ").dim()
+                Span::from("◆ ").dim()
             } else {
                 Span::raw("  ")
             };

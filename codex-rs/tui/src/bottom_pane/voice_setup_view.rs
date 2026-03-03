@@ -90,13 +90,17 @@ impl VoiceSetupView {
     pub(crate) fn new(
         tts_enabled: bool,
         stt_enabled: bool,
-        api_key_available: bool,
+        api_key: Option<String>,
         language_code: Option<String>,
         speed: Option<f64>,
         app_event_tx: AppEventSender,
     ) -> Self {
-        // Read any existing API key from the environment.
-        let existing_key = std::env::var("ELEVENLABS_API_KEY").unwrap_or_default();
+        // Use key from config/caller, falling back to env var.
+        let existing_key = api_key
+            .filter(|k| !k.is_empty())
+            .or_else(|| std::env::var("ELEVENLABS_API_KEY").ok())
+            .unwrap_or_default();
+        let api_key_available = !existing_key.is_empty();
 
         let lang_options: Vec<(String, String)> = LANGUAGE_OPTIONS
             .iter()
