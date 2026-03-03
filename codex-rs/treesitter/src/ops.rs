@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use rayon::prelude::*;
 use serde::Serialize;
 use tree_sitter::StreamingIterator;
 
@@ -51,26 +52,26 @@ pub fn find_callers(
         .get(file, symbol_name)
         .ok_or_else(|| format!("symbol '{symbol_name}' not found in '{file}'"))?;
 
-    let mut callers = Vec::new();
+    let mut callers: Vec<CallerInfo> = file_tree
+        .all_paths_with_language()
+        .into_par_iter()
+        .flat_map_iter(|(rel_path, language)| {
+            let source = match std::fs::read_to_string(root.join(&rel_path)) {
+                Ok(source) => source,
+                Err(_) => return Vec::new(),
+            };
 
-    for (rel_path, language) in file_tree.all_paths_with_language() {
-        let source = match std::fs::read_to_string(root.join(&rel_path)) {
-            Ok(source) => source,
-            Err(_) => continue,
-        };
-
-        let file_callers = if language.has_tree_sitter_support() {
-            find_callers_ast(&source, &rel_path, language, symbol_name, file)
-        } else {
-            find_callers_regex(&source, &rel_path, language, symbol_name, file)
-        };
-
-        for caller in file_callers {
-            callers.push(caller);
-            if callers.len() >= limit {
-                return Ok(callers);
+            if language.has_tree_sitter_support() {
+                find_callers_ast(&source, &rel_path, language, symbol_name, file)
+            } else {
+                find_callers_regex(&source, &rel_path, language, symbol_name, file)
             }
-        }
+        })
+        .collect();
+
+    callers.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)));
+    if callers.len() > limit {
+        callers.truncate(limit);
     }
 
     Ok(callers)
@@ -248,30 +249,29 @@ pub fn find_tests(
         .get(file, symbol_name)
         .ok_or_else(|| format!("symbol '{symbol_name}' not found in '{file}'"))?;
 
-    let mut tests = Vec::new();
+    let mut tests: Vec<TestInfo> = symbol_table
+        .test_symbols()
+        .into_par_iter()
+        .filter_map(|symbol| {
+            let source = std::fs::read_to_string(root.join(&symbol.file)).ok()?;
+            let end = symbol.byte_range.1.min(source.len());
+            let body = &source[symbol.byte_range.0..end];
+            if !body.contains(symbol_name) {
+                return None;
+            }
 
-    for symbol in symbol_table.test_symbols() {
-        let source = match std::fs::read_to_string(root.join(&symbol.file)) {
-            Ok(source) => source,
-            Err(_) => continue,
-        };
+            Some(TestInfo {
+                name: symbol.name,
+                file: symbol.file,
+                line: symbol.line_range.0,
+                signature: symbol.signature,
+            })
+        })
+        .collect();
 
-        let end = symbol.byte_range.1.min(source.len());
-        let body = &source[symbol.byte_range.0..end];
-        if !body.contains(symbol_name) {
-            continue;
-        }
-
-        tests.push(TestInfo {
-            name: symbol.name,
-            file: symbol.file,
-            line: symbol.line_range.0,
-            signature: symbol.signature,
-        });
-
-        if tests.len() >= limit {
-            break;
-        }
+    tests.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)));
+    if tests.len() > limit {
+        tests.truncate(limit);
     }
 
     Ok(tests)

@@ -348,57 +348,9 @@ impl ServerRegistry {
         deduped
     }
 
-    pub async fn prewarm_most_relevant_server(&self) {
-        let candidate = self
-            .servers
-            .iter()
-            .filter_map(|(server_id, config)| {
-                if config.disabled {
-                    return None;
-                }
-                let score = prewarm_candidate_score(&self.workspace_root, config);
-                if score == 0 {
-                    return None;
-                }
-                Some((server_id.clone(), config.clone(), score))
-            })
-            .max_by_key(|(_, _, score)| *score)
-            .map(|(server_id, config, _)| (server_id, config));
-
-        let Some((server_id, config)) = candidate else {
-            return;
-        };
-
-        let root = self.workspace_root.clone();
-        let key: ClientKey = (server_id.clone(), root.clone());
-
-        if self.broken.lock().await.contains_key(&key) {
-            return;
-        }
-
-        {
-            let clients = self.clients.lock().await;
-            if clients.contains_key(&key) {
-                return;
-            }
-        }
-
-        match self.spawn_client(&server_id, &config, &root, &key).await {
-            Ok(_) => {
-                tracing::debug!(
-                    server = %server_id,
-                    root = %root.display(),
-                    "prewarmed LSP server"
-                );
-            }
-            Err(e) => {
-                tracing::debug!(
-                    server = %server_id,
-                    root = %root.display(),
-                    "failed to prewarm LSP server: {e}"
-                );
-            }
-        }
+    /// Eagerly start workspace-relevant servers in the background.
+    pub async fn prewarm_workspace_clients(&self) {
+        self.ensure_workspace_clients_started().await;
     }
 
     /// Spawn a client with deduplication.
@@ -966,33 +918,6 @@ fn incoming_call_key(call: &CallHierarchyIncomingCall) -> (String, (u32, u32, u3
 
 fn outgoing_call_key(call: &CallHierarchyOutgoingCall) -> (String, (u32, u32, u32, u32)) {
     (call.to.uri.as_str().to_string(), range_key(&call.to.range))
-}
-
-fn prewarm_candidate_score(workspace_root: &Path, config: &LspServerConfig) -> usize {
-    if config.root_markers.is_empty() || !dir_has_any_marker(workspace_root, &config.root_markers) {
-        return 0;
-    }
-
-    let mut score = 0usize;
-    let mut has_non_git_glob = false;
-    for marker in &config.root_markers {
-        if marker == ".git" {
-            continue;
-        }
-        if marker.contains('*') || marker.contains('?') || marker.contains('[') {
-            has_non_git_glob = true;
-            continue;
-        }
-        if workspace_root.join(marker).exists() {
-            score += 3;
-        }
-    }
-
-    if score == 0 && has_non_git_glob {
-        1
-    } else {
-        score
-    }
 }
 
 #[cfg(test)]
