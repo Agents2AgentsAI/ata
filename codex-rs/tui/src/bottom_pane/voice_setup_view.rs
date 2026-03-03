@@ -221,7 +221,7 @@ impl VoiceSetupView {
             let name = match &item.kind {
                 VoiceSetupItemKind::Toggle { enabled } => {
                     let marker = if *enabled { 'x' } else { ' ' };
-                    format!("{prefix} [{marker}] {}", item.name)
+                    format!("{prefix}  [{marker}] {}", item.name)
                 }
                 VoiceSetupItemKind::ApiKey {
                     value,
@@ -234,11 +234,15 @@ impl VoiceSetupView {
                         } else {
                             mask_key(edit_buffer)
                         };
-                        format!("{prefix}  {}  [{display}\u{2588}]", item.name)
+                        format!("{prefix}  {:<10} [{display}\u{2588}]", item.name)
                     } else if value.is_empty() {
-                        format!("{prefix}  {}  [paste key here]", item.name)
+                        format!("{prefix}  {:<10} [paste key here]", item.name)
                     } else {
-                        format!("{prefix}  {}  [{}]", item.name, mask_key(value))
+                        format!(
+                            "{prefix}  {:<10} [{}]",
+                            item.name,
+                            mask_key(value)
+                        )
                     }
                 }
                 VoiceSetupItemKind::Selection {
