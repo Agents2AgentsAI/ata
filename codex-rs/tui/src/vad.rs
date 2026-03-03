@@ -120,16 +120,15 @@ impl VoiceActivityDetector {
 
         // Max speech duration guard — force silence if speaking too long.
         // Prevents runaway recordings from ambient audio (podcasts, TV).
-        if self.is_speaking {
-            if let Some(onset) = self.speech_onset_at {
-                if now.duration_since(onset) >= self.max_speech_duration {
-                    self.is_speaking = false;
-                    self.last_speech_at = None;
-                    self.speech_onset_at = None;
-                    self.onset_frame_count = 0;
-                    return Some(VadEvent::SilenceDetected);
-                }
-            }
+        if self.is_speaking
+            && let Some(onset) = self.speech_onset_at
+            && now.duration_since(onset) >= self.max_speech_duration
+        {
+            self.is_speaking = false;
+            self.last_speech_at = None;
+            self.speech_onset_at = None;
+            self.onset_frame_count = 0;
+            return Some(VadEvent::SilenceDetected);
         }
 
         if normalized_peak >= threshold {
@@ -145,15 +144,14 @@ impl VoiceActivityDetector {
             // Reset onset counter on any below-threshold frame.
             self.onset_frame_count = 0;
 
-            if self.is_speaking {
-                if let Some(last) = self.last_speech_at {
-                    if now.duration_since(last) >= self.silence_gate {
-                        self.is_speaking = false;
-                        self.last_speech_at = None;
-                        self.speech_onset_at = None;
-                        return Some(VadEvent::SilenceDetected);
-                    }
-                }
+            if self.is_speaking
+                && let Some(last) = self.last_speech_at
+                && now.duration_since(last) >= self.silence_gate
+            {
+                self.is_speaking = false;
+                self.last_speech_at = None;
+                self.speech_onset_at = None;
+                return Some(VadEvent::SilenceDetected);
             }
         }
 

@@ -2852,12 +2852,11 @@ impl Renderable for DocumentReaderView {
                 // Apply word-level reading highlight during narration.
                 // This runs BEFORE the 🔊 icon prepend so that character
                 // offsets computed from rendered_lines() match correctly.
-                if let Some((line_idx, col_start, col_end)) = self.voice_reading_highlight {
-                    if line_idx < raw_lines.len() {
-                        let line = std::mem::take(&mut raw_lines[line_idx]);
-                        raw_lines[line_idx] =
-                            render::apply_word_highlight(line, col_start, col_end);
-                    }
+                if let Some((line_idx, col_start, col_end)) = self.voice_reading_highlight
+                    && line_idx < raw_lines.len()
+                {
+                    let line = std::mem::take(&mut raw_lines[line_idx]);
+                    raw_lines[line_idx] = render::apply_word_highlight(line, col_start, col_end);
                 }
 
                 // (Voice icon removed — too noisy.)

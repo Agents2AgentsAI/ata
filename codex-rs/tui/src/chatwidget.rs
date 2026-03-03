@@ -8516,24 +8516,24 @@ fn strip_system_instruction_prefix(
     text_elements: Vec<codex_protocol::user_input::TextElement>,
 ) -> (String, Vec<codex_protocol::user_input::TextElement>) {
     // Voice mode instruction prefixes end with a double newline.
-    if message.starts_with("[VOICE MODE") {
-        if let Some(pos) = message.find("\n\n") {
-            let prefix_len = pos + 2;
-            let stripped = message[prefix_len..].to_string();
-            let adjusted = text_elements
-                .into_iter()
-                .filter_map(|el| {
-                    if el.byte_range.end <= prefix_len {
-                        return None; // element is entirely within the prefix
-                    }
-                    Some(el.map_range(|r| codex_protocol::user_input::ByteRange {
-                        start: r.start.saturating_sub(prefix_len),
-                        end: r.end.saturating_sub(prefix_len),
-                    }))
-                })
-                .collect();
-            return (stripped, adjusted);
-        }
+    if message.starts_with("[VOICE MODE")
+        && let Some(pos) = message.find("\n\n")
+    {
+        let prefix_len = pos + 2;
+        let stripped = message[prefix_len..].to_string();
+        let adjusted = text_elements
+            .into_iter()
+            .filter_map(|el| {
+                if el.byte_range.end <= prefix_len {
+                    return None; // element is entirely within the prefix
+                }
+                Some(el.map_range(|r| codex_protocol::user_input::ByteRange {
+                    start: r.start.saturating_sub(prefix_len),
+                    end: r.end.saturating_sub(prefix_len),
+                }))
+            })
+            .collect();
+        return (stripped, adjusted);
     }
 
     // Document reader close feedback is entirely a system instruction.

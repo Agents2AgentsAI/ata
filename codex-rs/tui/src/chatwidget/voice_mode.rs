@@ -113,15 +113,11 @@ impl SentenceBuffer {
         self.buffer.push_str(delta);
         let mut sentences = Vec::new();
 
-        loop {
-            if let Some(split_pos) = self.find_sentence_boundary() {
-                let sentence: String = self.buffer[..split_pos].trim().to_string();
-                self.buffer = self.buffer[split_pos..].trim_start().to_string();
-                if !sentence.is_empty() {
-                    sentences.push(sentence);
-                }
-            } else {
-                break;
+        while let Some(split_pos) = self.find_sentence_boundary() {
+            let sentence: String = self.buffer[..split_pos].trim().to_string();
+            self.buffer = self.buffer[split_pos..].trim_start().to_string();
+            if !sentence.is_empty() {
+                sentences.push(sentence);
             }
         }
         sentences
@@ -307,15 +303,11 @@ impl VoiceTagParser {
 
     /// Extract complete sentences from voice_buffer into the output vec.
     fn extract_sentences(&mut self, out: &mut Vec<String>) {
-        loop {
-            if let Some(pos) = find_sentence_boundary(&self.voice_buffer) {
-                let sentence = self.voice_buffer[..pos].trim().to_string();
-                self.voice_buffer = self.voice_buffer[pos..].trim_start().to_string();
-                if !sentence.is_empty() {
-                    out.push(sentence);
-                }
-            } else {
-                break;
+        while let Some(pos) = find_sentence_boundary(&self.voice_buffer) {
+            let sentence = self.voice_buffer[..pos].trim().to_string();
+            self.voice_buffer = self.voice_buffer[pos..].trim_start().to_string();
+            if !sentence.is_empty() {
+                out.push(sentence);
             }
         }
     }
@@ -715,18 +707,18 @@ impl super::ChatWidget {
             });
         }
 
-        if let Some(ref mut state) = self.voice_mode_state {
-            if state.is_active() {
-                // Turn off.
-                state.reset();
-                self.app_event_tx
-                    .send(AppEvent::PersistVoiceModeEnabled(false));
-                self.add_info_message("Voice mode off.".to_string(), None);
-                self.restore_default_placeholder();
-                self.bottom_pane.set_force_hide_cursor(false);
-                self.request_redraw();
-                return;
-            }
+        if let Some(ref mut state) = self.voice_mode_state
+            && state.is_active()
+        {
+            // Turn off.
+            state.reset();
+            self.app_event_tx
+                .send(AppEvent::PersistVoiceModeEnabled(false));
+            self.add_info_message("Voice mode off.".to_string(), None);
+            self.restore_default_placeholder();
+            self.bottom_pane.set_force_hide_cursor(false);
+            self.request_redraw();
+            return;
         }
 
         // Mutual exclusion: stop realtime mode if active.
@@ -857,19 +849,19 @@ impl super::ChatWidget {
     /// Deactivate voice mode if it's currently active (called when both
     /// TTS and STT are turned off via the setup popup).
     pub(crate) fn deactivate_voice_mode_if_active(&mut self) {
-        if let Some(ref mut state) = self.voice_mode_state {
-            if state.is_active() {
-                state.reset();
-                self.app_event_tx
-                    .send(AppEvent::PersistVoiceModeEnabled(false));
-                self.add_info_message(
-                    "Voice mode off (TTS and STT both disabled).".to_string(),
-                    None,
-                );
-                self.restore_default_placeholder();
-                self.bottom_pane.set_force_hide_cursor(false);
-                self.request_redraw();
-            }
+        if let Some(ref mut state) = self.voice_mode_state
+            && state.is_active()
+        {
+            state.reset();
+            self.app_event_tx
+                .send(AppEvent::PersistVoiceModeEnabled(false));
+            self.add_info_message(
+                "Voice mode off (TTS and STT both disabled).".to_string(),
+                None,
+            );
+            self.restore_default_placeholder();
+            self.bottom_pane.set_force_hide_cursor(false);
+            self.request_redraw();
         }
     }
 
@@ -1114,23 +1106,22 @@ impl super::ChatWidget {
 
         // Release-capable terminals: if held < 200ms, it was a quick tap.
         // Discard the recording and type a space instead.
-        if state.key_release_supported {
-            if let Some(started) = state.recording_started_at {
-                if started.elapsed() < Duration::from_millis(200) {
-                    // Discard recording — stop capture without transcribing.
-                    let capture = state.capture.take();
-                    if let Some(c) = capture {
-                        let _ = c.stop();
-                    }
-                    state.phase = VoiceModePhase::Idle;
-                    state.recording_started_at = None;
-                    state.cancel_ptt_meter();
-                    let _ = state;
-                    self.sync_voice_placeholder();
-                    self.type_space_in_composer();
-                    return;
-                }
+        if state.key_release_supported
+            && let Some(started) = state.recording_started_at
+            && started.elapsed() < Duration::from_millis(200)
+        {
+            // Discard recording — stop capture without transcribing.
+            let capture = state.capture.take();
+            if let Some(c) = capture {
+                let _ = c.stop();
             }
+            state.phase = VoiceModePhase::Idle;
+            state.recording_started_at = None;
+            state.cancel_ptt_meter();
+            let _ = state;
+            self.sync_voice_placeholder();
+            self.type_space_in_composer();
+            return;
         }
 
         // Cancel timeout poller and meter.
@@ -1310,10 +1301,10 @@ impl super::ChatWidget {
         if state.phase != VoiceModePhase::Recording {
             return;
         }
-        if let Some(last_repeat) = state.last_ptt_repeat_at {
-            if Instant::now().duration_since(last_repeat) > Duration::from_millis(250) {
-                self.on_ptt_release();
-            }
+        if let Some(last_repeat) = state.last_ptt_repeat_at
+            && Instant::now().duration_since(last_repeat) > Duration::from_millis(250)
+        {
+            self.on_ptt_release();
         }
     }
 
@@ -1325,9 +1316,7 @@ impl super::ChatWidget {
     /// Returns `Some(display_text)` when voice mode is active (caller should use
     /// this instead of the raw delta), or `None` when voice mode is inactive.
     pub(crate) fn on_voice_mode_agent_delta(&mut self, delta: &str) -> Option<String> {
-        let Some(ref mut state) = self.voice_mode_state else {
-            return None;
-        };
+        let state = self.voice_mode_state.as_mut()?;
         if !state.is_active() {
             // Voice mode was previously on but is now off.  The agent may
             // still emit <voice> tags from earlier instructions in the
@@ -1498,10 +1487,10 @@ impl super::ChatWidget {
 
         // Reset playback position counter on the first chunk of a turn
         // so alignment timing stays in sync with audio output.
-        if state.tts_cumulative_ms == 0 {
-            if let Some(ref player) = state.audio_player {
-                player.reset_playback_position();
-            }
+        if state.tts_cumulative_ms == 0
+            && let Some(ref player) = state.audio_player
+        {
+            player.reset_playback_position();
         }
 
         // Build alignment entries from this chunk's alignment data.
@@ -1603,17 +1592,17 @@ impl super::ChatWidget {
         if let Some((doc_id, sec_idx, content_hash)) = state.narrating_section.take() {
             let chunks = std::mem::take(&mut state.narrating_chunks);
             let alignment_timeline = state.tts_alignment_timeline.clone();
-            if !chunks.is_empty() {
-                if let Ok(mut cache) = state.tts_section_cache.lock() {
-                    cache.insert(
-                        (doc_id, sec_idx),
-                        TtsCacheEntry {
-                            content_hash,
-                            chunks,
-                            alignment_timeline,
-                        },
-                    );
-                }
+            if !chunks.is_empty()
+                && let Ok(mut cache) = state.tts_section_cache.lock()
+            {
+                cache.insert(
+                    (doc_id, sec_idx),
+                    TtsCacheEntry {
+                        content_hash,
+                        chunks,
+                        alignment_timeline,
+                    },
+                );
             }
         }
 
@@ -1985,11 +1974,11 @@ impl super::ChatWidget {
         self.sync_voice_placeholder();
         // Show the inline "You asked: ... • thinking..." indicator in the
         // reading view — same style as text questions.
-        if let Some(question) = reading_view_question {
-            if let Some(ctx) = self.bottom_pane.reading_view_voice_context() {
-                self.bottom_pane
-                    .set_document_reader_pending_voice_question(ctx.section_index, question);
-            }
+        if let Some(question) = reading_view_question
+            && let Some(ctx) = self.bottom_pane.reading_view_voice_context()
+        {
+            self.bottom_pane
+                .set_document_reader_pending_voice_question(ctx.section_index, question);
         }
         self.request_redraw();
     }
@@ -2258,19 +2247,18 @@ impl super::ChatWidget {
         let key = (document_id, section_index);
 
         // Already cached with matching hash?
-        if let Ok(cache) = state.tts_section_cache.lock() {
-            if let Some(entry) = cache.get(&key) {
-                if entry.content_hash == content_hash {
-                    return; // Already cached.
-                }
-            }
+        if let Ok(cache) = state.tts_section_cache.lock()
+            && let Some(entry) = cache.get(&key)
+            && entry.content_hash == content_hash
+        {
+            return; // Already cached.
         }
 
         // Already being prefetched?
-        if let Ok(mut pending) = state.prefetch_pending.lock() {
-            if !pending.insert(key.clone()) {
-                return; // Prefetch already in progress.
-            }
+        if let Ok(mut pending) = state.prefetch_pending.lock()
+            && !pending.insert(key.clone())
+        {
+            return; // Prefetch already in progress.
         }
 
         // Split into sentences.
@@ -2771,10 +2759,8 @@ async fn tts_worker_loop(
     }
 
     tracing::debug!("TTS worker exiting (gen={my_gen})");
-    if gen_ref.load(Ordering::SeqCst) == my_gen {
-        if in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
-            event_tx.send(AppEvent::VoiceModeTtsFinished);
-        }
+    if gen_ref.load(Ordering::SeqCst) == my_gen && in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
+        event_tx.send(AppEvent::VoiceModeTtsFinished);
     }
 }
 
@@ -2894,12 +2880,10 @@ fn build_alignment_entries(
             let word: String = word_chars.iter().copied().collect();
 
             // Merge with existing pending if this is the first (and only) word.
-            if is_first_word {
-                if let Some(prev) = pending_word.as_mut() {
-                    prev.word.push_str(&word);
-                    prev.duration_ms = abs_end.saturating_sub(prev.start_ms);
-                    return;
-                }
+            if is_first_word && let Some(prev) = pending_word.as_mut() {
+                prev.word.push_str(&word);
+                prev.duration_ms = abs_end.saturating_sub(prev.start_ms);
+                return;
             }
 
             *pending_word = Some(AlignmentEntry {
