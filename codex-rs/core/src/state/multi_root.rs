@@ -284,10 +284,15 @@ impl MultiRootState {
 
         #[cfg(feature = "lsp")]
         if let Some(registry) = lsp_registry {
+            let registry_for_prewarm = Arc::clone(&registry);
             self.lsp_registries
                 .write()
                 .await
                 .insert(root.name.clone(), registry);
+
+            tokio::spawn(async move {
+                registry_for_prewarm.prewarm_most_relevant_server().await;
+            });
         }
 
         Ok(root)

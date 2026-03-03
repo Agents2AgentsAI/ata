@@ -44,6 +44,9 @@ const DIAG_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(150)
 /// Maximum wait time for diagnostics after a file sync.
 const DIAG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// Skip syncing very large files to avoid excessive JSON payloads.
+const MAX_SYNC_FILE_SIZE: u64 = 5 * 1024 * 1024;
+
 type PendingMap = Arc<Mutex<HashMap<i64, oneshot::Sender<JsonRpcResponse>>>>;
 
 // ---------------------------------------------------------------------------
@@ -334,6 +337,18 @@ impl LspClient {
 
     /// Notify the server about a file being opened or changed (full-document sync).
     pub async fn notify_open(&self, path: &Path) -> Result<(), LspError> {
+        let metadata = tokio::fs::metadata(path).await.map_err(LspError::Io)?;
+        if metadata.len() > MAX_SYNC_FILE_SIZE {
+            tracing::warn!(
+                server = %self.server_id,
+                path = %path.display(),
+                file_size_bytes = metadata.len(),
+                max_sync_file_size_bytes = MAX_SYNC_FILE_SIZE,
+                "skipping LSP sync for oversized file"
+            );
+            return Ok(());
+        }
+
         let content = tokio::fs::read_to_string(path)
             .await
             .map_err(|e| LspError::Io(e))?;
@@ -440,13 +455,27 @@ impl LspClient {
 
         // Wait for diagnostics with debounce.
         let _result = tokio::time::timeout(DIAG_TIMEOUT, async {
+            // Wait until we observe diagnostics for this URI.
             loop {
-                match tokio::time::timeout(DIAG_DEBOUNCE, rx.recv()).await {
-                    Ok(Ok(ref changed_uri)) if *changed_uri == uri_key => {
-                        // Got a notification for our file — debounce: wait a bit more.
-                        tokio::time::sleep(DIAG_DEBOUNCE).await;
-                        while rx.try_recv().is_ok() {}
-                        return;
+                match rx.recv().await {
+                    Ok(changed_uri) if changed_uri == uri_key => break,
+                    Ok(_) => continue,
+                    Err(_) => return,
+                }
+            }
+
+            // Once observed, require a quiet period for this URI before returning.
+            let mut quiet_deadline = tokio::time::Instant::now() + DIAG_DEBOUNCE;
+            loop {
+                let now = tokio::time::Instant::now();
+                if now >= quiet_deadline {
+                    return;
+                }
+                let remaining = quiet_deadline - now;
+
+                match tokio::time::timeout(remaining, rx.recv()).await {
+                    Ok(Ok(changed_uri)) if changed_uri == uri_key => {
+                        quiet_deadline = tokio::time::Instant::now() + DIAG_DEBOUNCE;
                     }
                     Ok(Ok(_)) => continue,
                     Ok(Err(_)) => return,

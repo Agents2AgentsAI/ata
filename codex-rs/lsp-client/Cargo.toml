@@ -19,6 +19,7 @@ dunce = { workspace = true }
 globset = { workspace = true }
 lsp-types = "0.97"
 phf = { version = "0.11", features = ["macros"] }
+regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

@@ -62,7 +62,7 @@ pub fn find_callers(
         let file_callers = if language.has_tree_sitter_support() {
             find_callers_ast(&source, &rel_path, language, symbol_name, file)
         } else {
-            find_callers_regex(&source, &rel_path, symbol_name, file)
+            find_callers_regex(&source, &rel_path, language, symbol_name, file)
         };
 
         for caller in file_callers {
@@ -83,22 +83,8 @@ fn find_callers_ast(
     symbol_name: &str,
     definition_file: &str,
 ) -> Vec<CallerInfo> {
-    let Some(config) = queries::get_language_config(language) else {
-        return find_callers_regex(source, rel_path, symbol_name, definition_file);
-    };
-
-    let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&config.language).is_err() {
-        return find_callers_regex(source, rel_path, symbol_name, definition_file);
-    }
-
-    let Some(tree) = parser.parse(source, None) else {
-        return find_callers_regex(source, rel_path, symbol_name, definition_file);
-    };
-
-    let query = match tree_sitter::Query::new(&config.language, config.callers_query) {
-        Ok(query) => query,
-        Err(_) => return find_callers_regex(source, rel_path, symbol_name, definition_file),
+    let Some((tree, query)) = try_parse_with_query(source, language, QueryKind::Callers) else {
+        return find_callers_regex(source, rel_path, language, symbol_name, definition_file);
     };
 
     let capture_names: Vec<String> = query
@@ -153,6 +139,7 @@ fn find_callers_ast(
 fn find_callers_regex(
     source: &str,
     rel_path: &str,
+    language: Language,
     symbol_name: &str,
     definition_file: &str,
 ) -> Vec<CallerInfo> {
@@ -168,16 +155,7 @@ fn find_callers_regex(
             continue;
         }
 
-        if rel_path == definition_file
-            && (line.contains(&format!("fn {symbol_name}"))
-                || line.contains(&format!("def {symbol_name}"))
-                || line.contains(&format!("function {symbol_name}"))
-                || line.contains(&format!("func {symbol_name}"))
-                || line.contains(&format!("class {symbol_name}"))
-                || line.contains(&format!("interface {symbol_name}"))
-                || line.contains(&format!("object {symbol_name}"))
-                || line.contains(&format!("trait {symbol_name}")))
-        {
+        if rel_path == definition_file && is_definition_line(line, symbol_name, language) {
             continue;
         }
 
@@ -225,6 +203,32 @@ fn is_definition_line(line: &str, name: &str, language: Language) -> bool {
     }
 }
 
+#[derive(Clone, Copy)]
+enum QueryKind {
+    Callers,
+    Variables,
+}
+
+fn try_parse_with_query(
+    source: &str,
+    language: Language,
+    query_kind: QueryKind,
+) -> Option<(tree_sitter::Tree, tree_sitter::Query)> {
+    let config = queries::get_language_config(language)?;
+    let query_str = match query_kind {
+        QueryKind::Callers => config.callers_query,
+        QueryKind::Variables => config.variables_query,
+    };
+
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&config.language).ok()?;
+
+    let tree = parser.parse(source, None)?;
+    let query = tree_sitter::Query::new(&config.language, query_str).ok()?;
+
+    Some((tree, query))
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct TestInfo {
     pub name: String,
@@ -246,11 +250,7 @@ pub fn find_tests(
 
     let mut tests = Vec::new();
 
-    for symbol in symbol_table.all_symbols() {
-        if !is_test_symbol(&symbol) {
-            continue;
-        }
-
+    for symbol in symbol_table.test_symbols() {
         let source = match std::fs::read_to_string(root.join(&symbol.file)) {
             Ok(source) => source,
             Err(_) => continue,
@@ -275,30 +275,6 @@ pub fn find_tests(
     }
 
     Ok(tests)
-}
-
-fn is_test_symbol(symbol: &Symbol) -> bool {
-    match symbol.language {
-        Language::Rust => symbol.name.starts_with("test") || symbol.file.contains("/tests/"),
-        Language::Python => {
-            symbol.name.starts_with("test_")
-                || symbol.file.contains("test_")
-                || symbol.file.contains("_test.")
-        }
-        Language::TypeScript | Language::JavaScript => {
-            symbol.file.contains(".test.")
-                || symbol.file.contains(".spec.")
-                || symbol.file.contains("__tests__")
-        }
-        Language::Go => symbol.name.starts_with("Test") || symbol.file.ends_with("_test.go"),
-        Language::Java => symbol.file.contains("Test") || symbol.file.contains("/test/"),
-        Language::Scala => {
-            symbol.file.contains("Spec")
-                || symbol.file.contains("Test")
-                || symbol.file.contains("/test/")
-        }
-        Language::Other => false,
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -345,40 +321,12 @@ fn list_variables_ast(
     function_end: usize,
     function_name: &str,
 ) -> Vec<VariableInfo> {
-    let Some(config) = queries::get_language_config(language) else {
+    let Some((tree, query)) = try_parse_with_query(source, language, QueryKind::Variables) else {
         return list_variables_regex(
             &source[function_start..function_end],
             language,
             function_name,
         );
-    };
-
-    let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&config.language).is_err() {
-        return list_variables_regex(
-            &source[function_start..function_end],
-            language,
-            function_name,
-        );
-    }
-
-    let Some(tree) = parser.parse(source, None) else {
-        return list_variables_regex(
-            &source[function_start..function_end],
-            language,
-            function_name,
-        );
-    };
-
-    let query = match tree_sitter::Query::new(&config.language, config.variables_query) {
-        Ok(query) => query,
-        Err(_) => {
-            return list_variables_regex(
-                &source[function_start..function_end],
-                language,
-                function_name,
-            );
-        }
     };
 
     let capture_names: Vec<String> = query
