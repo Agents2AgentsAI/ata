@@ -4295,7 +4295,7 @@ impl ChatWidget {
             .as_ref()
             .is_some_and(voice_mode::VoiceModeState::is_active);
         #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
-        let voice_mode_active = false;
+        let _voice_mode_active = false;
 
         if text.is_empty() && local_images.is_empty() && remote_image_urls.is_empty() {
             return;

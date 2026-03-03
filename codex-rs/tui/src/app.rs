@@ -3464,9 +3464,12 @@ impl App {
             } => {
                 // When voice TTS is playing, route Esc to chatwidget first so it
                 // can interrupt playback before backtrack or other Esc handling.
+                #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
                 if self.chat_widget.is_voice_speaking() {
                     self.chat_widget.handle_key_event(key_event);
-                } else if self.chat_widget.is_normal_backtrack_mode()
+                    return;
+                }
+                if self.chat_widget.is_normal_backtrack_mode()
                     && self.chat_widget.composer_is_empty()
                 {
                     self.handle_backtrack_esc_key(tui);
