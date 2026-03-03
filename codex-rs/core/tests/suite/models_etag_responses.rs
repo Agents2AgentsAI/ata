@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use codex_core::CodexAuth;
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -107,7 +106,7 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
             model: session_model,
             model_provider: None,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,

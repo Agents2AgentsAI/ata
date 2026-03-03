@@ -24,6 +24,8 @@ Ata can run a notification hook when the agent finishes a turn. See the configur
 
 - https://github.com/Agents2AgentsAI/ata/blob/main/docs/config.md
 
+When Codex knows which client started the turn, the legacy notify JSON payload also includes a top-level `client` field. The TUI reports `codex-tui`, and the app server reports the `clientInfo.name` value from `initialize`.
+
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.

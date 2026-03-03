@@ -139,6 +139,7 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
         },
     ];
     remote_model.supports_reasoning_summaries = true;
+    remote_model.default_reasoning_summary = ReasoningSummary::Detailed;
     mount_models_once(
         &server,
         ModelsResponse {
@@ -176,7 +177,7 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
             model: requested_model.to_string(),
             model_provider: None,
             effort: None,
-            summary: config.model_reasoning_summary,
+            summary: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -191,8 +192,13 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
         .get("reasoning")
         .and_then(|reasoning| reasoning.get("effort"))
         .and_then(|value| value.as_str());
+    let reasoning_summary = body
+        .get("reasoning")
+        .and_then(|reasoning| reasoning.get("summary"))
+        .and_then(|value| value.as_str());
     assert_eq!(body["model"].as_str(), Some(requested_model));
     assert_eq!(reasoning_effort, Some("high"));
+    assert_eq!(reasoning_summary, Some("detailed"));
 
     Ok(())
 }
@@ -230,7 +236,11 @@ async fn namespaced_model_slug_uses_catalog_metadata_without_fallback_warning() 
             model: requested_model.to_string(),
             model_provider: None,
             effort: None,
-            summary: config.model_reasoning_summary,
+            summary: Some(
+                config
+                    .model_reasoning_summary
+                    .unwrap_or(ReasoningSummary::Auto),
+            ),
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -288,8 +298,10 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         base_instructions: "base instructions".to_string(),
         model_messages: None,
         supports_reasoning_summaries: false,
+        default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
         default_verbosity: None,
+        availability_nux: None,
         apply_patch_tool_type: None,
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
@@ -386,7 +398,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             model: REMOTE_MODEL_SLUG.to_string(),
             model_provider: None,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: Some(ReasoningSummary::Auto),
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -528,8 +540,10 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         base_instructions: remote_base.to_string(),
         model_messages: None,
         supports_reasoning_summaries: false,
+        default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
         default_verbosity: None,
+        availability_nux: None,
         apply_patch_tool_type: None,
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
@@ -601,7 +615,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             model: model.to_string(),
             model_provider: None,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: Some(ReasoningSummary::Auto),
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -997,8 +1011,10 @@ fn test_remote_model_with_policy(
         base_instructions: "base instructions".to_string(),
         model_messages: None,
         supports_reasoning_summaries: false,
+        default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
         default_verbosity: None,
+        availability_nux: None,
         apply_patch_tool_type: None,
         truncation_policy,
         supports_parallel_tool_calls: false,
