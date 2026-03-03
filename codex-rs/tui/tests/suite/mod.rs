@@ -1,5 +1,6 @@
 // Aggregates all former standalone integration tests as modules.
 mod logout;
+mod model_availability_nux;
 mod no_panic_on_startup;
 mod status_indicator;
 mod vt100_history;

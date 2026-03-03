@@ -36,6 +36,7 @@ codex-protocol = { workspace = true }
 codex-responses-api-proxy = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-scheduler = { workspace = true }
+codex-state = { workspace = true }
 codex-stdio-to-uds = { workspace = true }
 codex-tui = { workspace = true }
 libc = { workspace = true }
@@ -66,3 +67,4 @@ assert_matches = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
+sqlx = { workspace = true }

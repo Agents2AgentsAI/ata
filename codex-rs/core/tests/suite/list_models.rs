@@ -156,6 +156,7 @@ fn bengalfox() -> ModelPreset {
         supported_in_api: true,
         provider_id: None,
         input_modalities: default_input_modalities(),
+        availability_nux: None,
     }
 }
 
@@ -191,6 +192,7 @@ fn boomslang() -> ModelPreset {
         supported_in_api: true,
         provider_id: None,
         input_modalities: default_input_modalities(),
+        availability_nux: None,
     }
 }
 
@@ -222,6 +224,7 @@ fn claude_sonnet_4_6() -> ModelPreset {
         supported_in_api: true,
         provider_id: Some("anthropic".to_string()),
         input_modalities: default_input_modalities(),
+        availability_nux: None,
     }
 }
 
@@ -257,6 +260,7 @@ fn claude_opus_4_5() -> ModelPreset {
         supported_in_api: true,
         provider_id: Some("anthropic".to_string()),
         input_modalities: default_input_modalities(),
+        availability_nux: None,
     }
 }
 
@@ -281,6 +285,7 @@ fn gemini_3_pro_preview() -> ModelPreset {
         supported_in_api: true,
         provider_id: Some("gemini".to_string()),
         input_modalities: default_input_modalities(),
+        availability_nux: None,
     }
 }
 
@@ -309,6 +314,7 @@ fn gemini_3_1_pro_preview() -> ModelPreset {
         supported_in_api: true,
         provider_id: Some("gemini".to_string()),
         input_modalities: default_input_modalities(),
+        availability_nux: None,
     }
 }
 
@@ -338,5 +344,6 @@ fn gemini_3_flash_preview() -> ModelPreset {
         supported_in_api: true,
         provider_id: Some("gemini".to_string()),
         input_modalities: default_input_modalities(),
+        availability_nux: None,
     }
 }

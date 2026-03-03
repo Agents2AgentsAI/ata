@@ -332,6 +332,9 @@
             "data": {
               "type": "boolean"
             },
+            "default_mode_request_user_input": {
+              "type": "boolean"
+            },
             "elevated_windows_sandbox": {
               "type": "boolean"
             },
@@ -440,9 +443,6 @@
             "shell_zsh_fork": {
               "type": "boolean"
             },
-            "skill_approval": {
-              "type": "boolean"
-            },
             "skill_env_var_dependency_prompt": {
               "type": "boolean"
             },
@@ -465,6 +465,9 @@
               "type": "boolean"
             },
             "use_linux_sandbox_bwrap": {
+              "type": "boolean"
+            },
+            "voice_mode": {
               "type": "boolean"
             },
             "voice_transcription": {
@@ -577,6 +580,34 @@
           "type": "string"
         },
         "kaggle_username": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ElevenLabsToml": {
+      "additionalProperties": false,
+      "description": "ElevenLabs-specific configuration nested under `[voice_mode.elevenlabs]`.",
+      "properties": {
+        "api_key": {
+          "description": "ElevenLabs API key. Falls back to `ELEVENLABS_API_KEY` env var.",
+          "type": "string"
+        },
+        "language_code": {
+          "description": "ISO 639-1 language code (e.g. \"en\", \"es\"). None = auto-detect.",
+          "type": "string"
+        },
+        "model_id": {
+          "description": "Model ID for TTS. Defaults to `eleven_turbo_v2_5`.",
+          "type": "string"
+        },
+        "speed": {
+          "description": "Speech speed multiplier. Range: 0.7–1.2, default 1.0.",
+          "format": "double",
+          "type": "number"
+        },
+        "voice_id": {
+          "description": "Voice ID for TTS. Defaults to ElevenLabs' \"Rachel\".",
           "type": "string"
         }
       },
@@ -752,6 +783,10 @@
       "additionalProperties": false,
       "description": "Memories settings loaded from config.toml.",
       "properties": {
+        "generate_memories": {
+          "description": "When `false`, newly created threads are stored with `memory_mode = \"disabled\"` in the state DB.",
+          "type": "boolean"
+        },
         "max_raw_memories_for_global": {
           "description": "Maximum number of recent raw memories retained for global consolidation.",
           "format": "uint",
@@ -769,6 +804,11 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "max_unused_days": {
+          "description": "Maximum number of days since a memory was last used before it becomes ineligible for phase 2 selection.",
+          "format": "int64",
+          "type": "integer"
+        },
         "min_rollout_idle_hours": {
           "description": "Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.",
           "format": "int64",
@@ -781,7 +821,19 @@
         "phase_2_model": {
           "description": "Model used for memory consolidation.",
           "type": "string"
+        },
+        "use_memories": {
+          "description": "When `false`, skip injecting memory usage instructions into developer prompts.",
+          "type": "boolean"
         }
+      },
+      "type": "object"
+    },
+    "ModelAvailabilityNuxConfig": {
+      "additionalProperties": {
+        "format": "uint32",
+        "minimum": 0.0,
+        "type": "integer"
       },
       "type": "object"
     },
@@ -1280,6 +1332,10 @@
           },
           "type": "object"
         },
+        "oauth_resource": {
+          "default": null,
+          "type": "string"
+        },
         "required": {
           "default": null,
           "type": "boolean"
@@ -1308,6 +1364,18 @@
           "type": "number"
         },
         "url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "RealtimeAudioToml": {
+      "additionalProperties": false,
+      "properties": {
+        "microphone": {
+          "type": "string"
+        },
+        "speaker": {
           "type": "string"
         }
       },
@@ -1606,6 +1674,15 @@
           "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
           "type": "boolean"
         },
+        "model_availability_nux": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelAvailabilityNuxConfig"
+            }
+          ],
+          "default": {},
+          "description": "Startup tooltip availability NUX state persisted by the TUI."
+        },
         "notification_method": {
           "allOf": [
             {
@@ -1673,6 +1750,84 @@
         "high"
       ],
       "type": "string"
+    },
+    "VoiceModeToml": {
+      "additionalProperties": false,
+      "description": "Voice mode configuration nested under `[voice_mode]` in config.toml.",
+      "properties": {
+        "auto_submit": {
+          "description": "When true, transcribed speech is auto-submitted to the agent.",
+          "type": "boolean"
+        },
+        "elevenlabs": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ElevenLabsToml"
+            }
+          ],
+          "default": null,
+          "description": "ElevenLabs API settings."
+        },
+        "enabled": {
+          "description": "When true, voice mode is automatically enabled on startup.",
+          "type": "boolean"
+        },
+        "output": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/VoiceOutput"
+            }
+          ],
+          "default": null,
+          "description": "Controls what output is produced: \"voice\", \"text\", or \"both\"."
+        },
+        "silence_duration_ms": {
+          "description": "Milliseconds of silence before a recording is finalized.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "stt_enabled": {
+          "description": "When false, STT (speech-to-text / push-to-talk) is disabled even when voice mode is on.",
+          "type": "boolean"
+        },
+        "tts_enabled": {
+          "description": "When false, TTS (text-to-speech) is disabled even when voice mode is on.",
+          "type": "boolean"
+        },
+        "vad_threshold": {
+          "description": "RMS energy threshold for voice activity detection (0.0–1.0).",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "VoiceOutput": {
+      "description": "Output mode for the voice mode pipeline.",
+      "oneOf": [
+        {
+          "description": "Only play TTS audio, suppress text streaming.",
+          "enum": [
+            "voice"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Only show text, no TTS playback.",
+          "enum": [
+            "text"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Show text AND play TTS audio (default).",
+          "enum": [
+            "both"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "WebSearchMode": {
       "enum": [
@@ -1763,6 +1918,15 @@
       ],
       "default": null,
       "description": "Settings for app-specific controls."
+    },
+    "audio": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RealtimeAudioToml"
+        }
+      ],
+      "default": null,
+      "description": "Machine-local realtime audio device preferences used by realtime voice."
     },
     "background_terminal_max_timeout": {
       "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `300000` (5 minutes).",
@@ -1860,6 +2024,9 @@
           "type": "boolean"
         },
         "data": {
+          "type": "boolean"
+        },
+        "default_mode_request_user_input": {
           "type": "boolean"
         },
         "elevated_windows_sandbox": {
@@ -1970,9 +2137,6 @@
         "shell_zsh_fork": {
           "type": "boolean"
         },
-        "skill_approval": {
-          "type": "boolean"
-        },
         "skill_env_var_dependency_prompt": {
           "type": "boolean"
         },
@@ -1995,6 +2159,9 @@
           "type": "boolean"
         },
         "use_linux_sandbox_bwrap": {
+          "type": "boolean"
+        },
+        "voice_mode": {
           "type": "boolean"
         },
         "voice_transcription": {
@@ -2388,6 +2555,15 @@
         }
       ],
       "description": "Collection of settings that are specific to the TUI."
+    },
+    "voice_mode": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/VoiceModeToml"
+        }
+      ],
+      "default": null,
+      "description": "Voice mode settings (mic → STT → agent → TTS → speaker)."
     },
     "web_search": {
       "allOf": [

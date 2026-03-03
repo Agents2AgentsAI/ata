@@ -5,6 +5,24 @@ use crossterm::event::KeyEvent;
 
 use super::CancellationEvent;
 
+/// Context extracted from a reading view for voice mode integration.
+///
+/// When voice mode is active and the user is in a document reader, this struct
+/// carries the current reading context so the agent can provide reading-view-aware
+/// explanations rather than generic voice responses.
+#[derive(Debug, Clone)]
+#[cfg_attr(
+    not(all(not(target_os = "linux"), feature = "voice-input")),
+    allow(dead_code)
+)]
+pub(crate) struct ReadingViewVoiceContext {
+    pub(crate) title: String,
+    pub(crate) document_id: String,
+    pub(crate) section_index: usize,
+    pub(crate) heading: String,
+    pub(crate) selection: Option<String>,
+}
+
 /// Trait implemented by every view that can be shown in the bottom pane.
 pub(crate) trait BottomPaneView: Renderable {
     /// Handle a key event while the view is active. A redraw is always
@@ -120,5 +138,40 @@ pub(crate) trait BottomPaneView: Renderable {
     /// not re-open a reader the user already closed.
     fn closed_document_id(&self) -> Option<&str> {
         None
+    }
+
+    // ─── Voice-mode-only trait methods ─────────────────────────────────
+    // These exist only when voice-input is available (non-Linux + feature).
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    fn voice_context(&self) -> Option<ReadingViewVoiceContext> {
+        None
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    fn set_voice_status(&mut self, _status: Option<String>) {}
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    fn set_pending_voice_question(&mut self, _section: usize, _question: String) {}
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    fn set_voice_karaoke_lines(
+        &mut self,
+        _lines: Option<Vec<ratatui::text::Line<'static>>>,
+        _append: bool,
+    ) {
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    fn set_voice_reading_progress(
+        &mut self,
+        _word_idx: Option<usize>,
+        _heading_words_to_skip: usize,
+    ) {
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    fn is_composer_focused(&self) -> bool {
+        false
     }
 }
