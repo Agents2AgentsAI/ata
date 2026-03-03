@@ -22,6 +22,8 @@ pub enum SymbolKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Symbol {
     pub name: String,
+    #[serde(default)]
+    pub name_lower: String,
     pub kind: SymbolKind,
     pub file: String,
     pub byte_range: (usize, usize),
@@ -30,4 +32,12 @@ pub struct Symbol {
     pub signature: String,
     pub definition: Option<String>,
     pub parent: Option<String>,
+}
+
+impl Symbol {
+    pub fn ensure_name_lower(&mut self) {
+        if self.name_lower.is_empty() {
+            self.name_lower = self.name.to_lowercase();
+        }
+    }
 }

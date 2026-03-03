@@ -396,19 +396,8 @@ impl LspClient {
             drop(versions);
 
             // Send didChangeWatchedFiles (Created).
-            self.send_notification(
-                "workspace/didChangeWatchedFiles",
-                Some(
-                    serde_json::to_value(DidChangeWatchedFilesParams {
-                        changes: vec![FileEvent {
-                            uri: uri.clone(),
-                            typ: FileChangeType::CREATED,
-                        }],
-                    })
-                    .map_err(LspError::Json)?,
-                ),
-            )
-            .await?;
+            self.send_file_watch_event(&uri, FileChangeType::CREATED)
+                .await?;
 
             // Send textDocument/didOpen.
             self.send_notification(
@@ -432,19 +421,8 @@ impl LspClient {
             drop(versions);
 
             // Send didChangeWatchedFiles (Changed).
-            self.send_notification(
-                "workspace/didChangeWatchedFiles",
-                Some(
-                    serde_json::to_value(DidChangeWatchedFilesParams {
-                        changes: vec![FileEvent {
-                            uri: uri.clone(),
-                            typ: FileChangeType::CHANGED,
-                        }],
-                    })
-                    .map_err(LspError::Json)?,
-                ),
-            )
-            .await?;
+            self.send_file_watch_event(&uri, FileChangeType::CHANGED)
+                .await?;
 
             // Send textDocument/didChange with full content.
             self.send_notification(
@@ -465,6 +443,22 @@ impl LspClient {
         }
 
         Ok(())
+    }
+
+    async fn send_file_watch_event(&self, uri: &Uri, typ: FileChangeType) -> Result<(), LspError> {
+        self.send_notification(
+            "workspace/didChangeWatchedFiles",
+            Some(
+                serde_json::to_value(DidChangeWatchedFilesParams {
+                    changes: vec![FileEvent {
+                        uri: uri.clone(),
+                        typ,
+                    }],
+                })
+                .map_err(LspError::Json)?,
+            ),
+        )
+        .await
     }
 
     // -----------------------------------------------------------------------

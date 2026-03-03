@@ -64,10 +64,10 @@ pub(super) fn build_lsp_server_configs(
         });
 
     match lsp_config.as_ref() {
-        // `lsp = false` (parsed as `Disabled(false)`) disables all LSP integration.
-        Some(LspConfig::Disabled(false)) => return std::collections::HashMap::new(),
+        // `lsp = false` (parsed as `Enabled(false)`) disables all LSP integration.
+        Some(LspConfig::Enabled(false)) => return std::collections::HashMap::new(),
         // `lsp = true` keeps builtin defaults enabled.
-        Some(LspConfig::Disabled(true)) => {}
+        Some(LspConfig::Enabled(true)) => {}
         Some(LspConfig::Servers(servers)) => {
             for (server_id, server_cfg) in servers {
                 let override_cfg = match server_cfg {
@@ -125,9 +125,9 @@ pub(super) fn build_treesitter_index_config(
 
     let config_map = match treesitter_config {
         // `treesitter = false` disables indexing.
-        Some(TreeSitterConfig::Disabled(false)) => return None,
+        Some(TreeSitterConfig::Enabled(false)) => return None,
         // `treesitter = true` keeps default TreeSitter settings enabled.
-        Some(TreeSitterConfig::Disabled(true)) => TreeSitterConfigMap::default(),
+        Some(TreeSitterConfig::Enabled(true)) => TreeSitterConfigMap::default(),
         Some(TreeSitterConfig::Config(map)) => map,
         _ => TreeSitterConfigMap::default(),
     };
