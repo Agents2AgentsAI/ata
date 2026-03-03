@@ -23,4 +23,6 @@ pub use error::LspError;
 pub use server_config::InstallConfig;
 pub use server_config::InstallMethod;
 pub use server_config::LspServerConfig;
+pub use server_config::PostRootHook;
+pub use server_config::RootStrategy;
 pub use server_registry::ServerRegistry;

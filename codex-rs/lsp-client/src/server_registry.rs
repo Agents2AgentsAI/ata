@@ -22,6 +22,7 @@ use crate::client::path_from_uri;
 use crate::error::LspError;
 use crate::root_discovery::dir_has_any_marker;
 use crate::root_discovery::nearest_root;
+use crate::root_discovery::refine_root;
 use crate::server_config::LspServerConfig;
 
 /// Key for de-duplicating clients: (server_id, root_path).
@@ -193,20 +194,14 @@ impl ServerRegistry {
 
     /// Best-effort explanation for why servers are currently unavailable.
     pub async fn explain_unavailable_servers(&self, file: &Path) -> Vec<String> {
-        let ext = match file.extension().and_then(|e| e.to_str()) {
-            Some(e) => format!(".{e}"),
-            None => {
-                return vec!["file has no extension and does not match configured servers".into()];
-            }
-        };
-
         let mut lines = Vec::new();
         for (server_id, config) in &self.servers {
-            if config.disabled || !config.matches_extension(&ext) {
+            if config.disabled || !config.matches_path(file) {
                 continue;
             }
 
             let root = nearest_root(file, &self.workspace_root, &config.root_markers);
+            let root = refine_root(&root, &self.workspace_root, &config.root_strategy);
             let key: ClientKey = (server_id.clone(), root);
             if let Some(reason) = self.broken.lock().await.get(&key).cloned() {
                 lines.push(format!(
@@ -241,19 +236,15 @@ impl ServerRegistry {
     /// Get or spawn all applicable clients for a given file.
     /// Returns a list of (server_id, client) pairs.
     pub async fn get_clients(&self, file: &Path) -> Vec<(String, Arc<LspClient>)> {
-        let ext = match file.extension().and_then(|e| e.to_str()) {
-            Some(e) => format!(".{e}"),
-            None => return Vec::new(),
-        };
-
         let mut result = Vec::new();
 
         for (server_id, config) in &self.servers {
-            if config.disabled || !config.matches_extension(&ext) {
+            if config.disabled || !config.matches_path(file) {
                 continue;
             }
 
             let root = nearest_root(file, &self.workspace_root, &config.root_markers);
+            let root = refine_root(&root, &self.workspace_root, &config.root_strategy);
             let key: ClientKey = (server_id.clone(), root.clone());
 
             // Check if broken.
@@ -430,6 +421,7 @@ impl ServerRegistry {
 
         let mut runtime_config = config.clone();
         runtime_config.command = resolved_command;
+        apply_post_root_hook(&mut runtime_config, root);
         let result = LspClient::create(server_id, &runtime_config, root).await;
 
         // If the process exited immediately (broken shim), try auto-install and retry.
@@ -846,6 +838,64 @@ impl ServerRegistry {
     }
 }
 
+use crate::server_config::PostRootHook;
+
+/// Apply a post-root hook to the runtime configuration.
+fn apply_post_root_hook(config: &mut LspServerConfig, root: &Path) {
+    match &config.post_root_hook {
+        PostRootHook::None => {}
+        PostRootHook::PythonVenvProbe => {
+            if let Some(python_path) = probe_python_venv(root) {
+                let opts = config
+                    .initialization_options
+                    .get_or_insert_with(|| serde_json::json!({}));
+                if let Some(obj) = opts.as_object_mut() {
+                    obj.entry("python")
+                        .or_insert_with(|| serde_json::json!({}));
+                    if let Some(python_obj) = obj.get_mut("python").and_then(|v| v.as_object_mut())
+                    {
+                        python_obj
+                            .entry("pythonPath".to_string())
+                            .or_insert(serde_json::Value::String(
+                                python_path.to_string_lossy().to_string(),
+                            ));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Probe for a Python virtual environment at or above `root`.
+///
+/// Checks in order: `$VIRTUAL_ENV`, `<root>/.venv`, `<root>/venv`.
+fn probe_python_venv(root: &Path) -> Option<PathBuf> {
+    // 1. $VIRTUAL_ENV environment variable
+    if let Ok(venv) = std::env::var("VIRTUAL_ENV") {
+        let venv = PathBuf::from(venv);
+        if let Some(python) = find_python_in_venv(&venv) {
+            return Some(python);
+        }
+    }
+    // 2. <root>/.venv
+    let dot_venv = root.join(".venv");
+    if let Some(python) = find_python_in_venv(&dot_venv) {
+        return Some(python);
+    }
+    // 3. <root>/venv
+    let venv = root.join("venv");
+    find_python_in_venv(&venv)
+}
+
+/// Find a Python binary inside a virtual environment directory.
+fn find_python_in_venv(venv: &Path) -> Option<PathBuf> {
+    #[cfg(unix)]
+    let candidates = &[venv.join("bin/python3"), venv.join("bin/python")];
+    #[cfg(windows)]
+    let candidates = &[venv.join("Scripts/python.exe")];
+    candidates.iter().find(|p| p.exists()).cloned()
+}
+
 fn output_indicates_missing_install(binary: &str, combined_output: &str) -> Option<&'static str> {
     // Keep this intentionally strict. We only want to auto-install when we're
     // very confident the "binary exists" but is unusable due to missing install.
@@ -1020,6 +1070,8 @@ sleep 60\n",
                     package: Some("rust-analyzer".into()),
                 },
             }),
+            root_strategy: Default::default(),
+            post_root_hook: Default::default(),
         };
 
         let called = Arc::new(AtomicUsize::new(0));
@@ -1040,5 +1092,72 @@ sleep 60\n",
 
         assert!(matches!(res, Err(LspError::BinaryNotFound(_))));
         assert_eq!(called.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_python_venv_finds_dot_venv_python3() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let bin_dir = root.join(".venv/bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        // Only python3, no python
+        let python3 = bin_dir.join("python3");
+        std::fs::write(&python3, "").unwrap();
+
+        let result = probe_python_venv(root);
+        assert_eq!(result, Some(python3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_python_venv_no_venv_returns_none() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let result = probe_python_venv(tmp.path());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn apply_post_root_hook_preserves_existing_init_options() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        // No venv exists, so nothing should be injected.
+        let mut config = LspServerConfig::new(
+            vec![".py".into()],
+            vec!["pyright".into()],
+            vec![],
+        );
+        config.initialization_options = Some(serde_json::json!({"diagnostics": true}));
+        config.post_root_hook = crate::server_config::PostRootHook::PythonVenvProbe;
+
+        apply_post_root_hook(&mut config, root);
+        // Original options preserved.
+        assert_eq!(
+            config.initialization_options.as_ref().unwrap()["diagnostics"],
+            serde_json::json!(true)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_post_root_hook_injects_python_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let bin_dir = root.join(".venv/bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let python3 = bin_dir.join("python3");
+        std::fs::write(&python3, "").unwrap();
+
+        let mut config = LspServerConfig::new(
+            vec![".py".into()],
+            vec!["pyright".into()],
+            vec![],
+        );
+        config.post_root_hook = crate::server_config::PostRootHook::PythonVenvProbe;
+
+        apply_post_root_hook(&mut config, root);
+        let opts = config.initialization_options.unwrap();
+        let python_path = opts["python"]["pythonPath"].as_str().unwrap();
+        assert!(python_path.contains(".venv/bin/python3"));
     }
 }

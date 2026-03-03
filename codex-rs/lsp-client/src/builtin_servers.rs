@@ -2,6 +2,8 @@
 
 use crate::server_config::InstallMethod;
 use crate::server_config::LspServerConfig;
+use crate::server_config::PostRootHook;
+use crate::server_config::RootStrategy;
 
 /// Returns built-in server configurations.
 pub fn builtin_servers() -> Vec<(&'static str, LspServerConfig)> {
@@ -37,11 +39,14 @@ pub fn builtin_servers() -> Vec<(&'static str, LspServerConfig)> {
 fn rust_analyzer() -> (&'static str, LspServerConfig) {
     (
         "rust-analyzer",
-        cfg(&[".rs"], &["rust-analyzer"], &["Cargo.toml"]).with_install(
-            InstallMethod::RustupComponent {
+        cfg(&[".rs"], &["rust-analyzer"], &["Cargo.toml"])
+            .with_root_strategy(RootStrategy::WalkUpForContent {
+                marker_file: "Cargo.toml",
+                content_pattern: "[workspace]",
+            })
+            .with_install(InstallMethod::RustupComponent {
                 component: Some("rust-analyzer".into()),
-            },
-        ),
+            }),
     )
 }
 
@@ -49,12 +54,21 @@ fn typescript_language_server() -> (&'static str, LspServerConfig) {
     (
         "typescript-language-server",
         cfg(
-            &[".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
+            &[".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"],
             &["typescript-language-server", "--stdio"],
-            &["tsconfig.json", "jsconfig.json", "package.json"],
+            &[
+                "tsconfig.json",
+                "jsconfig.json",
+                "package.json",
+                "package-lock.json",
+                "pnpm-lock.yaml",
+                "yarn.lock",
+                "bun.lockb",
+                "bun.lock",
+            ],
         )
         .with_install(InstallMethod::Npm {
-            package: Some("typescript-language-server".into()),
+            packages: vec!["typescript-language-server".into(), "typescript".into()],
         }),
     )
 }
@@ -62,9 +76,13 @@ fn typescript_language_server() -> (&'static str, LspServerConfig) {
 fn gopls() -> (&'static str, LspServerConfig) {
     (
         "gopls",
-        cfg(&[".go"], &["gopls"], &["go.mod", "go.sum"]).with_install(InstallMethod::Go {
-            package_path: "golang.org/x/tools/gopls".into(),
-        }),
+        cfg(&[".go"], &["gopls"], &["go.mod", "go.sum"])
+            .with_root_strategy(RootStrategy::PreferAncestorMarker {
+                preferred_marker: "go.work",
+            })
+            .with_install(InstallMethod::Go {
+                package_path: "golang.org/x/tools/gopls".into(),
+            }),
     )
 }
 
@@ -82,8 +100,9 @@ fn pyright() -> (&'static str, LspServerConfig) {
                 "pyrightconfig.json",
             ],
         )
+        .with_post_root_hook(PostRootHook::PythonVenvProbe)
         .with_install(InstallMethod::Npm {
-            package: Some("pyright".into()),
+            packages: vec!["pyright".into()],
         }),
     )
 }
@@ -129,7 +148,7 @@ fn yaml_language_server() -> (&'static str, LspServerConfig) {
             ],
         )
         .with_install(InstallMethod::Npm {
-            package: Some("yaml-language-server".into()),
+            packages: vec!["yaml-language-server".into()],
         }),
     )
 }
@@ -143,7 +162,7 @@ fn bash_language_server() -> (&'static str, LspServerConfig) {
             &[".git", "package.json"],
         )
         .with_install(InstallMethod::Npm {
-            package: Some("bash-language-server".into()),
+            packages: vec!["bash-language-server".into()],
         }),
     )
 }
@@ -152,12 +171,12 @@ fn dockerfile_language_server() -> (&'static str, LspServerConfig) {
     (
         "dockerfile-language-server-nodejs",
         cfg(
-            &[".dockerfile"],
+            &[".dockerfile", "Dockerfile"],
             &["docker-langserver", "--stdio"],
             &["Dockerfile", "docker-compose.yml", ".git"],
         )
         .with_install(InstallMethod::Npm {
-            package: Some("dockerfile-language-server-nodejs".into()),
+            packages: vec!["dockerfile-language-server-nodejs".into()],
         }),
     )
 }
@@ -171,7 +190,7 @@ fn vue_language_server() -> (&'static str, LspServerConfig) {
             &["package.json", "pnpm-lock.yaml", "yarn.lock"],
         )
         .with_install(InstallMethod::Npm {
-            package: Some("@vue/language-server".into()),
+            packages: vec!["@vue/language-server".into()],
         }),
     )
 }
@@ -185,7 +204,7 @@ fn svelte_language_server() -> (&'static str, LspServerConfig) {
             &["package.json", "svelte.config.js", "svelte.config.ts"],
         )
         .with_install(InstallMethod::Npm {
-            package: Some("svelte-language-server".into()),
+            packages: vec!["svelte-language-server".into()],
         }),
     )
 }
@@ -199,7 +218,7 @@ fn astro_language_server() -> (&'static str, LspServerConfig) {
             &["astro.config.mjs", "astro.config.ts", "package.json"],
         )
         .with_install(InstallMethod::Npm {
-            package: Some("@astrojs/language-server".into()),
+            packages: vec!["@astrojs/language-server".into()],
         }),
     )
 }
@@ -216,7 +235,7 @@ fn intelephense() -> (&'static str, LspServerConfig) {
             "telemetry": { "enabled": false }
         }))
         .with_install(InstallMethod::Npm {
-            package: Some("intelephense".into()),
+            packages: vec!["intelephense".into()],
         }),
     )
 }
@@ -437,7 +456,7 @@ mod tests {
     #[test]
     fn typescript_server_matches_all_js_ts_extensions() {
         let (_, config) = typescript_language_server();
-        for ext in &[".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"] {
+        for ext in &[".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"] {
             assert!(
                 config.matches_extension(ext),
                 "typescript server should match {ext}"

@@ -188,6 +188,8 @@ fn fake_config(script: &PathBuf) -> LspServerConfig {
         initialization_options: None,
         disabled: false,
         install: None,
+        root_strategy: Default::default(),
+        post_root_hook: Default::default(),
     }
 }
 
