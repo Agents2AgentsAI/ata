@@ -13,6 +13,7 @@ Available operations:
 - prepareRename: Check whether rename is valid at a given position.
 - renamePreview: Preview a rename as an apply_patch-compatible patch (does not apply).
 - codeActionPreview: Preview a code action edit as an apply_patch-compatible patch (does not apply).
+- diagnostics: Get current diagnostics (errors, warnings) for a file from the LSP server.
 
 For position-based operations, provide `file` (absolute path) and either:
 - `line` (1-based) + `character` (1-based), or

@@ -79,16 +79,18 @@ pub fn find_callers(
         .all_paths_with_language()
         .into_par_iter()
         .flat_map_iter(|(rel_path, language)| {
+            // Skip non-code files (e.g. LICENSE, .md) that have no tree-sitter
+            // support — regex fallback on these produces too many false positives.
+            if !language.has_tree_sitter_support() {
+                return Vec::new();
+            }
+
             let source = match std::fs::read_to_string(root.join(&rel_path)) {
                 Ok(source) => source,
                 Err(_) => return Vec::new(),
             };
 
-            if language.has_tree_sitter_support() {
-                find_callers_ast(&source, &rel_path, language, symbol_name, file)
-            } else {
-                find_callers_regex(&source, &rel_path, language, symbol_name, file)
-            }
+            find_callers_ast(&source, &rel_path, language, symbol_name, file)
         })
         .collect();
 
@@ -166,7 +168,7 @@ fn find_callers_regex(
     symbol_name: &str,
     definition_file: &str,
 ) -> Vec<CallerInfo> {
-    let pattern = match regex::Regex::new(&regex::escape(symbol_name)) {
+    let pattern = match regex::Regex::new(&format!(r"\b{}\b", regex::escape(symbol_name))) {
         Ok(pattern) => pattern,
         Err(_) => return Vec::new(),
     };

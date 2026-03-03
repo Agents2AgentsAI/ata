@@ -1,5 +1,6 @@
 //! LSP tool handler exposing code intelligence and preview refactor operations to the agent.
 
+use std::collections::HashSet;
 use std::fmt::Write;
 use std::future::Future;
 use std::path::Path;
@@ -53,6 +54,9 @@ const FUZZ_ATTEMPTS_LONG: usize = 25;
 /// Handler for the `lsp` tool.
 pub struct LspToolHandler {
     pub state: Arc<MultiRootState>,
+    /// Tracks files that have been synced at least once (with a diagnostic wait)
+    /// so that subsequent queries skip the readiness delay.
+    pub warmed_files: tokio::sync::Mutex<HashSet<PathBuf>>,
 }
 
 struct FileQueryContext {
@@ -131,6 +135,7 @@ enum LspOperation {
     PrepareRename,
     RenamePreview,
     CodeActionPreview,
+    Diagnostics,
 }
 
 #[async_trait]
@@ -444,6 +449,49 @@ impl ToolHandler for LspToolHandler {
                 .map_err(FunctionCallError::RespondToModel)?;
                 (patch, true)
             }
+            LspOperation::Diagnostics => {
+                let context = self.prepare_file_query_context(&args).await?;
+                // Wait for diagnostics (touch_file with wait=true triggers the
+                // debounced diagnostic collection from all applicable servers).
+                let all_diags = context.registry.touch_file(&context.path, true).await;
+                let mut out = String::new();
+                let mut count = 0usize;
+                for (server_id, diags) in &all_diags {
+                    for diag in diags {
+                        count += 1;
+                        let severity = match diag.severity {
+                            Some(codex_lsp_client::lsp_types::DiagnosticSeverity::ERROR) => "ERROR",
+                            Some(codex_lsp_client::lsp_types::DiagnosticSeverity::WARNING) => {
+                                "WARNING"
+                            }
+                            Some(codex_lsp_client::lsp_types::DiagnosticSeverity::INFORMATION) => {
+                                "INFO"
+                            }
+                            Some(codex_lsp_client::lsp_types::DiagnosticSeverity::HINT) => "HINT",
+                            _ => "UNKNOWN",
+                        };
+                        let line = diag.range.start.line + 1;
+                        let col = diag.range.start.character + 1;
+                        let _ = writeln!(
+                            out,
+                            "{severity} [{line}:{col}] ({server_id}) {}",
+                            diag.message
+                        );
+                    }
+                }
+                if count == 0 {
+                    out.push_str("No diagnostics.");
+                } else {
+                    out.insert_str(
+                        0,
+                        &format!(
+                            "{count} diagnostic(s) for {}:\n",
+                            context.path.display()
+                        ),
+                    );
+                }
+                (out, false)
+            }
         };
 
         let out = if is_patch {
@@ -616,7 +664,14 @@ impl LspToolHandler {
             )));
         }
 
-        let _ = registry.touch_file(path, false).await;
+        // On first contact with a file, wait for diagnostics as a proxy for
+        // server readiness (e.g. Pyright needs time to index after startup).
+        // Subsequent queries skip the wait to avoid latency.
+        let first_contact = {
+            let mut warmed = self.warmed_files.lock().await;
+            warmed.insert(path.to_path_buf())
+        };
+        let _ = registry.touch_file(path, first_contact).await;
         Ok(())
     }
 
@@ -1117,7 +1172,7 @@ pub(crate) fn create_lsp_tool() -> ToolSpec {
         "operation".to_string(),
         JsonSchema::String {
             description: Some(
-                "The LSP operation to perform: goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls, prepareRename, renamePreview, codeActionPreview".to_string(),
+                "The LSP operation to perform: goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls, prepareRename, renamePreview, codeActionPreview, diagnostics".to_string(),
             ),
         },
     );
