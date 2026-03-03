@@ -1297,8 +1297,8 @@ mod tests {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(untagged)]
 pub enum LspConfig {
-    /// `lsp = false` disables all LSP integration.
-    Disabled(bool),
+    /// Boolean enable flag from `lsp = true|false`.
+    Enabled(bool),
     /// Per-server configuration map.
     Servers(HashMap<String, LspServerConfigToml>),
 }
@@ -1334,8 +1334,8 @@ pub enum LspServerConfigToml {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(untagged)]
 pub enum TreeSitterConfig {
-    /// `treesitter = false` disables TreeSitter indexing.
-    Disabled(bool),
+    /// Boolean enable flag from `treesitter = true|false`.
+    Enabled(bool),
     /// Detailed TreeSitter configuration map.
     Config(TreeSitterConfigMap),
 }

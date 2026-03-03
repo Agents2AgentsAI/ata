@@ -147,9 +147,11 @@ pub fn extract_symbols_from_file(
                 let line_range = (start.row + 1, end.row + 1);
                 let node_text = def_node.utf8_text(source.as_bytes()).unwrap_or("");
                 let signature = node_text.lines().next().unwrap_or("").to_string();
+                let name_lower = name.to_lowercase();
 
                 symbols.push(Symbol {
                     name,
+                    name_lower,
                     kind,
                     file: rel_path.to_string(),
                     byte_range,

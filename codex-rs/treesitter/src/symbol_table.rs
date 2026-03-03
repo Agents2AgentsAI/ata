@@ -37,7 +37,8 @@ impl SymbolTable {
         format!("{file}::{name}@{byte_start}")
     }
 
-    pub fn insert(&self, symbol: Symbol) {
+    pub fn insert(&self, mut symbol: Symbol) {
+        symbol.ensure_name_lower();
         let key = Self::make_key(&symbol.file, &symbol.name, symbol.byte_range.0);
 
         self.by_name
@@ -169,10 +170,9 @@ impl SymbolTable {
             .iter()
             .filter_map(|entry| {
                 let symbol = entry.value();
-                let name_lower = symbol.name.to_lowercase();
-                if name_lower.contains(&query_lower) {
-                    let exact = name_lower == query_lower;
-                    let prefix = name_lower.starts_with(&query_lower);
+                if symbol.name_lower.contains(&query_lower) {
+                    let exact = symbol.name_lower == query_lower;
+                    let prefix = symbol.name_lower.starts_with(&query_lower);
                     Some((symbol.clone(), exact, prefix))
                 } else {
                     None
@@ -214,6 +214,7 @@ mod tests {
     fn make_symbol(name: &str, file: &str, language: Language) -> Symbol {
         Symbol {
             name: name.to_string(),
+            name_lower: name.to_lowercase(),
             kind: SymbolKind::Function,
             file: file.to_string(),
             byte_range: (0, 10),

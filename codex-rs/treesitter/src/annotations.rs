@@ -185,6 +185,7 @@ mod tests {
         let symbol_table = SymbolTable::new();
         symbol_table.insert(Symbol {
             name: "run".to_string(),
+            name_lower: "run".to_string(),
             kind: SymbolKind::Function,
             file: "src/lib.rs".to_string(),
             byte_range: (0, 32),
@@ -208,6 +209,7 @@ mod tests {
         let new_symbol_table = SymbolTable::new();
         new_symbol_table.insert(Symbol {
             name: "run".to_string(),
+            name_lower: "run".to_string(),
             kind: SymbolKind::Function,
             file: "src/lib.rs".to_string(),
             byte_range: (0, 32),
