@@ -914,6 +914,61 @@ impl Default for ShellEnvironmentPolicy {
     }
 }
 
+// ─── Voice Mode ──────────────────────────────────────────────────────────────
+
+/// Output mode for the voice mode pipeline.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceOutput {
+    /// Only play TTS audio, suppress text streaming.
+    Voice,
+    /// Only show text, no TTS playback.
+    Text,
+    /// Show text AND play TTS audio (default).
+    #[default]
+    Both,
+}
+
+/// ElevenLabs-specific configuration nested under `[voice_mode.elevenlabs]`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ElevenLabsToml {
+    /// ElevenLabs API key. Falls back to `ELEVENLABS_API_KEY` env var.
+    pub api_key: Option<String>,
+    /// Voice ID for TTS. Defaults to ElevenLabs' "Rachel".
+    pub voice_id: Option<String>,
+    /// Model ID for TTS. Defaults to `eleven_turbo_v2_5`.
+    pub model_id: Option<String>,
+    /// ISO 639-1 language code (e.g. "en", "es"). None = auto-detect.
+    pub language_code: Option<String>,
+    /// Speech speed multiplier. Range: 0.7–1.2, default 1.0.
+    pub speed: Option<f64>,
+}
+
+/// Voice mode configuration nested under `[voice_mode]` in config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct VoiceModeToml {
+    /// When true, voice mode is automatically enabled on startup.
+    pub enabled: Option<bool>,
+    /// Controls what output is produced: "voice", "text", or "both".
+    #[serde(default)]
+    pub output: Option<VoiceOutput>,
+    /// When true, transcribed speech is auto-submitted to the agent.
+    pub auto_submit: Option<bool>,
+    /// RMS energy threshold for voice activity detection (0.0–1.0).
+    pub vad_threshold: Option<f64>,
+    /// Milliseconds of silence before a recording is finalized.
+    pub silence_duration_ms: Option<u64>,
+    /// When false, TTS (text-to-speech) is disabled even when voice mode is on.
+    pub tts_enabled: Option<bool>,
+    /// When false, STT (speech-to-text / push-to-talk) is disabled even when voice mode is on.
+    pub stt_enabled: Option<bool>,
+    /// ElevenLabs API settings.
+    #[serde(default)]
+    pub elevenlabs: Option<ElevenLabsToml>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

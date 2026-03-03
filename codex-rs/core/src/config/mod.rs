@@ -22,6 +22,7 @@ use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::SkillsConfig;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
+use crate::config::types::VoiceModeToml;
 use crate::config::types::WindowsSandboxModeToml;
 use crate::config::types::WindowsToml;
 use crate::config_loader::CloudRequirementsLoader;
@@ -1299,6 +1300,10 @@ pub struct ConfigToml {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
+
+    /// Voice mode settings (mic → STT → agent → TTS → speaker).
+    #[serde(default)]
+    pub voice_mode: Option<VoiceModeToml>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {

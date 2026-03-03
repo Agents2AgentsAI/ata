@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU16;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use tracing::error;
 use tracing::info;
@@ -487,6 +488,9 @@ pub(crate) struct RealtimeAudioPlayer {
     queue: Arc<Mutex<VecDeque<i16>>>,
     output_sample_rate: u32,
     output_channels: u16,
+    /// Number of samples consumed from the queue by the audio callback.
+    /// Tracks actual playback position (not buffered position).
+    samples_played: Arc<AtomicUsize>,
 }
 
 impl RealtimeAudioPlayer {
@@ -496,7 +500,13 @@ impl RealtimeAudioPlayer {
         let output_sample_rate = config.sample_rate().0;
         let output_channels = config.channels();
         let queue = Arc::new(Mutex::new(VecDeque::new()));
-        let stream = build_output_stream(&device, &config, Arc::clone(&queue))?;
+        let samples_played = Arc::new(AtomicUsize::new(0));
+        let stream = build_output_stream(
+            &device,
+            &config,
+            Arc::clone(&queue),
+            Arc::clone(&samples_played),
+        )?;
         stream
             .play()
             .map_err(|e| format!("failed to start output stream: {e}"))?;
@@ -505,6 +515,7 @@ impl RealtimeAudioPlayer {
             queue,
             output_sample_rate,
             output_channels,
+            samples_played,
         })
     }
 
@@ -546,69 +557,169 @@ impl RealtimeAudioPlayer {
             guard.clear();
         }
     }
+
+    /// Returns `true` if the audio buffer has samples waiting to be played.
+    pub(crate) fn has_buffered_audio(&self) -> bool {
+        self.queue
+            .lock()
+            .map(|guard| !guard.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Enqueue raw PCM i16 samples directly (no base64 decoding).
+    /// Used by the voice mode pipeline where audio arrives as native PCM.
+    pub(crate) fn enqueue_pcm(&self, pcm: &[i16], sample_rate: u32, channels: u16) {
+        if pcm.is_empty() || sample_rate == 0 || channels == 0 {
+            return;
+        }
+        let converted = convert_pcm16_for_output(
+            pcm,
+            sample_rate,
+            channels,
+            self.output_sample_rate,
+            self.output_channels,
+        );
+        if converted.is_empty() {
+            return;
+        }
+        if let Ok(mut guard) = self.queue.lock() {
+            guard.extend(converted);
+        }
+    }
+
+    /// Returns true when the playback queue is empty.
+    #[allow(dead_code)]
+    pub(crate) fn is_idle(&self) -> bool {
+        self.queue
+            .lock()
+            .map(|guard| guard.is_empty())
+            .unwrap_or(true)
+    }
+
+    /// Current playback position in milliseconds.
+    ///
+    /// Based on the number of output samples actually consumed by the audio
+    /// callback, converted using the output device's sample rate and channel count.
+    pub(crate) fn playback_position_ms(&self) -> u64 {
+        let samples = self.samples_played.load(Ordering::Relaxed) as u64;
+        let frames = samples / self.output_channels.max(1) as u64;
+        frames * 1000 / self.output_sample_rate.max(1) as u64
+    }
+
+    /// Reset the playback position counter (call when starting a new voice turn).
+    pub(crate) fn reset_playback_position(&self) {
+        self.samples_played.store(0, Ordering::Relaxed);
+    }
 }
 
 fn build_output_stream(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
     queue: Arc<Mutex<VecDeque<i16>>>,
+    samples_played: Arc<AtomicUsize>,
 ) -> Result<cpal::Stream, String> {
     let config_any: cpal::StreamConfig = config.clone().into();
     match config.sample_format() {
-        cpal::SampleFormat::F32 => device
-            .build_output_stream(
-                &config_any,
-                move |output: &mut [f32], _| fill_output_f32(output, &queue),
-                move |err| error!("audio output error: {err}"),
-                None,
-            )
-            .map_err(|e| format!("failed to build f32 output stream: {e}")),
-        cpal::SampleFormat::I16 => device
-            .build_output_stream(
-                &config_any,
-                move |output: &mut [i16], _| fill_output_i16(output, &queue),
-                move |err| error!("audio output error: {err}"),
-                None,
-            )
-            .map_err(|e| format!("failed to build i16 output stream: {e}")),
-        cpal::SampleFormat::U16 => device
-            .build_output_stream(
-                &config_any,
-                move |output: &mut [u16], _| fill_output_u16(output, &queue),
-                move |err| error!("audio output error: {err}"),
-                None,
-            )
-            .map_err(|e| format!("failed to build u16 output stream: {e}")),
+        cpal::SampleFormat::F32 => {
+            let sp = Arc::clone(&samples_played);
+            device
+                .build_output_stream(
+                    &config_any,
+                    move |output: &mut [f32], _| fill_output_f32(output, &queue, &sp),
+                    move |err| error!("audio output error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build f32 output stream: {e}"))
+        }
+        cpal::SampleFormat::I16 => {
+            let sp = Arc::clone(&samples_played);
+            device
+                .build_output_stream(
+                    &config_any,
+                    move |output: &mut [i16], _| fill_output_i16(output, &queue, &sp),
+                    move |err| error!("audio output error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build i16 output stream: {e}"))
+        }
+        cpal::SampleFormat::U16 => {
+            let sp = Arc::clone(&samples_played);
+            device
+                .build_output_stream(
+                    &config_any,
+                    move |output: &mut [u16], _| fill_output_u16(output, &queue, &sp),
+                    move |err| error!("audio output error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build u16 output stream: {e}"))
+        }
         other => Err(format!("unsupported output sample format: {other:?}")),
     }
 }
 
-fn fill_output_i16(output: &mut [i16], queue: &Arc<Mutex<VecDeque<i16>>>) {
+fn fill_output_i16(
+    output: &mut [i16],
+    queue: &Arc<Mutex<VecDeque<i16>>>,
+    samples_played: &Arc<AtomicUsize>,
+) {
     if let Ok(mut guard) = queue.lock() {
+        let mut consumed = 0usize;
         for sample in output {
-            *sample = guard.pop_front().unwrap_or(0);
+            if let Some(v) = guard.pop_front() {
+                *sample = v;
+                consumed += 1;
+            } else {
+                *sample = 0;
+            }
+        }
+        if consumed > 0 {
+            samples_played.fetch_add(consumed, Ordering::Relaxed);
         }
         return;
     }
     output.fill(0);
 }
 
-fn fill_output_f32(output: &mut [f32], queue: &Arc<Mutex<VecDeque<i16>>>) {
+fn fill_output_f32(
+    output: &mut [f32],
+    queue: &Arc<Mutex<VecDeque<i16>>>,
+    samples_played: &Arc<AtomicUsize>,
+) {
     if let Ok(mut guard) = queue.lock() {
+        let mut consumed = 0usize;
         for sample in output {
-            let v = guard.pop_front().unwrap_or(0);
-            *sample = (v as f32) / (i16::MAX as f32);
+            if let Some(v) = guard.pop_front() {
+                *sample = (v as f32) / (i16::MAX as f32);
+                consumed += 1;
+            } else {
+                *sample = 0.0;
+            }
+        }
+        if consumed > 0 {
+            samples_played.fetch_add(consumed, Ordering::Relaxed);
         }
         return;
     }
     output.fill(0.0);
 }
 
-fn fill_output_u16(output: &mut [u16], queue: &Arc<Mutex<VecDeque<i16>>>) {
+fn fill_output_u16(
+    output: &mut [u16],
+    queue: &Arc<Mutex<VecDeque<i16>>>,
+    samples_played: &Arc<AtomicUsize>,
+) {
     if let Ok(mut guard) = queue.lock() {
+        let mut consumed = 0usize;
         for sample in output {
-            let v = guard.pop_front().unwrap_or(0);
-            *sample = (v as i32 + 32768).clamp(0, u16::MAX as i32) as u16;
+            if let Some(v) = guard.pop_front() {
+                *sample = (v as i32 + 32768).clamp(0, u16::MAX as i32) as u16;
+                consumed += 1;
+            } else {
+                *sample = 32768;
+            }
+        }
+        if consumed > 0 {
+            samples_played.fetch_add(consumed, Ordering::Relaxed);
         }
         return;
     }
@@ -747,6 +858,11 @@ fn encode_wav_normalized(audio: &RecordedAudio) -> Result<Vec<u8>, String> {
         .finalize()
         .map_err(|_| "failed to finalize wav".to_string())?;
     Ok(wav_bytes)
+}
+
+/// Public wrapper around `encode_wav_normalized` for use by voice mode STT.
+pub(crate) fn encode_wav_for_voice_mode(audio: &RecordedAudio) -> Result<Vec<u8>, String> {
+    encode_wav_normalized(audio)
 }
 
 fn normalize_chatgpt_base_url(input: &str) -> String {

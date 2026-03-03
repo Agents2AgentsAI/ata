@@ -1115,6 +1115,7 @@ async fn queued_restore_with_remote_images_keeps_local_placeholder_mapping() {
         remote_image_urls: remote_image_urls.clone(),
         text_elements: text_elements.clone(),
         mention_bindings: Vec::new(),
+        voice_input: false,
     });
 
     assert_eq!(chat.bottom_pane.composer_text(), text);
@@ -1160,6 +1161,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
         remote_image_urls: Vec::new(),
         text_elements: first_elements,
         mention_bindings: Vec::new(),
+        voice_input: false,
     });
     chat.queued_user_messages.push_back(UserMessage {
         text: second_text,
@@ -1170,6 +1172,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
         remote_image_urls: Vec::new(),
         text_elements: second_elements,
         mention_bindings: Vec::new(),
+        voice_input: false,
     });
     chat.refresh_queued_user_messages();
 
@@ -1240,6 +1243,7 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
         remote_image_urls: Vec::new(),
         text_elements: Vec::new(),
         mention_bindings: Vec::new(),
+        voice_input: false,
     });
     chat.refresh_queued_user_messages();
 
@@ -1302,6 +1306,7 @@ async fn remap_placeholders_uses_attachment_labels() {
         local_images: attachments,
         remote_image_urls: vec!["https://example.com/a.png".to_string()],
         mention_bindings: Vec::new(),
+        voice_input: false,
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
@@ -1368,6 +1373,7 @@ async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
         local_images: attachments,
         remote_image_urls: Vec::new(),
         mention_bindings: Vec::new(),
+        voice_input: false,
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
@@ -1738,7 +1744,17 @@ async fn make_chatwidget_manual(
         status_line_branch_lookup_complete: false,
         external_editor_state: ExternalEditorState::Closed,
         realtime_conversation: RealtimeConversationUiState::default(),
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        voice_mode_state: None,
+        #[cfg(not(target_os = "linux"))]
+        cached_elevenlabs_language: None,
+        #[cfg(not(target_os = "linux"))]
+        cached_elevenlabs_speed: None,
         last_rendered_user_message_event: None,
+        #[cfg(not(target_os = "linux"))]
+        deferred_voice_cells: Vec::new(),
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        pending_voice_startup_cells: Vec::new(),
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
@@ -3296,7 +3312,7 @@ async fn streaming_final_answer_keeps_task_running_state() {
     chat.thread_id = Some(ThreadId::new());
 
     chat.on_task_started();
-    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_agent_message_delta("Final answer line\n".to_string(), false);
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
@@ -3329,7 +3345,7 @@ async fn idle_commit_ticks_do_not_restore_status_without_commentary_completion()
     chat.on_task_started();
     assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
 
-    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_agent_message_delta("Final answer line\n".to_string(), false);
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
@@ -3348,7 +3364,7 @@ async fn commentary_completion_restores_status_indicator_before_exec_begin() {
     chat.on_task_started();
     assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
 
-    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_agent_message_delta("Preamble line\n".to_string(), false);
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
@@ -3401,7 +3417,7 @@ async fn preamble_keeps_working_status_snapshot() {
     // Regression sequence: a preamble line is committed to history before any exec/tool event.
     // After commentary completes, the status row should be restored before subsequent work.
     chat.on_task_started();
-    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_agent_message_delta("Preamble line\n".to_string(), false);
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
     complete_assistant_message(
@@ -3442,7 +3458,7 @@ async fn unified_exec_begin_restores_working_status_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.on_task_started();
-    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_agent_message_delta("Preamble line\n".to_string(), false);
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
@@ -3494,7 +3510,7 @@ async fn steer_enter_queues_while_final_answer_stream_is_active() {
     chat.on_task_started();
     // Keep the assistant stream open (no commit tick/finalize) to model the repro window:
     // user presses Enter while the final answer is still streaming.
-    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_agent_message_delta("Final answer line\n".to_string(), false);
 
     chat.bottom_pane.set_composer_text(
         "queued while streaming".to_string(),
@@ -3527,7 +3543,7 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
     chat.on_task_started();
     // Simulate "dead mode" repro timing by keeping a final-answer stream active while the
     // user submits multiple follow-up prompts.
-    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_agent_message_delta("Final answer line\n".to_string(), false);
 
     chat.bottom_pane
         .set_composer_text("first follow-up".to_string(), Vec::new(), Vec::new());
@@ -8272,7 +8288,7 @@ async fn replayed_interrupted_reconnect_footer_row_snapshot() {
 async fn stream_error_restores_hidden_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
-    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_agent_message_delta("Preamble line\n".to_string(), false);
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
     assert!(!chat.bottom_pane.status_indicator_visible());

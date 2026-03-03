@@ -405,6 +405,9 @@ pub(crate) struct ChatComposer {
     pre_search_text: Option<String>,
     /// Path to `history.jsonl`, set once after construction.
     history_path: Option<PathBuf>,
+    /// When true, `cursor_pos()` returns `None` to hide the terminal cursor.
+    /// Used by voice mode to suppress the blinking cursor over placeholder text.
+    force_hide_cursor: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -514,6 +517,7 @@ impl ChatComposer {
             reverse_search: None,
             pre_search_text: None,
             history_path: None,
+            force_hide_cursor: false,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -685,6 +689,18 @@ impl ChatComposer {
             return None;
         }
         let [_, _, textarea_rect, _] = self.layout_areas(area);
+
+        // Voice mode: place cursor after the placeholder text.
+        if self.force_hide_cursor && self.textarea.text().is_empty() {
+            use unicode_width::UnicodeWidthStr;
+            let w = UnicodeWidthStr::width(self.placeholder_text.as_str()) as u16;
+            let x = textarea_rect.x.saturating_add(w);
+            return Some((
+                x.min(textarea_rect.right().saturating_sub(1)),
+                textarea_rect.y,
+            ));
+        }
+
         let state = *self.textarea_state.borrow();
         self.textarea.cursor_pos_with_state(textarea_rect, state)
     }
@@ -1016,6 +1032,12 @@ impl ChatComposer {
     /// Update the placeholder text without changing input enablement.
     pub(crate) fn set_placeholder_text(&mut self, placeholder: String) {
         self.placeholder_text = placeholder;
+    }
+
+    /// Force the terminal cursor hidden (or visible) regardless of focus/input state.
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    pub(crate) fn set_force_hide_cursor(&mut self, hide: bool) {
+        self.force_hide_cursor = hide;
     }
 
     /// Move the cursor to the end of the current text buffer.
@@ -4072,6 +4094,18 @@ impl Renderable for ChatComposer {
         }
 
         let [_, _, textarea_rect, _] = self.layout_areas(area);
+
+        // Voice mode: place cursor after the placeholder text.
+        if self.force_hide_cursor && self.textarea.text().is_empty() {
+            use unicode_width::UnicodeWidthStr;
+            let w = UnicodeWidthStr::width(self.placeholder_text.as_str()) as u16;
+            let x = textarea_rect.x.saturating_add(w);
+            return Some((
+                x.min(textarea_rect.right().saturating_sub(1)),
+                textarea_rect.y,
+            ));
+        }
+
         let state = *self.textarea_state.borrow();
         self.textarea.cursor_pos_with_state(textarea_rect, state)
     }

@@ -198,6 +198,14 @@ mod voice {
         }
 
         pub(crate) fn clear(&self) {}
+        pub(crate) fn enqueue_pcm(&self, _pcm: &[i16], _sample_rate: u32, _channels: u16) {}
+        pub(crate) fn is_idle(&self) -> bool {
+            true
+        }
+    }
+
+    pub(crate) fn encode_wav_for_voice_mode(_audio: &RecordedAudio) -> Result<Vec<u8>, String> {
+        Err("voice input is unavailable in this build".to_string())
     }
 
     pub fn transcribe_async(
@@ -212,6 +220,9 @@ mod voice {
         });
     }
 }
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[allow(dead_code)]
+mod vad;
 mod wrapping;
 
 #[cfg(test)]
