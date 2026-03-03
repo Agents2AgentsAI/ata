@@ -172,7 +172,11 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
             model: test.session_configured.model.clone(),
             model_provider: None,
             effort: None,
-            summary: test.config.model_reasoning_summary,
+            summary: Some(
+                test.config
+                    .model_reasoning_summary
+                    .unwrap_or(codex_protocol::config_types::ReasoningSummary::Auto),
+            ),
             collaboration_mode: Some(collaboration_mode),
             final_output_json_schema: None,
             personality: None,
@@ -284,7 +288,11 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
             model: test.session_configured.model.clone(),
             model_provider: None,
             effort: None,
-            summary: test.config.model_reasoning_summary,
+            summary: Some(
+                test.config
+                    .model_reasoning_summary
+                    .unwrap_or(codex_protocol::config_types::ReasoningSummary::Auto),
+            ),
             collaboration_mode: Some(turn_mode),
             final_output_json_schema: None,
             personality: None,

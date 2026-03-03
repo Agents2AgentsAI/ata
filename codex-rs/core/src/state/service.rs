@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AuthManager;
@@ -16,6 +16,7 @@ use crate::research::SharedResearchToolkit;
 use crate::skills::SkillsManager;
 use crate::state_db::StateDbHandle;
 use crate::tools::network_approval::NetworkApprovalService;
+use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_api::file_support::FileReferenceCache;
@@ -52,7 +53,7 @@ pub(crate) struct SessionServices {
     pub(crate) otel_manager: OtelManager,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
     #[cfg_attr(not(unix), allow(dead_code))]
-    pub(crate) execve_session_approvals: RwLock<HashSet<AbsolutePathBuf>>,
+    pub(crate) execve_session_approvals: RwLock<HashMap<AbsolutePathBuf, ExecveSessionApproval>>,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) file_watcher: Arc<FileWatcher>,
     pub(crate) agent_control: AgentControl,

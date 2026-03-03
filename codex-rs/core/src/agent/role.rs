@@ -196,19 +196,23 @@ They write results to a staging file and return the path.".to_string()),
                         config_file: Some("synthesizer.toml".to_string().parse().unwrap_or_default()),
                     }
                 ),
-                (
-                    "awaiter".to_string(),
-                    AgentRoleConfig {
-                        description: Some(r#"Use an `awaiter` agent EVERY TIME you must run a command that might take some time.
-This includes, but not only:
-* testing
-* monitoring of a long running process
-* explicit ask to wait for something
-
-When YOU wait for the `awaiter` agent to be done, use the largest possible timeout."#.to_string()),
-                        config_file: Some("awaiter.toml".to_string().parse().unwrap_or_default()),
-                    }
-                )
+                // Awaiter is temp removed
+//                 (
+//                     "awaiter".to_string(),
+//                     AgentRoleConfig {
+//                         description: Some(r#"Use an `awaiter` agent EVERY TIME you must run a command that will take some very long time.
+// This includes, but not only:
+// * testing
+// * monitoring of a long running process
+// * explicit ask to wait for something
+//
+// Do not use an awaiter for every compilation/test if it won't take time.
+//
+// When YOU wait for the `awaiter` agent to be done, use the largest possible timeout.
+// Close the awaiter when you're done with it."#.to_string()),
+//                         config_file: Some("awaiter.toml".to_string().parse().unwrap_or_default()),
+//                     }
+//                 )
             ])
         });
         &CONFIG

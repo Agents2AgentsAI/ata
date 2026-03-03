@@ -53,6 +53,8 @@ pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
 pub(crate) use request_user_input::RequestUserInputOverlay;
 mod bottom_pane_view;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+pub(crate) use bottom_pane_view::ReadingViewVoiceContext;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LocalImageAttachment {
@@ -72,6 +74,10 @@ mod chat_composer_history;
 mod command_popup;
 pub mod custom_prompt_view;
 mod experimental_features_view;
+#[cfg(not(target_os = "linux"))]
+mod voice_setup_view;
+#[cfg(not(target_os = "linux"))]
+pub(crate) use voice_setup_view::VoiceSetupView;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;
@@ -281,10 +287,6 @@ impl BottomPane {
         let _ = self.take_mention_bindings();
     }
 
-    pub fn set_steer_enabled(&mut self, enabled: bool) {
-        self.composer.set_steer_enabled(enabled);
-    }
-
     pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {
         self.composer.set_collaboration_modes_enabled(enabled);
         self.request_redraw();
@@ -315,6 +317,11 @@ impl BottomPane {
 
     pub fn set_realtime_conversation_enabled(&mut self, enabled: bool) {
         self.composer.set_realtime_conversation_enabled(enabled);
+        self.request_redraw();
+    }
+
+    pub fn set_audio_device_selection_enabled(&mut self, enabled: bool) {
+        self.composer.set_audio_device_selection_enabled(enabled);
         self.request_redraw();
     }
 
@@ -552,6 +559,17 @@ impl BottomPane {
     ) {
         self.composer.set_input_enabled(enabled, placeholder);
         self.request_redraw();
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    pub(crate) fn set_placeholder_text(&mut self, placeholder: String) {
+        self.composer.set_placeholder_text(placeholder);
+        self.request_redraw();
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    pub(crate) fn set_force_hide_cursor(&mut self, hide: bool) {
+        self.composer.set_force_hide_cursor(hide);
     }
 
     pub(crate) fn clear_composer_for_ctrl_c(&mut self) {
@@ -855,6 +873,22 @@ impl BottomPane {
     /// running and some are not.
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
         self.can_launch_external_editor()
+    }
+
+    /// Returns true when PTT (hold-Space-to-speak) should be allowed.
+    ///
+    /// PTT is allowed when either no view is active (normal chat mode) or the
+    /// active view supports voice (e.g. the document reader). Composer popups
+    /// block PTT so Space can operate toggles/steppers.
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    pub(crate) fn ptt_space_allowed(&self) -> bool {
+        if self.composer.popup_active() {
+            return false;
+        }
+        match self.view_stack.last() {
+            None => true,
+            Some(view) => view.voice_context().is_some(),
+        }
     }
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
@@ -1171,9 +1205,11 @@ mod tests {
             id: "1".to_string(),
             command: vec!["echo".into(), "ok".into()],
             reason: None,
+            available_decisions: vec![
+                codex_protocol::protocol::ReviewDecision::Approved,
+                codex_protocol::protocol::ReviewDecision::Abort,
+            ],
             network_approval_context: None,
-            proposed_execpolicy_amendment: None,
-            proposed_network_policy_amendments: None,
             additional_permissions: None,
         }
     }

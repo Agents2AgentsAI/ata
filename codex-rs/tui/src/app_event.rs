@@ -30,6 +30,28 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RealtimeAudioDeviceKind {
+    Microphone,
+    Speaker,
+}
+
+impl RealtimeAudioDeviceKind {
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            Self::Microphone => "Microphone",
+            Self::Speaker => "Speaker",
+        }
+    }
+
+    pub(crate) fn noun(self) -> &'static str {
+        match self {
+            Self::Microphone => "microphone",
+            Self::Speaker => "speaker",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) enum WindowsSandboxEnableMode {
     Elevated,
@@ -165,6 +187,26 @@ pub(crate) enum AppEvent {
     /// Persist the selected personality to the appropriate config.
     PersistPersonalitySelection {
         personality: Personality,
+    },
+
+    /// Open the device picker for a realtime microphone or speaker.
+    OpenRealtimeAudioDeviceSelection {
+        kind: RealtimeAudioDeviceKind,
+    },
+
+    /// Persist the selected realtime microphone or speaker to top-level config.
+    #[cfg_attr(
+        any(target_os = "linux", not(feature = "voice-input")),
+        allow(dead_code)
+    )]
+    PersistRealtimeAudioDeviceSelection {
+        kind: RealtimeAudioDeviceKind,
+        name: Option<String>,
+    },
+
+    /// Restart the selected realtime microphone or speaker locally.
+    RestartRealtimeAudioDevice {
+        kind: RealtimeAudioDeviceKind,
     },
 
     /// Open the reasoning selection popup after picking a model.
@@ -396,6 +438,92 @@ pub(crate) enum AppEvent {
     /// Apply a user-confirmed syntax theme selection.
     SyntaxThemeSelected {
         name: String,
+    },
+
+    // ─── Voice mode events ───────────────────────────────────────────────
+    /// Apply TTS/STT toggle settings from the voice setup popup.
+    #[cfg(not(target_os = "linux"))]
+    UpdateVoiceSettings {
+        tts_enabled: bool,
+        stt_enabled: bool,
+        elevenlabs_api_key: Option<String>,
+        /// Some(None) = clear to auto-detect, Some(Some("en")) = set language, None = unchanged.
+        language_code: Option<Option<String>>,
+        /// Some(speed) = set speed, None = unchanged.
+        speed: Option<f64>,
+    },
+
+    /// PTT timeout check — for terminals that don't emit key release events.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModePttTimeoutCheck,
+
+    /// TTS audio chunk received from ElevenLabs (24kHz mono i16 PCM).
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeTtsAudioChunk {
+        pcm: Vec<i16>,
+        alignment: Option<codex_elevenlabs::TtsAlignment>,
+    },
+
+    /// Live volume meter tick during PTT recording.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeMeterTick {
+        text: String,
+    },
+
+    /// TTS playback finished — transition back to Idle.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeTtsFinished,
+
+    /// TTS error (e.g. credit exhaustion, connection failure).
+    /// Displayed to the user as a voice status message.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeTtsError {
+        error: String,
+    },
+
+    /// Periodic tick to update the TTS word-highlight position.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeHighlightTick,
+
+    /// Voice mode STT transcription completed.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeTranscriptionComplete {
+        text: String,
+    },
+
+    /// Voice mode STT transcription failed.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeTranscriptionFailed {
+        error: String,
+    },
+
+    /// Persist voice mode enabled state to config file.
+    #[cfg(not(target_os = "linux"))]
+    PersistVoiceModeEnabled(bool),
+
+    /// Interrupt TTS playback (e.g. user navigated away in reading view).
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeInterruptTts,
+
+    /// Auto-narrate a reading view section via TTS when voice mode is active.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeNarrateSection {
+        document_id: String,
+        section_index: usize,
+        text: String,
+        /// When `Some(n)`, the text is a visual selection that starts at
+        /// rendered-word index `n` in the section.  The offset lets karaoke
+        /// highlight the correct word in the full rendered content.
+        /// `None` means full-section narration.
+        selection_word_offset: Option<usize>,
+    },
+
+    /// Pre-generate TTS audio for an adjacent section in the background.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModePrefetchSection {
+        document_id: String,
+        section_index: usize,
+        text: String,
     },
 }
 
