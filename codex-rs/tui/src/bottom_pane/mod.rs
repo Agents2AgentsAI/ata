@@ -53,6 +53,7 @@ pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
 pub(crate) use request_user_input::RequestUserInputOverlay;
 mod bottom_pane_view;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 pub(crate) use bottom_pane_view::ReadingViewVoiceContext;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
