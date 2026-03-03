@@ -90,13 +90,17 @@ impl VoiceSetupView {
     pub(crate) fn new(
         tts_enabled: bool,
         stt_enabled: bool,
-        api_key_available: bool,
+        api_key: Option<String>,
         language_code: Option<String>,
         speed: Option<f64>,
         app_event_tx: AppEventSender,
     ) -> Self {
-        // Read any existing API key from the environment.
-        let existing_key = std::env::var("ELEVENLABS_API_KEY").unwrap_or_default();
+        // Use key from config/caller, falling back to env var.
+        let existing_key = api_key
+            .filter(|k| !k.is_empty())
+            .or_else(|| std::env::var("ELEVENLABS_API_KEY").ok())
+            .unwrap_or_default();
+        let api_key_available = !existing_key.is_empty();
 
         let lang_options: Vec<(String, String)> = LANGUAGE_OPTIONS
             .iter()
@@ -221,7 +225,7 @@ impl VoiceSetupView {
             let name = match &item.kind {
                 VoiceSetupItemKind::Toggle { enabled } => {
                     let marker = if *enabled { 'x' } else { ' ' };
-                    format!("{prefix} [{marker}] {}", item.name)
+                    format!("{prefix}  [{marker}] {}", item.name)
                 }
                 VoiceSetupItemKind::ApiKey {
                     value,
@@ -234,11 +238,11 @@ impl VoiceSetupView {
                         } else {
                             mask_key(edit_buffer)
                         };
-                        format!("{prefix}  {}  [{display}\u{2588}]", item.name)
+                        format!("{prefix}  {:<10} [{:<15}\u{2588}]", item.name, display)
                     } else if value.is_empty() {
-                        format!("{prefix}  {}  [paste key here]", item.name)
+                        format!("{prefix}  {:<10} [{:<16}]", item.name, "paste key here")
                     } else {
-                        format!("{prefix}  {}  [{}]", item.name, mask_key(value))
+                        format!("{prefix}  {:<10} [{:<16}]", item.name, mask_key(value))
                     }
                 }
                 VoiceSetupItemKind::Selection {
@@ -578,6 +582,24 @@ impl BottomPaneView for VoiceSetupView {
             }
             _ => {}
         }
+    }
+
+    fn handle_paste(&mut self, pasted: String) -> bool {
+        if !self.is_editing_api_key() {
+            return false;
+        }
+        // Append pasted text into the active API key edit buffer.
+        let Some(idx) = self.state.selected_idx else {
+            return false;
+        };
+        let Some(item) = self.items.get_mut(idx) else {
+            return false;
+        };
+        if let VoiceSetupItemKind::ApiKey { edit_buffer, .. } = &mut item.kind {
+            edit_buffer.push_str(pasted.trim());
+            return true;
+        }
+        false
     }
 
     fn is_complete(&self) -> bool {
