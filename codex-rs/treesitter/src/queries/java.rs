@@ -40,11 +40,18 @@ const VARIABLES_QUERY: &str = r#"
   name: (identifier) @var.name)
 "#;
 
+const NON_CODE_QUERY: &str = r#"
+(line_comment) @skip
+(block_comment) @skip
+(string_literal) @skip
+"#;
+
 pub fn config() -> LanguageConfig {
     LanguageConfig {
         language: tree_sitter_java::LANGUAGE.into(),
         symbols_query: SYMBOLS_QUERY,
         callers_query: CALLERS_QUERY,
         variables_query: VARIABLES_QUERY,
+        non_code_query: NON_CODE_QUERY,
     }
 }

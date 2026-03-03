@@ -60,10 +60,6 @@ impl SymbolTable {
                     self.test_keys.remove(&key);
                     if let Some(mut by_name_keys) = self.by_name.get_mut(&symbol.name) {
                         by_name_keys.remove(&key);
-                        if by_name_keys.is_empty() {
-                            drop(by_name_keys);
-                            self.by_name.remove(&symbol.name);
-                        }
                     }
                 }
             }
@@ -166,39 +162,33 @@ impl SymbolTable {
 
     pub fn search(&self, query: &str, limit: usize) -> Vec<Symbol> {
         let query_lower = query.to_lowercase();
-        let mut out: Vec<Symbol> = self
+        let mut ranked: Vec<(Symbol, bool, bool)> = self
             .symbols
             .iter()
             .filter_map(|entry| {
                 let symbol = entry.value();
                 let name_lower = symbol.name.to_lowercase();
                 if name_lower.contains(&query_lower) {
-                    Some(symbol.clone())
+                    let exact = name_lower == query_lower;
+                    let prefix = name_lower.starts_with(&query_lower);
+                    Some((symbol.clone(), exact, prefix))
                 } else {
                     None
                 }
             })
             .collect();
 
-        out.sort_by(|a, b| {
-            let a_name = a.name.to_lowercase();
-            let b_name = b.name.to_lowercase();
-            let a_exact = a_name == query_lower;
-            let b_exact = b_name == query_lower;
-            let a_prefix = a_name.starts_with(&query_lower);
-            let b_prefix = b_name.starts_with(&query_lower);
-
-            b_exact
-                .cmp(&a_exact)
-                .then(b_prefix.cmp(&a_prefix))
-                .then(a.file.cmp(&b.file))
-                .then(a.line_range.0.cmp(&b.line_range.0))
+        ranked.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then(b.2.cmp(&a.2))
+                .then(a.0.file.cmp(&b.0.file))
+                .then(a.0.line_range.0.cmp(&b.0.line_range.0))
         });
 
-        if out.len() > limit {
-            out.truncate(limit);
+        if ranked.len() > limit {
+            ranked.truncate(limit);
         }
-        out
+        ranked.into_iter().map(|(symbol, _, _)| symbol).collect()
     }
 
     pub fn len(&self) -> usize {
@@ -212,7 +202,12 @@ impl SymbolTable {
 
 fn is_test_symbol(symbol: &Symbol) -> bool {
     match symbol.language {
-        Language::Rust => symbol.name.starts_with("test") || symbol.file.contains("/tests/"),
+        Language::Rust => {
+            symbol.name.starts_with("test_")
+                || symbol.file.contains("/tests/")
+                || symbol.file.contains("\\tests\\")
+                || symbol.file.ends_with("_test.rs")
+        }
         Language::Python => {
             symbol.name.starts_with("test_")
                 || symbol.file.contains("test_")

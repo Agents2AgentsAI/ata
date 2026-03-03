@@ -11,6 +11,7 @@ use std::sync::atomic::Ordering;
 use lsp_types::request::GotoImplementationParams;
 use lsp_types::request::GotoImplementationResponse;
 use lsp_types::*;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncReadExt;
@@ -49,6 +50,16 @@ const DIAG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 const MAX_SYNC_FILE_SIZE: u64 = 5 * 1024 * 1024;
 
 type PendingMap = Arc<Mutex<HashMap<i64, oneshot::Sender<JsonRpcResponse>>>>;
+
+struct ReaderContext {
+    pending: PendingMap,
+    diagnostics: Arc<RwLock<HashMap<String, Vec<Diagnostic>>>>,
+    diag_tx: broadcast::Sender<String>,
+    writer: Arc<Mutex<ChildStdin>>,
+    initialization_options: Option<Value>,
+    root_uri: Uri,
+    server_id: String,
+}
 
 // ---------------------------------------------------------------------------
 // URI helpers: lsp_types::Uri ↔ file path
@@ -187,24 +198,16 @@ impl LspClient {
         // Spawn the reader task.
         let reader = BufReader::new(stdout);
         let framed = FramedRead::new(reader, crate::jsonrpc::LspCodec::new());
-        let reader_pending = pending.clone();
-        let reader_diagnostics = diagnostics.clone();
-        let reader_diag_tx = diag_tx.clone();
-        let reader_writer = client.writer.clone();
-        let reader_init_opts = client.initialization_options.clone();
-        let reader_root_uri = root_uri.clone();
-        let reader_server_id = server_id.to_string();
-
-        tokio::spawn(Self::reader_loop(
-            framed,
-            reader_pending,
-            reader_diagnostics,
-            reader_diag_tx,
-            reader_writer,
-            reader_init_opts,
-            reader_root_uri,
-            reader_server_id,
-        ));
+        let reader_context = ReaderContext {
+            pending: pending.clone(),
+            diagnostics: diagnostics.clone(),
+            diag_tx: diag_tx.clone(),
+            writer: client.writer.clone(),
+            initialization_options: client.initialization_options.clone(),
+            root_uri: root_uri.clone(),
+            server_id: server_id.to_string(),
+        };
+        tokio::spawn(Self::reader_loop(framed, reader_context));
 
         // Run initialize handshake.
         match client.initialize_handshake().await {
@@ -534,7 +537,7 @@ impl LspClient {
             work_done_progress_params: Default::default(),
         };
         let val = self.query("textDocument/hover", params).await?;
-        serde_json::from_value(val).ok()
+        self.deserialize_response("textDocument/hover", val)
     }
 
     pub async fn definition(
@@ -549,7 +552,7 @@ impl LspClient {
             partial_result_params: Default::default(),
         };
         let val = self.query("textDocument/definition", params).await?;
-        serde_json::from_value(val).ok()
+        self.deserialize_response("textDocument/definition", val)
     }
 
     pub async fn references(&self, path: &Path, line: u32, character: u32) -> Vec<Location> {
@@ -568,7 +571,7 @@ impl LspClient {
             Some(v) => v,
             None => return Vec::new(),
         };
-        serde_json::from_value(val).unwrap_or_default()
+        self.deserialize_or_default("textDocument/references", val)
     }
 
     pub async fn document_symbol(&self, path: &Path) -> Option<DocumentSymbolResponse> {
@@ -579,7 +582,7 @@ impl LspClient {
             partial_result_params: Default::default(),
         };
         let val = self.query("textDocument/documentSymbol", params).await?;
-        serde_json::from_value(val).ok()
+        self.deserialize_response("textDocument/documentSymbol", val)
     }
 
     #[allow(deprecated)]
@@ -593,7 +596,7 @@ impl LspClient {
             Some(v) => v,
             None => return Vec::new(),
         };
-        serde_json::from_value(val).unwrap_or_default()
+        self.deserialize_or_default("workspace/symbol", val)
     }
 
     pub async fn implementation(
@@ -608,7 +611,7 @@ impl LspClient {
             partial_result_params: Default::default(),
         };
         let val = self.query("textDocument/implementation", params).await?;
-        serde_json::from_value(val).ok()
+        self.deserialize_response("textDocument/implementation", val)
     }
 
     pub async fn prepare_call_hierarchy(
@@ -631,7 +634,7 @@ impl LspClient {
             Some(v) => v,
             None => return Vec::new(),
         };
-        serde_json::from_value(val).unwrap_or_default()
+        self.deserialize_or_default("textDocument/prepareCallHierarchy", val)
     }
 
     pub async fn incoming_calls(&self, item: CallHierarchyItem) -> Vec<CallHierarchyIncomingCall> {
@@ -644,7 +647,7 @@ impl LspClient {
             Some(v) => v,
             None => return Vec::new(),
         };
-        serde_json::from_value(val).unwrap_or_default()
+        self.deserialize_or_default("callHierarchy/incomingCalls", val)
     }
 
     pub async fn outgoing_calls(&self, item: CallHierarchyItem) -> Vec<CallHierarchyOutgoingCall> {
@@ -657,7 +660,7 @@ impl LspClient {
             Some(v) => v,
             None => return Vec::new(),
         };
-        serde_json::from_value(val).unwrap_or_default()
+        self.deserialize_or_default("callHierarchy/outgoingCalls", val)
     }
 
     pub async fn prepare_rename(
@@ -671,7 +674,7 @@ impl LspClient {
         if val.is_null() {
             return None;
         }
-        serde_json::from_value(val).ok()
+        self.deserialize_response("textDocument/prepareRename", val)
     }
 
     pub async fn rename(
@@ -690,7 +693,7 @@ impl LspClient {
         if val.is_null() {
             return None;
         }
-        serde_json::from_value(val).ok()
+        self.deserialize_response("textDocument/rename", val)
     }
 
     pub async fn code_action(
@@ -723,7 +726,7 @@ impl LspClient {
         if val.is_null() {
             return Vec::new();
         }
-        serde_json::from_value(val).unwrap_or_default()
+        self.deserialize_or_default("textDocument/codeAction", val)
     }
 
     // -----------------------------------------------------------------------
@@ -771,6 +774,42 @@ impl LspClient {
         }
     }
 
+    fn deserialize_response<T: DeserializeOwned>(
+        &self,
+        method: &'static str,
+        val: Value,
+    ) -> Option<T> {
+        match serde_json::from_value(val) {
+            Ok(parsed) => Some(parsed),
+            Err(error) => {
+                tracing::debug!(
+                    server = %self.server_id,
+                    method,
+                    "failed to deserialize response payload: {error}"
+                );
+                None
+            }
+        }
+    }
+
+    fn deserialize_or_default<T: DeserializeOwned + Default>(
+        &self,
+        method: &'static str,
+        val: Value,
+    ) -> T {
+        match serde_json::from_value(val) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                tracing::debug!(
+                    server = %self.server_id,
+                    method,
+                    "failed to deserialize response payload: {error}"
+                );
+                T::default()
+            }
+        }
+    }
+
     async fn send_request(&self, method: &str, params: Option<Value>) -> Result<Value, LspError> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let request = JsonRpcRequest {
@@ -807,8 +846,10 @@ impl LspClient {
         }
 
         let result = response.result.unwrap_or(Value::Null);
-        self.trace_event("response", method, id, None, Some(result.clone()))
-            .await;
+        if self.trace.is_some() {
+            self.trace_event("response", method, id, None, Some(result.clone()))
+                .await;
+        }
         Ok(result)
     }
 
@@ -862,24 +903,13 @@ impl LspClient {
     }
 
     async fn write_message(&self, body: Vec<u8>) -> Result<(), LspError> {
-        let header = format!("Content-Length: {}\r\n\r\n", body.len());
-        let mut writer = self.writer.lock().await;
-        writer.write_all(header.as_bytes()).await?;
-        writer.write_all(&body).await?;
-        writer.flush().await?;
-        Ok(())
+        write_framed_message(&self.writer, &body).await
     }
 
     /// Background task that reads messages from the server and routes them.
     async fn reader_loop(
         framed: FramedRead<BufReader<tokio::process::ChildStdout>, LspCodec>,
-        pending: PendingMap,
-        diagnostics: Arc<RwLock<HashMap<String, Vec<Diagnostic>>>>,
-        diag_tx: broadcast::Sender<String>,
-        writer: Arc<Mutex<ChildStdin>>,
-        initialization_options: Option<Value>,
-        root_uri: Uri,
-        server_id: String,
+        context: ReaderContext,
     ) {
         tokio::pin!(framed);
 
@@ -887,7 +917,7 @@ impl LspClient {
             let msg = match result {
                 Ok(msg) => msg,
                 Err(e) => {
-                    tracing::debug!(server = %server_id, "reader error: {e}");
+                    tracing::debug!(server = %context.server_id, "reader error: {e}");
                     break;
                 }
             };
@@ -895,7 +925,7 @@ impl LspClient {
             match msg {
                 JsonRpcMessage::Response(resp) => {
                     if let Some(id) = resp.id {
-                        if let Some(tx) = pending.lock().await.remove(&id) {
+                        if let Some(tx) = context.pending.lock().await.remove(&id) {
                             let _ = tx.send(resp);
                         }
                     }
@@ -907,11 +937,12 @@ impl LspClient {
                                 serde_json::from_value::<PublishDiagnosticsParams>(params)
                             {
                                 let uri_key = diag_params.uri.as_str().to_string();
-                                diagnostics
+                                context
+                                    .diagnostics
                                     .write()
                                     .await
                                     .insert(uri_key.clone(), diag_params.diagnostics);
-                                let _ = diag_tx.send(uri_key);
+                                let _ = context.diag_tx.send(uri_key);
                             }
                         }
                     }
@@ -922,18 +953,19 @@ impl LspClient {
                         | "client/registerCapability"
                         | "client/unregisterCapability" => Some(Value::Null),
                         "workspace/configuration" => {
-                            let settings = initialization_options
+                            let settings = context
+                                .initialization_options
                                 .clone()
                                 .unwrap_or(serde_json::json!({}));
                             Some(serde_json::json!([settings]))
                         }
                         "workspace/workspaceFolders" => Some(serde_json::json!([{
-                            "uri": root_uri.as_str(),
+                            "uri": context.root_uri.as_str(),
                             "name": "workspace"
                         }])),
                         _ => {
                             tracing::debug!(
-                                server = %server_id,
+                                server = %context.server_id,
                                 method = %req.method,
                                 "unhandled server request; replying with MethodNotFound"
                             );
@@ -960,19 +992,21 @@ impl LspClient {
                             }),
                         }
                     };
-                    if let Ok(body) = serde_json::to_vec(&resp) {
-                        let header = format!("Content-Length: {}\r\n\r\n", body.len());
-                        let mut w = writer.lock().await;
-                        let _ = w.write_all(header.as_bytes()).await;
-                        let _ = w.write_all(&body).await;
-                        let _ = w.flush().await;
+                    if let Ok(body) = serde_json::to_vec(&resp)
+                        && let Err(error) = write_framed_message(&context.writer, &body).await
+                    {
+                        tracing::debug!(
+                            server = %context.server_id,
+                            "failed to write server-request response: {error}"
+                        );
+                        break;
                     }
                 }
             }
         }
 
         // Server exited — resolve all pending requests with errors.
-        let mut map = pending.lock().await;
+        let mut map = context.pending.lock().await;
         for (_, tx) in map.drain() {
             let _ = tx.send(JsonRpcResponse {
                 jsonrpc: "2.0".into(),
@@ -986,6 +1020,18 @@ impl LspClient {
             });
         }
     }
+}
+
+async fn write_framed_message(
+    writer: &Arc<Mutex<ChildStdin>>,
+    body: &[u8],
+) -> Result<(), LspError> {
+    let header = format!("Content-Length: {}\r\n\r\n", body.len());
+    let mut writer = writer.lock().await;
+    writer.write_all(header.as_bytes()).await?;
+    writer.write_all(body).await?;
+    writer.flush().await?;
+    Ok(())
 }
 
 async fn open_trace_file() -> Option<Arc<Mutex<tokio::fs::File>>> {

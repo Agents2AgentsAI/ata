@@ -37,11 +37,19 @@ const VARIABLES_QUERY: &str = r#"
   name: (identifier) @var.name)
 "#;
 
+const NON_CODE_QUERY: &str = r#"
+(comment) @skip
+(block_comment) @skip
+(string) @skip
+(interpolated_string_expression) @skip
+"#;
+
 pub fn config() -> LanguageConfig {
     LanguageConfig {
         language: tree_sitter_scala::LANGUAGE.into(),
         symbols_query: SYMBOLS_QUERY,
         callers_query: CALLERS_QUERY,
         variables_query: VARIABLES_QUERY,
+        non_code_query: NON_CODE_QUERY,
     }
 }

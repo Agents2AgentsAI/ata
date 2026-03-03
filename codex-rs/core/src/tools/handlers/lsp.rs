@@ -9,9 +9,9 @@ use codex_lsp_client::ServerRegistry;
 use codex_lsp_client::lsp_types::CallHierarchyItem;
 use codex_lsp_client::lsp_types::CodeActionKind;
 use codex_lsp_client::lsp_types::CodeActionOrCommand;
+use codex_lsp_client::lsp_types::Diagnostic;
 use codex_lsp_client::lsp_types::DocumentSymbol;
 use codex_lsp_client::lsp_types::DocumentSymbolResponse;
-use codex_lsp_client::lsp_types::Diagnostic;
 use codex_lsp_client::lsp_types::GotoDefinitionResponse;
 use codex_lsp_client::lsp_types::Hover;
 use codex_lsp_client::lsp_types::HoverContents;
@@ -126,7 +126,9 @@ impl ToolHandler for LspToolHandler {
                     self.registry_for_file(&path, args.root.as_deref()).await?;
                 self.sync_file_for_query(&registry, &root_name, &path)
                     .await?;
-                let (line, char) = self.resolve_line_char(&registry, &root_name, &path, &args).await?;
+                let (line, char) = self
+                    .resolve_line_char(&registry, &root_name, &path, &args)
+                    .await?;
 
                 let mut resp = registry.definition(&path, line, char).await;
                 let mut resolved = None;
@@ -159,7 +161,9 @@ impl ToolHandler for LspToolHandler {
                     self.registry_for_file(&path, args.root.as_deref()).await?;
                 self.sync_file_for_query(&registry, &root_name, &path)
                     .await?;
-                let (line, char) = self.resolve_line_char(&registry, &root_name, &path, &args).await?;
+                let (line, char) = self
+                    .resolve_line_char(&registry, &root_name, &path, &args)
+                    .await?;
 
                 let mut refs = registry.references(&path, line, char).await;
                 let mut resolved = None;
@@ -192,7 +196,9 @@ impl ToolHandler for LspToolHandler {
                     self.registry_for_file(&path, args.root.as_deref()).await?;
                 self.sync_file_for_query(&registry, &root_name, &path)
                     .await?;
-                let (line, char) = self.resolve_line_char(&registry, &root_name, &path, &args).await?;
+                let (line, char) = self
+                    .resolve_line_char(&registry, &root_name, &path, &args)
+                    .await?;
 
                 let mut hover = registry.hover(&path, line, char).await;
                 let mut resolved = None;
@@ -264,7 +270,9 @@ impl ToolHandler for LspToolHandler {
                     self.registry_for_file(&path, args.root.as_deref()).await?;
                 self.sync_file_for_query(&registry, &root_name, &path)
                     .await?;
-                let (line, char) = self.resolve_line_char(&registry, &root_name, &path, &args).await?;
+                let (line, char) = self
+                    .resolve_line_char(&registry, &root_name, &path, &args)
+                    .await?;
 
                 let mut resp = registry.implementation(&path, line, char).await;
                 let mut resolved = None;
@@ -297,7 +305,9 @@ impl ToolHandler for LspToolHandler {
                     self.registry_for_file(&path, args.root.as_deref()).await?;
                 self.sync_file_for_query(&registry, &root_name, &path)
                     .await?;
-                let (line, char) = self.resolve_line_char(&registry, &root_name, &path, &args).await?;
+                let (line, char) = self
+                    .resolve_line_char(&registry, &root_name, &path, &args)
+                    .await?;
 
                 let mut items = registry.prepare_call_hierarchy(&path, line, char).await;
                 if fuzz && items.is_empty() {
@@ -311,8 +321,10 @@ impl ToolHandler for LspToolHandler {
                 }
 
                 (
-                    serde_json::to_string_pretty(&items.into_iter().take(limit).collect::<Vec<_>>())
-                        .unwrap_or_else(|_| "[]".to_string()),
+                    serde_json::to_string_pretty(
+                        &items.into_iter().take(limit).collect::<Vec<_>>(),
+                    )
+                    .unwrap_or_else(|_| "[]".to_string()),
                     false,
                 )
             }
@@ -338,8 +350,10 @@ impl ToolHandler for LspToolHandler {
                 };
                 let calls = registry.incoming_calls(item).await;
                 (
-                    serde_json::to_string_pretty(&calls.into_iter().take(limit).collect::<Vec<_>>())
-                        .unwrap_or_else(|_| "[]".to_string()),
+                    serde_json::to_string_pretty(
+                        &calls.into_iter().take(limit).collect::<Vec<_>>(),
+                    )
+                    .unwrap_or_else(|_| "[]".to_string()),
                     false,
                 )
             }
@@ -365,8 +379,10 @@ impl ToolHandler for LspToolHandler {
                 };
                 let calls = registry.outgoing_calls(item).await;
                 (
-                    serde_json::to_string_pretty(&calls.into_iter().take(limit).collect::<Vec<_>>())
-                        .unwrap_or_else(|_| "[]".to_string()),
+                    serde_json::to_string_pretty(
+                        &calls.into_iter().take(limit).collect::<Vec<_>>(),
+                    )
+                    .unwrap_or_else(|_| "[]".to_string()),
                     false,
                 )
             }
@@ -376,7 +392,9 @@ impl ToolHandler for LspToolHandler {
                     self.registry_for_file(&path, args.root.as_deref()).await?;
                 self.sync_file_for_query(&registry, &root_name, &path)
                     .await?;
-                let (line, char) = self.resolve_line_char(&registry, &root_name, &path, &args).await?;
+                let (line, char) = self
+                    .resolve_line_char(&registry, &root_name, &path, &args)
+                    .await?;
 
                 let mut resp = registry.prepare_rename(&path, line, char).await;
                 let mut resolved = None;
@@ -404,11 +422,7 @@ impl ToolHandler for LspToolHandler {
                 (out, false)
             }
             LspOperation::RenamePreview => {
-                let new_name = args
-                    .new_name
-                    .as_deref()
-                    .map(str::trim)
-                    .unwrap_or("");
+                let new_name = args.new_name.as_deref().map(str::trim).unwrap_or("");
                 if new_name.is_empty() {
                     return Err(FunctionCallError::RespondToModel(
                         "renamePreview requires `new_name`".to_string(),
@@ -420,7 +434,9 @@ impl ToolHandler for LspToolHandler {
                     self.registry_for_file(&path, args.root.as_deref()).await?;
                 self.sync_file_for_query(&registry, &root_name, &path)
                     .await?;
-                let (line, char) = self.resolve_line_char(&registry, &root_name, &path, &args).await?;
+                let (line, char) = self
+                    .resolve_line_char(&registry, &root_name, &path, &args)
+                    .await?;
 
                 let mut edit = registry.rename(&path, line, char, new_name).await;
                 if fuzz && edit.is_none() {
@@ -434,7 +450,9 @@ impl ToolHandler for LspToolHandler {
                 }
 
                 let edit = edit.ok_or_else(|| {
-                    FunctionCallError::RespondToModel("rename produced no workspace edit".to_string())
+                    FunctionCallError::RespondToModel(
+                        "rename produced no workspace edit".to_string(),
+                    )
                 })?;
 
                 let patch = workspace_edit_to_apply_patch(
@@ -454,7 +472,9 @@ impl ToolHandler for LspToolHandler {
                 self.sync_file_for_query(&registry, &root_name, &path)
                     .await?;
 
-                let (line, char) = self.resolve_line_char(&registry, &root_name, &path, &args).await?;
+                let (line, char) = self
+                    .resolve_line_char(&registry, &root_name, &path, &args)
+                    .await?;
                 let end_line = args.end_line.unwrap_or(line.saturating_add(1));
                 let end_character = args.end_character.unwrap_or(char.saturating_add(1));
                 if end_line == 0 || end_character == 0 {
@@ -463,14 +483,22 @@ impl ToolHandler for LspToolHandler {
                     ));
                 }
                 let range = Range {
-                    start: codex_lsp_client::lsp_types::Position { line, character: char },
+                    start: codex_lsp_client::lsp_types::Position {
+                        line,
+                        character: char,
+                    },
                     end: codex_lsp_client::lsp_types::Position {
                         line: end_line - 1,
                         character: end_character - 1,
                     },
                 };
 
-                let only_kind = args.only.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("quickfix");
+                let only_kind = args
+                    .only
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("quickfix");
                 let only = Some(vec![CodeActionKind::from(only_kind.to_string())]);
 
                 let diags: Vec<Diagnostic> = registry.diagnostics_for_file(&path).await;
@@ -479,10 +507,23 @@ impl ToolHandler for LspToolHandler {
                 if fuzz && actions.is_empty() {
                     for (l, c) in fuzz_positions(line, char).into_iter().skip(1).take(12) {
                         let range = Range {
-                            start: codex_lsp_client::lsp_types::Position { line: l, character: c },
-                            end: codex_lsp_client::lsp_types::Position { line: l, character: c },
+                            start: codex_lsp_client::lsp_types::Position {
+                                line: l,
+                                character: c,
+                            },
+                            end: codex_lsp_client::lsp_types::Position {
+                                line: l,
+                                character: c,
+                            },
                         };
-                        let candidate = registry.code_action(&path, range, Some(vec![CodeActionKind::from(only_kind.to_string())]), Vec::new()).await;
+                        let candidate = registry
+                            .code_action(
+                                &path,
+                                range,
+                                Some(vec![CodeActionKind::from(only_kind.to_string())]),
+                                Vec::new(),
+                            )
+                            .await;
                         if !candidate.is_empty() {
                             actions = candidate;
                             break;
@@ -490,7 +531,11 @@ impl ToolHandler for LspToolHandler {
                     }
                 }
 
-                let title = args.title.as_deref().map(str::trim).filter(|s| !s.is_empty());
+                let title = args
+                    .title
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
                 let previewable = filter_previewable_code_actions(&actions);
                 if previewable.is_empty() {
                     return Err(FunctionCallError::RespondToModel(
@@ -500,7 +545,9 @@ impl ToolHandler for LspToolHandler {
 
                 let chosen = choose_code_action(&previewable, title)?;
                 let edit = chosen.edit.clone().ok_or_else(|| {
-                    FunctionCallError::RespondToModel("selected code action has no edit".to_string())
+                    FunctionCallError::RespondToModel(
+                        "selected code action has no edit".to_string(),
+                    )
                 })?;
                 let patch = workspace_edit_to_apply_patch(
                     &edit,
@@ -899,10 +946,7 @@ fn format_workspace_symbols(symbols: &[SymbolInformation], limit: usize) -> Stri
                 s.location.range.start.line,
                 s.location.range.start.character,
             );
-            format!(
-                "{:?} {} @ {}",
-                s.kind, s.name, pos
-            )
+            format!("{:?} {} @ {}", s.kind, s.name, pos)
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -963,7 +1007,8 @@ fn collect_document_symbol_candidates(
     };
 
     match resp {
-        DocumentSymbolResponse::Flat(symbols) => {
+        DocumentSymbolResponse::Flat(symbols) =>
+        {
             #[allow(deprecated)]
             for s in symbols {
                 if symbol_name_matches(&s.name, query) {
@@ -1022,9 +1067,9 @@ fn format_prepare_rename(resp: Option<PrepareRenameResponse>) -> String {
             range.end.line + 1,
             range.end.character + 1
         ),
-        PrepareRenameResponse::DefaultBehavior { default_behavior } => format!(
-            "Rename supported (default behavior: {default_behavior}).",
-        ),
+        PrepareRenameResponse::DefaultBehavior { default_behavior } => {
+            format!("Rename supported (default behavior: {default_behavior}).",)
+        }
     }
 }
 

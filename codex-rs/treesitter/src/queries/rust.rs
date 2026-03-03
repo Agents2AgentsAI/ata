@@ -1,8 +1,14 @@
 use crate::queries::LanguageConfig;
 
 const SYMBOLS_QUERY: &str = r#"
-(function_item
-  name: (identifier) @function.name) @function.def
+(source_file
+  (function_item
+    name: (identifier) @function.name) @function.def)
+
+(mod_item
+  body: (declaration_list
+    (function_item
+      name: (identifier) @function.name) @function.def))
 
 (impl_item
   type: (_) @impl.type
@@ -71,11 +77,19 @@ const VARIABLES_QUERY: &str = r#"
   pattern: (identifier) @var.name)
 "#;
 
+const NON_CODE_QUERY: &str = r#"
+(line_comment) @skip
+(block_comment) @skip
+(string_literal) @skip
+(raw_string_literal) @skip
+"#;
+
 pub fn config() -> LanguageConfig {
     LanguageConfig {
         language: tree_sitter_rust::LANGUAGE.into(),
         symbols_query: SYMBOLS_QUERY,
         callers_query: CALLERS_QUERY,
         variables_query: VARIABLES_QUERY,
+        non_code_query: NON_CODE_QUERY,
     }
 }

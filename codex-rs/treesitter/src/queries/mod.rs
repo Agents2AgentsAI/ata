@@ -19,6 +19,7 @@ pub struct LanguageConfig {
     pub symbols_query: &'static str,
     pub callers_query: &'static str,
     pub variables_query: &'static str,
+    pub non_code_query: &'static str,
 }
 
 pub fn get_language_config(language: Language) -> Option<LanguageConfig> {

@@ -78,7 +78,10 @@ pub fn workspace_edit_to_apply_patch(
     build_apply_patch(&mut ctx, limits)
 }
 
-fn apply_text_document_edit(ctx: &mut VirtualWorkspace, e: &TextDocumentEdit) -> Result<(), String> {
+fn apply_text_document_edit(
+    ctx: &mut VirtualWorkspace,
+    e: &TextDocumentEdit,
+) -> Result<(), String> {
     let path = path_from_uri(&e.text_document.uri)?;
     let mut edits = Vec::with_capacity(e.edits.len());
     for edit in &e.edits {
@@ -117,7 +120,9 @@ impl VirtualWorkspace {
         }
 
         let contents = std::fs::read_to_string(path).unwrap_or_default();
-        self.original.entry(path.clone()).or_insert_with(|| contents.clone());
+        self.original
+            .entry(path.clone())
+            .or_insert_with(|| contents.clone());
         self.current.insert(path.clone(), contents);
         Ok(())
     }
@@ -218,10 +223,7 @@ fn position_to_offset_utf16(contents: &str, pos: Position) -> Result<usize, Stri
     }
 
     let line_start = line_starts[line];
-    let line_end = line_starts
-        .get(line + 1)
-        .copied()
-        .unwrap_or(contents.len());
+    let line_end = line_starts.get(line + 1).copied().unwrap_or(contents.len());
     let line_slice = &contents[line_start..line_end];
 
     let target_units = pos.character as usize;
@@ -292,7 +294,9 @@ fn build_apply_patch(ctx: &mut VirtualWorkspace, limits: PatchLimits) -> Result<
         if handled.contains(&path) {
             continue;
         }
-        let exists_on_disk = std::fs::metadata(&path).map(|m| m.is_file()).unwrap_or(false);
+        let exists_on_disk = std::fs::metadata(&path)
+            .map(|m| m.is_file())
+            .unwrap_or(false);
         if !exists_on_disk || ctx.created.contains(&path) {
             hunks.push(format!("*** Add File: {}", path.display()));
             push_add_file_body(&mut hunks, &new_contents);
@@ -352,7 +356,10 @@ fn push_add_file_body(hunks: &mut Vec<String>, contents: &str) {
     }
 }
 
-fn diff_to_update_chunks(old_contents: &str, new_contents: &str) -> Result<Vec<Vec<String>>, String> {
+fn diff_to_update_chunks(
+    old_contents: &str,
+    new_contents: &str,
+) -> Result<Vec<Vec<String>>, String> {
     let diff = TextDiff::from_lines(old_contents, new_contents);
     let unified = diff.unified_diff().context_radius(2).to_string();
 
