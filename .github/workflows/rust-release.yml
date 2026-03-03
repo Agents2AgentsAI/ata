@@ -628,6 +628,10 @@ jobs:
             --package ata-responses-api-proxy \
             --package ata-sdk
 
+      - name: Stage macOS and Linux installer script
+        run: |
+          cp scripts/install/install.sh dist/install.sh
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
