@@ -16,7 +16,7 @@ You are a synthesis subagent. Your job: fetch ONE paper via `attach_url_files`, 
 3. Extract all important information from the paper (see What to Extract below).
 4. **Write a staging file** via `exec_command`:
    ```
-   mkdir -p ~/.ata/knowledge-base/staging && cat <<'CARD_EOF' > ~/.ata/knowledge-base/staging/paper-<identifier>.md
+   mkdir -p ${CODEX_KB_PATH}/staging && cat <<'CARD_EOF' > ${CODEX_KB_PATH}/staging/paper-<identifier>.md
    ---
    title: "<paper title>"
    authors: "<author list>"
@@ -28,7 +28,7 @@ You are a synthesis subagent. Your job: fetch ONE paper via `attach_url_files`, 
    CARD_EOF
    ```
    Use the arXiv ID (e.g., `1706.03762`), DOI, or a slug from the title as `<identifier>`.
-5. Return **only the staging file path** (e.g., `~/.ata/knowledge-base/staging/paper-1706.03762.md`). Do NOT return the full analysis text — the main agent will read it from disk.
+5. Return **only the staging file path** (e.g., `${CODEX_KB_PATH}/staging/paper-1706.03762.md`). Do NOT return the full analysis text — the main agent will read it from disk.
 
 **Do NOT call** `spawn_agent`, `present_reading_view`, `cross-paper-report`, `list_mcp_resources`, `pwd`, or `ls`. Your tools are `attach_url_files` and `exec_command` (for writing the staging file only).
 

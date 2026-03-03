@@ -78,7 +78,7 @@ Explore mode answers research questions by mapping the landscape of approaches a
 
 ### Phase 0: Check Existing Knowledge (1 tool call max)
 
-**Skip if KB is disabled.** Run `rg "tag1\|tag2\|tag3" ~/.ata/knowledge-base/cards/` with 2-3 tags. Do NOT list KB, read cards, or call `$kb`.
+**Skip if KB is disabled.** Run `rg "tag1\|tag2\|tag3" ${CODEX_KB_PATH}/cards/` with 2-3 tags. Do NOT list KB, read cards, or call `$kb`.
 
 ### Phase 1: Decompose the Question into Facets
 

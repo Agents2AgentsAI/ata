@@ -65,7 +65,7 @@ Explore mode answers research questions by mapping the landscape of approaches a
 
 **This is optional and must be fast — 1 tool call maximum.**
 
-Run `rg "tag1\|tag2\|tag3" ~/.ata/knowledge-base/cards/` with 2-3 relevant tags. This tells you which papers the user already has.
+Run `rg "tag1\|tag2\|tag3" ${CODEX_KB_PATH}/cards/` with 2-3 relevant tags. This tells you which papers the user already has.
 
 Do NOT:
 - Do NOT list the entire KB directory
@@ -107,7 +107,7 @@ Use this path when the user references a specific paper (from a previous synthes
 
 Then immediately present results. Do NOT do facet decomposition, KB exploration, or research-context reading.
 
-**KB check (optional, 1 call max):** If KB is available, run `rg "relevant_tag" ~/.ata/knowledge-base/cards/` to mark which found papers are already in KB. Do NOT read individual cards.
+**KB check (optional, 1 call max):** If KB is available, run `rg "relevant_tag" ${CODEX_KB_PATH}/cards/` to mark which found papers are already in KB. Do NOT read individual cards.
 
 #### General Explore Path (topic/question-based)
 

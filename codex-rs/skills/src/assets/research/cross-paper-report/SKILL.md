@@ -55,7 +55,7 @@ Before diving into full technical detail, each card explanation should establish
 
 ## Prerequisites
 
-Determine `<kb_path>` per the `$kb` skill (default `~/.ata/knowledge-base` unless configured otherwise). **If KB is disabled** (no `$kb` skill available), this skill can still work if card content is provided directly in the conversation (e.g., from staging files or previous synthesis output). Skip all KB reads/writes and work from conversation context.
+Determine `<kb_path>` per the `$kb` skill (default `${CODEX_KB_PATH}` unless configured otherwise). **If KB is disabled** (no `$kb` skill available), this skill can still work if card content is provided directly in the conversation (e.g., from staging files or previous synthesis output). Skip all KB reads/writes and work from conversation context.
 
 ## Scale Detection
 

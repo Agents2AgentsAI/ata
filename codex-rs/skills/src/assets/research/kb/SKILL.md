@@ -13,9 +13,9 @@ The knowledge base is a directory of markdown files with YAML frontmatter, organ
 
 ## KB Path
 
-The KB directory is `~/.ata/knowledge-base`. Use this path directly — do not read config.toml to determine it.
-
-Resolve `~` to the user's home directory. The KB path is referred to as `<kb_path>` throughout this document.
+Use `${CODEX_KB_PATH}` as the KB directory. The runtime injects this variable per turn.
+If `${CODEX_KB_PATH}` is missing, fall back to `~/.ata/knowledge-base`.
+The resolved KB path is referred to as `<kb_path>` throughout this document.
 
 ## Directory Layout
 
@@ -165,10 +165,10 @@ Optionally create an empty `index.json`:
 
 **IMMEDIATE ACTION — no clarifying questions.** When the user asks to "clear the KB", "reset the KB", "wipe the KB", or similar, execute ALL steps below without asking what they mean:
 
-1. Count existing cards first (for the confirmation message): `ls $HOME/.ata/knowledge-base/cards/`
-2. Remove all card files: `exec_command("cd $HOME/.ata/knowledge-base && find cards topics briefings explanations assets staging -type f -delete 2>/dev/null; find cards topics briefings explanations assets staging -mindepth 1 -type d -delete 2>/dev/null; true")`
-3. Reset `$HOME/.ata/knowledge-base/index.json` — write: `{"tag_taxonomy": [], "topics": {}}`
-4. Reset `$HOME/.ata/knowledge-base/research-journal.md` — write: `# Research Journal\n`
+1. Count existing cards first (for the confirmation message): `ls ${CODEX_KB_PATH}/cards/`
+2. Remove all card files: `exec_command("cd ${CODEX_KB_PATH} && find cards topics briefings explanations assets staging -type f -delete 2>/dev/null; find cards topics briefings explanations assets staging -mindepth 1 -type d -delete 2>/dev/null; true")`
+3. Reset `${CODEX_KB_PATH}/index.json` — write: `{"tag_taxonomy": [], "topics": {}}`
+4. Reset `${CODEX_KB_PATH}/research-journal.md` — write: `# Research Journal\n`
 5. **Keep** `research-context.md` unchanged — it contains user preferences, not card data.
 
 Confirm completion: "Reset complete. Deleted N cards. research-context.md preserved."
