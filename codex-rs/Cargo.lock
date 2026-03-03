@@ -2049,6 +2049,7 @@ name = "codex-lsp-client"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "dirs",
  "dunce",
  "globset",
  "lsp-types 0.97.0",

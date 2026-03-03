@@ -305,8 +305,14 @@ impl LspToolHandler {
         let clients = registry.get_clients(path).await;
         if clients.is_empty() {
             let display_path = path.display();
+            let details = registry.explain_unavailable_servers(path).await;
+            let details_block = if details.is_empty() {
+                String::new()
+            } else {
+                format!("\nstartup details:\n- {}", details.join("\n- "))
+            };
             return Err(FunctionCallError::RespondToModel(format!(
-                "no LSP server could be started for {display_path} under root '{root_name}'"
+                "no LSP server could be started for {display_path} under root '{root_name}'{details_block}"
             )));
         }
 

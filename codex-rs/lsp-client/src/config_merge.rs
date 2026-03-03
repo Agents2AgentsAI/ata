@@ -48,6 +48,7 @@ pub fn merge_configs(
                     *existing = LspServerConfig {
                         extensions,
                         command: full.command,
+                        command_candidates: existing.command_candidates.clone(),
                         env: full.env,
                         root_markers,
                         initialization_options: full.initialization_options,
@@ -61,6 +62,7 @@ pub fn merge_configs(
                         LspServerConfig {
                             extensions: full.extensions,
                             command: full.command,
+                            command_candidates: Vec::new(),
                             env: full.env,
                             root_markers: full.root_markers,
                             initialization_options: full.initialization_options,
