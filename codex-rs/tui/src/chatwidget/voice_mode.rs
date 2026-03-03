@@ -1388,7 +1388,6 @@ impl super::ChatWidget {
 
             // Ensure TTS worker is running (one persistent WebSocket per voice turn).
             if state.tts_worker_tx.is_none() {
-                let worker_vc = vc.clone();
                 let tx = self.app_event_tx.clone();
                 let in_flight = state.tts_in_flight.clone();
                 let gen_ref = state.tts_generation.clone();
@@ -1399,7 +1398,7 @@ impl super::ChatWidget {
                 state.tts_worker_tx = Some(worker_tx);
 
                 tokio::spawn(async move {
-                    tts_worker_loop(worker_vc, worker_rx, tx, in_flight, gen_ref, spawn_gen).await;
+                    tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen).await;
                 });
             }
 
