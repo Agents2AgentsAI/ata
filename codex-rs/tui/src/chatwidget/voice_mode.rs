@@ -1734,9 +1734,12 @@ impl super::ChatWidget {
         &self,
         width: u16,
     ) -> Option<Vec<ratatui::text::Line<'static>>> {
-        use ratatui::style::{Modifier, Style};
-        use ratatui::text::{Line, Span};
-        use textwrap::{Options as WrapOptions, wrap};
+        use ratatui::style::Modifier;
+        use ratatui::style::Style;
+        use ratatui::text::Line;
+        use ratatui::text::Span;
+        use textwrap::Options as WrapOptions;
+        use textwrap::wrap;
 
         let state = self.voice_mode_state.as_ref()?;
         if state.phase != VoiceModePhase::Speaking {
@@ -1845,7 +1848,8 @@ impl super::ChatWidget {
         hl_end: usize,
         highlight_style: ratatui::style::Style,
     ) -> Vec<ratatui::text::Line<'static>> {
-        use ratatui::text::{Line, Span};
+        use ratatui::text::Line;
+        use ratatui::text::Span;
 
         /// Snap a byte offset to the nearest valid character boundary
         /// (scanning forward). Returns `s.len()` if `pos >= s.len()`.
