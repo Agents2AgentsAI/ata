@@ -680,10 +680,22 @@ pub(crate) struct ChatWidget {
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
     #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     voice_mode_state: Option<voice_mode::VoiceModeState>,
+    /// Cached ElevenLabs language_code from the last voice-setup save.
+    /// Overrides config when `Some`.
+    #[cfg(not(target_os = "linux"))]
+    cached_elevenlabs_language: Option<Option<String>>,
+    /// Cached ElevenLabs speed from the last voice-setup save.
+    /// Overrides config when `Some`.
+    #[cfg(not(target_os = "linux"))]
+    cached_elevenlabs_speed: Option<f64>,
     /// Voice response cells stashed during karaoke playback.
     /// Flushed to history when the karaoke overlay finishes.
     #[cfg(not(target_os = "linux"))]
     deferred_voice_cells: Vec<Box<dyn HistoryCell>>,
+    /// Voice startup cells (warning + info) stashed before the session is
+    /// configured so they appear after the welcome/Tip box.
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    pending_voice_startup_cells: Vec<Box<dyn HistoryCell>>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -1168,6 +1180,16 @@ impl ChatWidget {
         );
         self.apply_session_info_cell(session_info_cell);
 
+        // Flush voice startup cells that were stashed before the session was
+        // configured so they appear after the welcome/Tip box.
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        {
+            let cells: Vec<_> = self.pending_voice_startup_cells.drain(..).collect();
+            for cell in cells {
+                self.add_boxed_history(cell);
+            }
+        }
+
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
@@ -1302,9 +1324,14 @@ impl ChatWidget {
         if self.is_suppressing_streaming_for_reader() {
             return;
         }
-        // If we have a stream_controller, then the final agent message is redundant and will be a
-        // duplicate of what has already been streamed.
+        // If we have a stream_controller, the final agent message is redundant
+        // — streaming deltas already processed the text (including voice tag
+        // parsing). Only strip <voice> tags and display when no streaming occurred.
         if self.stream_controller.is_none() && !message.is_empty() {
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            let message = self
+                .on_voice_mode_agent_delta(&message)
+                .unwrap_or(message);
             self.handle_streaming_delta(message);
         }
         self.flush_answer_stream_with_separator();
@@ -1312,13 +1339,18 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_agent_message_delta(&mut self, delta: String) {
+    fn on_agent_message_delta(&mut self, delta: String, from_replay: bool) {
         // When voice mode is active, the parser strips <voice> tags from the
-        // display text and routes tagged content to TTS.
+        // display text and routes tagged content to TTS.  Skip during replay
+        // so resuming a session doesn't re-narrate old messages.
         #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
-        let delta = self
-            .on_voice_mode_agent_delta(&delta)
-            .unwrap_or(delta);
+        let delta = if from_replay {
+            delta
+        } else {
+            self.on_voice_mode_agent_delta(&delta).unwrap_or(delta)
+        };
+        #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
+        let _ = from_replay;
 
         if self.is_suppressing_streaming_for_reader() {
             return;
@@ -2934,7 +2966,13 @@ impl ChatWidget {
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
             voice_mode_state: None,
             #[cfg(not(target_os = "linux"))]
+            cached_elevenlabs_language: None,
+            #[cfg(not(target_os = "linux"))]
+            cached_elevenlabs_speed: None,
+            #[cfg(not(target_os = "linux"))]
             deferred_voice_cells: Vec::new(),
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            pending_voice_startup_cells: Vec::new(),
         };
 
         widget.prefetch_rate_limits();
@@ -3140,7 +3178,13 @@ impl ChatWidget {
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
             voice_mode_state: None,
             #[cfg(not(target_os = "linux"))]
+            cached_elevenlabs_language: None,
+            #[cfg(not(target_os = "linux"))]
+            cached_elevenlabs_speed: None,
+            #[cfg(not(target_os = "linux"))]
             deferred_voice_cells: Vec::new(),
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            pending_voice_startup_cells: Vec::new(),
         };
 
         widget.prefetch_rate_limits();
@@ -3313,7 +3357,13 @@ impl ChatWidget {
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
             voice_mode_state: None,
             #[cfg(not(target_os = "linux"))]
+            cached_elevenlabs_language: None,
+            #[cfg(not(target_os = "linux"))]
+            cached_elevenlabs_speed: None,
+            #[cfg(not(target_os = "linux"))]
             deferred_voice_cells: Vec::new(),
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            pending_voice_startup_cells: Vec::new(),
         };
 
         widget.prefetch_rate_limits();
@@ -3346,6 +3396,28 @@ impl ChatWidget {
                 ),
         );
         widget.update_collaboration_mode_indicator();
+
+        // Auto-enable voice mode if persisted in config (mirrors logic in `new()`).
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        {
+            if widget.config.features.enabled(Feature::VoiceMode) {
+                let voice_config = widget
+                    .config
+                    .config_layer_stack
+                    .effective_config()
+                    .as_table()
+                    .and_then(|t| t.get("voice_mode"))
+                    .and_then(|v| {
+                        v.clone()
+                            .try_into::<codex_core::config::types::VoiceModeToml>()
+                            .ok()
+                    })
+                    .unwrap_or_default();
+                if voice_config.enabled == Some(true) {
+                    widget.toggle_voice_mode();
+                }
+            }
+        }
 
         widget
     }
@@ -3412,9 +3484,12 @@ impl ChatWidget {
                 self.on_voice_interrupt_tts();
                 return;
             }
-            // Space: push-to-talk (PTT) when voice mode is active.
+            // Space: push-to-talk (PTT) when voice mode is active and STT is enabled.
             // Intercept before the input_enabled guard so PTT works during agent turns.
-            // Skip interception when the main composer has text (user is typing).
+            // Skip interception when the main composer has text (user is typing)
+            // or when a popup is active (e.g. voice setup view).
+            // PTT is allowed in the reading view (document reader) since it
+            // supports voice questions.
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
             KeyEvent {
                 code: KeyCode::Char(' '),
@@ -3422,10 +3497,11 @@ impl ChatWidget {
                 modifiers,
                 ..
             } if modifiers.is_empty()
+                && self.bottom_pane.ptt_space_allowed()
                 && self
                     .voice_mode_state
                     .as_ref()
-                    .is_some_and(|s| s.is_active())
+                    .is_some_and(|s| s.is_active() && s.stt_enabled)
                 && !self.is_main_composer_typing() =>
             {
                 match kind {
@@ -3709,6 +3785,17 @@ impl ChatWidget {
             }
             #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
             SlashCommand::Voice => {
+                self.add_info_message(
+                    "Voice mode is not available in this build.".to_string(),
+                    None,
+                );
+            }
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            SlashCommand::VoiceSetup => {
+                self.open_voice_setup_popup();
+            }
+            #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
+            SlashCommand::VoiceSetup => {
                 self.add_info_message(
                     "Voice mode is not available in this build.".to_string(),
                     None,
@@ -4264,40 +4351,62 @@ impl ChatWidget {
             // For voice input (or typed messages when voice mode is active),
             // prepend the voice mode instruction so the model wraps spoken
             // content in <voice> tags for TTS. NOT shown in chat display.
+            // Only inject when TTS is enabled — otherwise the tags are wasted.
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
-            if voice_input || voice_mode_active {
-                let model_text = format!(
-                    "{}{}",
-                    crate::chatwidget::voice_mode::VOICE_MODE_INSTRUCTION,
-                    &text,
-                );
+            let tts_on = self
+                .voice_mode_state
+                .as_ref()
+                .is_some_and(|s| s.tts_enabled);
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            if (voice_input || voice_mode_active) && tts_on {
+                let prefix = crate::chatwidget::voice_mode::VOICE_MODE_INSTRUCTION;
+                let prefix_len = prefix.len();
+                let model_text = format!("{}{}", prefix, &text);
+                // Shift text_elements byte ranges forward by the prefix length
+                // so they still point to the correct spans in the prefixed text.
+                let shifted_elements: Vec<TextElement> = text_elements
+                    .iter()
+                    .map(|el| {
+                        el.map_range(|r| codex_protocol::user_input::ByteRange {
+                            start: r.start + prefix_len,
+                            end: r.end + prefix_len,
+                        })
+                    })
+                    .collect();
                 items.push(UserInput::Text {
                     text: model_text,
-                    text_elements: text_elements.clone(),
+                    text_elements: shifted_elements,
                 });
             } else {
-                // Voice mode was previously on but now off — tell the agent
-                // to stop using <voice> tags.
+                // Voice mode was previously on but now off (or TTS disabled) —
+                // tell the agent to stop using <voice> tags.
                 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
                 let voice_was_on = self
                     .voice_mode_state
                     .as_ref()
-                    .is_some_and(|s| !s.is_active());
+                    .is_some_and(|s| !s.is_active() || !s.tts_enabled);
                 #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
                 let voice_was_on = false;
 
-                let model_text = if voice_was_on {
-                    format!(
-                        "{}{}",
-                        crate::chatwidget::voice_mode::VOICE_MODE_OFF_INSTRUCTION,
-                        &text,
-                    )
+                let (model_text, shifted_elements) = if voice_was_on {
+                    let off_prefix = crate::chatwidget::voice_mode::VOICE_MODE_OFF_INSTRUCTION;
+                    let off_prefix_len = off_prefix.len();
+                    let shifted: Vec<TextElement> = text_elements
+                        .iter()
+                        .map(|el| {
+                            el.map_range(|r| codex_protocol::user_input::ByteRange {
+                                start: r.start + off_prefix_len,
+                                end: r.end + off_prefix_len,
+                            })
+                        })
+                        .collect();
+                    (format!("{}{}", off_prefix, &text), shifted)
                 } else {
-                    text.clone()
+                    (text.clone(), text_elements.clone())
                 };
                 items.push(UserInput::Text {
                     text: model_text,
-                    text_elements: text_elements.clone(),
+                    text_elements: shifted_elements,
                 });
             }
 
@@ -4580,7 +4689,7 @@ impl ChatWidget {
                 self.on_agent_message(message)
             }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
-                self.on_agent_message_delta(delta)
+                self.on_agent_message_delta(delta, from_replay)
             }
             EventMsg::PlanDelta(event) => self.on_plan_delta(event.delta),
             EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta })
@@ -4826,13 +4935,20 @@ impl ChatWidget {
         self.last_rendered_user_message_event =
             Some(Self::rendered_user_message_event_from_event(&event));
         let remote_image_urls = event.images.unwrap_or_default();
-        if !event.message.trim().is_empty()
-            || !event.text_elements.is_empty()
+
+        // Strip system instruction prefixes that were injected for the model
+        // but should not be visible to the user (e.g. voice mode instructions,
+        // document reader close feedback).
+        let (message, text_elements) =
+            strip_system_instruction_prefix(event.message, event.text_elements);
+
+        if !message.trim().is_empty()
+            || !text_elements.is_empty()
             || !remote_image_urls.is_empty()
         {
             self.add_to_history(history_cell::new_user_prompt(
-                event.message,
-                event.text_elements,
+                message,
+                text_elements,
                 event.local_images,
                 remote_image_urls,
             ));
@@ -8391,6 +8507,45 @@ pub(crate) fn show_review_commit_picker_with_entries(
         search_placeholder: Some("Type to search commits".to_string()),
         ..Default::default()
     });
+}
+
+/// Strip system instruction prefixes that were injected for the model but
+/// should not be visible to the user in chat history.
+///
+/// Handles:
+/// - `[VOICE MODE] ...` / `[VOICE MODE OFF] ...` — prefix stripped, user text preserved
+/// - `[The user closed the document reader ...]` — entire message hidden
+fn strip_system_instruction_prefix(
+    message: String,
+    text_elements: Vec<codex_protocol::user_input::TextElement>,
+) -> (String, Vec<codex_protocol::user_input::TextElement>) {
+    // Voice mode instruction prefixes end with a double newline.
+    if message.starts_with("[VOICE MODE") {
+        if let Some(pos) = message.find("\n\n") {
+            let prefix_len = pos + 2;
+            let stripped = message[prefix_len..].to_string();
+            let adjusted = text_elements
+                .into_iter()
+                .filter_map(|el| {
+                    if el.byte_range.end <= prefix_len {
+                        return None; // element is entirely within the prefix
+                    }
+                    Some(el.map_range(|r| codex_protocol::user_input::ByteRange {
+                        start: r.start.saturating_sub(prefix_len),
+                        end: r.end.saturating_sub(prefix_len),
+                    }))
+                })
+                .collect();
+            return (stripped, adjusted);
+        }
+    }
+
+    // Document reader close feedback is entirely a system instruction.
+    if message.starts_with("[The user closed the document reader") {
+        return (String::new(), Vec::new());
+    }
+
+    (message, text_elements)
 }
 
 #[cfg(test)]

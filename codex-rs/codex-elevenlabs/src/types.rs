@@ -11,6 +11,10 @@ pub struct ElevenLabsConfig {
     pub voice_id: String,
     /// TTS model ID (defaults to "eleven_turbo_v2_5").
     pub model_id: String,
+    /// ISO 639-1 language code. None = auto-detect.
+    pub language_code: Option<String>,
+    /// Speech speed: 0.7–1.2 (default 1.0).
+    pub speed: Option<f64>,
 }
 
 impl ElevenLabsConfig {
@@ -19,6 +23,8 @@ impl ElevenLabsConfig {
             api_key,
             voice_id: "21m00Tcm4TlvDq8ikWAM".to_string(),
             model_id: "eleven_flash_v2_5".to_string(),
+            language_code: None,
+            speed: None,
         }
     }
 
@@ -56,6 +62,8 @@ pub(crate) struct TtsBosMessage {
 pub(crate) struct VoiceSettings {
     pub stability: f64,
     pub similarity_boost: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speed: Option<f64>,
 }
 
 #[derive(Serialize)]

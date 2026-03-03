@@ -116,9 +116,6 @@ struct FoldRegion {
     summary: String,
     /// Whether this fold is currently collapsed.
     collapsed: bool,
-    /// Whether this fold was created from a voice mode interaction.
-    /// When true, a speaker icon is shown next to the fold summary.
-    voice: bool,
 }
 
 /// A single section of a document (split on `## ` headings).
@@ -303,6 +300,11 @@ pub(crate) struct DocumentReaderView {
     /// index here. `update_section` checks this and re-triggers narration
     /// once content arrives.
     pending_narration_section: Option<usize>,
+
+    /// When true, the "end of document" separator is rendered in a
+    /// highlighted style.  Set when the user presses `n` at the last
+    /// section; cleared on the next keypress.
+    end_of_doc_flash: bool,
 }
 
 impl DocumentReaderView {
@@ -391,6 +393,7 @@ impl DocumentReaderView {
             voice_karaoke_append: false,
             voice_reading_highlight: None,
             pending_narration_section: None,
+            end_of_doc_flash: false,
         };
         // Auto-narrate the first section on open (if voice mode is active,
         // ChatWidget will pick it up; otherwise it's a no-op).
@@ -512,7 +515,6 @@ impl DocumentReaderView {
                     end: section.content.len(),
                     summary: fold_summary,
                     collapsed: false,
-                    voice: self.voice_status.is_some(),
                 });
             }
 
@@ -647,7 +649,6 @@ impl DocumentReaderView {
                             end: fold_end,
                             summary: fold_summary,
                             collapsed: false,
-                            voice: self.voice_status.is_some(),
                         });
                     }
                 }
@@ -691,6 +692,7 @@ impl DocumentReaderView {
 
     fn next_section(&mut self) {
         if self.current_section + 1 < self.sections.len() {
+            self.end_of_doc_flash = false;
             self.interrupt_tts_if_needed();
             self.clear_updated_flag();
             let first_visit = !self.visited_sections.contains(&(self.current_section + 1));
@@ -705,6 +707,9 @@ impl DocumentReaderView {
             if first_visit {
                 self.narrate_current_section_if_voice();
             }
+        } else {
+            // Already at the last section — flash the indicator.
+            self.end_of_doc_flash = true;
         }
     }
 
@@ -770,7 +775,7 @@ impl DocumentReaderView {
             let text = if section.heading.is_empty() {
                 section.content.clone()
             } else {
-                format!("{}. {}", section.heading, section.content)
+                format!("{}.\n{}", section.heading, section.content)
             };
             self.app_event_tx
                 .send(AppEvent::VoiceModeNarrateSection {
@@ -785,7 +790,7 @@ impl DocumentReaderView {
             let next_text = if next.heading.is_empty() {
                 next.content.clone()
             } else {
-                format!("{}. {}", next.heading, next.content)
+                format!("{}.\n{}", next.heading, next.content)
             };
             if !next_text.trim().is_empty() {
                 self.app_event_tx
@@ -1084,6 +1089,9 @@ impl DocumentReaderView {
     }
 
     fn handle_content_key(&mut self, key_event: KeyEvent) {
+        // Clear the "end of document" flash on any keypress.
+        self.end_of_doc_flash = false;
+
         // Line-number jump mode (`:` prefix) — must run before overlay/quit
         // handlers so digit keys are captured instead of dismissing overlays.
         if let Some(ref mut input) = self.line_number_input {
@@ -1495,6 +1503,18 @@ impl DocumentReaderView {
                     let inner_w = self.last_inner_width.get();
                     let word_offset = self.count_words_before_selection(inner_w);
                     if let Some(text) = self.selected_text(inner_w) {
+                        // Strip fold decorators from selected text so the TTS
+                        // word sequence matches the rendered word counter (which
+                        // skips fold headers and ┊ border prefixes).
+                        let text: String = text
+                            .lines()
+                            .filter(|line| {
+                                let t = line.trim_start();
+                                !t.starts_with("┊ [-]") && !t.starts_with("┊ [+]")
+                            })
+                            .map(|line| line.strip_prefix("┊ ").unwrap_or(line))
+                            .collect::<Vec<_>>()
+                            .join("\n");
                         if !text.trim().is_empty() {
                             self.app_event_tx
                                 .send(AppEvent::VoiceModeNarrateSection {
@@ -2315,7 +2335,11 @@ impl DocumentReaderView {
                 continue;
             }
             for (word_start, word) in WordOffsets::new(&text) {
-                if word == "\u{1F50A}" || word == "┊" || word == "\u{2713}" {
+                if word == "\u{1F50A}"
+                    || word == "┊"
+                    || word == "\u{2713}"
+                    || word == "———"
+                {
                     continue;
                 }
                 if i > start_line || (i == start_line && word_start >= start_col) {
@@ -2418,7 +2442,11 @@ impl BottomPaneView for DocumentReaderView {
                 }
                 for (word_start, word) in WordOffsets::new(&text) {
                     // Skip decorators that aren't real TTS words.
-                    if word == "\u{1F50A}" || word == "┊" || word == "\u{2713}" {
+                    if word == "\u{1F50A}"
+                        || word == "┊"
+                        || word == "\u{2713}"
+                        || word == "———"
+                    {
                         continue;
                     }
                     if cumulative_words == adj {
@@ -2427,6 +2455,10 @@ impl BottomPaneView for DocumentReaderView {
                     cumulative_words += 1;
                 }
             }
+            tracing::debug!(
+                "Karaoke word miss: adj={adj}, total_rendered_words={cumulative_words}, lines={}",
+                lines.len()
+            );
             None
         });
 
@@ -2844,25 +2876,7 @@ impl Renderable for DocumentReaderView {
                     }
                 }
 
-                // When voice mode is active (but not karaoke), prepend a
-                // speaker icon to the heading line so the user can see this
-                // section is being narrated.
-                if self.voice_karaoke_lines.is_none()
-                    && self.voice_status.is_some()
-                    && !section.heading.is_empty()
-                    && !raw_lines.is_empty()
-                {
-                    let first = &raw_lines[0];
-                    // Only add the icon if it's not already there (e.g. from
-                    // a recently_updated heading which starts with "✓").
-                    let first_text: String =
-                        first.spans.iter().map(|sp| sp.content.as_ref()).collect();
-                    if !first_text.starts_with('\u{1F50A}') {
-                        let mut new_spans = vec![Span::from("\u{1F50A} ")];
-                        new_spans.extend(first.spans.clone());
-                        raw_lines[0] = Line::from(new_spans);
-                    }
-                }
+                // (Voice icon removed — too noisy.)
 
                 // On the first section, append a table of contents listing
                 // all section headings so the user knows the full structure.
@@ -3273,8 +3287,16 @@ impl Renderable for DocumentReaderView {
                 format!(" n \u{25B6} {next_heading} ")
             };
             render::separator_with_indicator(w, &label)
+        } else if self.end_of_doc_flash {
+            render::separator_with_indicator_styled(
+                w,
+                " \u{2713} end of document ",
+                ratatui::style::Style::default()
+                    .fg(ratatui::style::Color::Yellow)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            )
         } else {
-            render::separator(w)
+            render::separator_with_indicator(w, " \u{2713} end of document ")
         };
         Paragraph::new(sep).render(
             Rect {

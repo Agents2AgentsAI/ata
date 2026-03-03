@@ -2917,6 +2917,56 @@ impl App {
             }
             // ─── Voice mode events ───────────────────────────────────────
             #[cfg(not(target_os = "linux"))]
+            AppEvent::UpdateVoiceSettings { tts_enabled, stt_enabled, elevenlabs_api_key, language_code, speed } => {
+                // Persist to config.
+                let tts_edit = codex_core::config::edit::voice_mode_tts_edit(tts_enabled);
+                let stt_edit = codex_core::config::edit::voice_mode_stt_edit(stt_enabled);
+                let mut edits: Vec<codex_core::config::edit::ConfigEdit> = vec![tts_edit, stt_edit];
+                if let Some(ref key) = elevenlabs_api_key {
+                    edits.push(codex_core::config::edit::voice_mode_elevenlabs_api_key_edit(key));
+                }
+                if let Some(ref lang) = language_code {
+                    match lang {
+                        Some(code) => edits.push(codex_core::config::edit::voice_mode_elevenlabs_language_edit(code)),
+                        None => edits.push(codex_core::config::edit::voice_mode_elevenlabs_language_clear()),
+                    }
+                }
+                if let Some(speed_val) = speed {
+                    edits.push(codex_core::config::edit::voice_mode_elevenlabs_speed_edit(speed_val));
+                }
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits(edits)
+                    .apply()
+                    .await
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist voice settings"
+                    );
+                }
+                // Update the API key in-memory for the current session.
+                if let Some(key) = elevenlabs_api_key {
+                    self.chat_widget.update_elevenlabs_api_key(key);
+                }
+                // Cache language/speed so re-opening voice-setup reflects saved values.
+                self.chat_widget.update_elevenlabs_voice_settings(language_code, speed);
+                // Update in-memory state.
+                self.chat_widget.apply_voice_settings(tts_enabled, stt_enabled);
+                // If both off, deactivate voice mode entirely.
+                if !tts_enabled && !stt_enabled {
+                    self.chat_widget.deactivate_voice_mode_if_active();
+                }
+                // If either on and Feature::VoiceMode not enabled, auto-enable it.
+                if (tts_enabled || stt_enabled)
+                    && !self.config.features.enabled(codex_core::features::Feature::VoiceMode)
+                {
+                    self.apply_feature_flag_updates(vec![
+                        (codex_core::features::Feature::VoiceMode, true),
+                    ]).await;
+                }
+                tui.frame_requester().schedule_frame();
+            }
+            #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModePttTimeoutCheck => {
                 self.chat_widget.check_ptt_timeout();
                 tui.frame_requester().schedule_frame();

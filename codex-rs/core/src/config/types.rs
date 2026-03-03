@@ -890,7 +890,7 @@ pub enum VoiceOutput {
 }
 
 /// ElevenLabs-specific configuration nested under `[voice_mode.elevenlabs]`.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ElevenLabsToml {
     /// ElevenLabs API key. Falls back to `ELEVENLABS_API_KEY` env var.
@@ -899,6 +899,10 @@ pub struct ElevenLabsToml {
     pub voice_id: Option<String>,
     /// Model ID for TTS. Defaults to `eleven_turbo_v2_5`.
     pub model_id: Option<String>,
+    /// ISO 639-1 language code (e.g. "en", "es"). None = auto-detect.
+    pub language_code: Option<String>,
+    /// Speech speed multiplier. Range: 0.7–1.2, default 1.0.
+    pub speed: Option<f64>,
 }
 
 /// Voice mode configuration nested under `[voice_mode]` in config.toml.
@@ -916,6 +920,10 @@ pub struct VoiceModeToml {
     pub vad_threshold: Option<f64>,
     /// Milliseconds of silence before a recording is finalized.
     pub silence_duration_ms: Option<u64>,
+    /// When false, TTS (text-to-speech) is disabled even when voice mode is on.
+    pub tts_enabled: Option<bool>,
+    /// When false, STT (speech-to-text / push-to-talk) is disabled even when voice mode is on.
+    pub stt_enabled: Option<bool>,
     /// ElevenLabs API settings.
     #[serde(default)]
     pub elevenlabs: Option<ElevenLabsToml>,

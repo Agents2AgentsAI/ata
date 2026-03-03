@@ -214,6 +214,27 @@ pub(super) fn separator_with_indicator(width: u16, label: &str) -> Line<'static>
     ])
 }
 
+/// Build a separator with a centered text indicator in a custom style.
+pub(super) fn separator_with_indicator_styled(
+    width: u16,
+    label: &str,
+    style: ratatui::style::Style,
+) -> Line<'static> {
+    let inner = (width as usize).saturating_sub(2);
+    let label_width = unicode_width::UnicodeWidthStr::width(label);
+    if inner <= label_width {
+        return separator(width);
+    }
+    let remaining = inner - label_width;
+    let left = remaining / 2;
+    let right = remaining - left;
+    Line::from(vec![
+        Span::from(format!("├{}", "─".repeat(left))).dim(),
+        Span::styled(label.to_string(), style),
+        Span::from(format!("{}┤", "─".repeat(right))).dim(),
+    ])
+}
+
 /// Build the keyboard hints line shown below the content area.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn hints_line(
@@ -772,7 +793,6 @@ pub(super) fn apply_folds(
         end_line: usize, // exclusive
         summary: String,
         collapsed: bool,
-        voice: bool,
     }
 
     let mut line_folds: Vec<LineFold> = Vec::new();
@@ -790,7 +810,6 @@ pub(super) fn apply_folds(
                 end_line,
                 summary: fold.summary.clone(),
                 collapsed: fold.collapsed,
-                voice: fold.voice,
             });
         }
     }
@@ -812,11 +831,10 @@ pub(super) fn apply_folds(
             && lf.collapsed
         {
             // Emit a single collapsed summary line.
-            let voice_icon = if lf.voice { "\u{1F50A} " } else { "" };
             out.push(Line::from(vec![
                 "┊ ".dim().cyan(),
                 "[+] ".dim().cyan(),
-                Span::from(format!("{voice_icon}{}", lf.summary)).dim().cyan(),
+                Span::from(lf.summary.clone()).dim().cyan(),
             ]));
             skip_until = lf.end_line;
             continue;
@@ -827,11 +845,10 @@ pub(super) fn apply_folds(
             .iter()
             .find(|f| !f.collapsed && f.start_line == i)
         {
-            let voice_icon = if lf.voice { "\u{1F50A} " } else { "" };
             out.push(Line::from(vec![
                 "┊ ".dim().cyan(),
                 "[-] ".dim().cyan(),
-                Span::from(format!("{voice_icon}{}", lf.summary)).dim().cyan(),
+                Span::from(lf.summary.clone()).dim().cyan(),
             ]));
         }
 

@@ -54,6 +54,8 @@ pub enum SlashCommand {
     Personality,
     Realtime,
     Voice,
+    #[strum(serialize = "voice-setup")]
+    VoiceSetup,
     TestApproval,
     // Debugging commands.
     #[strum(serialize = "debug-m-drop")]
@@ -93,6 +95,7 @@ impl SlashCommand {
             SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Realtime => "toggle realtime voice mode (experimental)",
             SlashCommand::Voice => "toggle voice mode (mic → STT → agent → TTS)",
+            SlashCommand::VoiceSetup => "configure voice mode (TTS/STT)",
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent => "switch the active agent thread",
@@ -172,6 +175,7 @@ impl SlashCommand {
             SlashCommand::TestApproval => true,
             SlashCommand::Realtime => true,
             SlashCommand::Voice => true,
+            SlashCommand::VoiceSetup => true,
             SlashCommand::Collab => true,
             SlashCommand::Agent => true,
             SlashCommand::Statusline => false,

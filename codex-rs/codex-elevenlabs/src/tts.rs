@@ -53,10 +53,13 @@ impl TtsStream {
         // Ensure rustls has a crypto provider before any TLS handshake.
         codex_utils_rustls_provider::ensure_rustls_crypto_provider();
 
-        let url = format!(
+        let mut url = format!(
             "wss://api.elevenlabs.io/v1/text-to-speech/{}/stream-input?model_id={}&output_format=pcm_24000&sync_alignment=true",
             config.voice_id, config.model_id
         );
+        if let Some(ref lang) = config.language_code {
+            url.push_str(&format!("&language_code={}", lang));
+        }
 
         let request = tokio_tungstenite::tungstenite::http::Request::builder()
             .uri(&url)
@@ -79,11 +82,15 @@ impl TtsStream {
         let (audio_tx, audio_rx) = mpsc::channel::<TtsChunk>(64);
 
         // Send BOS (beginning of stream) message.
+        // Clamp speed to the ElevenLabs API range (0.7–1.2). Omit if
+        // default (1.0) to maximize compatibility.
+        let clamped_speed = config.speed.map(|s| s.clamp(0.7, 1.2)).filter(|&s| (s - 1.0).abs() > f64::EPSILON);
         let bos = TtsBosMessage {
             text: " ".to_string(),
             voice_settings: VoiceSettings {
                 stability: 0.5,
                 similarity_boost: 0.75,
+                speed: clamped_speed,
             },
             generation_config: Some(GenerationConfig {
                 chunk_length_schedule: vec![120, 160, 250, 290],

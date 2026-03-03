@@ -399,6 +399,18 @@ pub(crate) enum AppEvent {
     },
 
     // ─── Voice mode events ───────────────────────────────────────────────
+    /// Apply TTS/STT toggle settings from the voice setup popup.
+    #[cfg(not(target_os = "linux"))]
+    UpdateVoiceSettings {
+        tts_enabled: bool,
+        stt_enabled: bool,
+        elevenlabs_api_key: Option<String>,
+        /// Some(None) = clear to auto-detect, Some(Some("en")) = set language, None = unchanged.
+        language_code: Option<Option<String>>,
+        /// Some(speed) = set speed, None = unchanged.
+        speed: Option<f64>,
+    },
+
     /// PTT timeout check — for terminals that don't emit key release events.
     #[cfg(not(target_os = "linux"))]
     VoiceModePttTimeoutCheck,
