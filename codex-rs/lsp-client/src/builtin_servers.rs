@@ -1,6 +1,5 @@
 //! Built-in LSP server configurations for common languages.
 
-use crate::server_config::InstallConfig;
 use crate::server_config::InstallMethod;
 use crate::server_config::LspServerConfig;
 
@@ -38,556 +37,336 @@ pub fn builtin_servers() -> Vec<(&'static str, LspServerConfig)> {
 fn rust_analyzer() -> (&'static str, LspServerConfig) {
     (
         "rust-analyzer",
-        LspServerConfig {
-            extensions: vec![".rs".into()],
-            command: vec!["rust-analyzer".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec!["Cargo.toml".into()],
-            initialization_options: None,
-            disabled: false,
-            install: Some(InstallConfig {
-                method: InstallMethod::RustupComponent {
-                    component: Some("rust-analyzer".into()),
-                },
-            }),
-        },
+        cfg(&[".rs"], &["rust-analyzer"], &["Cargo.toml"]).with_install(
+            InstallMethod::RustupComponent {
+                component: Some("rust-analyzer".into()),
+            },
+        ),
     )
 }
 
 fn typescript_language_server() -> (&'static str, LspServerConfig) {
     (
         "typescript-language-server",
-        LspServerConfig {
-            extensions: vec![
-                ".ts".into(),
-                ".tsx".into(),
-                ".js".into(),
-                ".jsx".into(),
-                ".mjs".into(),
-                ".cjs".into(),
-            ],
-            command: vec!["typescript-language-server".into(), "--stdio".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec![
-                "tsconfig.json".into(),
-                "jsconfig.json".into(),
-                "package.json".into(),
-            ],
-            initialization_options: None,
-            disabled: false,
-            install: Some(InstallConfig {
-                method: InstallMethod::Npm {
-                    package: Some("typescript-language-server".into()),
-                },
-            }),
-        },
+        cfg(
+            &[".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
+            &["typescript-language-server", "--stdio"],
+            &["tsconfig.json", "jsconfig.json", "package.json"],
+        )
+        .with_install(InstallMethod::Npm {
+            package: Some("typescript-language-server".into()),
+        }),
     )
 }
 
 fn gopls() -> (&'static str, LspServerConfig) {
     (
         "gopls",
-        LspServerConfig {
-            extensions: vec![".go".into()],
-            command: vec!["gopls".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec!["go.mod".into(), "go.sum".into()],
-            initialization_options: None,
-            disabled: false,
-            install: Some(InstallConfig {
-                method: InstallMethod::Go {
-                    package_path: "golang.org/x/tools/gopls".into(),
-                },
-            }),
-        },
+        cfg(&[".go"], &["gopls"], &["go.mod", "go.sum"]).with_install(InstallMethod::Go {
+            package_path: "golang.org/x/tools/gopls".into(),
+        }),
     )
 }
 
 fn pyright() -> (&'static str, LspServerConfig) {
     (
         "pyright",
-        LspServerConfig {
-            extensions: vec![".py".into(), ".pyi".into()],
-            command: vec!["pyright-langserver".into(), "--stdio".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec![
-                "pyproject.toml".into(),
-                "setup.py".into(),
-                "setup.cfg".into(),
-                "requirements.txt".into(),
-                "pyrightconfig.json".into(),
+        cfg(
+            &[".py", ".pyi"],
+            &["pyright-langserver", "--stdio"],
+            &[
+                "pyproject.toml",
+                "setup.py",
+                "setup.cfg",
+                "requirements.txt",
+                "pyrightconfig.json",
             ],
-            initialization_options: None,
-            disabled: false,
-            install: Some(InstallConfig {
-                method: InstallMethod::Npm {
-                    package: Some("pyright".into()),
-                },
-            }),
-        },
+        )
+        .with_install(InstallMethod::Npm {
+            package: Some("pyright".into()),
+        }),
     )
 }
 
 fn clangd() -> (&'static str, LspServerConfig) {
     (
         "clangd",
-        LspServerConfig {
-            extensions: vec![
-                ".c".into(),
-                ".cpp".into(),
-                ".cc".into(),
-                ".cxx".into(),
-                ".h".into(),
-                ".hpp".into(),
-            ],
-            command: vec!["clangd".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec![
-                "compile_commands.json".into(),
-                ".clangd".into(),
-                "CMakeLists.txt".into(),
-            ],
-            initialization_options: None,
-            disabled: false,
-            install: Some(InstallConfig {
-                method: InstallMethod::Brew {
-                    formula: Some("llvm".into()),
-                },
-            }),
-        },
+        cfg(
+            &[".c", ".cpp", ".cc", ".cxx", ".h", ".hpp"],
+            &["clangd"],
+            &["compile_commands.json", ".clangd", "CMakeLists.txt"],
+        )
+        .with_install(InstallMethod::Brew {
+            formula: Some("llvm".into()),
+        }),
     )
 }
 
 fn sourcekit_lsp() -> (&'static str, LspServerConfig) {
     (
         "sourcekit-lsp",
-        LspServerConfig {
-            extensions: vec![".swift".into()],
-            command: vec!["sourcekit-lsp".into()],
-            command_candidates: vec![vec!["xcrun".into(), "sourcekit-lsp".into()]],
-            env: Default::default(),
-            root_markers: vec![
-                "Package.swift".into(),
-                "*.xcodeproj".into(),
-                "*.xcworkspace".into(),
-            ],
-            initialization_options: None,
-            disabled: false,
-            // sourcekit-lsp ships with Xcode — no separate install.
-            install: None,
-        },
+        // sourcekit-lsp ships with Xcode — no separate install.
+        cfg(
+            &[".swift"],
+            &["sourcekit-lsp"],
+            &["Package.swift", "*.xcodeproj", "*.xcworkspace"],
+        )
+        .with_command_candidates(vec![v(&["xcrun", "sourcekit-lsp"])]),
     )
 }
 
 fn yaml_language_server() -> (&'static str, LspServerConfig) {
     (
         "yaml-language-server",
-        LspServerConfig {
-            extensions: vec![".yaml".into(), ".yml".into()],
-            command: vec!["yaml-language-server".into(), "--stdio".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec![
-                ".yamllint".into(),
-                "docker-compose.yml".into(),
-                "kustomization.yaml".into(),
-                ".git".into(),
+        cfg(
+            &[".yaml", ".yml"],
+            &["yaml-language-server", "--stdio"],
+            &[
+                ".yamllint",
+                "docker-compose.yml",
+                "kustomization.yaml",
+                ".git",
             ],
-            initialization_options: None,
-            disabled: false,
-            install: Some(InstallConfig {
-                method: InstallMethod::Npm {
-                    package: Some("yaml-language-server".into()),
-                },
-            }),
-        },
+        )
+        .with_install(InstallMethod::Npm {
+            package: Some("yaml-language-server".into()),
+        }),
     )
 }
 
 fn bash_language_server() -> (&'static str, LspServerConfig) {
     (
         "bash-language-server",
-        LspServerConfig {
-            extensions: vec![".sh".into(), ".bash".into(), ".zsh".into(), ".ksh".into()],
-            command: vec!["bash-language-server".into(), "start".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec![".git".into(), "package.json".into()],
-            initialization_options: None,
-            disabled: false,
-            install: Some(InstallConfig {
-                method: InstallMethod::Npm {
-                    package: Some("bash-language-server".into()),
-                },
-            }),
-        },
+        cfg(
+            &[".sh", ".bash", ".zsh", ".ksh"],
+            &["bash-language-server", "start"],
+            &[".git", "package.json"],
+        )
+        .with_install(InstallMethod::Npm {
+            package: Some("bash-language-server".into()),
+        }),
     )
 }
 
 fn dockerfile_language_server() -> (&'static str, LspServerConfig) {
     (
         "dockerfile-language-server-nodejs",
-        LspServerConfig {
-            extensions: vec![".dockerfile".into()],
-            command: vec!["docker-langserver".into(), "--stdio".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec![
-                "Dockerfile".into(),
-                "docker-compose.yml".into(),
-                ".git".into(),
-            ],
-            initialization_options: None,
-            disabled: false,
-            install: Some(InstallConfig {
-                method: InstallMethod::Npm {
-                    package: Some("dockerfile-language-server-nodejs".into()),
-                },
-            }),
-        },
+        cfg(
+            &[".dockerfile"],
+            &["docker-langserver", "--stdio"],
+            &["Dockerfile", "docker-compose.yml", ".git"],
+        )
+        .with_install(InstallMethod::Npm {
+            package: Some("dockerfile-language-server-nodejs".into()),
+        }),
     )
 }
 
 fn vue_language_server() -> (&'static str, LspServerConfig) {
     (
         "vue-language-server",
-        LspServerConfig {
-            extensions: vec![".vue".into()],
-            command: vec!["vue-language-server".into(), "--stdio".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec![
-                "package.json".into(),
-                "pnpm-lock.yaml".into(),
-                "yarn.lock".into(),
-            ],
-            initialization_options: None,
-            disabled: false,
-            install: Some(InstallConfig {
-                method: InstallMethod::Npm {
-                    package: Some("@vue/language-server".into()),
-                },
-            }),
-        },
+        cfg(
+            &[".vue"],
+            &["vue-language-server", "--stdio"],
+            &["package.json", "pnpm-lock.yaml", "yarn.lock"],
+        )
+        .with_install(InstallMethod::Npm {
+            package: Some("@vue/language-server".into()),
+        }),
     )
 }
 
 fn svelte_language_server() -> (&'static str, LspServerConfig) {
     (
         "svelte-language-server",
-        LspServerConfig {
-            extensions: vec![".svelte".into()],
-            command: vec!["svelteserver".into(), "--stdio".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec![
-                "package.json".into(),
-                "svelte.config.js".into(),
-                "svelte.config.ts".into(),
-            ],
-            initialization_options: None,
-            disabled: false,
-            install: Some(InstallConfig {
-                method: InstallMethod::Npm {
-                    package: Some("svelte-language-server".into()),
-                },
-            }),
-        },
+        cfg(
+            &[".svelte"],
+            &["svelteserver", "--stdio"],
+            &["package.json", "svelte.config.js", "svelte.config.ts"],
+        )
+        .with_install(InstallMethod::Npm {
+            package: Some("svelte-language-server".into()),
+        }),
     )
 }
 
 fn astro_language_server() -> (&'static str, LspServerConfig) {
     (
         "astro-language-server",
-        LspServerConfig {
-            extensions: vec![".astro".into()],
-            command: vec!["astro-ls".into(), "--stdio".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec![
-                "astro.config.mjs".into(),
-                "astro.config.ts".into(),
-                "package.json".into(),
-            ],
-            initialization_options: None,
-            disabled: false,
-            install: Some(InstallConfig {
-                method: InstallMethod::Npm {
-                    package: Some("@astrojs/language-server".into()),
-                },
-            }),
-        },
+        cfg(
+            &[".astro"],
+            &["astro-ls", "--stdio"],
+            &["astro.config.mjs", "astro.config.ts", "package.json"],
+        )
+        .with_install(InstallMethod::Npm {
+            package: Some("@astrojs/language-server".into()),
+        }),
     )
 }
 
 fn intelephense() -> (&'static str, LspServerConfig) {
     (
         "intelephense",
-        LspServerConfig {
-            extensions: vec![".php".into()],
-            command: vec!["intelephense".into(), "--stdio".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec![
-                "composer.json".into(),
-                "composer.lock".into(),
-                ".git".into(),
-            ],
-            initialization_options: Some(serde_json::json!({
-                "telemetry": { "enabled": false }
-            })),
-            disabled: false,
-            install: Some(InstallConfig {
-                method: InstallMethod::Npm {
-                    package: Some("intelephense".into()),
-                },
-            }),
-        },
+        cfg(
+            &[".php"],
+            &["intelephense", "--stdio"],
+            &["composer.json", "composer.lock", ".git"],
+        )
+        .with_initialization_options(serde_json::json!({
+            "telemetry": { "enabled": false }
+        }))
+        .with_install(InstallMethod::Npm {
+            package: Some("intelephense".into()),
+        }),
     )
 }
 
 fn csharp_ls() -> (&'static str, LspServerConfig) {
     (
         "csharp-ls",
-        LspServerConfig {
-            extensions: vec![".cs".into()],
-            command: vec!["csharp-ls".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec![".sln".into(), ".csproj".into(), "global.json".into()],
-            initialization_options: None,
-            disabled: false,
-            install: Some(InstallConfig {
-                method: InstallMethod::DotnetTool {
-                    package: Some("csharp-ls".into()),
-                },
-            }),
-        },
+        cfg(
+            &[".cs"],
+            &["csharp-ls"],
+            &[".sln", ".csproj", "global.json"],
+        )
+        .with_install(InstallMethod::DotnetTool {
+            package: Some("csharp-ls".into()),
+        }),
     )
 }
 
 fn fsharp_ls() -> (&'static str, LspServerConfig) {
     (
         "fsautocomplete",
-        LspServerConfig {
-            extensions: vec![
-                ".fs".into(),
-                ".fsi".into(),
-                ".fsx".into(),
-                ".fsscript".into(),
-            ],
-            command: vec!["fsautocomplete".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec![".sln".into(), ".fsproj".into(), "global.json".into()],
-            initialization_options: None,
-            disabled: false,
-            install: Some(InstallConfig {
-                method: InstallMethod::DotnetTool {
-                    package: Some("fsautocomplete".into()),
-                },
-            }),
-        },
+        cfg(
+            &[".fs", ".fsi", ".fsx", ".fsscript"],
+            &["fsautocomplete"],
+            &[".sln", ".fsproj", "global.json"],
+        )
+        .with_install(InstallMethod::DotnetTool {
+            package: Some("fsautocomplete".into()),
+        }),
     )
 }
 
 fn rubocop() -> (&'static str, LspServerConfig) {
     (
         "rubocop",
-        LspServerConfig {
-            extensions: vec![
-                ".rb".into(),
-                ".rake".into(),
-                ".gemspec".into(),
-                ".ru".into(),
-            ],
-            command: vec!["rubocop".into(), "--lsp".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec!["Gemfile".into(), ".ruby-version".into(), ".git".into()],
-            initialization_options: None,
-            disabled: false,
-            install: Some(InstallConfig {
-                method: InstallMethod::Gem {
-                    package: Some("rubocop".into()),
-                },
-            }),
-        },
+        cfg(
+            &[".rb", ".rake", ".gemspec", ".ru"],
+            &["rubocop", "--lsp"],
+            &["Gemfile", ".ruby-version", ".git"],
+        )
+        .with_install(InstallMethod::Gem {
+            package: Some("rubocop".into()),
+        }),
     )
 }
 
 fn terraform_ls() -> (&'static str, LspServerConfig) {
     (
         "terraform-ls",
-        LspServerConfig {
-            extensions: vec![".tf".into(), ".tfvars".into()],
-            command: vec!["terraform-ls".into(), "serve".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec![".terraform.lock.hcl".into(), "*.tf".into(), ".git".into()],
-            initialization_options: Some(serde_json::json!({
-                "experimentalFeatures": {
-                    "prefillRequiredFields": true,
-                    "validateOnSave": true
-                }
-            })),
-            disabled: false,
-            install: None,
-        },
+        cfg(
+            &[".tf", ".tfvars"],
+            &["terraform-ls", "serve"],
+            &[".terraform.lock.hcl", "*.tf", ".git"],
+        )
+        .with_initialization_options(serde_json::json!({
+            "experimentalFeatures": {
+                "prefillRequiredFields": true,
+                "validateOnSave": true
+            }
+        })),
     )
 }
 
 fn lua_language_server() -> (&'static str, LspServerConfig) {
     (
         "lua-language-server",
-        LspServerConfig {
-            extensions: vec![".lua".into()],
-            command: vec!["lua-language-server".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec![
-                ".luarc.json".into(),
-                ".luarc.jsonc".into(),
-                "stylua.toml".into(),
-                ".git".into(),
-            ],
-            initialization_options: None,
-            disabled: false,
-            install: None,
-        },
+        cfg(
+            &[".lua"],
+            &["lua-language-server"],
+            &[".luarc.json", ".luarc.jsonc", "stylua.toml", ".git"],
+        ),
     )
 }
 
 fn texlab() -> (&'static str, LspServerConfig) {
     (
         "texlab",
-        LspServerConfig {
-            extensions: vec![".tex".into(), ".bib".into()],
-            command: vec!["texlab".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec![".latexmkrc".into(), "latexmkrc".into(), ".git".into()],
-            initialization_options: None,
-            disabled: false,
-            install: None,
-        },
+        cfg(
+            &[".tex", ".bib"],
+            &["texlab"],
+            &[".latexmkrc", "latexmkrc", ".git"],
+        ),
     )
 }
 
 fn zls() -> (&'static str, LspServerConfig) {
     (
         "zls",
-        LspServerConfig {
-            extensions: vec![".zig".into(), ".zon".into()],
-            command: vec!["zls".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec!["build.zig".into(), ".git".into()],
-            initialization_options: None,
-            disabled: false,
-            install: None,
-        },
+        cfg(&[".zig", ".zon"], &["zls"], &["build.zig", ".git"]),
     )
 }
 
 fn jdtls() -> (&'static str, LspServerConfig) {
     (
         "jdtls",
-        LspServerConfig {
-            extensions: vec![".java".into()],
-            command: vec!["jdtls".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec![
-                "pom.xml".into(),
-                "build.gradle".into(),
-                "build.gradle.kts".into(),
-                ".project".into(),
-            ],
-            initialization_options: None,
-            disabled: false,
-            install: None,
-        },
+        cfg(
+            &[".java"],
+            &["jdtls"],
+            &["pom.xml", "build.gradle", "build.gradle.kts", ".project"],
+        ),
     )
 }
 
 fn kotlin_lsp() -> (&'static str, LspServerConfig) {
     (
         "kotlin-lsp",
-        LspServerConfig {
-            extensions: vec![".kt".into(), ".kts".into()],
-            command: vec!["kotlin-lsp".into(), "--stdio".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec![
-                "settings.gradle.kts".into(),
-                "settings.gradle".into(),
-                "build.gradle.kts".into(),
-                "build.gradle".into(),
+        cfg(
+            &[".kt", ".kts"],
+            &["kotlin-lsp", "--stdio"],
+            &[
+                "settings.gradle.kts",
+                "settings.gradle",
+                "build.gradle.kts",
+                "build.gradle",
             ],
-            initialization_options: None,
-            disabled: false,
-            install: None,
-        },
+        ),
     )
 }
 
 fn clojure_lsp() -> (&'static str, LspServerConfig) {
     (
         "clojure-lsp",
-        LspServerConfig {
-            extensions: vec![".clj".into(), ".cljs".into(), ".cljc".into(), ".edn".into()],
-            command: vec!["clojure-lsp".into(), "listen".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec![
-                "deps.edn".into(),
-                "project.clj".into(),
-                "shadow-cljs.edn".into(),
-                ".git".into(),
-            ],
-            initialization_options: None,
-            disabled: false,
-            install: None,
-        },
+        cfg(
+            &[".clj", ".cljs", ".cljc", ".edn"],
+            &["clojure-lsp", "listen"],
+            &["deps.edn", "project.clj", "shadow-cljs.edn", ".git"],
+        ),
     )
 }
 
 fn nixd() -> (&'static str, LspServerConfig) {
     (
         "nixd",
-        LspServerConfig {
-            extensions: vec![".nix".into()],
-            command: vec!["nixd".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec!["flake.nix".into(), "shell.nix".into(), ".git".into()],
-            initialization_options: None,
-            disabled: false,
-            install: None,
-        },
+        cfg(&[".nix"], &["nixd"], &["flake.nix", "shell.nix", ".git"]),
     )
 }
 
 fn tinymist() -> (&'static str, LspServerConfig) {
     (
         "tinymist",
-        LspServerConfig {
-            extensions: vec![".typ".into(), ".typc".into()],
-            command: vec!["tinymist".into()],
-            command_candidates: Vec::new(),
-            env: Default::default(),
-            root_markers: vec!["typst.toml".into(), ".git".into()],
-            initialization_options: None,
-            disabled: false,
-            install: None,
-        },
+        cfg(&[".typ", ".typc"], &["tinymist"], &["typst.toml", ".git"]),
     )
+}
+
+fn cfg(extensions: &[&str], command: &[&str], root_markers: &[&str]) -> LspServerConfig {
+    LspServerConfig::new(v(extensions), v(command), v(root_markers))
+}
+
+fn v(items: &[&str]) -> Vec<String> {
+    items.iter().map(|item| (*item).to_string()).collect()
 }
 
 #[cfg(test)]

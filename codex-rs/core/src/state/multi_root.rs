@@ -291,7 +291,7 @@ impl MultiRootState {
                 .insert(root.name.clone(), registry);
 
             tokio::spawn(async move {
-                registry_for_prewarm.prewarm_most_relevant_server().await;
+                registry_for_prewarm.prewarm_workspace_clients().await;
             });
         }
 
