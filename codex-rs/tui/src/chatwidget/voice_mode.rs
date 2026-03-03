@@ -27,9 +27,22 @@ Wrap any text you want spoken aloud in <voice></voice> tags. \
 Never put code, file paths, or markdown in <voice> tags — only natural, \
 conversational text.\n\
 \n\
+IMPORTANT: Voice mode ONLY changes how you format output (with <voice> tags). \
+Everything else stays identical to non-voice mode:\n\
+- Trigger skills exactly as you would without voice mode. If a request would \
+normally activate a skill (paper synthesis, research, etc.), activate it now.\n\
+- Use all tools normally — spawn subagents, check KB, read files, fetch URLs, \
+search code, call APIs, and use any other capabilities you have.\n\
+- Follow multi-step skill workflows completely. Do NOT take shortcuts or skip \
+steps (like KB checks) just because the user is speaking.\n\
+Do not answer from memory when you have tools and skills that can do it better.\n\
+- Never use LaTeX math notation (\\mathbb, \\frac, etc.) — the terminal cannot \
+render it. Use plain text or Unicode for math (e.g. \"E[|h_j(x)|]\" not \
+\"\\\\mathbb{E}[|h_j(x)|]\").\n\
+\n\
 Follow this pattern:\n\
 1. Start with a brief <voice> acknowledgment (1-2 sentences).\n\
-2. Do any technical work (tool calls, code, file listings) without voice tags.\n\
+2. Do any technical work (tool calls, skill execution, subagents) without voice tags.\n\
 3. End with a <voice> summary of what you found or did (2-3 sentences).\n\
 \n\
 For multi-step tasks, add brief <voice> progress updates between steps \
@@ -155,6 +168,8 @@ pub(crate) struct VoiceParseResult {
     pub display_text: String,
     /// Complete sentences extracted from `<voice>` regions, ready for TTS.
     pub voice_sentences: Vec<String>,
+    /// Whether a `</voice>` closing tag was processed in this delta (voice block boundary).
+    pub voice_block_closed: bool,
 }
 
 /// Streaming parser that separates `<voice>`-tagged content (for TTS) from
@@ -184,6 +199,7 @@ impl VoiceTagParser {
 
         let mut display = String::new();
         let mut voice_sentences = Vec::new();
+        let mut voice_block_closed = false;
 
         loop {
             if let Some(tag_start) = self.pending.find('<') {
@@ -205,13 +221,11 @@ impl VoiceTagParser {
 
                     if tag_lower == "<voice>" {
                         self.in_voice = true;
-                        // Strip the tag from display output; prefix voice
-                        // content with a speaker icon so the user can tell
-                        // which parts were spoken aloud.
-                        display.push_str("🔊 ");
+                        // Strip the tag from display output.
                         self.pending = rest[tag_end + 1..].to_string();
                     } else if tag_lower == "</voice>" {
                         self.in_voice = false;
+                        voice_block_closed = true;
                         // Closing tag ends a spoken region — flush the voice
                         // buffer as a complete sentence for TTS.
                         let text = self.voice_buffer.trim().to_string();
@@ -265,6 +279,7 @@ impl VoiceTagParser {
         VoiceParseResult {
             display_text: display,
             voice_sentences,
+            voice_block_closed,
         }
     }
 
@@ -365,6 +380,10 @@ pub(crate) struct VoiceModeState {
     pub(crate) voice_tag_parser: VoiceTagParser,
     pub(crate) output: VoiceOutput,
     pub(crate) auto_submit: bool,
+    /// When false, TTS is disabled (no `<voice>` tag injection, no audio playback).
+    pub(crate) tts_enabled: bool,
+    /// When false, STT/push-to-talk is disabled (Space key not intercepted).
+    pub(crate) stt_enabled: bool,
 
     // Audio capture (when recording).
     pub(crate) capture: Option<crate::voice::VoiceCapture>,
@@ -431,6 +450,10 @@ pub(crate) struct VoiceModeState {
     /// When narrating a section, tracks the (document_id, section_index)
     /// and content hash so chunks can be collected for caching.
     pub(crate) narrating_section: Option<(String, usize, u64)>,
+    /// Number of heading words in the narration text. The TTS audio includes
+    /// the heading but the reading view renders it separately, so karaoke
+    /// must skip this many words to stay in sync.
+    pub(crate) narrating_heading_words: usize,
     /// When narrating a visual selection, holds the word offset of the
     /// selection start within the section's rendered lines.  The offset
     /// is added to TTS word indices so karaoke highlights the correct
@@ -457,12 +480,18 @@ pub(crate) struct VoiceModeState {
     /// Set when TTS worker has finished sending all audio to the player,
     /// but the player may still be playing buffered audio.
     pub(crate) tts_data_complete: bool,
+    /// Set when a `</voice>` block closes; cleared when the next block's
+    /// sentences are about to be sent to TTS.  Used to insert paragraph
+    /// break sentinels in the alignment timeline between voice blocks.
+    pub(crate) tts_block_break_pending: bool,
 }
 
 impl VoiceModeState {
     pub(crate) fn new(config: &VoiceModeToml) -> Self {
         let output = config.output.unwrap_or_default();
         let auto_submit = config.auto_submit.unwrap_or(true);
+        let tts_enabled = config.tts_enabled.unwrap_or(true);
+        let stt_enabled = config.stt_enabled.unwrap_or(true);
 
         Self {
             phase: VoiceModePhase::Off,
@@ -470,6 +499,8 @@ impl VoiceModeState {
             voice_tag_parser: VoiceTagParser::new(),
             output,
             auto_submit,
+            tts_enabled,
+            stt_enabled,
             capture: None,
             audio_player: None,
             meter_state: None,
@@ -488,6 +519,7 @@ impl VoiceModeState {
             tts_section_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             prefetch_pending: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             narrating_section: None,
+            narrating_heading_words: 0,
             selection_word_offset: None,
             narrating_cleaned_text: None,
             narrating_chunks: Vec::new(),
@@ -497,6 +529,7 @@ impl VoiceModeState {
             highlight_tick_cancel: None,
             tts_pending_word: None,
             tts_data_complete: false,
+            tts_block_break_pending: false,
         }
     }
 
@@ -507,8 +540,15 @@ impl VoiceModeState {
     /// Should we send text deltas to TTS?
     pub(crate) fn should_tts(&self) -> bool {
         self.is_active()
+            && self.tts_enabled
             && !self.tts_suppressed
             && matches!(self.output, VoiceOutput::Voice | VoiceOutput::Both)
+    }
+
+    /// Apply updated TTS/STT settings from the voice setup popup.
+    pub(crate) fn apply_voice_settings(&mut self, tts: bool, stt: bool) {
+        self.tts_enabled = tts;
+        self.stt_enabled = stt;
     }
 
     /// Should we suppress text streaming in the chat?
@@ -536,6 +576,7 @@ impl VoiceModeState {
         self.tts_ordering_lock = Arc::new(tokio::sync::Mutex::new(()));
         // Clear narration collection state.
         self.narrating_section = None;
+        self.narrating_heading_words = 0;
         self.selection_word_offset = None;
         self.narrating_cleaned_text = None;
         self.narrating_chunks.clear();
@@ -545,6 +586,7 @@ impl VoiceModeState {
         self.tts_highlight_word_idx = None;
         self.tts_pending_word = None;
         self.tts_data_complete = false;
+        self.tts_block_break_pending = false;
         self.cancel_highlight_tick();
     }
 
@@ -597,6 +639,16 @@ impl VoiceModeState {
 use crate::app_event::AppEvent;
 use crate::history_cell;
 
+/// Check if the ElevenLabs API key is available (config or environment).
+fn has_elevenlabs_api_key(config: &codex_core::config::Config) -> bool {
+    let vc = voice_mode_config(config);
+    vc.elevenlabs
+        .as_ref()
+        .and_then(|e| e.api_key.as_ref())
+        .is_some()
+        || std::env::var("ELEVENLABS_API_KEY").is_ok()
+}
+
 /// Extract `VoiceModeToml` from the merged effective config (which is a raw `toml::Value`).
 fn voice_mode_config(config: &codex_core::config::Config) -> VoiceModeToml {
     config
@@ -612,15 +664,26 @@ impl super::ChatWidget {
     /// Sync the composer placeholder text to reflect the current voice mode phase.
     /// Also syncs the voice status indicator in the reading view (if active).
     fn sync_voice_placeholder(&mut self) {
-        let (label, phase) = match &self.voice_mode_state {
-            Some(s) if s.phase.is_active() => (s.phase.status_label(), s.phase),
+        let (label, phase, stt_enabled) = match &self.voice_mode_state {
+            Some(s) if s.phase.is_active() => (s.phase.status_label(), s.phase, s.stt_enabled),
             _ => return,
         };
+        // When Idle and STT is disabled, show a different placeholder since
+        // Space-to-speak won't work.
+        let placeholder = if phase == VoiceModePhase::Idle && !stt_enabled {
+            "\u{1F3A4}  Voice mode on (TTS only)"
+        } else {
+            label
+        };
         self.bottom_pane
-            .set_placeholder_text(label.to_string());
+            .set_placeholder_text(placeholder.to_string());
         // Also update the reading view's voice status indicator.
         let reading_status = if phase == VoiceModePhase::Idle {
-            Some("Hold Space to ask".to_string())
+            if stt_enabled {
+                Some("Hold Space to ask".to_string())
+            } else {
+                Some("Voice mode on (TTS only)".to_string())
+            }
         } else {
             Some(label.to_string())
         };
@@ -642,12 +705,12 @@ impl super::ChatWidget {
 
     /// Toggle voice mode on/off (`/voice` command).
     pub(crate) fn toggle_voice_mode(&mut self) {
+        // Auto-enable the VoiceMode feature flag on first use.
         if !self.config.features.enabled(codex_core::features::Feature::VoiceMode) {
-            self.add_info_message(
-                "Voice mode is not enabled. Use /experimental to enable it.".to_string(),
-                None,
-            );
-            return;
+            self.config.features.enable(codex_core::features::Feature::VoiceMode);
+            self.app_event_tx.send(AppEvent::UpdateFeatureFlags {
+                updates: vec![(codex_core::features::Feature::VoiceMode, true)],
+            });
         }
 
         if let Some(ref mut state) = self.voice_mode_state {
@@ -674,7 +737,43 @@ impl super::ChatWidget {
         // Initialize voice mode state from config.
         let voice_config = voice_mode_config(&self.config);
 
+        // Show a friendly API key hint if TTS won't work (STT still works
+        // without ElevenLabs because it uses the built-in Whisper path).
+        let api_key = voice_config
+            .elevenlabs
+            .as_ref()
+            .and_then(|e| e.api_key.clone())
+            .or_else(|| std::env::var("ELEVENLABS_API_KEY").ok());
+        let session_not_ready = self.thread_id.is_none();
+        if api_key.is_none() {
+            let warning_cell = history_cell::new_warning_event(
+                "ElevenLabs API key not found — TTS will not work.\n\
+                 Set ELEVENLABS_API_KEY or add to config.toml:\n  \
+                 [voice_mode.elevenlabs]\n  \
+                 api_key = \"your-key\"\n\
+                 Get a key at: https://elevenlabs.io/app/settings/api-keys"
+                    .to_string(),
+            );
+            if session_not_ready {
+                self.pending_voice_startup_cells.push(Box::new(warning_cell));
+            } else {
+                self.add_to_history(warning_cell);
+            }
+            self.request_redraw();
+        }
+
         let mut state = VoiceModeState::new(&voice_config);
+
+        // If both TTS and STT are disabled, don't activate — nothing useful
+        // would happen. Point the user to /voice-setup instead.
+        if !state.tts_enabled && !state.stt_enabled {
+            self.add_info_message(
+                "Both TTS and STT are disabled. Use /voice-setup to enable at least one."
+                    .to_string(),
+                None,
+            );
+            return;
+        }
 
         // Start audio player for TTS output.
         match crate::voice::RealtimeAudioPlayer::start() {
@@ -697,14 +796,116 @@ impl super::ChatWidget {
         self.app_event_tx
             .send(AppEvent::PersistVoiceModeEnabled(true));
 
-        self.add_info_message(
-            "Voice mode on. Hold Space to speak. /voice to stop.".to_string(),
-            None,
-        );
+        if session_not_ready {
+            self.pending_voice_startup_cells.push(Box::new(
+                history_cell::new_info_event(
+                    "Voice mode on. Hold Space to speak. /voice to stop.".to_string(),
+                    None,
+                ),
+            ));
+        } else {
+            self.add_info_message(
+                "Voice mode on. Hold Space to speak. /voice to stop.".to_string(),
+                None,
+            );
+        }
 
         self.bottom_pane.set_force_hide_cursor(true);
         self.sync_voice_placeholder();
         self.request_redraw();
+    }
+
+    /// Update the ElevenLabs API key for the current process.
+    pub(crate) fn update_elevenlabs_api_key(&mut self, key: String) {
+        // SAFETY: single-threaded TUI — no other threads read this concurrently.
+        unsafe { std::env::set_var("ELEVENLABS_API_KEY", &key); }
+        self.add_info_message(
+            "ElevenLabs API key saved.".to_string(),
+            None,
+        );
+    }
+
+    /// Cache the last-saved ElevenLabs language and speed so re-opening
+    /// `/voice-setup` reflects the latest values without a config reload.
+    pub(crate) fn update_elevenlabs_voice_settings(
+        &mut self,
+        language_code: Option<Option<String>>,
+        speed: Option<f64>,
+    ) {
+        if let Some(lang) = language_code {
+            self.cached_elevenlabs_language = Some(lang);
+        }
+        if let Some(s) = speed {
+            self.cached_elevenlabs_speed = Some(s);
+        }
+    }
+
+    /// Apply voice settings from the setup popup.
+    pub(crate) fn apply_voice_settings(&mut self, tts: bool, stt: bool) {
+        if let Some(ref mut state) = self.voice_mode_state {
+            state.apply_voice_settings(tts, stt);
+            // Re-sync placeholder to reflect new STT state.
+            if state.is_active() {
+                let _ = state;
+                self.sync_voice_placeholder();
+                self.request_redraw();
+            }
+        }
+    }
+
+    /// Deactivate voice mode if it's currently active (called when both
+    /// TTS and STT are turned off via the setup popup).
+    pub(crate) fn deactivate_voice_mode_if_active(&mut self) {
+        if let Some(ref mut state) = self.voice_mode_state {
+            if state.is_active() {
+                state.reset();
+                self.app_event_tx
+                    .send(AppEvent::PersistVoiceModeEnabled(false));
+                self.add_info_message("Voice mode off (TTS and STT both disabled).".to_string(), None);
+                self.restore_default_placeholder();
+                self.bottom_pane.set_force_hide_cursor(false);
+                self.request_redraw();
+            }
+        }
+    }
+
+    /// Open the voice setup popup.
+    pub(crate) fn open_voice_setup_popup(&mut self) {
+        let voice_config = voice_mode_config(&self.config);
+
+        let tts_enabled = self
+            .voice_mode_state
+            .as_ref()
+            .map_or(voice_config.tts_enabled.unwrap_or(true), |s| s.tts_enabled);
+        let stt_enabled = self
+            .voice_mode_state
+            .as_ref()
+            .map_or(voice_config.stt_enabled.unwrap_or(true), |s| s.stt_enabled);
+
+        let api_key_available = voice_config
+            .elevenlabs
+            .as_ref()
+            .and_then(|e| e.api_key.as_ref())
+            .is_some()
+            || std::env::var("ELEVENLABS_API_KEY").is_ok();
+
+        // Prefer cached values (set from the last save) over the stale in-memory config.
+        let language_code = self.cached_elevenlabs_language.clone().unwrap_or_else(|| {
+            voice_config.elevenlabs.as_ref().and_then(|e| e.language_code.clone())
+        });
+        let speed = self.cached_elevenlabs_speed.or_else(|| {
+            voice_config.elevenlabs.as_ref().and_then(|e| e.speed)
+        });
+
+        let view = crate::bottom_pane::VoiceSetupView::new(
+            tts_enabled,
+            stt_enabled,
+            api_key_available,
+            language_code,
+            speed,
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_view(Box::new(view));
     }
 
     // ─── Push-to-talk handlers ──────────────────────────────────────────
@@ -991,6 +1192,8 @@ impl super::ChatWidget {
                 if let Some(ref mid) = el.model_id {
                     config = config.with_model_id(mid.clone());
                 }
+                config.language_code = el.language_code.clone();
+                config.speed = el.speed;
             }
 
             let result = rt.block_on(codex_elevenlabs::stt::transcribe(&config, wav_bytes));
@@ -1123,14 +1326,11 @@ impl super::ChatWidget {
             return Some(result.display_text);
         }
 
-        // In reading view mode, narrate ALL text (no <voice> tags needed).
-        // The tag parser still runs for display (strips any tags the agent
-        // might still emit), but TTS receives everything.
-        let reading_view = self.bottom_pane.is_document_reader_active();
-
         // Always parse tags for display (strip <voice> markers), even if TTS
         // is suppressed due to barge-in.
         let result = state.voice_tag_parser.push(delta);
+
+        let block_closed = result.voice_block_closed;
 
         // Determine what to send to TTS.
         // When a section is being auto-narrated, skip sending agent delta
@@ -1138,21 +1338,37 @@ impl super::ChatWidget {
         // and mixing in the agent's conversational response would corrupt
         // the alignment timeline and karaoke overlay.
         let is_narrating = state.narrating_section.is_some();
-        let tts_sentences = if reading_view && !is_narrating {
-            // In reading view: send ALL display text to TTS via sentence buffer.
-            let mut sentences = state.sentence_buffer.push(&result.display_text);
-            // Also include any voice-tagged sentences (in case agent used tags).
-            sentences.extend(result.voice_sentences);
-            sentences
-        } else if is_narrating {
+        let tts_sentences = if is_narrating {
             // Auto-narration active — don't send anything to TTS.
             vec![]
         } else {
+            // Normal voice mode (whether in reading view or not): only
+            // <voice>-tagged content goes to TTS. The agent's response
+            // appears in chat history, not in the reading view overlay.
             result.voice_sentences
         };
 
         // Only dispatch to TTS if not suppressed.
         if state.should_tts() && !tts_sentences.is_empty() {
+            // Insert a paragraph break sentinel in the alignment timeline
+            // when a new voice block begins after a previous one closed.
+            // This gives the karaoke display paragraph structure matching
+            // the history cells.
+            if state.tts_block_break_pending && !state.tts_alignment_timeline.is_empty() {
+                state.tts_alignment_timeline.push(AlignmentEntry {
+                    start_ms: state.tts_cumulative_ms,
+                    duration_ms: 0,
+                    word: "\n\n".to_string(),
+                });
+                state.tts_block_break_pending = false;
+            }
+
+            // Skip TTS silently if no API key — the user was already warned
+            // at voice mode activation time.
+            if state.tts_worker_tx.is_none() && !has_elevenlabs_api_key(&self.config) {
+                return Some(result.display_text);
+            }
+
             if state.phase != VoiceModePhase::Speaking {
                 state.phase = VoiceModePhase::Speaking;
             }
@@ -1176,10 +1392,16 @@ impl super::ChatWidget {
 
             // Send each sentence to the worker — no per-sentence WebSocket needed.
             if let Some(ref worker_tx) = state.tts_worker_tx {
-                for sentence in tts_sentences {
-                    let _ = worker_tx.send(TtsWorkerCommand::SendText(sentence));
+                for sentence in tts_sentences.iter() {
+                    let _ = worker_tx.send(TtsWorkerCommand::SendText(sentence.clone()));
                 }
             }
+        }
+
+        // Mark block boundary AFTER dispatching the closing block's sentences,
+        // so the break sentinel is inserted before the NEXT block, not this one.
+        if block_closed {
+            state.tts_block_break_pending = true;
         }
 
         Some(result.display_text)
@@ -1368,6 +1590,7 @@ impl super::ChatWidget {
 
         // Store collected narration chunks + alignment in cache.
         state.narrating_cleaned_text = None;
+        state.narrating_heading_words = 0;
         state.selection_word_offset = None;
         if let Some((doc_id, sec_idx, content_hash)) = state.narrating_section.take() {
             let chunks = std::mem::take(&mut state.narrating_chunks);
@@ -1392,6 +1615,7 @@ impl super::ChatWidget {
         state.tts_highlight_word_idx = None;
         state.tts_pending_word = None;
         state.tts_data_complete = false;
+        state.tts_block_break_pending = false;
         state.cancel_highlight_tick();
 
         // Ready for next PTT press.
@@ -1510,34 +1734,69 @@ impl super::ChatWidget {
         }
         let word_idx = state.tts_highlight_word_idx;
 
-        // Build the full text from the timeline words with a 🔊 prefix.
-        let mut full_text = String::from("\u{1F50A} ");
-        for (i, entry) in timeline.iter().enumerate() {
-            if i > 0 {
+        // Build the full text from the timeline words.
+        // Voice block boundaries ("\n\n" sentinels) become paragraph breaks.
+        // Use `need_space` (not `i > 0`) so that skipped sentinels don't
+        // inject a spurious leading space — mirrors the offset calculation below.
+        let mut full_text = String::new();
+        let mut ft_need_space = false;
+        for entry in timeline.iter() {
+            if entry.word == "\n" {
+                continue; // legacy sentinel
+            }
+            if entry.word == "\n\n" {
+                // Voice block boundary — paragraph break.
+                full_text.push_str("\n\n");
+                ft_need_space = false;
+                continue;
+            }
+            if ft_need_space {
                 full_text.push(' ');
             }
+            ft_need_space = true;
             full_text.push_str(&entry.word);
         }
 
-        // Word-wrap to the available width (minus 2 for the bullet margin).
+        // Word-wrap each paragraph independently to respect block boundaries.
         let wrap_width = width.saturating_sub(4) as usize;
         if wrap_width < 10 {
             return None;
         }
-        let wrapped = wrap(&full_text, WrapOptions::new(wrap_width));
+        let mut wrapped: Vec<std::borrow::Cow<'_, str>> = Vec::new();
+        for paragraph in full_text.split("\n\n") {
+            if paragraph.is_empty() {
+                continue;
+            }
+            if !wrapped.is_empty() {
+                // Empty line between paragraphs.
+                wrapped.push(std::borrow::Cow::Borrowed(""));
+            }
+            wrapped.extend(wrap(paragraph, WrapOptions::new(wrap_width)));
+        }
 
         // Now build styled Lines. We need to find which characters belong to
         // the highlighted word and style them differently.
         let highlight_style = Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
 
         // Calculate character offsets for the highlighted word.
-        let (hl_start, hl_end) = if let Some(idx) = word_idx {
-            let prefix_len = "\u{1F50A} ".len();
-            let mut char_offset = prefix_len;
+        // Track offsets mirroring how full_text was built above.
+        if let Some(idx) = word_idx {
+            let mut char_offset = 0;
+            let mut need_space = false;
             for (i, entry) in timeline.iter().enumerate() {
-                if i > 0 {
+                if entry.word == "\n" {
+                    continue; // legacy sentinel
+                }
+                if entry.word == "\n\n" {
+                    // Block boundary — account for "\n\n" in full_text.
+                    char_offset += "\n\n".len();
+                    need_space = false;
+                    continue;
+                }
+                if need_space {
                     char_offset += 1; // space separator
                 }
+                need_space = true;
                 if i == idx {
                     let word_len = entry.word.len();
                     return Some(Self::build_karaoke_lines_inner(
@@ -1546,12 +1805,7 @@ impl super::ChatWidget {
                 }
                 char_offset += entry.word.len();
             }
-            (0, 0) // not found
-        } else {
-            (0, 0) // no highlight
-        };
-
-        let _ = (hl_start, hl_end);
+        }
 
         // No highlight — render plain text.
         Some(wrapped.iter().map(|line| {
@@ -1560,6 +1814,10 @@ impl super::ChatWidget {
     }
 
     /// Build wrapped Lines with a highlighted byte range.
+    ///
+    /// `hl_start` and `hl_end` are byte offsets into the **unwrapped**
+    /// concatenated text. We snap them to valid UTF-8 character boundaries
+    /// to avoid panics on multi-byte characters (e.g. `'`).
     #[cfg(not(target_os = "linux"))]
     fn build_karaoke_lines_inner(
         wrapped: &[std::borrow::Cow<'_, str>],
@@ -1568,6 +1826,26 @@ impl super::ChatWidget {
         highlight_style: ratatui::style::Style,
     ) -> Vec<ratatui::text::Line<'static>> {
         use ratatui::text::{Line, Span};
+
+        /// Snap a byte offset to the nearest valid character boundary
+        /// (scanning forward). Returns `s.len()` if `pos >= s.len()`.
+        fn snap_forward(s: &str, pos: usize) -> usize {
+            let mut p = pos.min(s.len());
+            while p < s.len() && !s.is_char_boundary(p) {
+                p += 1;
+            }
+            p
+        }
+
+        /// Snap a byte offset to the nearest valid character boundary
+        /// (scanning backward). Returns 0 if already at or before start.
+        fn snap_backward(s: &str, pos: usize) -> usize {
+            let mut p = pos.min(s.len());
+            while p > 0 && !s.is_char_boundary(p) {
+                p -= 1;
+            }
+            p
+        }
 
         let mut lines = Vec::new();
         let mut global_offset = 0usize;
@@ -1582,16 +1860,18 @@ impl super::ChatWidget {
             } else {
                 // Overlap — split into before/highlight/after spans.
                 let mut spans = Vec::new();
-                let rel_start = hl_start.saturating_sub(line_start);
-                let rel_end = hl_end.min(line_end) - line_start;
+                let rel_start = snap_backward(wrapped_line, hl_start.saturating_sub(line_start));
+                let rel_end = snap_forward(wrapped_line, hl_end.min(line_end) - line_start);
 
                 if rel_start > 0 {
                     spans.push(Span::raw(wrapped_line[..rel_start].to_string()));
                 }
-                spans.push(Span::styled(
-                    wrapped_line[rel_start..rel_end].to_string(),
-                    highlight_style,
-                ));
+                if rel_start < rel_end {
+                    spans.push(Span::styled(
+                        wrapped_line[rel_start..rel_end].to_string(),
+                        highlight_style,
+                    ));
+                }
                 if rel_end < line_len {
                     spans.push(Span::raw(wrapped_line[rel_end..].to_string()));
                 }
@@ -1602,164 +1882,6 @@ impl super::ChatWidget {
             global_offset = line_end + 1;
         }
         lines
-    }
-
-    /// Build karaoke lines for the reading view content area.
-    ///
-    /// Uses the stored cleaned narration text (which preserves newlines) for
-    /// layout, wrapping each paragraph independently. The heading is rendered
-    /// separately by the reader, so we strip it from the text. The timeline
-    /// word index drives the highlight position.
-    #[cfg(not(target_os = "linux"))]
-    fn build_reading_view_karaoke_lines(
-        &self,
-        width: u16,
-        heading: &str,
-    ) -> Option<Vec<ratatui::text::Line<'static>>> {
-        use ratatui::style::{Modifier, Style};
-        use ratatui::text::{Line, Span};
-        use textwrap::{wrap, Options as WrapOptions};
-
-        let state = self.voice_mode_state.as_ref()?;
-        if state.phase != VoiceModePhase::Speaking {
-            return None;
-        }
-        let timeline = &state.tts_alignment_timeline;
-        if timeline.is_empty() {
-            return None;
-        }
-
-        let wrap_width = width as usize;
-        if wrap_width < 10 {
-            return None;
-        }
-
-        // Count heading words to skip in the timeline (narration only).
-        let skip = if !heading.is_empty() {
-            heading.split_whitespace().count()
-        } else {
-            0
-        };
-
-        // Use the stored cleaned text (preserves newlines) if available
-        // (narration mode), otherwise build text from timeline words
-        // (Q&A mode — no stored cleaned text).
-        let (all_wrapped, full_text) = if let Some(cleaned) = state.narrating_cleaned_text.as_deref()
-        {
-            // Strip heading prefix from the cleaned text.
-            let body = if !heading.is_empty() {
-                let prefix = format!("{}.", heading);
-                cleaned
-                    .strip_prefix(&prefix)
-                    .map(|s| s.trim_start())
-                    .unwrap_or(cleaned)
-            } else {
-                cleaned
-            };
-
-            // Wrap each line independently to preserve paragraph structure.
-            let mut wrapped: Vec<std::borrow::Cow<'_, str>> = Vec::new();
-            for line in body.lines() {
-                if line.trim().is_empty() {
-                    wrapped.push(std::borrow::Cow::Borrowed(""));
-                } else {
-                    wrapped.extend(wrap(line, WrapOptions::new(wrap_width)));
-                }
-            }
-            let text: String = wrapped.iter().enumerate().fold(
-                String::new(),
-                |mut acc, (i, line)| {
-                    if i > 0 {
-                        acc.push('\n');
-                    }
-                    acc.push_str(line);
-                    acc
-                },
-            );
-            (wrapped, text)
-        } else {
-            // Q&A mode: build text from timeline words.
-            let mut text = String::new();
-            for entry in timeline.iter().skip(skip) {
-                if !text.is_empty() {
-                    text.push(' ');
-                }
-                text.push_str(&entry.word);
-            }
-            let wrapped = wrap(&text, WrapOptions::new(wrap_width));
-            let owned: Vec<std::borrow::Cow<'_, str>> = wrapped
-                .into_iter()
-                .map(|c| std::borrow::Cow::Owned(c.into_owned()))
-                .collect();
-            let rejoined: String = owned.iter().enumerate().fold(
-                String::new(),
-                |mut acc, (i, line)| {
-                    if i > 0 {
-                        acc.push('\n');
-                    }
-                    acc.push_str(line);
-                    acc
-                },
-            );
-            (owned, rejoined)
-        };
-
-        let highlight_style =
-            Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
-        let word_idx = state.tts_highlight_word_idx;
-        let adjusted_idx = word_idx.and_then(|idx| idx.checked_sub(skip));
-
-        // Find the highlighted word's byte range in full_text.
-        // The adj-th whitespace-delimited word in full_text corresponds
-        // to the adj-th word after the heading in the timeline.
-        let (hl_start, hl_end) = if let Some(adj) = adjusted_idx {
-            if let Some(offset) = find_nth_word_offset(&full_text, adj) {
-                let word_len = full_text[offset..]
-                    .split_whitespace()
-                    .next()
-                    .map(|w| w.len())
-                    .unwrap_or(0);
-                (offset, offset + word_len)
-            } else {
-                (0, 0)
-            }
-        } else {
-            (0, 0)
-        };
-
-        // Build styled Lines from the wrapped text.
-        let mut lines = Vec::new();
-        let mut global_offset = 0usize;
-        for wrapped_line in &all_wrapped {
-            let line_len = wrapped_line.len();
-            let line_start = global_offset;
-            let line_end = global_offset + line_len;
-
-            if hl_start == hl_end || hl_start >= line_end || hl_end <= line_start {
-                lines.push(Line::from(Span::raw(wrapped_line.to_string())));
-            } else {
-                let mut spans = Vec::new();
-                let rel_start = hl_start.saturating_sub(line_start);
-                let rel_end = hl_end.min(line_end) - line_start;
-
-                if rel_start > 0 {
-                    spans.push(Span::raw(wrapped_line[..rel_start].to_string()));
-                }
-                spans.push(Span::styled(
-                    wrapped_line[rel_start..rel_end].to_string(),
-                    highlight_style,
-                ));
-                if rel_end < line_len {
-                    spans.push(Span::raw(wrapped_line[rel_end..].to_string()));
-                }
-                lines.push(Line::from(spans));
-            }
-
-            // +1 for the '\n' separator between lines.
-            global_offset = line_end + 1;
-        }
-
-        Some(lines)
     }
 
     /// Push reading progress to the reading view if the document reader is active.
@@ -1784,26 +1906,20 @@ impl super::ChatWidget {
             // the view which maps it to a rendered line, preserving markdown.
             // For selections, add the word offset so karaoke highlights the
             // correct position within the full rendered content.
-            let (word_idx, sel_offset) = self
+            let (word_idx, sel_offset, heading_words) = self
                 .voice_mode_state
                 .as_ref()
-                .map(|s| (s.tts_highlight_word_idx, s.selection_word_offset.unwrap_or(0)))
-                .unwrap_or((None, 0));
+                .map(|s| {
+                    let hw = s.narrating_heading_words;
+                    (s.tts_highlight_word_idx, s.selection_word_offset.unwrap_or(0), hw)
+                })
+                .unwrap_or((None, 0, 0));
             let adjusted = word_idx.map(|w| w + sel_offset);
             self.bottom_pane
-                .set_document_reader_reading_progress(adjusted, 0);
-        } else {
-            // Q&A mode: build karaoke lines with word-level highlighting.
-            let width = self
-                .last_rendered_width
-                .get()
-                .map(|w| w.saturating_sub(8) as u16)
-                .unwrap_or(72);
-            let heading = String::new(); // Don't skip heading words for Q&A
-            let lines = self.build_reading_view_karaoke_lines(width, &heading);
-            self.bottom_pane
-                .set_document_reader_karaoke_lines(lines, true);
+                .set_document_reader_reading_progress(adjusted, heading_words);
         }
+        // Non-narrating Q&A responses go through normal voice mode
+        // karaoke in the scrollback — no reading view overlay.
     }
 
     /// Called when ElevenLabs STT returns transcribed text.
@@ -1882,22 +1998,22 @@ impl super::ChatWidget {
              Write your explanation as plain conversational prose. \
              Your text response will be read aloud AND saved as a note, so write \
              it exactly as you want it to sound and appear. \
-             Do NOT use <voice> tags — everything is narrated automatically. \
+             Wrap ALL of your spoken text in <voice>...</voice> tags so it is read aloud. \
              Do NOT include LaTeX, code blocks, or markdown formatting \
              since this is a terminal TTS context. Use plain language instead \
              (e.g. say \"the attention equation\" instead of writing $\\text{{Attention}}(Q,K,V)$).\n\n\
              After your spoken explanation, save it using EXACTLY ONE tool call:\n\
              append_to_section(document_id=\"{doc_id}\", section_index={idx}, \
-             content=\"<same text you just spoke>\", foldable=true, \
+             content=\"<same text you just spoke, without the voice tags>\", foldable=true, \
              summary=\"Descriptive topic label\")\n\n\
              IMPORTANT: The content in append_to_section MUST be the same text you \
              spoke above — do NOT write a separate summary. Copy your spoken \
-             response verbatim into the content field.\n\n\
+             response verbatim into the content field (without voice tags).\n\n\
              Rules:\n\
-             - Do NOT use <voice> tags — everything is narrated automatically\n\
+             - Wrap your spoken response in <voice>...</voice> tags\n\
              - Make exactly ONE append_to_section call\n\
              - Set foldable=true always\n\
-             - The content must match what you said (verbatim)\n\
+             - The content must match what you said (verbatim, without voice tags)\n\
              - No LaTeX, no code blocks\n\
              - The summary should describe the topic (e.g. \"Dropout as regularization\", \
              \"Why gradients vanish\")\n\
@@ -1990,6 +2106,11 @@ impl super::ChatWidget {
             if !state.should_tts() {
                 return;
             }
+            // Skip TTS silently if no API key — the user was already warned
+            // at voice mode activation time.
+            if state.tts_worker_tx.is_none() && !has_elevenlabs_api_key(&self.config) {
+                return;
+            }
             state.interrupt_tts();
         }
 
@@ -2020,12 +2141,18 @@ impl super::ChatWidget {
                     })
             });
 
+        // Heading words to skip = 0: the heading exists in BOTH the TTS
+        // timeline and the rendered section lines, so word indices are
+        // naturally aligned and no skip is needed.
+        let heading_words = 0;
+
         if let Some((chunks, cached_timeline)) = cached {
             // Cache hit — play cached chunks and restore alignment for karaoke.
             if let Some(ref mut state) = self.voice_mode_state {
                 state.phase = VoiceModePhase::Speaking;
                 state.narrating_section =
                     Some((document_id, section_index, content_hash));
+                state.narrating_heading_words = heading_words;
                 state.selection_word_offset = selection_word_offset;
                 state.narrating_cleaned_text = Some(cleaned);
                 state.tts_alignment_timeline = cached_timeline;
@@ -2049,6 +2176,7 @@ impl super::ChatWidget {
 
         // Track narration for chunk collection / caching.
         state.narrating_section = Some((document_id, section_index, content_hash));
+        state.narrating_heading_words = heading_words;
         state.selection_word_offset = selection_word_offset;
         state.narrating_cleaned_text = Some(cleaned.clone());
         state.narrating_chunks.clear();
@@ -2172,13 +2300,6 @@ impl super::ChatWidget {
     }
 }
 
-/// Find the byte offset of the n-th whitespace-delimited word in `text`.
-fn find_nth_word_offset(text: &str, n: usize) -> Option<usize> {
-    text.split_whitespace()
-        .nth(n)
-        .map(|word| word.as_ptr() as usize - text.as_ptr() as usize)
-}
-
 /// Strip markdown formatting from text to make it suitable for TTS narration.
 ///
 /// Removes code blocks, inline code backticks, heading markers, bold/italic
@@ -2189,6 +2310,17 @@ pub(crate) fn clean_for_tts(markdown: &str) -> String {
     let mut chars = markdown.chars().peekable();
 
     while let Some(ch) = chars.next() {
+        // Citation annotations (\u{e200}...\u{e201}) — strip them entirely.
+        // The reading view's render pipeline also strips these, so omitting them
+        // here keeps the TTS word sequence aligned with the rendered word counter.
+        if ch == '\u{e200}' {
+            for inner in chars.by_ref() {
+                if inner == '\u{e201}' {
+                    break;
+                }
+            }
+            continue;
+        }
         // Fenced code blocks (```...```)
         if ch == '`' && chars.peek() == Some(&'`') {
             chars.next(); // second `
@@ -2347,6 +2479,19 @@ pub(crate) fn clean_for_tts(markdown: &str) -> String {
         }
     }
 
+    // Strip horizontal rule lines (--- or more dashes) so they don't create
+    // extra TTS words that have no counterpart in the rendered view (where
+    // horizontal rules render as "———" which the word counter skips).
+    let collapsed = collapsed
+        .lines()
+        .filter(|line| {
+            let t = line.trim();
+            // Keep empty lines and lines that aren't just dashes.
+            t.is_empty() || !t.chars().all(|c| c == '-')
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
     let trimmed = collapsed.trim().to_string();
 
     // Cap at ~2000 chars at a sentence boundary
@@ -2409,6 +2554,8 @@ fn start_tts_generation(
         if let Some(ref mid) = el.model_id {
             config = config.with_model_id(mid.clone());
         }
+        config.language_code = el.language_code.clone();
+        config.speed = el.speed;
     }
 
     let sentence = sentence.to_string();
@@ -2516,6 +2663,8 @@ async fn tts_worker_loop(
         if let Some(ref mid) = el.model_id {
             config = config.with_model_id(mid.clone());
         }
+        config.language_code = el.language_code.clone();
+        config.speed = el.speed;
     }
 
     let mut stream = match codex_elevenlabs::tts::TtsStream::connect(&config).await {
@@ -2669,14 +2818,28 @@ fn build_alignment_entries(
             });
         };
 
+    // Track whether we've seen any non-whitespace character in this chunk.
+    // This distinguishes true leading whitespace (pending word is complete)
+    // from whitespace that follows the first word (pending word was continued).
+    let mut seen_non_ws = false;
+
     for i in 0..n {
         let ch = align.chars[i].as_str();
         if ch.trim().is_empty() {
+            // Leading whitespace (before any non-ws char) means the pending
+            // word from the previous chunk is complete — flush it standalone.
+            if is_first_word && !seen_non_ws {
+                is_first_word = false;
+                if let Some(prev) = pending_word.take() {
+                    timeline.push(prev);
+                }
+            }
             // Whitespace: flush current word if any.
             if let Some(ws) = word_start_idx.take() {
                 flush_word(ws, word_end_idx, &mut word_chars, timeline, pending_word, &mut is_first_word);
             }
         } else {
+            seen_non_ws = true;
             if word_start_idx.is_none() {
                 word_start_idx = Some(i);
             }
@@ -2805,7 +2968,7 @@ mod tests {
         let mut parser = VoiceTagParser::new();
         let r = parser.push("<voice>Hello world.</voice> Some code here.");
         // marks spoken start, marks spoken end.
-        assert_eq!(r.display_text, "🔊 Hello world. Some code here.");
+        assert_eq!(r.display_text, "Hello world. Some code here.");
         assert_eq!(r.voice_sentences, vec!["Hello world."]);
     }
 
@@ -2819,7 +2982,7 @@ mod tests {
         assert!(r1.voice_sentences.is_empty());
 
         let r2 = parser.push("ice>Hello.</voice>");
-        assert_eq!(r2.display_text, "🔊 Hello.");
+        assert_eq!(r2.display_text, "Hello.");
         assert_eq!(r2.voice_sentences, vec!["Hello."]);
     }
 
@@ -2827,7 +2990,7 @@ mod tests {
     fn voice_tag_multiple_regions() {
         let mut parser = VoiceTagParser::new();
         let r = parser.push("<voice>First.</voice> code <voice>Second.</voice>");
-        assert_eq!(r.display_text, "🔊 First. code 🔊 Second.");
+        assert_eq!(r.display_text, "First. code Second.");
         assert_eq!(r.voice_sentences, vec!["First.", "Second."]);
     }
 
@@ -2845,7 +3008,7 @@ mod tests {
         let mut parser = VoiceTagParser::new();
         // Voice content without closing tag.
         let r = parser.push("<voice>Partial content");
-        assert_eq!(r.display_text, "🔊 Partial content");
+        assert_eq!(r.display_text, "Partial content");
         assert!(r.voice_sentences.is_empty()); // No sentence boundary yet.
 
         // Flush on turn complete returns the partial voice content.
@@ -2859,7 +3022,7 @@ mod tests {
         let mut parser = VoiceTagParser::new();
 
         let r1 = parser.push("<voice>Hello ");
-        assert_eq!(r1.display_text, "🔊 Hello ");
+        assert_eq!(r1.display_text, "Hello ");
         assert!(r1.voice_sentences.is_empty());
 
         let r2 = parser.push("world. How are ");
@@ -2883,7 +3046,7 @@ mod tests {
 
         // After clear, parser should work fresh.
         let r = parser.push("<voice>Fresh start.</voice>");
-        assert_eq!(r.display_text, "🔊 Fresh start.");
+        assert_eq!(r.display_text, "Fresh start.");
         assert_eq!(r.voice_sentences, vec!["Fresh start."]);
     }
 
@@ -2893,7 +3056,7 @@ mod tests {
 
         // The closing </voice> tag is split: "</vo" in first delta, "ice>" in second.
         let r1 = parser.push("<voice>Done.</vo");
-        assert_eq!(r1.display_text, "🔊 Done.");
+        assert_eq!(r1.display_text, "Done.");
         // "Done." is in voice_buffer but </voice> hasn't closed yet and there's
         // no sentence boundary (period needs trailing space), so no sentence yet.
         assert!(r1.voice_sentences.is_empty());
@@ -2902,5 +3065,42 @@ mod tests {
         assert_eq!(r2.display_text, " Next text.");
         // </voice> closes the region and flushes "Done." as a sentence.
         assert_eq!(r2.voice_sentences, vec!["Done."]);
+    }
+
+    // ─── clean_for_tts tests ─────────────────────────────────────────────
+
+    #[test]
+    fn clean_for_tts_strips_citation_annotations() {
+        let text = "Before \u{e200}F:/path.rs\u{2020}L1\u{e201} After";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "Before  After");
+    }
+
+    #[test]
+    fn clean_for_tts_strips_horizontal_rules() {
+        let text = "Before\n\n---\n\nAfter";
+        let cleaned = clean_for_tts(text);
+        // The --- line is removed, leaving an extra blank line that the
+        // newline collapser already capped at 2. The result has the
+        // surrounding paragraph breaks preserved.
+        assert!(!cleaned.contains("---"));
+        assert!(cleaned.contains("Before"));
+        assert!(cleaned.contains("After"));
+    }
+
+    #[test]
+    fn clean_for_tts_keeps_dashes_in_words() {
+        // Dashes within text (not standalone lines) should be kept.
+        let text = "Llama-2-13B uses top-k=2";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "Llama-2-13B uses top-k=2");
+    }
+
+    #[test]
+    fn clean_for_tts_heading_after_newline() {
+        // Markdown heading at the start of a new line should be stripped.
+        let text = "Results.\n### General benchmarks\n\nThe model achieved";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "Results.\nGeneral benchmarks\n\nThe model achieved");
     }
 }

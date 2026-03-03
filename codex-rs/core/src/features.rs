@@ -846,7 +846,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Scheduler,
         key: "scheduler",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Scheduler",
+            menu_description: "Background job scheduler for cron/event triggers",
+            announcement: "Scheduler is now enabled.",
+        },
         default_enabled: false,
     },
 ];

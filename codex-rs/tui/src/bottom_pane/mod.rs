@@ -73,6 +73,10 @@ mod chat_composer_history;
 mod command_popup;
 pub mod custom_prompt_view;
 mod experimental_features_view;
+#[cfg(not(target_os = "linux"))]
+mod voice_setup_view;
+#[cfg(not(target_os = "linux"))]
+pub(crate) use voice_setup_view::VoiceSetupView;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;
@@ -865,6 +869,21 @@ impl BottomPane {
     /// running and some are not.
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
         self.can_launch_external_editor()
+    }
+
+    /// Returns true when PTT (hold-Space-to-speak) should be allowed.
+    ///
+    /// PTT is allowed when either no view is active (normal chat mode) or the
+    /// active view supports voice (e.g. the document reader). Composer popups
+    /// block PTT so Space can operate toggles/steppers.
+    pub(crate) fn ptt_space_allowed(&self) -> bool {
+        if self.composer.popup_active() {
+            return false;
+        }
+        match self.view_stack.last() {
+            None => true,
+            Some(view) => view.voice_context().is_some(),
+        }
     }
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
