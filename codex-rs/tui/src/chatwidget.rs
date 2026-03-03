@@ -1329,9 +1329,7 @@ impl ChatWidget {
         // parsing). Only strip <voice> tags and display when no streaming occurred.
         if self.stream_controller.is_none() && !message.is_empty() {
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
-            let message = self
-                .on_voice_mode_agent_delta(&message)
-                .unwrap_or(message);
+            let message = self.on_voice_mode_agent_delta(&message).unwrap_or(message);
             self.handle_streaming_delta(message);
         }
         self.flush_answer_stream_with_separator();
@@ -4295,7 +4293,7 @@ impl ChatWidget {
         let voice_mode_active = self
             .voice_mode_state
             .as_ref()
-            .is_some_and(|s| s.is_active());
+            .is_some_and(voice_mode::VoiceModeState::is_active);
         #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
         let voice_mode_active = false;
 
@@ -4557,7 +4555,7 @@ impl ChatWidget {
             let display_text = if voice_input {
                 format!("🎙️ {text}")
             } else {
-                text.clone()
+                text
             };
             self.last_rendered_user_message_event =
                 Some(Self::rendered_user_message_event_from_parts(
@@ -4942,9 +4940,7 @@ impl ChatWidget {
         let (message, text_elements) =
             strip_system_instruction_prefix(event.message, event.text_elements);
 
-        if !message.trim().is_empty()
-            || !text_elements.is_empty()
-            || !remote_image_urls.is_empty()
+        if !message.trim().is_empty() || !text_elements.is_empty() || !remote_image_urls.is_empty()
         {
             self.add_to_history(history_cell::new_user_prompt(
                 message,
@@ -7827,7 +7823,11 @@ impl ChatWidget {
     fn is_main_composer_typing(&self) -> bool {
         self.bottom_pane.no_modal_or_popup_active()
             && !self.bottom_pane.composer_is_empty()
-            && self.bottom_pane.composer_text().chars().any(|c| !c.is_whitespace())
+            && self
+                .bottom_pane
+                .composer_text()
+                .chars()
+                .any(|c| !c.is_whitespace())
     }
 
     pub(crate) fn insert_str(&mut self, text: &str) {
@@ -8220,10 +8220,7 @@ impl ChatWidget {
         // the reader's content area instead, so skip the overlay entirely.
         #[cfg(not(target_os = "linux"))]
         let karaoke_active = {
-            let width = self
-                .last_rendered_width
-                .get()
-                .unwrap_or(80) as u16;
+            let width = self.last_rendered_width.get().unwrap_or(80) as u16;
             if self.bottom_pane.is_document_reader_active() {
                 false
             } else if let Some(lines) = self.voice_karaoke_lines(width) {
@@ -8315,7 +8312,6 @@ impl Renderable for VoiceKaraokeRenderable {
         self.lines.len() as u16
     }
 }
-
 
 impl Drop for ChatWidget {
     fn drop(&mut self) {

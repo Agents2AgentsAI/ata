@@ -14,7 +14,10 @@ use crate::types::SttResponse;
 /// Transcribe WAV audio bytes using the ElevenLabs STT API.
 ///
 /// The `wav_bytes` should be a complete WAV file (header + PCM data).
-pub async fn transcribe(config: &ElevenLabsConfig, wav_bytes: Vec<u8>) -> Result<String, ElevenLabsError> {
+pub async fn transcribe(
+    config: &ElevenLabsConfig,
+    wav_bytes: Vec<u8>,
+) -> Result<String, ElevenLabsError> {
     let audio_kib = wav_bytes.len() as f32 / 1024.0;
     trace!("sending STT request: audio={audio_kib:.1}KiB");
 
@@ -50,7 +53,9 @@ pub async fn transcribe(config: &ElevenLabsConfig, wav_bytes: Vec<u8>) -> Result
     debug!("STT transcription succeeded: {} chars", stt_resp.text.len());
 
     if stt_resp.text.is_empty() {
-        Err(ElevenLabsError::Api("empty transcription result".to_string()))
+        Err(ElevenLabsError::Api(
+            "empty transcription result".to_string(),
+        ))
     } else {
         Ok(stt_resp.text)
     }

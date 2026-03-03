@@ -4,10 +4,10 @@
 //! Designed for the voice mode pipeline where low latency matters more
 //! than perfect accuracy.
 
+use std::sync::Arc;
 use std::sync::atomic::AtomicU16;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -204,11 +204,7 @@ mod tests {
 
     #[test]
     fn speech_onset_requires_consecutive_frames() {
-        let mut vad = VoiceActivityDetector::with_onset_frames(
-            0.04,
-            Duration::from_millis(100),
-            3,
-        );
+        let mut vad = VoiceActivityDetector::with_onset_frames(0.04, Duration::from_millis(100), 3);
 
         // Single frame above threshold — not enough.
         assert_eq!(vad.process(0.10), None);
@@ -224,11 +220,7 @@ mod tests {
 
     #[test]
     fn transient_noise_does_not_trigger() {
-        let mut vad = VoiceActivityDetector::with_onset_frames(
-            0.04,
-            Duration::from_millis(100),
-            3,
-        );
+        let mut vad = VoiceActivityDetector::with_onset_frames(0.04, Duration::from_millis(100), 3);
 
         // Single spike (keyboard click) then silence.
         assert_eq!(vad.process(0.15), None);
@@ -239,11 +231,7 @@ mod tests {
 
     #[test]
     fn speech_onset_and_silence() {
-        let mut vad = VoiceActivityDetector::with_onset_frames(
-            0.04,
-            Duration::from_millis(100),
-            1,
-        );
+        let mut vad = VoiceActivityDetector::with_onset_frames(0.04, Duration::from_millis(100), 1);
 
         // Below threshold — nothing.
         assert_eq!(vad.process(0.02), None);
@@ -268,11 +256,7 @@ mod tests {
 
     #[test]
     fn echo_suppression_raises_threshold() {
-        let mut vad = VoiceActivityDetector::with_onset_frames(
-            0.04,
-            Duration::from_millis(100),
-            1,
-        );
+        let mut vad = VoiceActivityDetector::with_onset_frames(0.04, Duration::from_millis(100), 1);
 
         // Normal: 0.10 triggers.
         assert_eq!(vad.process(0.10), Some(VadEvent::SpeechDetected));
@@ -293,11 +277,7 @@ mod tests {
 
     #[test]
     fn max_speech_duration_forces_silence() {
-        let mut vad = VoiceActivityDetector::with_onset_frames(
-            0.04,
-            Duration::from_millis(100),
-            1,
-        );
+        let mut vad = VoiceActivityDetector::with_onset_frames(0.04, Duration::from_millis(100), 1);
         vad.max_speech_duration = Duration::from_millis(50);
 
         // Trigger speech onset.
