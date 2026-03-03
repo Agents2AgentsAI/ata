@@ -320,9 +320,8 @@ mod tests {
         let mut total_chunks = 0;
         while let Some(chunk) = stream.recv_audio().await {
             total_chunks += 1;
-            if chunk.alignment.is_some() {
+            if let Some(a) = chunk.alignment.as_ref() {
                 got_alignment = true;
-                let a = chunk.alignment.as_ref().unwrap();
                 eprintln!(
                     "chunk {total_chunks}: alignment with {} chars",
                     a.chars.len()
