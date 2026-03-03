@@ -10,9 +10,29 @@ Available operations:
 - prepareCallHierarchy: Get the call hierarchy item at a given position (preparation step for incoming/outgoing calls).
 - incomingCalls: Find all callers of a function (requires a prepareCallHierarchy item).
 - outgoingCalls: Find all functions called by a function (requires a prepareCallHierarchy item).
+- prepareRename: Check whether rename is valid at a given position.
+- renamePreview: Preview a rename as an apply_patch-compatible patch (does not apply).
+- codeActionPreview: Preview a code action edit as an apply_patch-compatible patch (does not apply).
 
-For position-based operations, provide `file` (absolute path), `line` (1-based), and `character` (1-based).
+For position-based operations, provide `file` (absolute path) and either:
+- `line` (1-based) + `character` (1-based), or
+- `symbol` (best-effort symbol name resolution within the file).
+
+By default, position-based queries will retry nearby positions when the initial cursor is slightly off. Set `fuzz=false` to disable.
 For workspaceSymbol, provide `query` (search string).
 For incomingCalls/outgoingCalls, first call prepareCallHierarchy, then pass the returned item.
 Use `root` to force a specific registered root when needed.
 Use `limit` (default 20, max 50) to cap result volume for list-heavy operations.
+
+Recipe:
+- Use `lsp` for cross-file, type-aware questions (definitions, references, hover) and preview refactors.
+- Use `code_intel` for fast structural search, project exploration, and reading implementations.
+
+High-value patterns (prefer LSP when available):
+- Cross-file type analysis: `lsp.goToDefinition` + `lsp.findReferences` + `lsp.hover` are typically higher-signal than syntax-only caller search.
+- Interface/trait implementations: `lsp.goToImplementation` is more reliable than syntax-only heuristics.
+- Safe rename: always use `lsp.renamePreview` (then apply via `apply_patch`) instead of manual find-and-replace.
+
+Fallbacks:
+- If you don't have exact line/col: use `symbol` (or `lsp.documentSymbol` to discover names) and keep `fuzz=true`.
+- If no LSP server is configured/running for a file, fall back to `code_intel` operations.

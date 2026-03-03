@@ -1,4 +1,4 @@
-//! LSP tool handler exposing 9 code intelligence operations to the agent.
+//! LSP tool handler exposing code intelligence and preview refactor operations to the agent.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -7,13 +7,18 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use codex_lsp_client::ServerRegistry;
 use codex_lsp_client::lsp_types::CallHierarchyItem;
+use codex_lsp_client::lsp_types::CodeActionKind;
+use codex_lsp_client::lsp_types::CodeActionOrCommand;
 use codex_lsp_client::lsp_types::DocumentSymbol;
 use codex_lsp_client::lsp_types::DocumentSymbolResponse;
+use codex_lsp_client::lsp_types::Diagnostic;
 use codex_lsp_client::lsp_types::GotoDefinitionResponse;
 use codex_lsp_client::lsp_types::Hover;
 use codex_lsp_client::lsp_types::HoverContents;
 use codex_lsp_client::lsp_types::Location;
 use codex_lsp_client::lsp_types::MarkedString;
+use codex_lsp_client::lsp_types::PrepareRenameResponse;
+use codex_lsp_client::lsp_types::Range;
 use codex_lsp_client::lsp_types::SymbolInformation;
 use codex_lsp_client::lsp_types::request::GotoImplementationResponse;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -26,6 +31,8 @@ use crate::state::MultiRootState;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::handlers::function_arguments_from_payload;
+use crate::tools::handlers::lsp_workspace_edit::PatchLimits;
+use crate::tools::handlers::lsp_workspace_edit::workspace_edit_to_apply_patch;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::truncate_tool_output;
 use crate::tools::registry::ToolHandler;
@@ -36,6 +43,7 @@ const LSP_TOOL_DESCRIPTION: &str = include_str!("tool_lsp.txt");
 const DEFAULT_LIMIT: usize = 20;
 const MAX_RESULTS: usize = 50;
 const MAX_RESULT_BYTES: usize = 8 * 1024;
+const MAX_PATCH_BYTES: usize = 256 * 1024;
 
 /// Handler for the `lsp` tool.
 pub struct LspToolHandler {
@@ -52,11 +60,25 @@ struct LspToolArgs {
     #[serde(default)]
     character: Option<u32>,
     #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
+    fuzz: Option<bool>,
+    #[serde(default)]
     query: Option<String>,
     #[serde(default)]
     root: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
+    #[serde(default)]
+    end_line: Option<u32>,
+    #[serde(default)]
+    end_character: Option<u32>,
+    #[serde(default)]
+    new_name: Option<String>,
+    #[serde(default)]
+    only: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
     /// Serialized CallHierarchyItem for incoming/outgoing calls.
     #[serde(default)]
     item: Option<serde_json::Value>,
@@ -74,6 +96,9 @@ enum LspOperation {
     PrepareCallHierarchy,
     IncomingCalls,
     OutgoingCalls,
+    PrepareRename,
+    RenamePreview,
+    CodeActionPreview,
 }
 
 #[async_trait]
@@ -92,34 +117,107 @@ impl ToolHandler for LspToolHandler {
         let arguments = function_arguments_from_payload(payload, "lsp")?;
         let args: LspToolArgs = parse_arguments(&arguments)?;
         let limit = args.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_RESULTS);
+        let fuzz = args.fuzz.unwrap_or(true);
 
-        let result = match args.operation {
+        let (result, is_patch) = match args.operation {
             LspOperation::GoToDefinition => {
-                let (path, line, char) = extract_position(&args)?;
+                let path = extract_file(&args)?;
                 let (root_name, registry) =
                     self.registry_for_file(&path, args.root.as_deref()).await?;
                 self.sync_file_for_query(&registry, &root_name, &path)
                     .await?;
-                let resp = registry.definition(&path, line, char).await;
-                format_definition(resp)
+                let (line, char) = self.resolve_line_char(&registry, &root_name, &path, &args).await?;
+
+                let mut resp = registry.definition(&path, line, char).await;
+                let mut resolved = None;
+                if fuzz && is_empty_definition(&resp) {
+                    for (l, c) in fuzz_positions(line, char).into_iter().skip(1).take(25) {
+                        let candidate = registry.definition(&path, l, c).await;
+                        if !is_empty_definition(&candidate) {
+                            resp = candidate;
+                            resolved = Some((l, c));
+                            break;
+                        }
+                    }
+                }
+
+                let mut out = String::new();
+                if let Some((l, c)) = resolved {
+                    out.push_str(&format!(
+                        "Resolved at {}:{}:{}\n",
+                        path.display(),
+                        l + 1,
+                        c + 1
+                    ));
+                }
+                out.push_str(&format_definition(resp));
+                (out, false)
             }
             LspOperation::FindReferences => {
-                let (path, line, char) = extract_position(&args)?;
+                let path = extract_file(&args)?;
                 let (root_name, registry) =
                     self.registry_for_file(&path, args.root.as_deref()).await?;
                 self.sync_file_for_query(&registry, &root_name, &path)
                     .await?;
-                let refs = registry.references(&path, line, char).await;
-                format_references(&refs, limit)
+                let (line, char) = self.resolve_line_char(&registry, &root_name, &path, &args).await?;
+
+                let mut refs = registry.references(&path, line, char).await;
+                let mut resolved = None;
+                if fuzz && refs.is_empty() {
+                    for (l, c) in fuzz_positions(line, char).into_iter().skip(1).take(12) {
+                        let candidate = registry.references(&path, l, c).await;
+                        if !candidate.is_empty() {
+                            refs = candidate;
+                            resolved = Some((l, c));
+                            break;
+                        }
+                    }
+                }
+
+                let mut out = String::new();
+                if let Some((l, c)) = resolved {
+                    out.push_str(&format!(
+                        "Resolved at {}:{}:{}\n",
+                        path.display(),
+                        l + 1,
+                        c + 1
+                    ));
+                }
+                out.push_str(&format_references(&refs, limit));
+                (out, false)
             }
             LspOperation::Hover => {
-                let (path, line, char) = extract_position(&args)?;
+                let path = extract_file(&args)?;
                 let (root_name, registry) =
                     self.registry_for_file(&path, args.root.as_deref()).await?;
                 self.sync_file_for_query(&registry, &root_name, &path)
                     .await?;
-                let hover = registry.hover(&path, line, char).await;
-                format_hover(hover)
+                let (line, char) = self.resolve_line_char(&registry, &root_name, &path, &args).await?;
+
+                let mut hover = registry.hover(&path, line, char).await;
+                let mut resolved = None;
+                if fuzz && hover.is_none() {
+                    for (l, c) in fuzz_positions(line, char).into_iter().skip(1).take(25) {
+                        let candidate = registry.hover(&path, l, c).await;
+                        if candidate.is_some() {
+                            hover = candidate;
+                            resolved = Some((l, c));
+                            break;
+                        }
+                    }
+                }
+
+                let mut out = String::new();
+                if let Some((l, c)) = resolved {
+                    out.push_str(&format!(
+                        "Resolved at {}:{}:{}\n",
+                        path.display(),
+                        l + 1,
+                        c + 1
+                    ));
+                }
+                out.push_str(&format_hover(hover));
+                (out, false)
             }
             LspOperation::DocumentSymbol => {
                 let path = extract_file(&args)?;
@@ -128,7 +226,7 @@ impl ToolHandler for LspToolHandler {
                 self.sync_file_for_query(&registry, &root_name, &path)
                     .await?;
                 let resp = registry.document_symbol(&path).await;
-                format_document_symbols(resp)
+                (format_document_symbols(resp), false)
             }
             LspOperation::WorkspaceSymbol => {
                 let query = args.query.as_deref().map(str::trim).unwrap_or("");
@@ -158,26 +256,65 @@ impl ToolHandler for LspToolHandler {
                         "no LSP servers are running (failed to start any)".to_string(),
                     ));
                 }
-                format_workspace_symbols(&symbols, limit)
+                (format_workspace_symbols(&symbols, limit), false)
             }
             LspOperation::GoToImplementation => {
-                let (path, line, char) = extract_position(&args)?;
+                let path = extract_file(&args)?;
                 let (root_name, registry) =
                     self.registry_for_file(&path, args.root.as_deref()).await?;
                 self.sync_file_for_query(&registry, &root_name, &path)
                     .await?;
-                let resp = registry.implementation(&path, line, char).await;
-                format_implementation(resp)
+                let (line, char) = self.resolve_line_char(&registry, &root_name, &path, &args).await?;
+
+                let mut resp = registry.implementation(&path, line, char).await;
+                let mut resolved = None;
+                if fuzz && is_empty_definition(&resp) {
+                    for (l, c) in fuzz_positions(line, char).into_iter().skip(1).take(25) {
+                        let candidate = registry.implementation(&path, l, c).await;
+                        if !is_empty_definition(&candidate) {
+                            resp = candidate;
+                            resolved = Some((l, c));
+                            break;
+                        }
+                    }
+                }
+
+                let mut out = String::new();
+                if let Some((l, c)) = resolved {
+                    out.push_str(&format!(
+                        "Resolved at {}:{}:{}\n",
+                        path.display(),
+                        l + 1,
+                        c + 1
+                    ));
+                }
+                out.push_str(&format_implementation(resp));
+                (out, false)
             }
             LspOperation::PrepareCallHierarchy => {
-                let (path, line, char) = extract_position(&args)?;
+                let path = extract_file(&args)?;
                 let (root_name, registry) =
                     self.registry_for_file(&path, args.root.as_deref()).await?;
                 self.sync_file_for_query(&registry, &root_name, &path)
                     .await?;
-                let items = registry.prepare_call_hierarchy(&path, line, char).await;
-                serde_json::to_string_pretty(&items.into_iter().take(limit).collect::<Vec<_>>())
-                    .unwrap_or_else(|_| "[]".to_string())
+                let (line, char) = self.resolve_line_char(&registry, &root_name, &path, &args).await?;
+
+                let mut items = registry.prepare_call_hierarchy(&path, line, char).await;
+                if fuzz && items.is_empty() {
+                    for (l, c) in fuzz_positions(line, char).into_iter().skip(1).take(25) {
+                        let candidate = registry.prepare_call_hierarchy(&path, l, c).await;
+                        if !candidate.is_empty() {
+                            items = candidate;
+                            break;
+                        }
+                    }
+                }
+
+                (
+                    serde_json::to_string_pretty(&items.into_iter().take(limit).collect::<Vec<_>>())
+                        .unwrap_or_else(|_| "[]".to_string()),
+                    false,
+                )
             }
             LspOperation::IncomingCalls => {
                 let item_val = args.item.ok_or_else(|| {
@@ -200,8 +337,11 @@ impl ToolHandler for LspToolHandler {
                     ));
                 };
                 let calls = registry.incoming_calls(item).await;
-                serde_json::to_string_pretty(&calls.into_iter().take(limit).collect::<Vec<_>>())
-                    .unwrap_or_else(|_| "[]".to_string())
+                (
+                    serde_json::to_string_pretty(&calls.into_iter().take(limit).collect::<Vec<_>>())
+                        .unwrap_or_else(|_| "[]".to_string()),
+                    false,
+                )
             }
             LspOperation::OutgoingCalls => {
                 let item_val = args.item.ok_or_else(|| {
@@ -224,13 +364,170 @@ impl ToolHandler for LspToolHandler {
                     ));
                 };
                 let calls = registry.outgoing_calls(item).await;
-                serde_json::to_string_pretty(&calls.into_iter().take(limit).collect::<Vec<_>>())
-                    .unwrap_or_else(|_| "[]".to_string())
+                (
+                    serde_json::to_string_pretty(&calls.into_iter().take(limit).collect::<Vec<_>>())
+                        .unwrap_or_else(|_| "[]".to_string()),
+                    false,
+                )
+            }
+            LspOperation::PrepareRename => {
+                let path = extract_file(&args)?;
+                let (root_name, registry) =
+                    self.registry_for_file(&path, args.root.as_deref()).await?;
+                self.sync_file_for_query(&registry, &root_name, &path)
+                    .await?;
+                let (line, char) = self.resolve_line_char(&registry, &root_name, &path, &args).await?;
+
+                let mut resp = registry.prepare_rename(&path, line, char).await;
+                let mut resolved = None;
+                if fuzz && resp.is_none() {
+                    for (l, c) in fuzz_positions(line, char).into_iter().skip(1).take(25) {
+                        let candidate = registry.prepare_rename(&path, l, c).await;
+                        if candidate.is_some() {
+                            resp = candidate;
+                            resolved = Some((l, c));
+                            break;
+                        }
+                    }
+                }
+
+                let mut out = String::new();
+                if let Some((l, c)) = resolved {
+                    out.push_str(&format!(
+                        "Resolved at {}:{}:{}\n",
+                        path.display(),
+                        l + 1,
+                        c + 1
+                    ));
+                }
+                out.push_str(&format_prepare_rename(resp));
+                (out, false)
+            }
+            LspOperation::RenamePreview => {
+                let new_name = args
+                    .new_name
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or("");
+                if new_name.is_empty() {
+                    return Err(FunctionCallError::RespondToModel(
+                        "renamePreview requires `new_name`".to_string(),
+                    ));
+                }
+
+                let path = extract_file(&args)?;
+                let (root_name, registry) =
+                    self.registry_for_file(&path, args.root.as_deref()).await?;
+                self.sync_file_for_query(&registry, &root_name, &path)
+                    .await?;
+                let (line, char) = self.resolve_line_char(&registry, &root_name, &path, &args).await?;
+
+                let mut edit = registry.rename(&path, line, char, new_name).await;
+                if fuzz && edit.is_none() {
+                    for (l, c) in fuzz_positions(line, char).into_iter().skip(1).take(25) {
+                        let candidate = registry.rename(&path, l, c, new_name).await;
+                        if candidate.is_some() {
+                            edit = candidate;
+                            break;
+                        }
+                    }
+                }
+
+                let edit = edit.ok_or_else(|| {
+                    FunctionCallError::RespondToModel("rename produced no workspace edit".to_string())
+                })?;
+
+                let patch = workspace_edit_to_apply_patch(
+                    &edit,
+                    PatchLimits {
+                        max_files_touched: 50,
+                        max_patch_bytes: MAX_PATCH_BYTES,
+                    },
+                )
+                .map_err(FunctionCallError::RespondToModel)?;
+                (patch, true)
+            }
+            LspOperation::CodeActionPreview => {
+                let path = extract_file(&args)?;
+                let (root_name, registry) =
+                    self.registry_for_file(&path, args.root.as_deref()).await?;
+                self.sync_file_for_query(&registry, &root_name, &path)
+                    .await?;
+
+                let (line, char) = self.resolve_line_char(&registry, &root_name, &path, &args).await?;
+                let end_line = args.end_line.unwrap_or(line.saturating_add(1));
+                let end_character = args.end_character.unwrap_or(char.saturating_add(1));
+                if end_line == 0 || end_character == 0 {
+                    return Err(FunctionCallError::RespondToModel(
+                        "`end_line` and `end_character` must be 1-based".to_string(),
+                    ));
+                }
+                let range = Range {
+                    start: codex_lsp_client::lsp_types::Position { line, character: char },
+                    end: codex_lsp_client::lsp_types::Position {
+                        line: end_line - 1,
+                        character: end_character - 1,
+                    },
+                };
+
+                let only_kind = args.only.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("quickfix");
+                let only = Some(vec![CodeActionKind::from(only_kind.to_string())]);
+
+                let diags: Vec<Diagnostic> = registry.diagnostics_for_file(&path).await;
+
+                let mut actions = registry.code_action(&path, range, only, diags).await;
+                if fuzz && actions.is_empty() {
+                    for (l, c) in fuzz_positions(line, char).into_iter().skip(1).take(12) {
+                        let range = Range {
+                            start: codex_lsp_client::lsp_types::Position { line: l, character: c },
+                            end: codex_lsp_client::lsp_types::Position { line: l, character: c },
+                        };
+                        let candidate = registry.code_action(&path, range, Some(vec![CodeActionKind::from(only_kind.to_string())]), Vec::new()).await;
+                        if !candidate.is_empty() {
+                            actions = candidate;
+                            break;
+                        }
+                    }
+                }
+
+                let title = args.title.as_deref().map(str::trim).filter(|s| !s.is_empty());
+                let previewable = filter_previewable_code_actions(&actions);
+                if previewable.is_empty() {
+                    return Err(FunctionCallError::RespondToModel(
+                        "no previewable code actions found (need an action with `edit` and no `command`)".to_string(),
+                    ));
+                }
+
+                let chosen = choose_code_action(&previewable, title)?;
+                let edit = chosen.edit.clone().ok_or_else(|| {
+                    FunctionCallError::RespondToModel("selected code action has no edit".to_string())
+                })?;
+                let patch = workspace_edit_to_apply_patch(
+                    &edit,
+                    PatchLimits {
+                        max_files_touched: 50,
+                        max_patch_bytes: MAX_PATCH_BYTES,
+                    },
+                )
+                .map_err(FunctionCallError::RespondToModel)?;
+                (patch, true)
             }
         };
 
+        let out = if is_patch {
+            if result.len() > MAX_PATCH_BYTES {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "preview patch is {} bytes, exceeding limit {MAX_PATCH_BYTES}",
+                    result.len()
+                )));
+            }
+            result
+        } else {
+            truncate_tool_output(&result, MAX_RESULT_BYTES)
+        };
+
         Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(truncate_tool_output(&result, MAX_RESULT_BYTES)),
+            body: FunctionCallOutputBody::Text(out),
             success: Some(true),
         })
     }
@@ -319,6 +616,110 @@ impl LspToolHandler {
         let _ = registry.touch_file(path, false).await;
         Ok(())
     }
+
+    async fn resolve_line_char(
+        &self,
+        registry: &ServerRegistry,
+        root_name: &str,
+        path: &Path,
+        args: &LspToolArgs,
+    ) -> Result<(u32, u32), FunctionCallError> {
+        if let (Some(line), Some(character)) = (args.line, args.character) {
+            if line == 0 || character == 0 {
+                return Err(FunctionCallError::RespondToModel(
+                    "`line` and `character` must be 1-based".to_string(),
+                ));
+            }
+            return Ok((line - 1, character - 1));
+        }
+
+        let symbol = args.symbol.as_deref().map(str::trim).unwrap_or("");
+        if !symbol.is_empty() {
+            return self
+                .resolve_symbol_to_position(registry, root_name, path, symbol)
+                .await;
+        }
+
+        Err(FunctionCallError::RespondToModel(
+            "position required: provide (`line`, `character`) or `symbol`".to_string(),
+        ))
+    }
+
+    async fn resolve_symbol_to_position(
+        &self,
+        registry: &ServerRegistry,
+        root_name: &str,
+        path: &Path,
+        symbol: &str,
+    ) -> Result<(u32, u32), FunctionCallError> {
+        // Fast path: if tree-sitter index is already ready, use it without blocking.
+        #[cfg(feature = "treesitter")]
+        if let Some((_, index)) = self
+            .state
+            .try_treesitter_index_for_file(path, Some(root_name))
+            .await
+        {
+            if let Ok(rel) = index.rel_path_for_absolute(path) {
+                let symbols = index.symbol_table().symbols_in_file(&rel);
+                let matches: Vec<_> = symbols
+                    .into_iter()
+                    .filter(|s| symbol_name_matches(&s.name, symbol))
+                    .collect();
+
+                if matches.len() == 1 {
+                    let s = &matches[0];
+                    let line0 = (s.line_range.0 as u32).saturating_sub(1);
+                    return Ok((line0, 0));
+                }
+
+                if !matches.is_empty() {
+                    let mut lines = Vec::new();
+                    for s in matches {
+                        lines.push(format!(
+                            "{:?} {} [{}-{}] {}",
+                            s.kind, s.name, s.line_range.0, s.line_range.1, s.signature
+                        ));
+                    }
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "multiple symbols named '{symbol}' found in {}:\n- {}",
+                        path.display(),
+                        lines.join("\n- ")
+                    )));
+                }
+            }
+        }
+
+        // Fallback: ask the server for document symbols and pick the best match.
+        let resp = registry.document_symbol(path).await;
+        let mut candidates = Vec::new();
+        collect_document_symbol_candidates(&resp, symbol, &mut candidates);
+
+        if candidates.len() == 1 {
+            return Ok((candidates[0].0, candidates[0].1));
+        }
+
+        if candidates.is_empty() {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "symbol '{symbol}' not found in {}",
+                path.display()
+            )));
+        }
+
+        let mut lines = Vec::new();
+        for (line0, char0, name, kind) in candidates {
+            lines.push(format!(
+                "{kind} {name} @ {}:{}:{}",
+                path.display(),
+                line0 + 1,
+                char0 + 1
+            ));
+        }
+        Err(FunctionCallError::RespondToModel(format!(
+            "multiple symbols matching '{symbol}' found in {}:\n- {}",
+            path.display(),
+            lines.join("\n- ")
+        )))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -337,23 +738,6 @@ fn extract_file(args: &LspToolArgs) -> Result<PathBuf, FunctionCallError> {
         ));
     }
     Ok(path)
-}
-
-fn extract_position(args: &LspToolArgs) -> Result<(PathBuf, u32, u32), FunctionCallError> {
-    let path = extract_file(args)?;
-    let line = args.line.ok_or_else(|| {
-        FunctionCallError::RespondToModel("`line` is required (1-based)".to_string())
-    })?;
-    let character = args.character.ok_or_else(|| {
-        FunctionCallError::RespondToModel("`character` is required (1-based)".to_string())
-    })?;
-    if line == 0 || character == 0 {
-        return Err(FunctionCallError::RespondToModel(
-            "`line` and `character` must be 1-based".to_string(),
-        ));
-    }
-    // Convert from 1-based (user) to 0-based (LSP).
-    Ok((path, line - 1, character - 1))
 }
 
 // ---------------------------------------------------------------------------
@@ -381,11 +765,10 @@ fn format_definition(resp: Option<GotoDefinitionResponse>) -> String {
                 links
                     .iter()
                     .map(|l| {
-                        format!(
-                            "{}:{}:{}",
+                        format_uri_position(
                             l.target_uri.as_str(),
-                            l.target_range.start.line + 1,
-                            l.target_range.start.character + 1
+                            l.target_range.start.line,
+                            l.target_range.start.character,
                         )
                     })
                     .collect::<Vec<_>>()
@@ -412,12 +795,20 @@ fn format_references(refs: &[Location], limit: usize) -> String {
     }
 }
 
+fn format_uri_position(uri: &str, line0: u32, char0: u32) -> String {
+    if let Ok(url) = url::Url::parse(uri)
+        && let Ok(path) = url.to_file_path()
+    {
+        return format!("{}:{}:{}", path.display(), line0 + 1, char0 + 1);
+    }
+    format!("{uri}:{}:{}", line0 + 1, char0 + 1)
+}
+
 fn format_location(loc: &Location) -> String {
-    format!(
-        "{}:{}:{}",
+    format_uri_position(
         loc.uri.as_str(),
-        loc.range.start.line + 1,
-        loc.range.start.character + 1
+        loc.range.start.line,
+        loc.range.start.character,
     )
 }
 
@@ -503,17 +894,186 @@ fn format_workspace_symbols(symbols: &[SymbolInformation], limit: usize) -> Stri
         .iter()
         .take(limit)
         .map(|s| {
-            format!(
-                "{:?} {} @ {}:{}:{}",
-                s.kind,
-                s.name,
+            let pos = format_uri_position(
                 s.location.uri.as_str(),
-                s.location.range.start.line + 1,
-                s.location.range.start.character + 1
+                s.location.range.start.line,
+                s.location.range.start.character,
+            );
+            format!(
+                "{:?} {} @ {}",
+                s.kind, s.name, pos
             )
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn is_empty_definition(resp: &Option<GotoDefinitionResponse>) -> bool {
+    match resp {
+        None => true,
+        Some(GotoDefinitionResponse::Scalar(_)) => false,
+        Some(GotoDefinitionResponse::Array(locs)) => locs.is_empty(),
+        Some(GotoDefinitionResponse::Link(links)) => links.is_empty(),
+    }
+}
+
+fn fuzz_positions(line0: u32, char0: u32) -> Vec<(u32, u32)> {
+    const LINE_OFFSETS: [i32; 5] = [0, -1, 1, -2, 2];
+    const CHAR_OFFSETS: [i32; 17] = [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6, -7, 7, -8, 8];
+
+    let mut out = Vec::with_capacity(LINE_OFFSETS.len() * CHAR_OFFSETS.len());
+    let mut seen = std::collections::HashSet::new();
+    for lo in LINE_OFFSETS {
+        for co in CHAR_OFFSETS {
+            let l = line0 as i32 + lo;
+            let c = char0 as i32 + co;
+            if l < 0 || c < 0 {
+                continue;
+            }
+            let pos = (l as u32, c as u32);
+            if seen.insert(pos) {
+                out.push(pos);
+            }
+        }
+    }
+    out
+}
+
+fn symbol_name_matches(name: &str, query: &str) -> bool {
+    let query = query.trim();
+    if query.is_empty() {
+        return false;
+    }
+    if name == query {
+        return true;
+    }
+    if let Some(last) = query.rsplit("::").next() {
+        return name == last;
+    }
+    false
+}
+
+fn collect_document_symbol_candidates(
+    resp: &Option<DocumentSymbolResponse>,
+    query: &str,
+    out: &mut Vec<(u32, u32, String, String)>,
+) {
+    let Some(resp) = resp else {
+        return;
+    };
+
+    match resp {
+        DocumentSymbolResponse::Flat(symbols) => {
+            #[allow(deprecated)]
+            for s in symbols {
+                if symbol_name_matches(&s.name, query) {
+                    out.push((
+                        s.location.range.start.line,
+                        s.location.range.start.character,
+                        s.name.clone(),
+                        format!("{:?}", s.kind),
+                    ));
+                }
+            }
+        }
+        DocumentSymbolResponse::Nested(symbols) => {
+            collect_nested_doc_symbols(symbols, query, out);
+        }
+    }
+}
+
+fn collect_nested_doc_symbols(
+    symbols: &[DocumentSymbol],
+    query: &str,
+    out: &mut Vec<(u32, u32, String, String)>,
+) {
+    for s in symbols {
+        if symbol_name_matches(&s.name, query) {
+            out.push((
+                s.selection_range.start.line,
+                s.selection_range.start.character,
+                s.name.clone(),
+                format!("{:?}", s.kind),
+            ));
+        }
+        if let Some(children) = &s.children {
+            collect_nested_doc_symbols(children, query, out);
+        }
+    }
+}
+
+fn format_prepare_rename(resp: Option<PrepareRenameResponse>) -> String {
+    let Some(resp) = resp else {
+        return "No rename available.".to_string();
+    };
+
+    match resp {
+        PrepareRenameResponse::Range(r) => format!(
+            "Rename range: [{}:{}]-[{}:{}]",
+            r.start.line + 1,
+            r.start.character + 1,
+            r.end.line + 1,
+            r.end.character + 1
+        ),
+        PrepareRenameResponse::RangeWithPlaceholder { range, placeholder } => format!(
+            "Rename range: [{}:{}]-[{}:{}]\nPlaceholder: {placeholder}",
+            range.start.line + 1,
+            range.start.character + 1,
+            range.end.line + 1,
+            range.end.character + 1
+        ),
+        PrepareRenameResponse::DefaultBehavior { default_behavior } => format!(
+            "Rename supported (default behavior: {default_behavior}).",
+        ),
+    }
+}
+
+fn filter_previewable_code_actions(
+    actions: &[CodeActionOrCommand],
+) -> Vec<codex_lsp_client::lsp_types::CodeAction> {
+    actions
+        .iter()
+        .filter_map(|item| match item {
+            CodeActionOrCommand::CodeAction(action)
+                if action.edit.is_some() && action.command.is_none() =>
+            {
+                Some(action.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn choose_code_action(
+    actions: &[codex_lsp_client::lsp_types::CodeAction],
+    title: Option<&str>,
+) -> Result<codex_lsp_client::lsp_types::CodeAction, FunctionCallError> {
+    if let Some(title) = title {
+        if let Some(action) = actions.iter().find(|a| a.title == title) {
+            return Ok(action.clone());
+        }
+        return Err(FunctionCallError::RespondToModel(format!(
+            "no code action titled '{title}'. Available:\n- {}",
+            actions
+                .iter()
+                .map(|a| a.title.as_str())
+                .collect::<Vec<_>>()
+                .join("\n- ")
+        )));
+    }
+
+    if actions.len() == 1 {
+        return Ok(actions[0].clone());
+    }
+
+    Err(FunctionCallError::RespondToModel(format!(
+        "multiple previewable code actions found; pass `title` to select one:\n- {}",
+        actions
+            .iter()
+            .map(|a| a.title.as_str())
+            .collect::<Vec<_>>()
+            .join("\n- ")
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -528,7 +1088,7 @@ pub(crate) fn create_lsp_tool() -> ToolSpec {
         "operation".to_string(),
         JsonSchema::String {
             description: Some(
-                "The LSP operation to perform: goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls".to_string(),
+                "The LSP operation to perform: goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls, prepareRename, renamePreview, codeActionPreview".to_string(),
             ),
         },
     );
@@ -553,6 +1113,24 @@ pub(crate) fn create_lsp_tool() -> ToolSpec {
         },
     );
     properties.insert(
+        "symbol".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Alternative to line/character: resolve a symbol name within `file` to a position (best-effort)."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "fuzz".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "When a position-based query returns empty, retry nearby positions (default true)."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
         "query".to_string(),
         JsonSchema::String {
             description: Some("Search query for workspaceSymbol operation".to_string()),
@@ -571,6 +1149,44 @@ pub(crate) fn create_lsp_tool() -> ToolSpec {
         "limit".to_string(),
         JsonSchema::Number {
             description: Some("Result limit (default 20, max 50).".to_string()),
+        },
+    );
+    properties.insert(
+        "end_line".to_string(),
+        JsonSchema::Number {
+            description: Some("1-based end line number (for codeActionPreview range).".to_string()),
+        },
+    );
+    properties.insert(
+        "end_character".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "1-based end character/column number (for codeActionPreview range).".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "new_name".to_string(),
+        JsonSchema::String {
+            description: Some("New symbol name (for renamePreview).".to_string()),
+        },
+    );
+    properties.insert(
+        "only".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Code action kind filter (for codeActionPreview), e.g. 'quickfix' (default)."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "title".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Code action title selector when multiple actions are available (for codeActionPreview)."
+                    .to_string(),
+            ),
         },
     );
     properties.insert(

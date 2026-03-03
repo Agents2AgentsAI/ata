@@ -34,3 +34,6 @@ All operations accept optional `root` for scoping; when omitted, search-style op
 Set `response_format` to `json` for machine-readable output (default is `text`).
 
 Use the `lsp` tool when semantic precision is required (type-aware definitions, references, hover).
+
+Recipe:
+- If you only have a symbol name (no exact line/col), start with `code_intel.symbolSearch` or `lsp.documentSymbol`, then switch to `lsp` for the precise semantic query.

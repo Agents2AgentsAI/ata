@@ -822,6 +822,64 @@ impl ServerRegistry {
         Self::dedup_by_key(calls, outgoing_call_key)
     }
 
+    pub async fn prepare_rename(
+        &self,
+        path: &Path,
+        line: u32,
+        character: u32,
+    ) -> Option<PrepareRenameResponse> {
+        self.first_match(path, |client| async move {
+            client.prepare_rename(path, line, character).await
+        })
+        .await
+    }
+
+    pub async fn rename(
+        &self,
+        path: &Path,
+        line: u32,
+        character: u32,
+        new_name: &str,
+    ) -> Option<WorkspaceEdit> {
+        let new_name = new_name.to_string();
+        let path = path.to_path_buf();
+        self.first_match(&path, |client| {
+            let path = path.clone();
+            let new_name = new_name.clone();
+            async move { client.rename(&path, line, character, &new_name).await }
+        })
+        .await
+    }
+
+    pub async fn code_action(
+        &self,
+        path: &Path,
+        range: Range,
+        only: Option<Vec<CodeActionKind>>,
+        diagnostics: Vec<Diagnostic>,
+    ) -> Vec<CodeActionOrCommand> {
+        let clients: Vec<Arc<LspClient>> = self
+            .get_clients(path)
+            .await
+            .into_iter()
+            .map(|(_, client)| client)
+            .collect();
+
+        if clients.is_empty() {
+            return Vec::new();
+        }
+
+        for client in clients {
+            let items = client
+                .code_action(path, range, only.clone(), diagnostics.clone())
+                .await;
+            if !items.is_empty() {
+                return items;
+            }
+        }
+        Vec::new()
+    }
+
     // -----------------------------------------------------------------------
     // Shutdown
     // -----------------------------------------------------------------------
@@ -972,8 +1030,11 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
+
+    static PATH_MUTEX: Mutex<()> = Mutex::new(());
 
     fn rust_analyzer_like_rustup_error() -> &'static str {
         "error: Unknown binary 'rust-analyzer' in official toolchain '1.93.0-aarch64-apple-darwin'.\n\
@@ -1033,6 +1094,7 @@ help: run `rustup component add rust-analyzer`\n"
     #[cfg(unix)]
     #[tokio::test]
     async fn spawn_client_prompts_install_on_preflight_needs_install_and_decline() {
+        let _path_lock = PATH_MUTEX.lock().unwrap();
         let temp_bin = tempfile::TempDir::new().unwrap();
         let _guard = PathGuard::prepend(temp_bin.path());
 

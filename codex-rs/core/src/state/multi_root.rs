@@ -406,6 +406,28 @@ impl MultiRootState {
         Ok(Some((root.name, index)))
     }
 
+    /// Best-effort, non-blocking lookup of the tree-sitter index for a file.
+    ///
+    /// Returns `None` if:
+    /// - the file is not under a registered root,
+    /// - the root has no tree-sitter index,
+    /// - the index is still building or has failed.
+    #[cfg(feature = "treesitter")]
+    pub async fn try_treesitter_index_for_file(
+        &self,
+        file: &Path,
+        root_name: Option<&str>,
+    ) -> Option<(String, Arc<codex_treesitter::ProjectIndex>)> {
+        let root = self.resolve_root(root_name, Some(file)).await?;
+        let indices = self.treesitter_indices.read().await;
+        let idx = indices.get(&root.name).cloned();
+        drop(indices);
+
+        let idx = idx?;
+        let index = idx.try_ready().await?;
+        Some((root.name, index))
+    }
+
     #[cfg(feature = "treesitter")]
     pub async fn treesitter_indices(
         &self,

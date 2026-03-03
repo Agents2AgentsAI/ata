@@ -59,6 +59,8 @@ def handle_request(msg):
                     'textDocumentSync': 1,
                     'hoverProvider': True,
                     'definitionProvider': True,
+                    'renameProvider': True,
+                    'codeActionProvider': True,
                 }
             }
         })
@@ -111,6 +113,70 @@ def handle_request(msg):
                             'start': {'line': 0, 'character': 0},
                             'end': {'line': 0, 'character': 1}
                         }
+                    }
+                }
+            ]
+        })
+    elif method == 'textDocument/prepareRename':
+        # Always allow renaming the first identifier.
+        send_message({
+            'jsonrpc': '2.0',
+            'id': req_id,
+            'result': {
+                'start': {'line': 0, 'character': 0},
+                'end': {'line': 0, 'character': 5}
+            }
+        })
+    elif method == 'textDocument/rename':
+        params = msg.get('params', {})
+        new_name = params.get('newName', 'renamed')
+        uri = params.get('textDocument', {}).get('uri', '')
+        send_message({
+            'jsonrpc': '2.0',
+            'id': req_id,
+            'result': {
+                'changes': {
+                    uri: [
+                        {
+                            'range': {
+                                'start': {'line': 0, 'character': 0},
+                                'end': {'line': 0, 'character': 5}
+                            },
+                            'newText': new_name
+                        }
+                    ]
+                }
+            }
+        })
+    elif method == 'textDocument/codeAction':
+        # Return two actions: one previewable edit-only quickfix, one requiring a command.
+        send_message({
+            'jsonrpc': '2.0',
+            'id': req_id,
+            'result': [
+                {
+                    'title': 'Fake quickfix',
+                    'kind': 'quickfix',
+                    'edit': {
+                        'changes': {
+                            'file:///test.rs': [
+                                {
+                                    'range': {
+                                        'start': {'line': 0, 'character': 0},
+                                        'end': {'line': 0, 'character': 0}
+                                    },
+                                    'newText': '// quickfix\\n'
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    'title': 'Needs command',
+                    'kind': 'quickfix',
+                    'command': {
+                        'title': 'Do thing',
+                        'command': 'do.thing'
                     }
                 }
             ]
@@ -417,4 +483,95 @@ async fn workspace_symbol_autospawns_clients() {
     );
 
     registry.shutdown_all().await;
+}
+
+#[tokio::test]
+async fn prepare_rename_returns_result() {
+    let dir = TempDir::new().unwrap();
+    let script = write_fake_server(&dir);
+    let config = fake_config(&script);
+    let root = dir.path();
+
+    std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"test\"").unwrap();
+    let file_path = root.join("main.rs");
+    std::fs::write(&file_path, "fn hello() {}\n").unwrap();
+
+    let client = LspClient::create("fake", &config, root)
+        .await
+        .expect("spawn");
+    client.notify_open(&file_path).await.expect("notify_open");
+
+    let resp = client.prepare_rename(&file_path, 0, 0).await;
+    assert!(resp.is_some(), "expected prepareRename response");
+
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn rename_returns_workspace_edit() {
+    let dir = TempDir::new().unwrap();
+    let script = write_fake_server(&dir);
+    let config = fake_config(&script);
+    let root = dir.path();
+
+    std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"test\"").unwrap();
+    let file_path = root.join("main.rs");
+    std::fs::write(&file_path, "fn hello() {}\n").unwrap();
+
+    let client = LspClient::create("fake", &config, root)
+        .await
+        .expect("spawn");
+    client.notify_open(&file_path).await.expect("notify_open");
+
+    let edit = client.rename(&file_path, 0, 0, "world").await;
+    assert!(edit.is_some(), "expected workspace edit");
+    let edit = edit.unwrap();
+    assert!(
+        edit.changes.as_ref().is_some_and(|c| !c.is_empty()) || edit.document_changes.is_some(),
+        "expected non-empty workspace edit"
+    );
+
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn code_action_returns_actions() {
+    let dir = TempDir::new().unwrap();
+    let script = write_fake_server(&dir);
+    let config = fake_config(&script);
+    let root = dir.path();
+
+    std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"test\"").unwrap();
+    let file_path = root.join("test.rs");
+    std::fs::write(&file_path, "fn main() {}\n").unwrap();
+
+    let client = LspClient::create("fake", &config, root)
+        .await
+        .expect("spawn");
+    client.notify_open(&file_path).await.expect("notify_open");
+
+    let actions = client
+        .code_action(
+            &file_path,
+            codex_lsp_client::lsp_types::Range {
+                start: codex_lsp_client::lsp_types::Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: codex_lsp_client::lsp_types::Position {
+                    line: 0,
+                    character: 0,
+                },
+            },
+            None,
+            Vec::new(),
+        )
+        .await;
+    assert!(
+        actions.len() >= 1,
+        "expected at least one code action, got: {actions:?}",
+        actions = actions
+    );
+
+    client.shutdown().await;
 }
