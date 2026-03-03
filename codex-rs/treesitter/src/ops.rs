@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::OnceLock;
 
 use rayon::prelude::*;
 use serde::Serialize;
@@ -194,51 +193,7 @@ fn find_callers_regex(
 }
 
 fn is_definition_line(line: &str, name: &str, language: Language) -> bool {
-    match language {
-        Language::Rust => line.contains(&format!("fn {name}")),
-        Language::Python => line.contains(&format!("def {name}")),
-        Language::TypeScript | Language::JavaScript => {
-            line.contains(&format!("function {name}")) || line.contains(&format!("{name} ="))
-        }
-        Language::Go => line.contains(&format!("func {name}")),
-        Language::Java => {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
-                return false;
-            }
-
-            trimmed.contains(&format!("class {name}"))
-                || trimmed.contains(&format!("interface {name}"))
-                || trimmed.contains(&format!("enum {name}"))
-                || (trimmed.contains(&format!("{name}("))
-                    && (trimmed.contains("void ")
-                        || trimmed.contains("int ")
-                        || trimmed.contains("String ")
-                        || trimmed.contains("boolean ")
-                        || trimmed.contains("long ")
-                        || trimmed.contains("double ")
-                        || trimmed.contains("float ")
-                        || trimmed.contains("char ")
-                        || trimmed.contains("byte ")
-                        || trimmed.contains("short ")
-                        || trimmed.contains("public ")
-                        || trimmed.contains("private ")
-                        || trimmed.contains("protected ")
-                        || trimmed.contains("static ")
-                        || trimmed.contains("final ")
-                        || trimmed.contains("abstract ")
-                        || trimmed.contains("default ")
-                        || trimmed.contains("synchronized ")
-                        || trimmed.contains("native ")))
-        }
-        Language::Scala => {
-            line.contains(&format!("def {name}"))
-                || line.contains(&format!("object {name}"))
-                || line.contains(&format!("class {name}"))
-                || line.contains(&format!("trait {name}"))
-        }
-        Language::Other => false,
-    }
+    queries::is_definition_line(language, line, name)
 }
 
 #[derive(Clone, Copy)]
@@ -257,6 +212,13 @@ struct OpsQueryCache {
 
 thread_local! {
     static OPS_QUERY_CACHE: RefCell<HashMap<Language, OpsQueryCache>> = RefCell::new(HashMap::new());
+    static VARIABLE_REGEX_CACHE: RefCell<HashMap<Language, Vec<CompiledVariablePattern>>> =
+        RefCell::new(HashMap::new());
+}
+
+struct CompiledVariablePattern {
+    capture_group: usize,
+    regex: regex::Regex,
 }
 
 fn with_parsed_query<R>(
@@ -310,6 +272,29 @@ fn with_parsed_query<R>(
             ),
         };
         Some(handler(tree, query, capture_names))
+    })
+}
+
+fn with_compiled_variable_patterns<R>(
+    language: Language,
+    handler: impl FnOnce(&[CompiledVariablePattern], fn(&str) -> bool) -> R,
+) -> Option<R> {
+    let config = queries::get_language_config(language)?;
+    VARIABLE_REGEX_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if !cache.contains_key(&language) {
+            let mut compiled = Vec::with_capacity(config.variable_regex_patterns.len());
+            for pattern in config.variable_regex_patterns {
+                let regex = regex::Regex::new(pattern.regex).ok()?;
+                compiled.push(CompiledVariablePattern {
+                    capture_group: pattern.capture_group,
+                    regex,
+                });
+            }
+            cache.insert(language, compiled);
+        }
+        let compiled = cache.get(&language)?;
+        Some(handler(compiled, config.variable_name_filter))
     })
 }
 
@@ -456,99 +441,28 @@ fn list_variables_ast(
 }
 
 fn list_variables_regex(body: &str, language: Language, function_name: &str) -> Vec<VariableInfo> {
-    static RUST_VAR_REGEX: OnceLock<regex::Regex> = OnceLock::new();
-    static PYTHON_VAR_REGEX: OnceLock<regex::Regex> = OnceLock::new();
-    static JS_VAR_REGEX: OnceLock<regex::Regex> = OnceLock::new();
-    static GO_SHORT_VAR_REGEX: OnceLock<regex::Regex> = OnceLock::new();
-    static GO_VAR_REGEX: OnceLock<regex::Regex> = OnceLock::new();
-    static JAVA_VAR_REGEX: OnceLock<regex::Regex> = OnceLock::new();
-    static SCALA_VAR_REGEX: OnceLock<regex::Regex> = OnceLock::new();
-
-    let mut variables = Vec::new();
-
-    match language {
-        Language::Rust => {
-            let pattern = RUST_VAR_REGEX.get_or_init(|| {
-                regex::Regex::new(r"let\s+(mut\s+)?(\w+)").expect("valid rust variable regex")
-            });
-            for captures in pattern.captures_iter(body) {
-                variables.push(VariableInfo {
-                    name: captures[2].to_string(),
-                    function: function_name.to_string(),
-                });
-            }
-        }
-        Language::Python => {
-            let pattern = PYTHON_VAR_REGEX.get_or_init(|| {
-                regex::Regex::new(r"^\s+(\w+)\s*=").expect("valid python variable regex")
-            });
-            for captures in pattern.captures_iter(body) {
-                let name = captures[1].to_string();
-                if name != "self" && !name.starts_with('_') {
+    let Some(mut variables) =
+        with_compiled_variable_patterns(language, |patterns, variable_name_filter| {
+            let mut variables = Vec::new();
+            for pattern in patterns {
+                for captures in pattern.regex.captures_iter(body) {
+                    let Some(name) = captures.get(pattern.capture_group).map(|m| m.as_str()) else {
+                        continue;
+                    };
+                    if !variable_name_filter(name) {
+                        continue;
+                    }
                     variables.push(VariableInfo {
-                        name,
+                        name: name.to_string(),
                         function: function_name.to_string(),
                     });
                 }
             }
-        }
-        Language::TypeScript | Language::JavaScript => {
-            let pattern = JS_VAR_REGEX.get_or_init(|| {
-                regex::Regex::new(r"(?:let|const|var)\s+(\w+)").expect("valid js/ts variable regex")
-            });
-            for captures in pattern.captures_iter(body) {
-                variables.push(VariableInfo {
-                    name: captures[1].to_string(),
-                    function: function_name.to_string(),
-                });
-            }
-        }
-        Language::Go => {
-            let short_pattern = GO_SHORT_VAR_REGEX.get_or_init(|| {
-                regex::Regex::new(r"(\w+)\s*:=").expect("valid go short var regex")
-            });
-            for captures in short_pattern.captures_iter(body) {
-                variables.push(VariableInfo {
-                    name: captures[1].to_string(),
-                    function: function_name.to_string(),
-                });
-            }
-            let var_pattern = GO_VAR_REGEX
-                .get_or_init(|| regex::Regex::new(r"var\s+(\w+)").expect("valid go var regex"));
-            for captures in var_pattern.captures_iter(body) {
-                variables.push(VariableInfo {
-                    name: captures[1].to_string(),
-                    function: function_name.to_string(),
-                });
-            }
-        }
-        Language::Java => {
-            let pattern = JAVA_VAR_REGEX.get_or_init(|| {
-                regex::Regex::new(
-                r"\b(?:int|long|float|double|boolean|char|byte|short|String|var|final\s+\w+)\s+(\w+)\s*[=;,)]",
-            )
-                .expect("valid java variable regex")
-            });
-            for captures in pattern.captures_iter(body) {
-                variables.push(VariableInfo {
-                    name: captures[1].to_string(),
-                    function: function_name.to_string(),
-                });
-            }
-        }
-        Language::Scala => {
-            let pattern = SCALA_VAR_REGEX.get_or_init(|| {
-                regex::Regex::new(r"\b(?:val|var)\s+(\w+)").expect("valid scala variable regex")
-            });
-            for captures in pattern.captures_iter(body) {
-                variables.push(VariableInfo {
-                    name: captures[1].to_string(),
-                    function: function_name.to_string(),
-                });
-            }
-        }
-        Language::Other => {}
-    }
+            variables
+        })
+    else {
+        return Vec::new();
+    };
 
     variables.sort_by(|a, b| a.name.cmp(&b.name));
     variables.dedup_by(|a, b| a.name == b.name);

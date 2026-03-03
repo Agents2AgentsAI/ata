@@ -3,6 +3,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::{fmt::Write, future::Future};
 
 use async_trait::async_trait;
 use codex_lsp_client::ServerRegistry;
@@ -44,10 +45,24 @@ const DEFAULT_LIMIT: usize = 20;
 const MAX_RESULTS: usize = 50;
 const MAX_RESULT_BYTES: usize = 8 * 1024;
 const MAX_PATCH_BYTES: usize = 256 * 1024;
+const FUZZ_ATTEMPTS_SHORT: usize = 12;
+const FUZZ_ATTEMPTS_LONG: usize = 25;
 
 /// Handler for the `lsp` tool.
 pub struct LspToolHandler {
     pub state: Arc<MultiRootState>,
+}
+
+struct FileQueryContext {
+    path: PathBuf,
+    registry: Arc<ServerRegistry>,
+}
+
+struct PositionedQueryContext {
+    path: PathBuf,
+    registry: Arc<ServerRegistry>,
+    line: u32,
+    character: u32,
 }
 
 #[derive(Deserialize)]
@@ -121,117 +136,56 @@ impl ToolHandler for LspToolHandler {
 
         let (result, is_patch) = match args.operation {
             LspOperation::GoToDefinition => {
-                let path = extract_file(&args)?;
-                let (root_name, registry) =
-                    self.registry_for_file(&path, args.root.as_deref()).await?;
-                self.sync_file_for_query(&registry, &root_name, &path)
-                    .await?;
-                let (line, char) = self
-                    .resolve_line_char(&registry, &root_name, &path, &args)
-                    .await?;
+                let context = self.prepare_position_query_context(&args).await?;
+                let (resp, resolved) = fuzz_query(
+                    fuzz,
+                    context.line,
+                    context.character,
+                    FUZZ_ATTEMPTS_LONG,
+                    |line, character| context.registry.definition(&context.path, line, character),
+                    is_empty_definition,
+                )
+                .await;
 
-                let mut resp = registry.definition(&path, line, char).await;
-                let mut resolved = None;
-                if fuzz && is_empty_definition(&resp) {
-                    for (l, c) in fuzz_positions(line, char).into_iter().skip(1).take(25) {
-                        let candidate = registry.definition(&path, l, c).await;
-                        if !is_empty_definition(&candidate) {
-                            resp = candidate;
-                            resolved = Some((l, c));
-                            break;
-                        }
-                    }
-                }
-
-                let mut out = String::new();
-                if let Some((l, c)) = resolved {
-                    out.push_str(&format!(
-                        "Resolved at {}:{}:{}\n",
-                        path.display(),
-                        l + 1,
-                        c + 1
-                    ));
-                }
+                let mut out = resolved_at_prefix(&context.path, resolved);
                 out.push_str(&format_definition(resp));
                 (out, false)
             }
             LspOperation::FindReferences => {
-                let path = extract_file(&args)?;
-                let (root_name, registry) =
-                    self.registry_for_file(&path, args.root.as_deref()).await?;
-                self.sync_file_for_query(&registry, &root_name, &path)
-                    .await?;
-                let (line, char) = self
-                    .resolve_line_char(&registry, &root_name, &path, &args)
-                    .await?;
+                let context = self.prepare_position_query_context(&args).await?;
+                let (refs, resolved) = fuzz_query(
+                    fuzz,
+                    context.line,
+                    context.character,
+                    FUZZ_ATTEMPTS_SHORT,
+                    |line, character| context.registry.references(&context.path, line, character),
+                    |refs: &Vec<Location>| refs.is_empty(),
+                )
+                .await;
 
-                let mut refs = registry.references(&path, line, char).await;
-                let mut resolved = None;
-                if fuzz && refs.is_empty() {
-                    for (l, c) in fuzz_positions(line, char).into_iter().skip(1).take(12) {
-                        let candidate = registry.references(&path, l, c).await;
-                        if !candidate.is_empty() {
-                            refs = candidate;
-                            resolved = Some((l, c));
-                            break;
-                        }
-                    }
-                }
-
-                let mut out = String::new();
-                if let Some((l, c)) = resolved {
-                    out.push_str(&format!(
-                        "Resolved at {}:{}:{}\n",
-                        path.display(),
-                        l + 1,
-                        c + 1
-                    ));
-                }
+                let mut out = resolved_at_prefix(&context.path, resolved);
                 out.push_str(&format_references(&refs, limit));
                 (out, false)
             }
             LspOperation::Hover => {
-                let path = extract_file(&args)?;
-                let (root_name, registry) =
-                    self.registry_for_file(&path, args.root.as_deref()).await?;
-                self.sync_file_for_query(&registry, &root_name, &path)
-                    .await?;
-                let (line, char) = self
-                    .resolve_line_char(&registry, &root_name, &path, &args)
-                    .await?;
+                let context = self.prepare_position_query_context(&args).await?;
+                let (hover, resolved) = fuzz_query(
+                    fuzz,
+                    context.line,
+                    context.character,
+                    FUZZ_ATTEMPTS_LONG,
+                    |line, character| context.registry.hover(&context.path, line, character),
+                    |hover: &Option<Hover>| hover.is_none(),
+                )
+                .await;
 
-                let mut hover = registry.hover(&path, line, char).await;
-                let mut resolved = None;
-                if fuzz && hover.is_none() {
-                    for (l, c) in fuzz_positions(line, char).into_iter().skip(1).take(25) {
-                        let candidate = registry.hover(&path, l, c).await;
-                        if candidate.is_some() {
-                            hover = candidate;
-                            resolved = Some((l, c));
-                            break;
-                        }
-                    }
-                }
-
-                let mut out = String::new();
-                if let Some((l, c)) = resolved {
-                    out.push_str(&format!(
-                        "Resolved at {}:{}:{}\n",
-                        path.display(),
-                        l + 1,
-                        c + 1
-                    ));
-                }
+                let mut out = resolved_at_prefix(&context.path, resolved);
                 out.push_str(&format_hover(hover));
                 (out, false)
             }
             LspOperation::DocumentSymbol => {
-                let path = extract_file(&args)?;
-                let (root_name, registry) =
-                    self.registry_for_file(&path, args.root.as_deref()).await?;
-                self.sync_file_for_query(&registry, &root_name, &path)
-                    .await?;
-                let resp = registry.document_symbol(&path).await;
+                let context = self.prepare_file_query_context(&args).await?;
+                let resp = context.registry.document_symbol(&context.path).await;
                 (format_document_symbols(resp), false)
             }
             LspOperation::WorkspaceSymbol => {
@@ -265,60 +219,40 @@ impl ToolHandler for LspToolHandler {
                 (format_workspace_symbols(&symbols, limit), false)
             }
             LspOperation::GoToImplementation => {
-                let path = extract_file(&args)?;
-                let (root_name, registry) =
-                    self.registry_for_file(&path, args.root.as_deref()).await?;
-                self.sync_file_for_query(&registry, &root_name, &path)
-                    .await?;
-                let (line, char) = self
-                    .resolve_line_char(&registry, &root_name, &path, &args)
-                    .await?;
+                let context = self.prepare_position_query_context(&args).await?;
+                let (resp, resolved) = fuzz_query(
+                    fuzz,
+                    context.line,
+                    context.character,
+                    FUZZ_ATTEMPTS_LONG,
+                    |line, character| {
+                        context
+                            .registry
+                            .implementation(&context.path, line, character)
+                    },
+                    is_empty_definition,
+                )
+                .await;
 
-                let mut resp = registry.implementation(&path, line, char).await;
-                let mut resolved = None;
-                if fuzz && is_empty_definition(&resp) {
-                    for (l, c) in fuzz_positions(line, char).into_iter().skip(1).take(25) {
-                        let candidate = registry.implementation(&path, l, c).await;
-                        if !is_empty_definition(&candidate) {
-                            resp = candidate;
-                            resolved = Some((l, c));
-                            break;
-                        }
-                    }
-                }
-
-                let mut out = String::new();
-                if let Some((l, c)) = resolved {
-                    out.push_str(&format!(
-                        "Resolved at {}:{}:{}\n",
-                        path.display(),
-                        l + 1,
-                        c + 1
-                    ));
-                }
+                let mut out = resolved_at_prefix(&context.path, resolved);
                 out.push_str(&format_implementation(resp));
                 (out, false)
             }
             LspOperation::PrepareCallHierarchy => {
-                let path = extract_file(&args)?;
-                let (root_name, registry) =
-                    self.registry_for_file(&path, args.root.as_deref()).await?;
-                self.sync_file_for_query(&registry, &root_name, &path)
-                    .await?;
-                let (line, char) = self
-                    .resolve_line_char(&registry, &root_name, &path, &args)
-                    .await?;
-
-                let mut items = registry.prepare_call_hierarchy(&path, line, char).await;
-                if fuzz && items.is_empty() {
-                    for (l, c) in fuzz_positions(line, char).into_iter().skip(1).take(25) {
-                        let candidate = registry.prepare_call_hierarchy(&path, l, c).await;
-                        if !candidate.is_empty() {
-                            items = candidate;
-                            break;
-                        }
-                    }
-                }
+                let context = self.prepare_position_query_context(&args).await?;
+                let (items, _) = fuzz_query(
+                    fuzz,
+                    context.line,
+                    context.character,
+                    FUZZ_ATTEMPTS_LONG,
+                    |line, character| {
+                        context
+                            .registry
+                            .prepare_call_hierarchy(&context.path, line, character)
+                    },
+                    |items: &Vec<CallHierarchyItem>| items.is_empty(),
+                )
+                .await;
 
                 (
                     serde_json::to_string_pretty(
@@ -387,37 +321,22 @@ impl ToolHandler for LspToolHandler {
                 )
             }
             LspOperation::PrepareRename => {
-                let path = extract_file(&args)?;
-                let (root_name, registry) =
-                    self.registry_for_file(&path, args.root.as_deref()).await?;
-                self.sync_file_for_query(&registry, &root_name, &path)
-                    .await?;
-                let (line, char) = self
-                    .resolve_line_char(&registry, &root_name, &path, &args)
-                    .await?;
+                let context = self.prepare_position_query_context(&args).await?;
+                let (resp, resolved) = fuzz_query(
+                    fuzz,
+                    context.line,
+                    context.character,
+                    FUZZ_ATTEMPTS_LONG,
+                    |line, character| {
+                        context
+                            .registry
+                            .prepare_rename(&context.path, line, character)
+                    },
+                    |resp: &Option<PrepareRenameResponse>| resp.is_none(),
+                )
+                .await;
 
-                let mut resp = registry.prepare_rename(&path, line, char).await;
-                let mut resolved = None;
-                if fuzz && resp.is_none() {
-                    for (l, c) in fuzz_positions(line, char).into_iter().skip(1).take(25) {
-                        let candidate = registry.prepare_rename(&path, l, c).await;
-                        if candidate.is_some() {
-                            resp = candidate;
-                            resolved = Some((l, c));
-                            break;
-                        }
-                    }
-                }
-
-                let mut out = String::new();
-                if let Some((l, c)) = resolved {
-                    out.push_str(&format!(
-                        "Resolved at {}:{}:{}\n",
-                        path.display(),
-                        l + 1,
-                        c + 1
-                    ));
-                }
+                let mut out = resolved_at_prefix(&context.path, resolved);
                 out.push_str(&format_prepare_rename(resp));
                 (out, false)
             }
@@ -429,25 +348,20 @@ impl ToolHandler for LspToolHandler {
                     ));
                 }
 
-                let path = extract_file(&args)?;
-                let (root_name, registry) =
-                    self.registry_for_file(&path, args.root.as_deref()).await?;
-                self.sync_file_for_query(&registry, &root_name, &path)
-                    .await?;
-                let (line, char) = self
-                    .resolve_line_char(&registry, &root_name, &path, &args)
-                    .await?;
-
-                let mut edit = registry.rename(&path, line, char, new_name).await;
-                if fuzz && edit.is_none() {
-                    for (l, c) in fuzz_positions(line, char).into_iter().skip(1).take(25) {
-                        let candidate = registry.rename(&path, l, c, new_name).await;
-                        if candidate.is_some() {
-                            edit = candidate;
-                            break;
-                        }
-                    }
-                }
+                let context = self.prepare_position_query_context(&args).await?;
+                let (edit, _) = fuzz_query(
+                    fuzz,
+                    context.line,
+                    context.character,
+                    FUZZ_ATTEMPTS_LONG,
+                    |line, character| {
+                        context
+                            .registry
+                            .rename(&context.path, line, character, new_name)
+                    },
+                    |edit: &Option<codex_lsp_client::lsp_types::WorkspaceEdit>| edit.is_none(),
+                )
+                .await;
 
                 let edit = edit.ok_or_else(|| {
                     FunctionCallError::RespondToModel(
@@ -466,27 +380,18 @@ impl ToolHandler for LspToolHandler {
                 (patch, true)
             }
             LspOperation::CodeActionPreview => {
-                let path = extract_file(&args)?;
-                let (root_name, registry) =
-                    self.registry_for_file(&path, args.root.as_deref()).await?;
-                self.sync_file_for_query(&registry, &root_name, &path)
-                    .await?;
-
-                let (line, char) = self
-                    .resolve_line_char(&registry, &root_name, &path, &args)
-                    .await?;
+                let context = self.prepare_position_query_context(&args).await?;
+                let line = context.line;
+                let character = context.character;
                 let end_line = args.end_line.unwrap_or(line.saturating_add(1));
-                let end_character = args.end_character.unwrap_or(char.saturating_add(1));
+                let end_character = args.end_character.unwrap_or(character.saturating_add(1));
                 if end_line == 0 || end_character == 0 {
                     return Err(FunctionCallError::RespondToModel(
                         "`end_line` and `end_character` must be 1-based".to_string(),
                     ));
                 }
                 let range = Range {
-                    start: codex_lsp_client::lsp_types::Position {
-                        line,
-                        character: char,
-                    },
+                    start: codex_lsp_client::lsp_types::Position { line, character },
                     end: codex_lsp_client::lsp_types::Position {
                         line: end_line - 1,
                         character: end_character - 1,
@@ -501,35 +406,43 @@ impl ToolHandler for LspToolHandler {
                     .unwrap_or("quickfix");
                 let only = Some(vec![CodeActionKind::from(only_kind.to_string())]);
 
-                let diags: Vec<Diagnostic> = registry.diagnostics_for_file(&path).await;
-
-                let mut actions = registry.code_action(&path, range, only, diags).await;
-                if fuzz && actions.is_empty() {
-                    for (l, c) in fuzz_positions(line, char).into_iter().skip(1).take(12) {
-                        let range = Range {
-                            start: codex_lsp_client::lsp_types::Position {
-                                line: l,
-                                character: c,
-                            },
-                            end: codex_lsp_client::lsp_types::Position {
-                                line: l,
-                                character: c,
-                            },
+                let diags: Vec<Diagnostic> =
+                    context.registry.diagnostics_for_file(&context.path).await;
+                let (actions, _) = fuzz_query(
+                    fuzz,
+                    line,
+                    character,
+                    FUZZ_ATTEMPTS_SHORT,
+                    |query_line, query_char| {
+                        let range = if query_line == line && query_char == character {
+                            range
+                        } else {
+                            Range {
+                                start: codex_lsp_client::lsp_types::Position {
+                                    line: query_line,
+                                    character: query_char,
+                                },
+                                end: codex_lsp_client::lsp_types::Position {
+                                    line: query_line,
+                                    character: query_char,
+                                },
+                            }
                         };
-                        let candidate = registry
-                            .code_action(
-                                &path,
-                                range,
-                                Some(vec![CodeActionKind::from(only_kind.to_string())]),
-                                Vec::new(),
-                            )
-                            .await;
-                        if !candidate.is_empty() {
-                            actions = candidate;
-                            break;
-                        }
-                    }
-                }
+                        let diagnostics = if query_line == line && query_char == character {
+                            diags.clone()
+                        } else {
+                            Vec::new()
+                        };
+                        context.registry.code_action(
+                            &context.path,
+                            range,
+                            only.clone(),
+                            diagnostics,
+                        )
+                    },
+                    |actions: &Vec<CodeActionOrCommand>| actions.is_empty(),
+                )
+                .await;
 
                 let title = args
                     .title
@@ -618,6 +531,36 @@ impl LspToolHandler {
                     ))
                 }
             })
+    }
+
+    async fn prepare_file_query_context(
+        &self,
+        args: &LspToolArgs,
+    ) -> Result<FileQueryContext, FunctionCallError> {
+        let path = extract_file(args)?;
+        let (root_name, registry) = self.registry_for_file(&path, args.root.as_deref()).await?;
+        self.sync_file_for_query(&registry, &root_name, &path)
+            .await?;
+        Ok(FileQueryContext { path, registry })
+    }
+
+    async fn prepare_position_query_context(
+        &self,
+        args: &LspToolArgs,
+    ) -> Result<PositionedQueryContext, FunctionCallError> {
+        let path = extract_file(args)?;
+        let (root_name, registry) = self.registry_for_file(&path, args.root.as_deref()).await?;
+        self.sync_file_for_query(&registry, &root_name, &path)
+            .await?;
+        let (line, character) = self
+            .resolve_line_char(&registry, &root_name, &path, args)
+            .await?;
+        Ok(PositionedQueryContext {
+            path,
+            registry,
+            line,
+            character,
+        })
     }
 
     async fn sync_file_for_query(
@@ -959,6 +902,52 @@ fn is_empty_definition(resp: &Option<GotoDefinitionResponse>) -> bool {
         Some(GotoDefinitionResponse::Array(locs)) => locs.is_empty(),
         Some(GotoDefinitionResponse::Link(links)) => links.is_empty(),
     }
+}
+
+async fn fuzz_query<T, Q, Fut, E>(
+    fuzz: bool,
+    line: u32,
+    character: u32,
+    max_attempts: usize,
+    mut query: Q,
+    mut is_empty: E,
+) -> (T, Option<(u32, u32)>)
+where
+    Q: FnMut(u32, u32) -> Fut,
+    Fut: Future<Output = T>,
+    E: FnMut(&T) -> bool,
+{
+    let mut result = query(line, character).await;
+    let mut resolved = None;
+    if fuzz && is_empty(&result) {
+        for (candidate_line, candidate_character) in fuzz_positions(line, character)
+            .into_iter()
+            .skip(1)
+            .take(max_attempts)
+        {
+            let candidate = query(candidate_line, candidate_character).await;
+            if !is_empty(&candidate) {
+                result = candidate;
+                resolved = Some((candidate_line, candidate_character));
+                break;
+            }
+        }
+    }
+    (result, resolved)
+}
+
+fn resolved_at_prefix(path: &Path, resolved: Option<(u32, u32)>) -> String {
+    let mut out = String::new();
+    if let Some((line, character)) = resolved {
+        let _ = writeln!(
+            out,
+            "Resolved at {}:{}:{}",
+            path.display(),
+            line + 1,
+            character + 1
+        );
+    }
+    out
 }
 
 fn fuzz_positions(line0: u32, char0: u32) -> Vec<(u32, u32)> {

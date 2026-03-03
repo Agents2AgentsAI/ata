@@ -1,4 +1,5 @@
 use crate::queries::LanguageConfig;
+use crate::queries::VariableRegexPattern;
 
 const SYMBOLS_QUERY: &str = r#"
 (source_file
@@ -84,6 +85,26 @@ const NON_CODE_QUERY: &str = r#"
 (raw_string_literal) @skip
 "#;
 
+const VARIABLE_REGEX_PATTERNS: &[VariableRegexPattern] = &[VariableRegexPattern {
+    regex: r"let\s+(?:mut\s+)?(\w+)",
+    capture_group: 1,
+}];
+
+fn is_definition_line(line: &str, name: &str) -> bool {
+    line.contains(&format!("fn {name}"))
+}
+
+fn is_test_symbol(name: &str, file: &str) -> bool {
+    name.starts_with("test_")
+        || file.contains("/tests/")
+        || file.contains("\\tests\\")
+        || file.ends_with("_test.rs")
+}
+
+fn variable_name_filter(name: &str) -> bool {
+    !name.is_empty() && name != "_" && name != "self"
+}
+
 pub fn config() -> LanguageConfig {
     LanguageConfig {
         language: tree_sitter_rust::LANGUAGE.into(),
@@ -91,5 +112,9 @@ pub fn config() -> LanguageConfig {
         callers_query: CALLERS_QUERY,
         variables_query: VARIABLES_QUERY,
         non_code_query: NON_CODE_QUERY,
+        definition_matcher: is_definition_line,
+        test_symbol_matcher: is_test_symbol,
+        variable_regex_patterns: VARIABLE_REGEX_PATTERNS,
+        variable_name_filter,
     }
 }
