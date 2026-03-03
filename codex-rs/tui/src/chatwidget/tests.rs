@@ -7,6 +7,8 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+use crate::app_event::RealtimeAudioDeviceKind;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
@@ -25,7 +27,9 @@ use codex_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
 use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::RequirementSource;
+use codex_core::features::FEATURES;
 use codex_core::features::Feature;
+use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::skills::model::SkillMetadata;
 use codex_core::terminal::TerminalName;
@@ -751,8 +755,8 @@ async fn enter_with_only_remote_images_submits_user_turn() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    let items = match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => items,
+    let (items, summary) = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, summary, .. } => (items, summary),
         other => panic!("expected Op::UserTurn, got {other:?}"),
     };
     assert_eq!(
@@ -761,6 +765,7 @@ async fn enter_with_only_remote_images_submits_user_turn() {
             image_url: remote_url.clone(),
         }]
     );
+    assert_eq!(summary, None);
     assert!(chat.remote_image_urls().is_empty());
 
     let mut user_cell = None;
@@ -1110,6 +1115,7 @@ async fn queued_restore_with_remote_images_keeps_local_placeholder_mapping() {
         remote_image_urls: remote_image_urls.clone(),
         text_elements: text_elements.clone(),
         mention_bindings: Vec::new(),
+        voice_input: false,
     });
 
     assert_eq!(chat.bottom_pane.composer_text(), text);
@@ -1155,6 +1161,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
         remote_image_urls: Vec::new(),
         text_elements: first_elements,
         mention_bindings: Vec::new(),
+        voice_input: false,
     });
     chat.queued_user_messages.push_back(UserMessage {
         text: second_text,
@@ -1165,6 +1172,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
         remote_image_urls: Vec::new(),
         text_elements: second_elements,
         mention_bindings: Vec::new(),
+        voice_input: false,
     });
     chat.refresh_queued_user_messages();
 
@@ -1235,6 +1243,7 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
         remote_image_urls: Vec::new(),
         text_elements: Vec::new(),
         mention_bindings: Vec::new(),
+        voice_input: false,
     });
     chat.refresh_queued_user_messages();
 
@@ -1297,6 +1306,7 @@ async fn remap_placeholders_uses_attachment_labels() {
         local_images: attachments,
         remote_image_urls: vec!["https://example.com/a.png".to_string()],
         mention_bindings: Vec::new(),
+        voice_input: false,
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
@@ -1363,6 +1373,7 @@ async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
         local_images: attachments,
         remote_image_urls: Vec::new(),
         mention_bindings: Vec::new(),
+        voice_input: false,
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
@@ -1578,6 +1589,7 @@ async fn helpers_are_available_and_do_not_panic() {
         is_first_run: true,
         feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model),
+        startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
     };
@@ -1632,12 +1644,16 @@ async fn make_chatwidget_manual(
         animations_enabled: cfg.animations,
         skills: None,
     });
-    bottom.set_steer_enabled(true);
     bottom.set_collaboration_modes_enabled(true);
     let auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
     let codex_home = cfg.codex_home.clone();
-    let models_manager = Arc::new(ModelsManager::new(codex_home, auth_manager.clone(), None));
+    let models_manager = Arc::new(ModelsManager::new(
+        codex_home,
+        auth_manager.clone(),
+        None,
+        CollaborationModesConfig::default(),
+    ));
     let reasoning_effort = None;
     let base_mode = CollaborationMode {
         mode: ModeKind::Default,
@@ -1698,6 +1714,7 @@ async fn make_chatwidget_manual(
         forked_from: None,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
+        startup_tooltip_override: None,
         queued_user_messages: VecDeque::new(),
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
         suppress_session_configured_redraw: false,
@@ -1727,7 +1744,17 @@ async fn make_chatwidget_manual(
         status_line_branch_lookup_complete: false,
         external_editor_state: ExternalEditorState::Closed,
         realtime_conversation: RealtimeConversationUiState::default(),
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        voice_mode_state: None,
+        #[cfg(not(target_os = "linux"))]
+        cached_elevenlabs_language: None,
+        #[cfg(not(target_os = "linux"))]
+        cached_elevenlabs_speed: None,
         last_rendered_user_message_event: None,
+        #[cfg(not(target_os = "linux"))]
+        deferred_voice_cells: Vec::new(),
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        pending_voice_startup_cells: Vec::new(),
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
@@ -1763,6 +1790,7 @@ fn set_chatgpt_auth(chat: &mut ChatWidget) {
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
         None,
+        CollaborationModesConfig::default(),
     ));
 }
 
@@ -2803,6 +2831,7 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
         proposed_execpolicy_amendment: None,
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -2852,6 +2881,7 @@ async fn exec_approval_uses_approval_id_when_present() {
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
             additional_permissions: None,
+            available_decisions: None,
             parsed_cmd: vec![],
         }),
     });
@@ -2888,6 +2918,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         proposed_execpolicy_amendment: None,
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -2942,6 +2973,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         proposed_execpolicy_amendment: None,
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -3280,7 +3312,7 @@ async fn streaming_final_answer_keeps_task_running_state() {
     chat.thread_id = Some(ThreadId::new());
 
     chat.on_task_started();
-    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_agent_message_delta("Final answer line\n".to_string(), false);
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
@@ -3313,7 +3345,7 @@ async fn idle_commit_ticks_do_not_restore_status_without_commentary_completion()
     chat.on_task_started();
     assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
 
-    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_agent_message_delta("Final answer line\n".to_string(), false);
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
@@ -3332,7 +3364,7 @@ async fn commentary_completion_restores_status_indicator_before_exec_begin() {
     chat.on_task_started();
     assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
 
-    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_agent_message_delta("Preamble line\n".to_string(), false);
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
@@ -3385,7 +3417,7 @@ async fn preamble_keeps_working_status_snapshot() {
     // Regression sequence: a preamble line is committed to history before any exec/tool event.
     // After commentary completes, the status row should be restored before subsequent work.
     chat.on_task_started();
-    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_agent_message_delta("Preamble line\n".to_string(), false);
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
     complete_assistant_message(
@@ -3426,7 +3458,7 @@ async fn unified_exec_begin_restores_working_status_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.on_task_started();
-    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_agent_message_delta("Preamble line\n".to_string(), false);
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
@@ -3447,7 +3479,7 @@ async fn unified_exec_begin_restores_working_status_snapshot() {
 }
 
 #[tokio::test]
-async fn steer_enter_queues_while_plan_stream_is_active() {
+async fn enter_queues_while_plan_stream_is_active() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, true);
@@ -3478,7 +3510,7 @@ async fn steer_enter_queues_while_final_answer_stream_is_active() {
     chat.on_task_started();
     // Keep the assistant stream open (no commit tick/finalize) to model the repro window:
     // user presses Enter while the final answer is still streaming.
-    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_agent_message_delta("Final answer line\n".to_string(), false);
 
     chat.bottom_pane.set_composer_text(
         "queued while streaming".to_string(),
@@ -3511,7 +3543,7 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
     chat.on_task_started();
     // Simulate "dead mode" repro timing by keeping a final-answer stream active while the
     // user submits multiple follow-up prompts.
-    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_agent_message_delta("Final answer line\n".to_string(), false);
 
     chat.bottom_pane
         .set_composer_text("first follow-up".to_string(), Vec::new(), Vec::new());
@@ -3571,7 +3603,7 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
 }
 
 #[tokio::test]
-async fn steer_enter_submits_when_plan_stream_is_not_active() {
+async fn enter_submits_when_plan_stream_is_not_active() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, true);
@@ -4539,6 +4571,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         is_first_run: true,
         feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
+        startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
     };
@@ -4588,6 +4621,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         is_first_run: true,
         feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
+        startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
     };
@@ -6080,6 +6114,30 @@ async fn experimental_features_toggle_saves_on_exit() {
 }
 
 #[tokio::test]
+async fn experimental_popup_shows_js_repl_node_requirement() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let js_repl_description = FEATURES
+        .iter()
+        .find(|spec| spec.id == Feature::JsRepl)
+        .and_then(|spec| spec.stage.experimental_menu_description())
+        .expect("expected js_repl experimental description");
+    let node_requirement = js_repl_description
+        .split(". ")
+        .find(|sentence| sentence.starts_with("Requires Node >= v"))
+        .map(|sentence| sentence.trim_end_matches(" installed."))
+        .expect("expected js_repl description to mention the Node requirement");
+
+    chat.open_experimental_popup();
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains(node_requirement),
+        "expected js_repl feature description to mention the required Node version, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
 async fn model_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
     chat.thread_id = Some(ThreadId::new());
@@ -6133,6 +6191,7 @@ async fn provider_model_filter_keeps_untagged_models_for_custom_provider() {
         supported_in_api: true,
         input_modalities: default_input_modalities(),
         provider_id: provider_id.map(ToString::to_string),
+        availability_nux: None,
     };
 
     let presets = vec![
@@ -6162,6 +6221,62 @@ async fn personality_selection_popup_snapshot() {
     assert_snapshot!("personality_selection_popup", popup);
 }
 
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[tokio::test]
+async fn realtime_audio_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.open_realtime_audio_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("realtime_audio_selection_popup", popup);
+}
+
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[tokio::test]
+async fn realtime_audio_selection_popup_narrow_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.open_realtime_audio_popup();
+
+    let popup = render_bottom_popup(&chat, 56);
+    assert_snapshot!("realtime_audio_selection_popup_narrow", popup);
+}
+
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[tokio::test]
+async fn realtime_microphone_picker_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.config.realtime_audio.microphone = Some("Studio Mic".to_string());
+    chat.open_realtime_audio_device_selection_with_names(
+        RealtimeAudioDeviceKind::Microphone,
+        vec!["Built-in Mic".to_string(), "USB Mic".to_string()],
+    );
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("realtime_microphone_picker_popup", popup);
+}
+
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[tokio::test]
+async fn realtime_audio_picker_emits_persist_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.open_realtime_audio_device_selection_with_names(
+        RealtimeAudioDeviceKind::Speaker,
+        vec!["Desk Speakers".to_string(), "Headphones".to_string()],
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::PersistRealtimeAudioDeviceSelection {
+            kind: RealtimeAudioDeviceKind::Speaker,
+            name: Some(name),
+        }) if name == "Headphones"
+    );
+}
+
 #[tokio::test]
 async fn model_picker_hides_show_in_picker_false_models_from_cache() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("test-visible-model")).await;
@@ -6180,6 +6295,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         is_default: false,
         upgrade: None,
         show_in_picker,
+        availability_nux: None,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
         provider_id: None,
@@ -6449,6 +6565,7 @@ async fn single_reasoning_option_skips_selection() {
         is_default: false,
         upgrade: None,
         show_in_picker: true,
+        availability_nux: None,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
         provider_id: None,
@@ -6916,6 +7033,7 @@ async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
         ])),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -6976,6 +7094,7 @@ async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
         ])),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -7023,6 +7142,7 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
         proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -7389,6 +7509,7 @@ async fn status_widget_and_approval_modal_snapshot() {
         ])),
         proposed_network_policy_amendments: None,
         additional_permissions: None,
+        available_decisions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -8167,7 +8288,7 @@ async fn replayed_interrupted_reconnect_footer_row_snapshot() {
 async fn stream_error_restores_hidden_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
-    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_agent_message_delta("Preamble line\n".to_string(), false);
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
     assert!(!chat.bottom_pane.status_indicator_visible());
