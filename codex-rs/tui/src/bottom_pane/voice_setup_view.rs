@@ -234,12 +234,18 @@ impl VoiceSetupView {
                         } else {
                             mask_key(edit_buffer)
                         };
-                        format!("{prefix}  {:<10} [{display}\u{2588}]", item.name)
+                        format!(
+                            "{prefix}  {:<10} [{:<15}\u{2588}]",
+                            item.name, display
+                        )
                     } else if value.is_empty() {
-                        format!("{prefix}  {:<10} [paste key here]", item.name)
+                        format!(
+                            "{prefix}  {:<10} [{:<16}]",
+                            item.name, "paste key here"
+                        )
                     } else {
                         format!(
-                            "{prefix}  {:<10} [{}]",
+                            "{prefix}  {:<10} [{:<16}]",
                             item.name,
                             mask_key(value)
                         )
