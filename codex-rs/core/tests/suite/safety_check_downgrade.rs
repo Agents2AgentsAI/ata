@@ -1,5 +1,4 @@
 use anyhow::Result;
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
@@ -50,7 +49,7 @@ async fn openai_model_header_mismatch_emits_warning_event_and_warning_item() -> 
             model: REQUESTED_MODEL.to_string(),
             model_provider: None,
             effort: test.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -149,7 +148,7 @@ async fn response_model_field_mismatch_emits_warning_when_header_matches_request
             model: REQUESTED_MODEL.to_string(),
             model_provider: None,
             effort: test.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -235,7 +234,7 @@ async fn openai_model_header_mismatch_only_emits_one_warning_per_turn() -> Resul
             model: REQUESTED_MODEL.to_string(),
             model_provider: None,
             effort: test.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -285,7 +284,7 @@ async fn openai_model_header_casing_only_mismatch_does_not_warn() -> Result<()> 
             model: REQUESTED_MODEL.to_string(),
             model_provider: None,
             effort: test.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,

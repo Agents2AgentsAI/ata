@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use codex_core::features::Feature;
+use codex_test_macros::large_stack_test;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -245,7 +246,7 @@ async fn shell_command_times_out_with_timeout_ms() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(true ; "with_login")]
 #[test_case(false ; "without_login")]
 async fn unicode_output(login: bool) -> anyhow::Result<()> {
@@ -275,7 +276,7 @@ async fn unicode_output(login: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(true ; "with_login")]
 #[test_case(false ; "without_login")]
 async fn unicode_output_with_newlines(login: bool) -> anyhow::Result<()> {

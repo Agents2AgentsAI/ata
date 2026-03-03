@@ -5,7 +5,6 @@ use std::fs;
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -47,7 +46,7 @@ async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
             model: session_model,
             model_provider: None,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -364,7 +363,7 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
             model: session_model,
             model_provider: None,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
