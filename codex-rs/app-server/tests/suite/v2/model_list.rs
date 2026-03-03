@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use anyhow::anyhow;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use app_test_support::write_models_cache;
@@ -10,6 +9,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::Model;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
+use codex_app_server_protocol::ModelUpgradeInfo;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_app_server_protocol::RequestId;
 use codex_protocol::openai_models::ModelPreset;
@@ -26,6 +26,13 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
         id: preset.id.clone(),
         model: preset.model.clone(),
         upgrade: preset.upgrade.as_ref().map(|upgrade| upgrade.id.clone()),
+        upgrade_info: preset.upgrade.as_ref().map(|upgrade| ModelUpgradeInfo {
+            model: upgrade.id.clone(),
+            upgrade_copy: upgrade.upgrade_copy.clone(),
+            model_link: upgrade.model_link.clone(),
+            migration_markdown: upgrade.migration_markdown.clone(),
+        }),
+        availability_nux: preset.availability_nux.clone().map(Into::into),
         display_name: preset.display_name.clone(),
         description: preset.description.clone(),
         hidden: !preset.show_in_picker,
@@ -143,10 +150,10 @@ async fn list_models_pagination_works() -> Result<()> {
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let expected_models = expected_visible_models()?;
-    assert!(!expected_models.is_empty());
-    let mut cursor: Option<String> = None;
+    let mut cursor = None;
+    let mut items = Vec::new();
 
-    for (idx, expected_model) in expected_models.iter().enumerate() {
+    for _ in 0..expected_models.len() {
         let request_id = mcp
             .send_list_models_request(ModelListParams {
                 limit: Some(1),
@@ -162,23 +169,25 @@ async fn list_models_pagination_works() -> Result<()> {
         .await??;
 
         let ModelListResponse {
-            data: items,
+            data: page_items,
             next_cursor,
         } = to_response::<ModelListResponse>(response)?;
 
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].id, expected_model.id);
-        cursor = next_cursor;
+        assert_eq!(page_items.len(), 1);
+        items.extend(page_items);
 
-        if idx + 1 < expected_models.len() {
-            cursor
-                .as_ref()
-                .ok_or_else(|| anyhow!("cursor for next page"))?;
+        if let Some(next_cursor) = next_cursor {
+            cursor = Some(next_cursor);
+        } else {
+            assert_eq!(items, expected_models);
+            return Ok(());
         }
     }
 
-    assert!(cursor.is_none());
-    Ok(())
+    panic!(
+        "model pagination did not terminate after {} pages",
+        expected_models.len()
+    );
 }
 
 #[tokio::test]

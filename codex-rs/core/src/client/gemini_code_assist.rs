@@ -170,11 +170,9 @@ fn parse_code_assist_sse_data(
     ignore_parse_errors: bool,
 ) -> ParseSseEventResult {
     if data.trim() == "[DONE]" {
-        return ParseSseEventResult::Emit(vec![ResponseEvent::Completed {
-            response_id: String::new(),
-            token_usage: None,
-            can_append: false,
-        }]);
+        return ParseSseEventResult::Emit(codex_api::sse::gemini::finalize_gemini_stream(
+            state, None,
+        ));
     }
 
     if let Some(error_message) = extract_code_assist_stream_error_message(data) {
@@ -538,6 +536,49 @@ mod tests {
         };
         assert!(message.contains("non-OK response"), "{message}");
         assert!(message.contains("400 Bad Request"), "{message}");
+    }
+
+    #[test]
+    fn parse_code_assist_done_flushes_pending_message_item() {
+        let mut state = GeminiStreamState::new();
+        let first_result = parse_code_assist_sse_data(
+            r#"{"response":{"candidates":[{"content":{"parts":[{"text":"hello"}],"role":"model"},"index":0}]}}"#,
+            &mut state,
+            false,
+        );
+        let ParseSseEventResult::Emit(initial_events) = first_result else {
+            panic!("expected parse to emit streaming events");
+        };
+        assert!(
+            initial_events
+                .iter()
+                .any(|event| matches!(event, ResponseEvent::OutputTextDelta(_)))
+        );
+
+        let done_result = parse_code_assist_sse_data("[DONE]", &mut state, false);
+        let ParseSseEventResult::Emit(events) = done_result else {
+            panic!("expected [DONE] to emit completion events");
+        };
+
+        assert_eq!(events.len(), 2);
+        match &events[0] {
+            ResponseEvent::OutputItemDone(ResponseItem::Message { content, .. }) => {
+                assert_eq!(
+                    content,
+                    &vec![ContentItem::OutputText {
+                        text: "hello".to_string(),
+                    }]
+                );
+            }
+            _ => panic!("expected OutputItemDone(Message) before Completed"),
+        }
+        assert!(matches!(
+            events[1],
+            ResponseEvent::Completed {
+                token_usage: None,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]

@@ -11,6 +11,11 @@ impl ChatWidget {
         self.bottom_pane.is_document_reader_active()
     }
 
+    /// Returns `true` when the document reader view is the active bottom pane view.
+    pub(crate) fn is_document_reader_active(&self) -> bool {
+        self.bottom_pane.is_document_reader_active()
+    }
+
     /// Whether the reading view feature is enabled.
     fn is_reading_view_enabled(&self) -> bool {
         self.config.features.enabled(Feature::ReadingView)

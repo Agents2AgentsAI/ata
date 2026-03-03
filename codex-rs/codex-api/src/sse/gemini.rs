@@ -101,6 +101,8 @@ pub struct GeminiStreamState {
     pub created_sent: bool,
     /// Whether we've emitted OutputItemAdded for the message.
     message_started: bool,
+    /// Accumulated visible assistant text for the current message item.
+    accumulated_message_text: String,
     /// Counter for tracking current thinking/reasoning section index.
     thought_index: i64,
     /// Whether we're currently in a thinking section.
@@ -123,6 +125,7 @@ impl GeminiStreamState {
             call_id_counter: 0,
             created_sent: false,
             message_started: false,
+            accumulated_message_text: String::new(),
             thought_index: 0,
             in_thought_section: false,
             accumulated_thought_text: String::new(),
@@ -154,6 +157,17 @@ impl GeminiStreamState {
         self.thought_index += 1;
         self.in_thought_section = false;
         self.reasoning_item_started = false;
+    }
+
+    fn flush_message_item(&mut self, events: &mut Vec<ResponseEvent>) {
+        if self.accumulated_message_text.is_empty() {
+            return;
+        }
+
+        events.push(ResponseEvent::OutputItemDone(build_message_item(
+            &std::mem::take(&mut self.accumulated_message_text),
+        )));
+        self.message_started = false;
     }
 }
 
@@ -346,6 +360,7 @@ pub fn parse_gemini_chunk(
                             }));
                         }
                         events.push(ResponseEvent::OutputTextDelta(text.clone()));
+                        state.accumulated_message_text.push_str(text);
                     }
 
                     // Handle function calls
@@ -392,12 +407,7 @@ pub fn parse_gemini_chunk(
                     reasoning_output_tokens: usage.thoughts_token_count.unwrap_or(0),
                     total_tokens: usage.total_token_count.unwrap_or(0),
                 });
-
-                events.push(ResponseEvent::Completed {
-                    response_id: String::new(),
-                    token_usage,
-                    can_append: false,
-                });
+                events.extend(finalize_gemini_stream(state, token_usage));
             }
         }
     }
@@ -418,15 +428,32 @@ pub fn parse_gemini_chunk(
             reasoning_output_tokens: usage.thoughts_token_count.unwrap_or(0),
             total_tokens: usage.total_token_count.unwrap_or(0),
         });
-
-        events.push(ResponseEvent::Completed {
-            response_id: String::new(),
-            token_usage,
-            can_append: false,
-        });
+        events.extend(finalize_gemini_stream(state, token_usage));
     }
 
     Ok(events)
+}
+
+/// Finalizes Gemini stream state by flushing any pending reasoning/message items,
+/// then emitting a Completed event.
+pub fn finalize_gemini_stream(
+    state: &mut GeminiStreamState,
+    token_usage: Option<TokenUsage>,
+) -> Vec<ResponseEvent> {
+    let mut events = Vec::new();
+
+    if state.in_thought_section {
+        state.flush_thinking_section(&mut events);
+    }
+    state.flush_message_item(&mut events);
+
+    events.push(ResponseEvent::Completed {
+        response_id: String::new(),
+        token_usage,
+        can_append: false,
+    });
+
+    events
 }
 
 /// Converts accumulated text and function calls into a final message ResponseItem.
@@ -521,7 +548,7 @@ mod tests {
         let mut state = GeminiStreamState::new();
         let events = parse_gemini_chunk(data, &mut state).unwrap();
 
-        assert_eq!(events.len(), 4); // Created + OutputItemAdded + TextDelta + Completed
+        assert_eq!(events.len(), 5); // Created + OutputItemAdded + TextDelta + OutputItemDone + Completed
         assert!(matches!(events[0], ResponseEvent::Created));
         assert!(matches!(
             events[1],
@@ -529,6 +556,17 @@ mod tests {
         ));
         assert!(matches!(events[2], ResponseEvent::OutputTextDelta(_)));
         match &events[3] {
+            ResponseEvent::OutputItemDone(ResponseItem::Message { content, .. }) => {
+                assert_eq!(
+                    content,
+                    &vec![ContentItem::OutputText {
+                        text: "Done!".to_string(),
+                    }]
+                );
+            }
+            _ => panic!("Expected OutputItemDone(Message)"),
+        }
+        match &events[4] {
             ResponseEvent::Completed { token_usage, .. } => {
                 let usage = token_usage.as_ref().unwrap();
                 assert_eq!(usage.input_tokens, 10);
@@ -537,6 +575,48 @@ mod tests {
             }
             _ => panic!("Expected Completed"),
         }
+    }
+
+    #[test]
+    fn test_finalize_gemini_stream_emits_message_item_before_completed() {
+        let data = r#"{
+            "candidates": [{
+                "content": {
+                    "parts": [{"text": "Hello"}],
+                    "role": "model"
+                },
+                "index": 0
+            }]
+        }"#;
+
+        let mut state = GeminiStreamState::new();
+        let events = parse_gemini_chunk(data, &mut state).unwrap();
+        assert!(matches!(
+            events[1],
+            ResponseEvent::OutputItemAdded(ResponseItem::Message { .. })
+        ));
+        assert!(matches!(events[2], ResponseEvent::OutputTextDelta(_)));
+
+        let finalized = finalize_gemini_stream(&mut state, None);
+        assert_eq!(finalized.len(), 2);
+        match &finalized[0] {
+            ResponseEvent::OutputItemDone(ResponseItem::Message { content, .. }) => {
+                assert_eq!(
+                    content,
+                    &vec![ContentItem::OutputText {
+                        text: "Hello".to_string(),
+                    }]
+                );
+            }
+            _ => panic!("Expected OutputItemDone(Message)"),
+        }
+        assert!(matches!(
+            finalized[1],
+            ResponseEvent::Completed {
+                token_usage: None,
+                ..
+            }
+        ));
     }
 
     #[test]

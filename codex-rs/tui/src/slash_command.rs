@@ -32,6 +32,7 @@ pub enum SlashCommand {
     Plan,
     Collab,
     Agent,
+    Jobs,
     // Undo,
     Diff,
     Copy,
@@ -53,6 +54,10 @@ pub enum SlashCommand {
     Clear,
     Personality,
     Realtime,
+    Settings,
+    Voice,
+    #[strum(serialize = "voice-setup")]
+    VoiceSetup,
     TestApproval,
     // Debugging commands.
     #[strum(serialize = "debug-m-drop")]
@@ -92,9 +97,13 @@ impl SlashCommand {
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Realtime => "toggle realtime voice mode (experimental)",
+            SlashCommand::Settings => "configure realtime microphone/speaker",
+            SlashCommand::Voice => "toggle voice mode (mic → STT → agent → TTS)",
+            SlashCommand::VoiceSetup => "configure voice mode (TTS/STT)",
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent => "switch the active agent thread",
+            SlashCommand::Jobs => "view scheduled jobs and daemon status",
             SlashCommand::Approvals => "choose what Codex is allowed to do",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
@@ -159,6 +168,7 @@ impl SlashCommand {
             | SlashCommand::Skills
             | SlashCommand::Status
             | SlashCommand::DebugConfig
+            | SlashCommand::Jobs
             | SlashCommand::Ps
             | SlashCommand::Clean
             | SlashCommand::Mcp
@@ -169,6 +179,9 @@ impl SlashCommand {
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
             SlashCommand::Realtime => true,
+            SlashCommand::Settings => true,
+            SlashCommand::Voice => true,
+            SlashCommand::VoiceSetup => true,
             SlashCommand::Collab => true,
             SlashCommand::Agent => true,
             SlashCommand::Team => true,

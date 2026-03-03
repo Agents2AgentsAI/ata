@@ -9,6 +9,7 @@ use crate::config::types::McpServerDisabledReason;
 use crate::config::types::McpServerTransportConfig;
 use crate::config::types::MemoriesConfig;
 use crate::config::types::MemoriesToml;
+use crate::config::types::ModelAvailabilityNuxConfig;
 use crate::config::types::Notice;
 use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
@@ -21,6 +22,7 @@ use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::SkillsConfig;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
+use crate::config::types::VoiceModeToml;
 use crate::config::types::WindowsSandboxModeToml;
 use crate::config::types::WindowsToml;
 use crate::config_loader::CloudRequirementsLoader;
@@ -49,8 +51,6 @@ use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
-#[cfg(target_os = "macos")]
-use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
@@ -66,6 +66,7 @@ use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
@@ -82,8 +83,6 @@ use std::path::Path;
 use std::path::PathBuf;
 #[cfg(test)]
 use tempfile::tempdir;
-#[cfg(not(target_os = "macos"))]
-type MacOsSeatbeltProfileExtensions = ();
 
 use crate::config::permissions::network_proxy_config_from_permissions;
 use crate::config::profile::ConfigProfile;
@@ -100,6 +99,7 @@ pub mod types;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
+pub use codex_network_proxy::NetworkProxyAuditMetadata;
 
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
@@ -107,6 +107,11 @@ pub use permissions::NetworkToml;
 pub use permissions::PermissionsToml;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
+
+/// Well-known prefix for provider-fallback warnings in `startup_warnings`.
+/// The TUI checks for this prefix to force the login screen when a fallback
+/// to the openai provider occurs (cached tokens are likely stale/absent).
+pub const MODEL_PROVIDER_FALLBACK_PREFIX: &str = "Model provider fallback:";
 
 pub use codex_git::GhostSnapshotConfig;
 
@@ -278,6 +283,9 @@ pub struct Config {
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
 
+    /// Persisted startup availability NUX state for model tooltips.
+    pub model_availability_nux: ModelAvailabilityNuxConfig,
+
     /// Start the TUI in the specified collaboration mode (plan/default).
 
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
@@ -411,9 +419,9 @@ pub struct Config {
     /// global default").
     pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
 
-    /// If not "none", the value to use for `reasoning.summary` when making a
-    /// request using the Responses API.
-    pub model_reasoning_summary: ReasoningSummary,
+    /// Optional value to use for `reasoning.summary` when making a request
+    /// using the Responses API. When unset, the model catalog default is used.
+    pub model_reasoning_summary: Option<ReasoningSummary>,
 
     /// Optional override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
@@ -427,6 +435,9 @@ pub struct Config {
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
+
+    /// Machine-local realtime audio device preferences used by realtime voice.
+    pub realtime_audio: RealtimeAudioConfig,
 
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport base URL (the `Op::RealtimeConversation` `/ws`
@@ -1189,6 +1200,10 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
+    /// Machine-local realtime audio device preferences used by realtime voice.
+    #[serde(default)]
+    pub audio: Option<RealtimeAudioToml>,
+
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport base URL (the `Op::RealtimeConversation` `/ws`
     /// connection) without changing normal provider HTTP requests.
@@ -1292,6 +1307,10 @@ pub struct ConfigToml {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
+
+    /// Voice mode settings (mic → STT → agent → TTS → speaker).
+    #[serde(default)]
+    pub voice_mode: Option<VoiceModeToml>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -1333,6 +1352,19 @@ impl ProjectConfig {
     pub fn is_untrusted(&self) -> bool {
         matches!(self.trust_level, Some(TrustLevel::Untrusted))
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RealtimeAudioConfig {
+    pub microphone: Option<String>,
+    pub speaker: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct RealtimeAudioToml {
+    pub microphone: Option<String>,
+    pub speaker: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
@@ -1842,21 +1874,34 @@ impl Config {
             model_providers.entry(key).or_insert(provider);
         }
 
-        let model_provider_id = model_provider
+        let mut model_provider_id = model_provider
             .or(config_profile.model_provider)
             .or(cfg.model_provider)
             .unwrap_or_else(|| "openai".to_string());
-        let model_provider = model_providers
-            .get(&model_provider_id)
-            .ok_or_else(|| {
-                let message = if model_provider_id == LEGACY_OLLAMA_CHAT_PROVIDER_ID {
+        let model_provider = match model_providers.get(&model_provider_id) {
+            Some(provider) => provider.clone(),
+            None => {
+                let warning = if model_provider_id == LEGACY_OLLAMA_CHAT_PROVIDER_ID {
                     OLLAMA_CHAT_PROVIDER_REMOVED_ERROR.to_string()
                 } else {
                     format!("Model provider `{model_provider_id}` not found")
                 };
-                std::io::Error::new(std::io::ErrorKind::NotFound, message)
-            })?
-            .clone();
+                tracing::warn!("{warning}; falling back to openai");
+                startup_warnings.push(format!(
+                    "{MODEL_PROVIDER_FALLBACK_PREFIX} {warning}. Using the default openai provider."
+                ));
+                model_provider_id = "openai".to_string();
+                model_providers
+                    .get("openai")
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "built-in openai provider is missing",
+                        )
+                    })?
+                    .clone()
+            }
+        };
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
         let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
@@ -2200,8 +2245,7 @@ impl Config {
                 .or(cfg.plan_mode_reasoning_effort),
             model_reasoning_summary: config_profile
                 .model_reasoning_summary
-                .or(cfg.model_reasoning_summary)
-                .unwrap_or_default(),
+                .or(cfg.model_reasoning_summary),
             model_supports_reasoning_summaries: cfg.model_supports_reasoning_summaries,
             model_catalog,
             model_verbosity: config_profile.model_verbosity.or(cfg.model_verbosity),
@@ -2209,6 +2253,12 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            realtime_audio: cfg
+                .audio
+                .map_or_else(RealtimeAudioConfig::default, |audio| RealtimeAudioConfig {
+                    microphone: audio.microphone,
+                    speaker: audio.speaker,
+                }),
             experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             forced_chatgpt_workspace_id,
@@ -2254,6 +2304,11 @@ impl Config {
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
+            model_availability_nux: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.model_availability_nux.clone())
+                .unwrap_or_default(),
             tui_alternate_screen: cfg
                 .tui
                 .as_ref()
@@ -2442,6 +2497,7 @@ mod tests {
     use crate::config::types::McpServerTransportConfig;
     use crate::config::types::MemoriesConfig;
     use crate::config::types::MemoriesToml;
+    use crate::config::types::ModelAvailabilityNuxConfig;
     use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
     use crate::config_loader::RequirementSource;
@@ -2474,6 +2530,7 @@ mod tests {
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            oauth_resource: None,
         }
     }
 
@@ -2493,6 +2550,7 @@ mod tests {
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            oauth_resource: None,
         }
     }
 
@@ -2529,7 +2587,10 @@ persistence = "none"
 
         let memories = r#"
 [memories]
+generate_memories = false
+use_memories = false
 max_raw_memories_for_global = 512
+max_unused_days = 21
 max_rollout_age_days = 42
 max_rollouts_per_startup = 9
 min_rollout_idle_hours = 24
@@ -2540,7 +2601,10 @@ phase_2_model = "gpt-5"
             toml::from_str::<ConfigToml>(memories).expect("TOML deserialization should succeed");
         assert_eq!(
             Some(MemoriesToml {
+                generate_memories: Some(false),
+                use_memories: Some(false),
                 max_raw_memories_for_global: Some(512),
+                max_unused_days: Some(21),
                 max_rollout_age_days: Some(42),
                 max_rollouts_per_startup: Some(9),
                 min_rollout_idle_hours: Some(24),
@@ -2559,13 +2623,61 @@ phase_2_model = "gpt-5"
         assert_eq!(
             config.memories,
             MemoriesConfig {
+                generate_memories: false,
+                use_memories: false,
                 max_raw_memories_for_global: 512,
+                max_unused_days: 21,
                 max_rollout_age_days: 42,
                 max_rollouts_per_startup: 9,
                 min_rollout_idle_hours: 24,
                 phase_1_model: Some("gpt-5-mini".to_string()),
                 phase_2_model: Some("gpt-5".to_string()),
             }
+        );
+    }
+
+    #[test]
+    fn config_toml_deserializes_model_availability_nux() {
+        let toml = r#"
+[tui.model_availability_nux]
+"gpt-foo" = 2
+"gpt-bar" = 4
+"#;
+        let cfg: ConfigToml =
+            toml::from_str(toml).expect("TOML deserialization should succeed for TUI NUX");
+
+        assert_eq!(
+            cfg.tui.expect("tui config should deserialize"),
+            Tui {
+                notifications: Notifications::default(),
+                notification_method: NotificationMethod::default(),
+                animations: true,
+                show_tooltips: true,
+                alternate_screen: AltScreenMode::default(),
+                status_line: None,
+                theme: None,
+                model_availability_nux: ModelAvailabilityNuxConfig {
+                    shown_count: HashMap::from([
+                        ("gpt-bar".to_string(), 4),
+                        ("gpt-foo".to_string(), 2),
+                    ]),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn runtime_config_defaults_model_availability_nux() {
+        let cfg = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            tempdir().expect("tempdir").path().to_path_buf(),
+        )
+        .expect("load config");
+
+        assert_eq!(
+            cfg.model_availability_nux,
+            ModelAvailabilityNuxConfig::default()
         );
     }
 
@@ -2703,6 +2815,7 @@ theme = "dracula"
                 alternate_screen: AltScreenMode::Auto,
                 status_line: None,
                 theme: None,
+                model_availability_nux: ModelAvailabilityNuxConfig::default(),
             }
         );
     }
@@ -3527,6 +3640,7 @@ profile = "project"
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         );
 
@@ -3684,6 +3798,7 @@ bearer_token = "secret"
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
 
@@ -3755,6 +3870,7 @@ ZIG_VAR = "3"
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
 
@@ -3806,6 +3922,7 @@ ZIG_VAR = "3"
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
 
@@ -3855,6 +3972,7 @@ ZIG_VAR = "3"
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
 
@@ -3920,6 +4038,7 @@ startup_timeout_sec = 2.0
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
         apply_blocking(
@@ -3997,6 +4116,7 @@ X-Auth = "DOCS_AUTH"
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
 
@@ -4027,6 +4147,7 @@ X-Auth = "DOCS_AUTH"
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         );
         apply_blocking(
@@ -4095,6 +4216,7 @@ url = "https://example.com/mcp"
                     enabled_tools: None,
                     disabled_tools: None,
                     scopes: None,
+                    oauth_resource: None,
                 },
             ),
             (
@@ -4115,6 +4237,7 @@ url = "https://example.com/mcp"
                     enabled_tools: None,
                     disabled_tools: None,
                     scopes: None,
+                    oauth_resource: None,
                 },
             ),
         ]);
@@ -4198,6 +4321,7 @@ url = "https://example.com/mcp"
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
 
@@ -4243,6 +4367,7 @@ url = "https://example.com/mcp"
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
 
@@ -4288,6 +4413,7 @@ url = "https://example.com/mcp"
                 enabled_tools: Some(vec!["allowed".to_string()]),
                 disabled_tools: Some(vec!["blocked".to_string()]),
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
 
@@ -4311,6 +4437,51 @@ url = "https://example.com/mcp"
         assert_eq!(
             docs.disabled_tools.as_ref(),
             Some(&vec!["blocked".to_string()])
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replace_mcp_servers_streamable_http_serializes_oauth_resource() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let servers = BTreeMap::from([(
+            "docs".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: "https://example.com/mcp".to_string(),
+                    bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+                enabled: true,
+                required: false,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth_resource: Some("https://resource.example.com".to_string()),
+            },
+        )]);
+
+        apply_blocking(
+            codex_home.path(),
+            None,
+            &[ConfigEdit::ReplaceMcpServers(servers.clone())],
+        )?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = std::fs::read_to_string(&config_path)?;
+        assert!(serialized.contains(r#"oauth_resource = "https://resource.example.com""#));
+
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let docs = loaded.get("docs").expect("docs entry");
+        assert_eq!(
+            docs.oauth_resource.as_deref(),
+            Some("https://resource.example.com")
         );
 
         Ok(())
@@ -4824,12 +4995,13 @@ model_verbosity = "high"
                 show_raw_agent_reasoning: false,
                 model_reasoning_effort: Some(ReasoningEffort::High),
                 plan_mode_reasoning_effort: None,
-                model_reasoning_summary: ReasoningSummary::Detailed,
+                model_reasoning_summary: Some(ReasoningSummary::Detailed),
                 model_supports_reasoning_summaries: None,
                 model_catalog: None,
                 model_verbosity: None,
                 personality: Some(Personality::Pragmatic),
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+                realtime_audio: RealtimeAudioConfig::default(),
                 experimental_realtime_ws_base_url: None,
                 experimental_realtime_ws_backend_prompt: None,
                 base_instructions: None,
@@ -4859,6 +5031,7 @@ model_verbosity = "high"
                 tui_notification_method: Default::default(),
                 animations: true,
                 show_tooltips: true,
+                model_availability_nux: ModelAvailabilityNuxConfig::default(),
                 analytics_enabled: Some(true),
                 feedback_enabled: true,
                 tui_alternate_screen: AltScreenMode::Auto,
@@ -4954,12 +5127,13 @@ model_verbosity = "high"
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
             plan_mode_reasoning_effort: None,
-            model_reasoning_summary: ReasoningSummary::default(),
+            model_reasoning_summary: None,
             model_supports_reasoning_summaries: None,
             model_catalog: None,
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            realtime_audio: RealtimeAudioConfig::default(),
             experimental_realtime_ws_base_url: None,
             experimental_realtime_ws_backend_prompt: None,
             base_instructions: None,
@@ -4989,6 +5163,7 @@ model_verbosity = "high"
             tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
+            model_availability_nux: ModelAvailabilityNuxConfig::default(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
@@ -5082,12 +5257,13 @@ model_verbosity = "high"
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
             plan_mode_reasoning_effort: None,
-            model_reasoning_summary: ReasoningSummary::default(),
+            model_reasoning_summary: None,
             model_supports_reasoning_summaries: None,
             model_catalog: None,
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            realtime_audio: RealtimeAudioConfig::default(),
             experimental_realtime_ws_base_url: None,
             experimental_realtime_ws_backend_prompt: None,
             base_instructions: None,
@@ -5117,6 +5293,7 @@ model_verbosity = "high"
             tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
+            model_availability_nux: ModelAvailabilityNuxConfig::default(),
             analytics_enabled: Some(false),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
@@ -5196,12 +5373,13 @@ model_verbosity = "high"
             show_raw_agent_reasoning: false,
             model_reasoning_effort: Some(ReasoningEffort::High),
             plan_mode_reasoning_effort: None,
-            model_reasoning_summary: ReasoningSummary::Detailed,
+            model_reasoning_summary: Some(ReasoningSummary::Detailed),
             model_supports_reasoning_summaries: None,
             model_catalog: None,
             model_verbosity: Some(Verbosity::High),
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            realtime_audio: RealtimeAudioConfig::default(),
             experimental_realtime_ws_base_url: None,
             experimental_realtime_ws_backend_prompt: None,
             base_instructions: None,
@@ -5231,6 +5409,7 @@ model_verbosity = "high"
             tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
+            model_availability_nux: ModelAvailabilityNuxConfig::default(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
@@ -5479,26 +5658,54 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn test_load_config_rejects_legacy_ollama_chat_provider_with_helpful_error()
-    -> std::io::Result<()> {
+    fn test_load_config_falls_back_for_legacy_ollama_chat_provider() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml {
             model_provider: Some(LEGACY_OLLAMA_CHAT_PROVIDER_ID.to_string()),
             ..Default::default()
         };
 
-        let result = Config::load_from_base_config_with_overrides(
+        let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
             codex_home.path().to_path_buf(),
-        );
-        assert!(result.is_err());
-        let error = result.unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        )?;
+        assert_eq!(config.model_provider_id, "openai");
         assert!(
-            error
-                .to_string()
-                .contains(OLLAMA_CHAT_PROVIDER_REMOVED_ERROR)
+            config
+                .startup_warnings
+                .iter()
+                .any(|w| w.starts_with(MODEL_PROVIDER_FALLBACK_PREFIX)
+                    && w.contains(OLLAMA_CHAT_PROVIDER_REMOVED_ERROR)),
+            "expected startup warning with fallback prefix about ollama-chat removal, got: {:?}",
+            config.startup_warnings,
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_config_falls_back_for_unknown_provider() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml {
+            model_provider: Some("github-copilot".to_string()),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+        assert_eq!(config.model_provider_id, "openai");
+        assert!(
+            config
+                .startup_warnings
+                .iter()
+                .any(|w| w.starts_with(MODEL_PROVIDER_FALLBACK_PREFIX)
+                    && w.contains("github-copilot")),
+            "expected startup warning with fallback prefix mentioning the unknown provider, got: {:?}",
+            config.startup_warnings,
         );
 
         Ok(())
@@ -6047,6 +6254,39 @@ experimental_realtime_ws_backend_prompt = "prompt from config"
         assert_eq!(
             config.experimental_realtime_ws_backend_prompt.as_deref(),
             Some("prompt from config")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn realtime_audio_loads_from_config_toml() -> std::io::Result<()> {
+        let cfg: ConfigToml = toml::from_str(
+            r#"
+[audio]
+microphone = "USB Mic"
+speaker = "Desk Speakers"
+"#,
+        )
+        .expect("TOML deserialization should succeed");
+
+        let realtime_audio = cfg
+            .audio
+            .as_ref()
+            .expect("realtime audio config should be present");
+        assert_eq!(realtime_audio.microphone.as_deref(), Some("USB Mic"));
+        assert_eq!(realtime_audio.speaker.as_deref(), Some("Desk Speakers"));
+
+        let codex_home = TempDir::new()?;
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.realtime_audio.microphone.as_deref(), Some("USB Mic"));
+        assert_eq!(
+            config.realtime_audio.speaker.as_deref(),
+            Some("Desk Speakers")
         );
         Ok(())
     }
