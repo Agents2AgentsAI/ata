@@ -590,6 +590,24 @@ impl BottomPaneView for VoiceSetupView {
         }
     }
 
+    fn handle_paste(&mut self, pasted: String) -> bool {
+        if !self.is_editing_api_key() {
+            return false;
+        }
+        // Append pasted text into the active API key edit buffer.
+        let Some(idx) = self.state.selected_idx else {
+            return false;
+        };
+        let Some(item) = self.items.get_mut(idx) else {
+            return false;
+        };
+        if let VoiceSetupItemKind::ApiKey { edit_buffer, .. } = &mut item.kind {
+            edit_buffer.push_str(pasted.trim());
+            return true;
+        }
+        false
+    }
+
     fn is_complete(&self) -> bool {
         self.complete
     }
