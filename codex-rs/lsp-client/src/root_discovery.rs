@@ -8,6 +8,8 @@ use globset::Glob;
 use globset::GlobSet;
 use globset::GlobSetBuilder;
 
+use crate::server_config::RootStrategy;
+
 /// Walk up from `file`'s parent directory looking for any of the given marker
 /// files/patterns. Returns the first directory containing a match, or
 /// `workspace_root` as a fallback.
@@ -100,6 +102,75 @@ fn has_marker(dir: &Path, glob_set: &Option<GlobSet>, markers: &[String]) -> boo
     false
 }
 
+/// Refine an initial root based on the server's [`RootStrategy`].
+///
+/// `initial` is the root returned by [`nearest_root`]. `workspace_root` is the
+/// upper bound — we never walk above it.
+pub fn refine_root(initial: &Path, workspace_root: &Path, strategy: &RootStrategy) -> PathBuf {
+    match strategy {
+        RootStrategy::NearestMarker => initial.to_path_buf(),
+        RootStrategy::WalkUpForContent {
+            marker_file,
+            content_pattern,
+        } => walk_up_for_content(initial, workspace_root, marker_file, content_pattern),
+        RootStrategy::PreferAncestorMarker { preferred_marker } => {
+            walk_up_for_marker(initial, workspace_root, preferred_marker)
+        }
+    }
+}
+
+/// Walk up from `start` (inclusive) looking for a directory containing
+/// `marker_file` whose contents include `content_pattern`. Returns the
+/// NEAREST (first) match. Falls back to `start`.
+fn walk_up_for_content(
+    start: &Path,
+    bound: &Path,
+    marker_file: &str,
+    content_pattern: &str,
+) -> PathBuf {
+    let mut dir = start;
+    loop {
+        let candidate = dir.join(marker_file);
+        if candidate.is_file() {
+            if let Ok(contents) = std::fs::read_to_string(&candidate) {
+                if contents.contains(content_pattern) {
+                    return dir.to_path_buf();
+                }
+            }
+        }
+        if dir == bound {
+            break;
+        }
+        match dir.parent() {
+            Some(parent) if parent != dir => dir = parent,
+            _ => break,
+        }
+    }
+    start.to_path_buf()
+}
+
+/// Walk up from `start` (exclusive — starts at parent) looking for a directory
+/// containing `preferred_marker`. Returns the FIRST match. Falls back to `start`.
+fn walk_up_for_marker(start: &Path, bound: &Path, preferred_marker: &str) -> PathBuf {
+    let mut dir = match start.parent() {
+        Some(parent) if parent != start => parent,
+        _ => return start.to_path_buf(),
+    };
+    loop {
+        if dir.join(preferred_marker).exists() {
+            return dir.to_path_buf();
+        }
+        if dir == bound {
+            break;
+        }
+        match dir.parent() {
+            Some(parent) if parent != dir => dir = parent,
+            _ => break,
+        }
+    }
+    start.to_path_buf()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,5 +234,115 @@ mod tests {
         let root = tmp.path();
         std::fs::create_dir_all(root.join("Foo.xcodeproj")).expect("mkdir");
         assert!(dir_has_any_marker(root, &["*.xcodeproj".to_string()]));
+    }
+
+    // -- refine_root tests --
+
+    #[test]
+    fn refine_root_nearest_marker_is_identity() {
+        let tmp = TempDir::new().expect("tmp");
+        let initial = tmp.path().join("crates/foo");
+        std::fs::create_dir_all(&initial).expect("mkdir");
+        let result = refine_root(&initial, tmp.path(), &RootStrategy::NearestMarker);
+        assert_eq!(result, initial);
+    }
+
+    #[test]
+    fn refine_root_walk_up_finds_workspace_cargo_toml() {
+        // workspace_root/
+        //   Cargo.toml  (contains [workspace])
+        //   crates/foo/
+        //     Cargo.toml  (plain package)
+        let tmp = TempDir::new().expect("tmp");
+        let ws = tmp.path();
+        let crate_dir = ws.join("crates/foo");
+        std::fs::create_dir_all(&crate_dir).expect("mkdir");
+        std::fs::write(ws.join("Cargo.toml"), "[workspace]\nmembers = [\"crates/*\"]")
+            .expect("write ws");
+        std::fs::write(crate_dir.join("Cargo.toml"), "[package]\nname = \"foo\"")
+            .expect("write pkg");
+
+        let strategy = RootStrategy::WalkUpForContent {
+            marker_file: "Cargo.toml",
+            content_pattern: "[workspace]",
+        };
+        // initial root is crate_dir (where nearest_root would land)
+        let result = refine_root(&crate_dir, ws, &strategy);
+        assert_eq!(result, ws);
+    }
+
+    #[test]
+    fn refine_root_walk_up_no_workspace_falls_back() {
+        let tmp = TempDir::new().expect("tmp");
+        let ws = tmp.path();
+        let crate_dir = ws.join("crates/foo");
+        std::fs::create_dir_all(&crate_dir).expect("mkdir");
+        // No workspace Cargo.toml at root
+        std::fs::write(crate_dir.join("Cargo.toml"), "[package]\nname = \"foo\"")
+            .expect("write pkg");
+
+        let strategy = RootStrategy::WalkUpForContent {
+            marker_file: "Cargo.toml",
+            content_pattern: "[workspace]",
+        };
+        let result = refine_root(&crate_dir, ws, &strategy);
+        assert_eq!(result, crate_dir, "should fall back to initial root");
+    }
+
+    #[test]
+    fn refine_root_walk_up_respects_workspace_bound() {
+        // Simulate a workspace Cargo.toml ABOVE the workspace_root bound.
+        // It should NOT be found.
+        let tmp = TempDir::new().expect("tmp");
+        let outer = tmp.path();
+        let ws = outer.join("repo");
+        let crate_dir = ws.join("crates/foo");
+        std::fs::create_dir_all(&crate_dir).expect("mkdir");
+        // Workspace toml above bound
+        std::fs::write(outer.join("Cargo.toml"), "[workspace]\nmembers = [\"repo/*\"]")
+            .expect("write");
+        std::fs::write(crate_dir.join("Cargo.toml"), "[package]\nname = \"foo\"").expect("write");
+
+        let strategy = RootStrategy::WalkUpForContent {
+            marker_file: "Cargo.toml",
+            content_pattern: "[workspace]",
+        };
+        let result = refine_root(&crate_dir, &ws, &strategy);
+        assert_eq!(result, crate_dir, "should not walk above workspace_root");
+    }
+
+    #[test]
+    fn refine_root_prefer_ancestor_marker_finds_go_work() {
+        // workspace_root/
+        //   go.work
+        //   services/api/
+        //     go.mod
+        let tmp = TempDir::new().expect("tmp");
+        let ws = tmp.path();
+        let svc = ws.join("services/api");
+        std::fs::create_dir_all(&svc).expect("mkdir");
+        std::fs::write(ws.join("go.work"), "go 1.21\nuse ./services/api").expect("write");
+        std::fs::write(svc.join("go.mod"), "module api").expect("write");
+
+        let strategy = RootStrategy::PreferAncestorMarker {
+            preferred_marker: "go.work",
+        };
+        let result = refine_root(&svc, ws, &strategy);
+        assert_eq!(result, ws);
+    }
+
+    #[test]
+    fn refine_root_prefer_ancestor_marker_no_go_work_falls_back() {
+        let tmp = TempDir::new().expect("tmp");
+        let ws = tmp.path();
+        let svc = ws.join("services/api");
+        std::fs::create_dir_all(&svc).expect("mkdir");
+        std::fs::write(svc.join("go.mod"), "module api").expect("write");
+
+        let strategy = RootStrategy::PreferAncestorMarker {
+            preferred_marker: "go.work",
+        };
+        let result = refine_root(&svc, ws, &strategy);
+        assert_eq!(result, svc, "should fall back when go.work not found");
     }
 }

@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 
 use crate::server_config::LspServerConfig;
+use crate::server_config::PostRootHook;
+use crate::server_config::RootStrategy;
 
 /// Merge built-in server configurations with user overrides.
 ///
@@ -54,6 +56,8 @@ pub fn merge_configs(
                         initialization_options: full.initialization_options,
                         disabled: full.disabled,
                         install: existing.install.clone(), // keep built-in install config
+                        root_strategy: existing.root_strategy.clone(),
+                        post_root_hook: existing.post_root_hook.clone(),
                     };
                 } else {
                     // Custom server: user must provide extensions.
@@ -68,6 +72,8 @@ pub fn merge_configs(
                             initialization_options: full.initialization_options,
                             disabled: full.disabled,
                             install: None,
+                            root_strategy: RootStrategy::default(),
+                            post_root_hook: PostRootHook::default(),
                         },
                     );
                 }
