@@ -1852,7 +1852,7 @@ impl super::ChatWidget {
         use ratatui::text::Span;
         for (i, line) in lines.iter_mut().enumerate() {
             let prefix = if i == 0 {
-                Span::from("• ").dim()
+                Span::from("♪ ").dim()
             } else {
                 Span::raw("  ")
             };
