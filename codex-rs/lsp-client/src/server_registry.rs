@@ -172,7 +172,8 @@ pub struct ServerRegistry {
     servers: HashMap<String, LspServerConfig>,
     /// Active clients keyed by (server_id, root).
     clients: AsyncMutex<HashMap<ClientKey, Arc<LspClient>>>,
-    /// Servers that failed to start (never retry within session), with reason.
+    /// Servers that failed to start, with reason. Entries can be cleared to allow retry
+    /// (e.g. after the agent installs missing dependencies).
     broken: AsyncMutex<HashMap<ClientKey, String>>,
     /// In-flight spawns for dedup.
     spawning: StdMutex<HashMap<ClientKey, Arc<tokio::sync::Notify>>>,
@@ -213,6 +214,25 @@ impl ServerRegistry {
         if let Ok(mut guard) = self.install_confirm.write() {
             *guard = callback;
         }
+    }
+
+    /// Clear broken entries for servers matching `path`, allowing retry.
+    pub async fn clear_broken_for_path(&self, path: &Path) {
+        let matching: Vec<String> = self
+            .servers
+            .iter()
+            .filter(|(_, c)| !c.disabled && c.matches_path(path))
+            .map(|(id, _)| id.clone())
+            .collect();
+        self.broken
+            .lock()
+            .await
+            .retain(|(sid, _), _| !matching.contains(sid));
+    }
+
+    /// Clear all broken entries (for workspace-wide operations).
+    pub async fn clear_all_broken(&self) {
+        self.broken.lock().await.clear();
     }
 
     /// Returns true when at least one configured server can handle this file.
