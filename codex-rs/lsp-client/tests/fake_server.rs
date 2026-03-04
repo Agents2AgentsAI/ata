@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::io::Write as _;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -243,13 +244,15 @@ while True:
 /// Write the fake LSP server script to a temp file and return its path.
 fn write_fake_server(dir: &TempDir) -> PathBuf {
     let script_path = dir.path().join("fake_lsp.py");
-    let mut f = std::fs::File::create(&script_path).expect("create script");
-    f.write_all(FAKE_LSP_PY.as_bytes()).expect("write script");
+    let mut f =
+        std::fs::File::create(&script_path).unwrap_or_else(|e| panic!("create script: {e}"));
+    f.write_all(FAKE_LSP_PY.as_bytes())
+        .unwrap_or_else(|e| panic!("write script: {e}"));
     script_path
 }
 
 /// Create an LspServerConfig pointing to the fake server.
-fn fake_config(script: &PathBuf) -> LspServerConfig {
+fn fake_config(script: &Path) -> LspServerConfig {
     LspServerConfig {
         extensions: vec![".rs".into()],
         command: vec!["python3".into(), script.to_string_lossy().to_string()],
@@ -354,7 +357,7 @@ async fn hover_returns_result() {
                 markup.value
             );
         }
-        other => panic!("expected Markup hover contents, got: {:?}", other),
+        other => panic!("expected Markup hover contents, got: {other:?}"),
     }
 
     client.shutdown().await;
@@ -484,7 +487,6 @@ async fn workspace_symbol_autospawns_clients() {
     assert!(
         symbols.iter().any(|s| s.name == "hello_symbol"),
         "expected 'hello_symbol' from workspace/symbol response, got: {symbols:?}",
-        symbols = symbols
     );
 
     registry.shutdown_all().await;
@@ -573,9 +575,8 @@ async fn code_action_returns_actions() {
         )
         .await;
     assert!(
-        actions.len() >= 1,
+        !actions.is_empty(),
         "expected at least one code action, got: {actions:?}",
-        actions = actions
     );
 
     client.shutdown().await;

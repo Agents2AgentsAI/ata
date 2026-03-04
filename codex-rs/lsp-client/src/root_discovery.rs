@@ -61,11 +61,11 @@ fn build_glob_set(markers: &[String]) -> Option<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     let mut has_globs = false;
     for m in markers {
-        if m.contains('*') || m.contains('?') || m.contains('[') {
-            if let Ok(glob) = Glob::new(m) {
-                builder.add(glob);
-                has_globs = true;
-            }
+        if (m.contains('*') || m.contains('?') || m.contains('['))
+            && let Ok(glob) = Glob::new(m)
+        {
+            builder.add(glob);
+            has_globs = true;
         }
     }
     if has_globs {
@@ -79,22 +79,20 @@ fn build_glob_set(markers: &[String]) -> Option<GlobSet> {
 fn has_marker(dir: &Path, glob_set: &Option<GlobSet>, markers: &[String]) -> bool {
     // Fast path: check literal markers by simple existence.
     for m in markers {
-        if !(m.contains('*') || m.contains('?') || m.contains('[')) {
-            if dir.join(m).exists() {
-                return true;
-            }
+        if !(m.contains('*') || m.contains('?') || m.contains('[')) && dir.join(m).exists() {
+            return true;
         }
     }
 
     // Slow path: check glob patterns via directory listing.
-    if let Some(gs) = glob_set {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if gs.is_match(name) {
-                        return true;
-                    }
-                }
+    if let Some(gs) = glob_set
+        && let Ok(entries) = std::fs::read_dir(dir)
+    {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str()
+                && gs.is_match(name)
+            {
+                return true;
             }
         }
     }
@@ -131,12 +129,11 @@ fn walk_up_for_content(
     let mut dir = start;
     loop {
         let candidate = dir.join(marker_file);
-        if candidate.is_file() {
-            if let Ok(contents) = std::fs::read_to_string(&candidate) {
-                if contents.contains(content_pattern) {
-                    return dir.to_path_buf();
-                }
-            }
+        if candidate.is_file()
+            && let Ok(contents) = std::fs::read_to_string(&candidate)
+            && contents.contains(content_pattern)
+        {
+            return dir.to_path_buf();
         }
         if dir == bound {
             break;

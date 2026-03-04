@@ -2074,35 +2074,33 @@ pub(crate) fn build_specs_with_toolkits(
     }
 
     #[cfg(feature = "lsp")]
-    if config.features.enabled(Feature::Lsp) {
-        if let Some(multi_root_state) = &config.multi_root_state
-            && multi_root_state.has_lsp()
-        {
-            use crate::tools::handlers::lsp::LspToolHandler;
-            use crate::tools::handlers::lsp::create_lsp_tool;
-            let lsp_handler = Arc::new(LspToolHandler {
-                state: Arc::clone(multi_root_state),
-                warmed_files: tokio::sync::Mutex::new(std::collections::HashSet::new()),
-                warmed_workspaces: tokio::sync::Mutex::new(std::collections::HashSet::new()),
-            });
-            builder.push_spec_with_parallel_support(create_lsp_tool(), true);
-            builder.register_handler("lsp", lsp_handler);
-        }
+    if config.features.enabled(Feature::Lsp)
+        && let Some(multi_root_state) = &config.multi_root_state
+        && multi_root_state.has_lsp()
+    {
+        use crate::tools::handlers::lsp::LspToolHandler;
+        use crate::tools::handlers::lsp::create_lsp_tool;
+        let lsp_handler = Arc::new(LspToolHandler {
+            state: Arc::clone(multi_root_state),
+            warmed_files: tokio::sync::Mutex::new(std::collections::HashSet::new()),
+            warmed_workspaces: tokio::sync::Mutex::new(std::collections::HashSet::new()),
+        });
+        builder.push_spec_with_parallel_support(create_lsp_tool(), true);
+        builder.register_handler("lsp", lsp_handler);
     }
 
     #[cfg(feature = "treesitter")]
-    if config.features.enabled(Feature::TreeSitter) {
-        if let Some(multi_root_state) = &config.multi_root_state
-            && multi_root_state.has_treesitter()
-        {
-            use crate::tools::handlers::code_intel::CodeIntelToolHandler;
-            use crate::tools::handlers::code_intel::create_code_intel_tool;
-            let code_intel_handler = Arc::new(CodeIntelToolHandler {
-                state: Arc::clone(multi_root_state),
-            });
-            builder.push_spec_with_parallel_support(create_code_intel_tool(), true);
-            builder.register_handler("code_intel", code_intel_handler);
-        }
+    if config.features.enabled(Feature::TreeSitter)
+        && let Some(multi_root_state) = &config.multi_root_state
+        && multi_root_state.has_treesitter()
+    {
+        use crate::tools::handlers::code_intel::CodeIntelToolHandler;
+        use crate::tools::handlers::code_intel::create_code_intel_tool;
+        let code_intel_handler = Arc::new(CodeIntelToolHandler {
+            state: Arc::clone(multi_root_state),
+        });
+        builder.push_spec_with_parallel_support(create_code_intel_tool(), true);
+        builder.register_handler("code_intel", code_intel_handler);
     }
 
     register_attach_url_files(&mut builder, config);

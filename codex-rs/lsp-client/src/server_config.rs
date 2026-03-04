@@ -149,7 +149,7 @@ impl LspServerConfig {
 
     /// Returns the binary name (first element of `command`).
     pub fn binary_name(&self) -> Option<&str> {
-        self.command.first().map(|s| s.as_str())
+        self.command.first().map(String::as_str)
     }
 
     /// Iterate startup command variants (primary command first, then fallbacks).
@@ -239,7 +239,7 @@ impl InstallMethod {
                 if packages.is_empty() {
                     cmd.push(binary_name.into());
                 } else {
-                    cmd.extend(packages.iter().map(|p| p.clone()));
+                    cmd.extend(packages.iter().cloned());
                 }
                 cmd
             }
@@ -343,7 +343,7 @@ mod tests {
             vec!["xcrun".into(), "sourcekit-lsp".into()],
             vec!["/opt/custom/bin/sourcekit-lsp".into()],
         ];
-        let variants: Vec<Vec<String>> = c.command_variants().map(|v| v.to_vec()).collect();
+        let variants: Vec<Vec<String>> = c.command_variants().map(<[String]>::to_vec).collect();
         assert_eq!(variants.len(), 3);
         assert_eq!(variants[0], vec!["rust-analyzer"]);
         assert_eq!(variants[1], vec!["xcrun", "sourcekit-lsp"]);

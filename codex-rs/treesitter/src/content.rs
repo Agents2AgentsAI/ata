@@ -205,7 +205,7 @@ pub fn grep(
     })
 }
 
-fn line_offsets(source: &str, lines: &[&str]) -> Vec<usize> {
+pub(crate) fn line_offsets(source: &str, lines: &[&str]) -> Vec<usize> {
     let mut offsets = Vec::with_capacity(lines.len());
     let mut offset = 0usize;
     let bytes = source.as_bytes();
@@ -222,7 +222,7 @@ fn line_offsets(source: &str, lines: &[&str]) -> Vec<usize> {
     offsets
 }
 
-fn compute_non_code_ranges(source: &str, language: Language) -> Vec<(usize, usize)> {
+pub(crate) fn compute_non_code_ranges(source: &str, language: Language) -> Vec<(usize, usize)> {
     let Some(config) = queries::get_language_config(language) else {
         return Vec::new();
     };
@@ -230,12 +230,12 @@ fn compute_non_code_ranges(source: &str, language: Language) -> Vec<(usize, usiz
     NON_CODE_QUERY_CACHE
         .with(|cache| {
             let mut cache = cache.borrow_mut();
-            if !cache.contains_key(&language) {
+            if let std::collections::hash_map::Entry::Vacant(e) = cache.entry(language) {
                 let mut parser = tree_sitter::Parser::new();
                 parser.set_language(&config.language).ok()?;
                 let query =
                     tree_sitter::Query::new(&config.language, config.non_code_query).ok()?;
-                cache.insert(language, NonCodeQueryCache { parser, query });
+                e.insert(NonCodeQueryCache { parser, query });
             }
 
             let entry = cache.get_mut(&language)?;
@@ -256,7 +256,7 @@ fn compute_non_code_ranges(source: &str, language: Language) -> Vec<(usize, usiz
         .unwrap_or_default()
 }
 
-fn is_in_excluded_range(offset: usize, ranges: &[(usize, usize)]) -> bool {
+pub(crate) fn is_in_excluded_range(offset: usize, ranges: &[(usize, usize)]) -> bool {
     ranges
         .binary_search_by(|(start, end)| {
             if offset < *start {

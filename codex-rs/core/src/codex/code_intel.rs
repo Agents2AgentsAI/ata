@@ -157,12 +157,8 @@ pub(super) fn build_treesitter_index_config(
     }
     .with_disabled_languages(disabled_languages);
 
-    treesitter_config = treesitter_config.with_ignore_extensions(
-        config_map
-            .ignore_extensions
-            .iter()
-            .map(|extension| extension.to_string()),
-    );
+    treesitter_config = treesitter_config
+        .with_ignore_extensions(config_map.ignore_extensions.iter().map(ToString::to_string));
 
     Some(treesitter_config)
 }

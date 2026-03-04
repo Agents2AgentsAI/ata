@@ -127,8 +127,11 @@ fn js_definition_line(line: &str, name: &str) -> bool {
 }
 
 fn is_test_symbol(name: &str, file: &str) -> bool {
-    let in_test_file =
-        file.contains(".test.") || file.contains(".spec.") || file.contains("__tests__");
+    let in_test_file = file.contains(".test.")
+        || file.contains(".spec.")
+        || file.contains("__tests__")
+        || file.contains("/tests/")
+        || file.contains("\\tests\\");
     // In test files, only mark symbols that look like test constructs or
     // follow common test-function naming patterns.  This avoids classifying
     // helper utilities (e.g. `createServer`) as tests.
