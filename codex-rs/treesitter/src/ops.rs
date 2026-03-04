@@ -80,9 +80,29 @@ pub fn find_callers(
     file: &str,
     limit: usize,
 ) -> Result<CallersResult, String> {
-    let _ = symbol_table
-        .get(file, symbol_name)
-        .ok_or_else(|| format!("symbol '{symbol_name}' not found in '{file}'"))?;
+    let _ = symbol_table.get(file, symbol_name).ok_or_else(|| {
+        let available = symbol_table.symbols_in_file(file);
+        if available.is_empty() {
+            format!("file '{file}' has no indexed symbols")
+        } else {
+            let names: Vec<String> = available
+                .iter()
+                .map(|s| match &s.parent {
+                    Some(parent) => format!("{}.{}", parent, s.name),
+                    None => s.name.clone(),
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .take(20)
+                .collect();
+            format!(
+                "symbol '{}' not found in '{}'. Available symbols: {}",
+                symbol_name,
+                file,
+                names.join(", ")
+            )
+        }
+    })?;
 
     let mut callers: Vec<CallerInfo> = file_tree
         .all_paths_with_language()

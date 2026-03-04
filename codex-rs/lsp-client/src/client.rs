@@ -349,6 +349,9 @@ impl LspClient {
                 }),
                 code_action: Some(CodeActionClientCapabilities {
                     dynamic_registration: Some(false),
+                    resolve_support: Some(CodeActionCapabilityResolveSupport {
+                        properties: vec!["edit".into()],
+                    }),
                     ..Default::default()
                 }),
                 rename: Some(RenameClientCapabilities {
@@ -749,6 +752,18 @@ impl LspClient {
             return Vec::new();
         }
         self.deserialize_or_default("textDocument/codeAction", val)
+    }
+
+    /// Resolve a code action to populate its `edit` field via `codeAction/resolve`.
+    pub async fn code_action_resolve(
+        &self,
+        action: CodeAction,
+    ) -> Option<CodeAction> {
+        let val = self.query("codeAction/resolve", action).await?;
+        if val.is_null() {
+            return None;
+        }
+        self.deserialize_response("codeAction/resolve", val)
     }
 
     // -----------------------------------------------------------------------

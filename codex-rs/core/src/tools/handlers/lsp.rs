@@ -11,6 +11,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use codex_lsp_client::ServerRegistry;
 use codex_lsp_client::lsp_types::CallHierarchyItem;
+use codex_lsp_client::lsp_types::CodeAction;
 use codex_lsp_client::lsp_types::CodeActionKind;
 use codex_lsp_client::lsp_types::CodeActionOrCommand;
 use codex_lsp_client::lsp_types::Diagnostic;
@@ -254,13 +255,16 @@ impl ToolHandler for LspToolHandler {
                 let mut symbols = Vec::new();
                 let mut any_running_clients = false;
                 for (root_name, registry) in &registries {
-                    self.warm_workspace(root_name, &registry).await;
+                    self.warm_workspace(root_name, registry).await;
                     symbols.extend(registry.workspace_symbol(query).await);
                     any_running_clients |= registry.running_client_count().await > 0;
                 }
-                // Retry once if empty — TS server may still be indexing workspace.
-                if symbols.is_empty() && any_running_clients {
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                // Retry with progressive backoff — TS server may need time to index.
+                for attempt in 1..=3u64 {
+                    if !symbols.is_empty() || !any_running_clients {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(attempt)).await;
                     for (_root_name, registry) in &registries {
                         symbols.extend(registry.workspace_symbol(query).await);
                     }
@@ -268,12 +272,15 @@ impl ToolHandler for LspToolHandler {
 
                 if symbols.is_empty() && !any_running_clients {
                     return Err(FunctionCallError::RespondToModel(
-                        "no LSP servers are running (failed to start any)".to_string(),
+                        "no LSP servers are running (failed to start any). Use `code_intel` for tree-sitter-based analysis or `grep` for text search instead.".to_string(),
                     ));
                 }
                 let total = symbols.len();
                 let truncated = total > limit;
-                (format_workspace_symbols(&symbols, limit, total, truncated), false)
+                (
+                    format_workspace_symbols(&symbols, limit, total, truncated),
+                    false,
+                )
             }
             LspOperation::GoToImplementation => {
                 let context = self
@@ -468,17 +475,32 @@ impl ToolHandler for LspToolHandler {
                     .as_deref()
                     .map(str::trim)
                     .filter(|s| !s.is_empty());
-                let previewable = filter_previewable_code_actions(&actions);
-                if previewable.is_empty() {
+                let (ready, resolvable) = filter_previewable_code_actions(&actions);
+                if ready.is_empty() && resolvable.is_empty() {
                     return Err(FunctionCallError::RespondToModel(
-                        "no previewable code actions found (need an action with `edit` and no `command`)".to_string(),
+                        "no previewable code actions found (need an action with `edit` and no `command`, or with `data` for resolve)".to_string(),
                     ));
                 }
 
-                let chosen = choose_code_action(&previewable, title)?;
+                // Combine ready + resolvable for title matching; prefer ready.
+                let mut candidates: Vec<CodeAction> = ready;
+                candidates.extend(resolvable);
+
+                let mut chosen = choose_code_action(&candidates, title)?;
+
+                // If the chosen action has `data` but no `edit`, try resolving it.
+                if chosen.edit.is_none()
+                    && let Some(resolved) = context
+                        .registry
+                        .code_action_resolve(&context.path, chosen.clone())
+                        .await
+                {
+                    chosen = resolved;
+                }
+
                 let edit = chosen.edit.ok_or_else(|| {
                     FunctionCallError::RespondToModel(
-                        "selected code action has no edit".to_string(),
+                        "selected code action has no edit (resolve did not provide one)".to_string(),
                     )
                 })?;
                 let patch = workspace_edit_to_apply_patch(
@@ -706,7 +728,7 @@ impl LspToolHandler {
         }
         if !registry.has_servers_for(path) {
             return Err(FunctionCallError::RespondToModel(format!(
-                "no LSP server configured for {} under root '{}'",
+                "no LSP server configured for {} under root '{}'. Use `code_intel` for tree-sitter-based analysis or `grep` for text search instead.",
                 path.display(),
                 root_name
             )));
@@ -728,7 +750,7 @@ impl LspToolHandler {
                 format!("\nstartup details:\n- {}", details.join("\n- "))
             };
             return Err(FunctionCallError::RespondToModel(format!(
-                "no LSP server could be started for {display_path} under root '{root_name}'{details_block}"
+                "no LSP server could be started for {display_path} under root '{root_name}'{details_block}\n\nUse `code_intel` for tree-sitter-based analysis or `grep` for text search instead."
             )));
         }
 
@@ -1084,8 +1106,7 @@ fn format_workspace_symbols(
     let mut lines: Vec<String> = Vec::with_capacity(shown + 1);
     if truncated {
         lines.push(format!(
-            "Showing {} of {} symbols (increase `limit` for more):",
-            shown, total
+            "Showing {shown} of {total} symbols (increase `limit` for more):",
         ));
     }
     for s in symbols.iter().take(limit) {
@@ -1266,26 +1287,33 @@ fn format_prepare_rename(resp: Option<PrepareRenameResponse>) -> String {
     }
 }
 
+/// Partition code actions into two categories:
+/// - `ready`: has `edit` and no `command` — can be previewed immediately.
+/// - `resolvable`: has `data` but no `edit` and no `command` — can be resolved via `codeAction/resolve`.
 fn filter_previewable_code_actions(
     actions: &[CodeActionOrCommand],
-) -> Vec<codex_lsp_client::lsp_types::CodeAction> {
-    actions
-        .iter()
-        .filter_map(|item| match item {
-            CodeActionOrCommand::CodeAction(action)
-                if action.edit.is_some() && action.command.is_none() =>
-            {
-                Some(action.clone())
+) -> (Vec<CodeAction>, Vec<CodeAction>) {
+    let mut ready = Vec::new();
+    let mut resolvable = Vec::new();
+    for item in actions {
+        if let CodeActionOrCommand::CodeAction(action) = item {
+            if action.command.is_some() {
+                continue;
             }
-            _ => None,
-        })
-        .collect()
+            if action.edit.is_some() {
+                ready.push(action.clone());
+            } else if action.data.is_some() {
+                resolvable.push(action.clone());
+            }
+        }
+    }
+    (ready, resolvable)
 }
 
 fn choose_code_action(
-    actions: &[codex_lsp_client::lsp_types::CodeAction],
+    actions: &[CodeAction],
     title: Option<&str>,
-) -> Result<codex_lsp_client::lsp_types::CodeAction, FunctionCallError> {
+) -> Result<CodeAction, FunctionCallError> {
     if let Some(title) = title {
         if let Some(action) = actions.iter().find(|a| a.title == title) {
             return Ok(action.clone());
@@ -1334,8 +1362,7 @@ pub(crate) fn create_lsp_tool() -> ToolSpec {
         "file".to_string(),
         JsonSchema::String {
             description: Some(
-                "Absolute path to the file (required for most operations)"
-                    .to_string(),
+                "Absolute path to the file (required for most operations)".to_string(),
             ),
         },
     );

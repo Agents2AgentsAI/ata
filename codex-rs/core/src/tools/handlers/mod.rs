@@ -114,25 +114,9 @@ pub(super) const HANDLER_MAX_RESULTS: usize = 50;
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
 pub(super) const HANDLER_MAX_RESULT_BYTES: usize = 8 * 1024;
 
-#[cfg(any(feature = "lsp", feature = "treesitter"))]
-pub(super) fn path_argument(
-    path_value: Option<&str>,
-    key: &str,
-    default_cwd: &Path,
-) -> Result<PathBuf, FunctionCallError> {
-    let path = path_value
-        .ok_or_else(|| FunctionCallError::RespondToModel(format!("`{key}` is required")))?;
-    let path = PathBuf::from(path);
-    if path.is_absolute() {
-        Ok(path)
-    } else {
-        Ok(crate::util::resolve_path(default_cwd, &path))
-    }
-}
-
-/// Stricter variant of [`path_argument`] that rejects relative paths outright
-/// instead of silently resolving them against `cwd`. Use this for tool
-/// parameters where the model should always provide an absolute path.
+/// Rejects relative paths outright instead of silently resolving them against
+/// `cwd`. Use this for tool parameters where the model should always provide
+/// an absolute path.
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
 pub(super) fn require_absolute_path_argument(
     path_value: Option<&str>,

@@ -1,6 +1,12 @@
 use codex_protocol::models::FunctionCallOutputBody;
 use std::collections::BTreeMap;
+#[cfg(feature = "lsp")]
+use std::collections::HashMap;
+#[cfg(feature = "lsp")]
+use std::collections::HashSet;
 use std::path::Path;
+#[cfg(feature = "lsp")]
+use std::path::PathBuf;
 
 use crate::apply_patch;
 use crate::apply_patch::InternalApplyPatchInvocation;
@@ -110,13 +116,24 @@ impl ToolHandler for ApplyPatchHandler {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
                 #[cfg(any(feature = "lsp", feature = "treesitter"))]
                 let changed_file_paths = file_paths_for_action(&changes);
+
+                // Capture pre-patch errors so we can show only new ones after.
+                #[cfg(feature = "lsp")]
+                let baselines = collect_baseline_errors(&session, &changed_file_paths).await;
+
                 match apply_patch::apply_patch(turn.as_ref(), changes).await {
                     InternalApplyPatchInvocation::Output(item) => {
                         #[allow(unused_mut)]
                         let mut content = item?;
                         #[cfg(any(feature = "lsp", feature = "treesitter"))]
-                        append_code_intel_feedback(&session, &changed_file_paths, &mut content)
-                            .await;
+                        append_code_intel_feedback(
+                            &session,
+                            &changed_file_paths,
+                            &mut content,
+                            #[cfg(feature = "lsp")]
+                            &baselines,
+                        )
+                        .await;
                         Ok(ToolOutput::Function {
                             body: FunctionCallOutputBody::Text(content),
                             success: Some(true),
@@ -173,8 +190,14 @@ impl ToolHandler for ApplyPatchHandler {
                         #[allow(unused_mut)]
                         let mut content = emitter.finish(event_ctx, out).await?;
                         #[cfg(any(feature = "lsp", feature = "treesitter"))]
-                        append_code_intel_feedback(&session, &changed_file_paths, &mut content)
-                            .await;
+                        append_code_intel_feedback(
+                            &session,
+                            &changed_file_paths,
+                            &mut content,
+                            #[cfg(feature = "lsp")]
+                            &baselines,
+                        )
+                        .await;
                         Ok(ToolOutput::Function {
                             body: FunctionCallOutputBody::Text(content),
                             success: Some(true),
@@ -403,19 +426,43 @@ It is important to remember:
     })
 }
 
+/// Capture pre-patch LSP error messages per file so we can diff after applying.
+#[cfg(feature = "lsp")]
+async fn collect_baseline_errors(
+    session: &Session,
+    paths: &[AbsolutePathBuf],
+) -> HashMap<PathBuf, HashSet<String>> {
+    let mut baselines = HashMap::new();
+    if let Some(ref multi_root_state) = session.services.multi_root_state {
+        for p in paths {
+            let errors = multi_root_state.collect_lsp_errors(p.as_path()).await;
+            let messages: HashSet<String> = errors.into_iter().map(|(_, _, msg)| msg).collect();
+            if !messages.is_empty() {
+                baselines.insert(p.as_path().to_path_buf(), messages);
+            }
+        }
+    }
+    baselines
+}
+
 /// Append code intelligence feedback after a successful patch.
+///
+/// When `baselines` is provided, only errors whose message text was NOT
+/// present before the patch are shown — filtering out pre-existing noise.
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
 async fn append_code_intel_feedback(
     session: &Session,
     paths: &[AbsolutePathBuf],
     content: &mut String,
+    #[cfg(feature = "lsp")] baselines: &HashMap<PathBuf, HashSet<String>>,
 ) {
     if let Some(ref multi_root_state) = session.services.multi_root_state {
         for p in paths {
             #[cfg(feature = "lsp")]
             {
+                let baseline = baselines.get(p.as_path());
                 let diag = multi_root_state
-                    .touch_lsp_and_collect_errors(p.as_path())
+                    .touch_lsp_and_collect_errors(p.as_path(), baseline)
                     .await;
                 if !diag.is_empty() {
                     content.push_str(&diag);

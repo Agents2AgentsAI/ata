@@ -65,7 +65,7 @@ def handle_request(msg):
                     'hoverProvider': True,
                     'definitionProvider': True,
                     'renameProvider': True,
-                    'codeActionProvider': True,
+                    'codeActionProvider': {'resolveProvider': True},
                 }
             }
         })
@@ -184,8 +184,34 @@ def handle_request(msg):
                         'title': 'Do thing',
                         'command': 'do.thing'
                     }
+                },
+                {
+                    'title': 'Lazy quickfix',
+                    'kind': 'quickfix',
+                    'data': {'resolve_id': 42}
                 }
             ]
+        })
+    elif method == 'codeAction/resolve':
+        # Populate the edit field for resolvable actions.
+        action = msg.get('params', {})
+        action['edit'] = {
+            'changes': {
+                'file:///test.rs': [
+                    {
+                        'range': {
+                            'start': {'line': 1, 'character': 0},
+                            'end': {'line': 1, 'character': 0}
+                        },
+                        'newText': '// resolved\\n'
+                    }
+                ]
+            }
+        }
+        send_message({
+            'jsonrpc': '2.0',
+            'id': req_id,
+            'result': action
         })
     else:
         # Unknown request — send empty result.
@@ -577,6 +603,72 @@ async fn code_action_returns_actions() {
     assert!(
         !actions.is_empty(),
         "expected at least one code action, got: {actions:?}",
+    );
+
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn code_action_resolve_populates_edit() {
+    let dir = TempDir::new().unwrap();
+    let script = write_fake_server(&dir);
+    let config = fake_config(&script);
+    let root = dir.path();
+
+    std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"test\"").unwrap();
+    let file_path = root.join("test.rs");
+    std::fs::write(&file_path, "fn main() {}\n").unwrap();
+
+    let client = LspClient::create("fake", &config, root)
+        .await
+        .expect("spawn");
+    client.notify_open(&file_path).await.expect("notify_open");
+
+    let actions = client
+        .code_action(
+            &file_path,
+            codex_lsp_client::lsp_types::Range {
+                start: codex_lsp_client::lsp_types::Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: codex_lsp_client::lsp_types::Position {
+                    line: 0,
+                    character: 0,
+                },
+            },
+            None,
+            Vec::new(),
+        )
+        .await;
+
+    // Find the "Lazy quickfix" action — it should have `data` but no `edit`.
+    let lazy_action = actions
+        .iter()
+        .filter_map(|a| match a {
+            codex_lsp_client::lsp_types::CodeActionOrCommand::CodeAction(action) => {
+                Some(action.clone())
+            }
+            _ => None,
+        })
+        .find(|a| a.title == "Lazy quickfix")
+        .expect("expected 'Lazy quickfix' action");
+    assert!(lazy_action.edit.is_none(), "lazy action should have no edit before resolve");
+    assert!(lazy_action.data.is_some(), "lazy action should have data");
+
+    // Resolve it — should now have an edit.
+    let resolved = client
+        .code_action_resolve(lazy_action)
+        .await
+        .expect("resolve should succeed");
+    assert!(
+        resolved.edit.is_some(),
+        "resolved action should have an edit"
+    );
+    let edit = resolved.edit.unwrap();
+    assert!(
+        edit.changes.as_ref().is_some_and(|c| !c.is_empty()),
+        "resolved edit should have non-empty changes"
     );
 
     client.shutdown().await;
