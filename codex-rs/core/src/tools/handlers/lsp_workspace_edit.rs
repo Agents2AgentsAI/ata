@@ -37,7 +37,9 @@ pub fn workspace_edit_to_apply_patch(
     let mut ctx = VirtualWorkspace::new();
 
     if let Some(changes) = &edit.changes {
-        for (uri, edits) in changes {
+        let mut sorted_changes: Vec<_> = changes.iter().collect();
+        sorted_changes.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
+        for (uri, edits) in sorted_changes {
             let path = path_from_uri(uri)?;
             ctx.apply_text_edits(&path, edits)?;
         }
@@ -280,8 +282,10 @@ fn build_apply_patch(ctx: &mut VirtualWorkspace, limits: PatchLimits) -> Result<
         handled.insert(new_path);
     }
 
-    // Deletes.
-    for path in ctx.deleted.clone() {
+    // Deletes (sorted for deterministic output).
+    let mut deleted: Vec<_> = ctx.deleted.iter().cloned().collect();
+    deleted.sort();
+    for path in deleted {
         if handled.contains(&path) {
             continue;
         }
@@ -289,8 +293,10 @@ fn build_apply_patch(ctx: &mut VirtualWorkspace, limits: PatchLimits) -> Result<
         handled.insert(path);
     }
 
-    // Adds and updates.
-    for (path, new_contents) in ctx.current.clone() {
+    // Adds and updates (sorted for deterministic output).
+    let mut current_entries: Vec<_> = ctx.current.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    current_entries.sort_by(|a, b| a.0.cmp(&b.0));
+    for (path, new_contents) in current_entries {
         if handled.contains(&path) {
             continue;
         }
