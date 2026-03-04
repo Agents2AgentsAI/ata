@@ -119,10 +119,12 @@ pub fn grep(
     max_matches: usize,
     context_lines: usize,
 ) -> Result<GrepResult, TreeSitterError> {
-    let regex = Regex::new(pattern)
-        .map_err(|e| TreeSitterError::InvalidPattern(e.to_string()))?;
+    let regex = Regex::new(pattern).map_err(|e| TreeSitterError::InvalidPattern(e.to_string()))?;
 
     let mut paths = file_tree.all_paths_with_language();
+    if scope == GrepScope::Code {
+        paths.retain(|(_, language)| language.has_tree_sitter_support());
+    }
     paths.sort_by(|a, b| a.0.cmp(&b.0));
     let mut per_file = paths
         .par_iter()

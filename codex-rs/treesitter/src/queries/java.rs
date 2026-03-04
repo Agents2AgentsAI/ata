@@ -23,6 +23,10 @@ const SYMBOLS_QUERY: &str = r#"
 
 const CALLERS_QUERY: &str = r#"
 (method_invocation
+  object: (_) @qualifier
+  name: (identifier) @callee)
+
+(method_invocation
   name: (identifier) @callee)
 
 (object_creation_expression

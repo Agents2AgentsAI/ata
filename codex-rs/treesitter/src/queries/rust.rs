@@ -45,6 +45,7 @@ const CALLERS_QUERY: &str = r#"
 
 (call_expression
   function: (field_expression
+    value: (_) @qualifier
     field: (field_identifier) @callee))
 
 (call_expression

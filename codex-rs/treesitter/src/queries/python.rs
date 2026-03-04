@@ -22,6 +22,7 @@ const CALLERS_QUERY: &str = r#"
 
 (call
   function: (attribute
+    object: (_) @qualifier
     attribute: (identifier) @callee))
 "#;
 

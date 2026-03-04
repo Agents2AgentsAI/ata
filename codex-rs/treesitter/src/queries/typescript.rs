@@ -32,6 +32,7 @@ const CALLERS_QUERY: &str = r#"
 
 (call_expression
   function: (member_expression
+    object: (_) @qualifier
     property: (property_identifier) @callee))
 "#;
 

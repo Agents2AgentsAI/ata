@@ -61,6 +61,8 @@ pub struct CallerInfo {
     pub file: String,
     pub line: usize,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qualifier: Option<String>,
 }
 
 pub fn find_callers(
@@ -116,6 +118,7 @@ fn find_callers_ast(
         QueryKind::Callers,
         |tree, query, capture_names| {
             let callee_index = capture_names.iter().position(|name| name == "callee");
+            let qualifier_index = capture_names.iter().position(|name| name == "qualifier");
             let mut callers = Vec::new();
             let mut cursor = tree_sitter::QueryCursor::new();
             let mut matches = cursor.matches(query, tree.root_node(), source.as_bytes());
@@ -130,6 +133,15 @@ fn find_callers_ast(
                     if text != symbol_name {
                         continue;
                     }
+
+                    let qualifier_text = qualifier_index.and_then(|qi| {
+                        match_
+                            .captures
+                            .iter()
+                            .find(|c| c.index as usize == qi)
+                            .and_then(|c| c.node.utf8_text(source.as_bytes()).ok())
+                            .map(|s| s.to_string())
+                    });
 
                     let line = capture.node.start_position().row + 1;
                     let line_text = lines
@@ -149,6 +161,7 @@ fn find_callers_ast(
                         file: rel_path.to_string(),
                         line,
                         text: line_text,
+                        qualifier: qualifier_text,
                     });
                 }
             }
@@ -188,6 +201,7 @@ fn find_callers_regex(
             file: rel_path.to_string(),
             line: line_idx + 1,
             text: line.trim().to_string(),
+            qualifier: None,
         });
     }
 

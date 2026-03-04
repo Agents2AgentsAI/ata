@@ -235,6 +235,11 @@ impl ServerRegistry {
         self.broken.lock().await.clear();
     }
 
+    /// Returns the workspace root directory for this registry.
+    pub fn workspace_root(&self) -> &Path {
+        &self.workspace_root
+    }
+
     /// Returns true when at least one configured server can handle this file.
     pub fn has_servers_for(&self, file: &Path) -> bool {
         self.servers
