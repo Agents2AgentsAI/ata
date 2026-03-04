@@ -267,7 +267,9 @@ impl ToolHandler for LspToolHandler {
                         "no LSP servers are running (failed to start any)".to_string(),
                     ));
                 }
-                (format_workspace_symbols(&symbols, limit), false)
+                let total = symbols.len();
+                let truncated = total > limit;
+                (format_workspace_symbols(&symbols, limit, total, truncated), false)
             }
             LspOperation::GoToImplementation => {
                 let context = self
@@ -1047,23 +1049,32 @@ fn format_nested_symbols(symbols: &[DocumentSymbol], depth: usize, out: &mut Vec
 }
 
 #[allow(deprecated)]
-fn format_workspace_symbols(symbols: &[SymbolInformation], limit: usize) -> String {
+fn format_workspace_symbols(
+    symbols: &[SymbolInformation],
+    limit: usize,
+    total: usize,
+    truncated: bool,
+) -> String {
     if symbols.is_empty() {
         return "No symbols found.".to_string();
     }
-    symbols
-        .iter()
-        .take(limit)
-        .map(|s| {
-            let pos = format_uri_position(
-                s.location.uri.as_str(),
-                s.location.range.start.line,
-                s.location.range.start.character,
-            );
-            format!("{:?} {} @ {}", s.kind, s.name, pos)
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    let shown = symbols.len().min(limit);
+    let mut lines: Vec<String> = Vec::with_capacity(shown + 1);
+    if truncated {
+        lines.push(format!(
+            "Showing {} of {} symbols (increase `limit` for more):",
+            shown, total
+        ));
+    }
+    for s in symbols.iter().take(limit) {
+        let pos = format_uri_position(
+            s.location.uri.as_str(),
+            s.location.range.start.line,
+            s.location.range.start.character,
+        );
+        lines.push(format!("{:?} {} @ {}", s.kind, s.name, pos));
+    }
+    lines.join("\n")
 }
 
 fn is_empty_definition(resp: &Option<GotoDefinitionResponse>) -> bool {
