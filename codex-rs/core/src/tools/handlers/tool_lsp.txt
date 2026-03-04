@@ -15,7 +15,7 @@ Available operations:
 - codeActionPreview: Preview a code action edit as an apply_patch-compatible patch (does not apply).
 - diagnostics: Get current diagnostics (errors, warnings) for a file from the LSP server.
 
-For position-based operations, provide `file` (absolute path) and either:
+For position-based operations, provide `file` (absolute or cwd-relative path) and either:
 - `line` (1-based) + `character` (1-based), or
 - `symbol` (best-effort symbol name resolution within the file).
 
@@ -23,11 +23,12 @@ By default, position-based queries will retry nearby positions when the initial 
 For workspaceSymbol, provide `query` (search string).
 For incomingCalls/outgoingCalls, first call prepareCallHierarchy, then pass the returned item.
 Use `root` to force a specific registered root when needed.
-Use `limit` (default 20, max 50) to cap result volume for list-heavy operations.
+Use `limit` (default 10, max 50) to cap result volume for list-heavy operations.
 
 Recipe:
 - Use `lsp` for cross-file, type-aware questions (definitions, references, hover) and preview refactors.
 - Use `code_intel` for fast structural search, project exploration, and reading implementations.
+- Keep calls focused to save tokens: set `limit` to the smallest useful value (often 5-10), prefer `file` + `symbol`/position over broad workspace queries.
 
 High-value patterns (prefer LSP when available):
 - Cross-file type analysis: `lsp.goToDefinition` + `lsp.findReferences` + `lsp.hover` are typically higher-signal than syntax-only caller search.
@@ -37,3 +38,4 @@ High-value patterns (prefer LSP when available):
 Fallbacks:
 - If you don't have exact line/col: use `symbol` (or `lsp.documentSymbol` to discover names) and keep `fuzz=true`.
 - If no LSP server is configured/running for a file, fall back to `code_intel` operations.
+- If repeated LSP calls return empty for a file, stop retrying and switch to targeted `rg`/`code_intel` exploration.

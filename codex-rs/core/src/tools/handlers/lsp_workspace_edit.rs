@@ -294,7 +294,11 @@ fn build_apply_patch(ctx: &mut VirtualWorkspace, limits: PatchLimits) -> Result<
     }
 
     // Adds and updates (sorted for deterministic output).
-    let mut current_entries: Vec<_> = ctx.current.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let mut current_entries: Vec<_> = ctx
+        .current
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
     current_entries.sort_by(|a, b| a.0.cmp(&b.0));
     for (path, new_contents) in current_entries {
         if handled.contains(&path) {

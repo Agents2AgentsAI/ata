@@ -31,9 +31,12 @@ Supported operations:
 - listRoots: List all roots with feature status.
 
 All operations accept optional `root` for scoping; when omitted, search-style operations fan out across roots.
+`file` and `path` parameters accept absolute or cwd-relative paths.
 Set `response_format` to `json` for machine-readable output (default is `text`).
+Use `limit` (default 10, max 50). For token efficiency, keep `limit` small (often 5-10), scope by `file`/`root` whenever possible, and avoid broad cross-root scans unless needed.
 
 Use the `lsp` tool when semantic precision is required (type-aware definitions, references, hover).
 
 Recipe:
 - If you only have a symbol name (no exact line/col), start with `code_intel.symbolSearch` or `lsp.documentSymbol`, then switch to `lsp` for the precise semantic query.
+- If `code_intel` returns low-signal or overly broad matches, narrow with `file`/`kind`/`scope` before issuing another large query.
