@@ -656,7 +656,13 @@ impl LspToolHandler {
             )));
         }
 
-        let clients = registry.get_clients(path).await;
+        let mut clients = registry.get_clients(path).await;
+        if clients.is_empty() {
+            // Retry once: a previously broken server may now work if
+            // the agent installed missing dependencies during this session.
+            registry.clear_broken_for_path(path).await;
+            clients = registry.get_clients(path).await;
+        }
         if clients.is_empty() {
             let display_path = path.display();
             let details = registry.explain_unavailable_servers(path).await;
