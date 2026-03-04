@@ -24,6 +24,7 @@ use crate::tools::handlers::HANDLER_MAX_RESULTS;
 use crate::tools::handlers::function_arguments_from_payload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::path_argument;
+use crate::tools::handlers::require_absolute_path_argument;
 use crate::tools::handlers::truncate_tool_output;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -605,15 +606,24 @@ impl ToolHandler for CodeIntelToolHandler {
         let output = match response_format {
             ResponseFormat::Text => output_text,
             ResponseFormat::Json => {
-                serde_json::to_string_pretty(&output_json).unwrap_or(output_text)
+                let json_str = serde_json::to_string_pretty(&output_json)
+                    .unwrap_or_else(|_| output_text.clone());
+                if json_str.len() > HANDLER_MAX_RESULT_BYTES {
+                    format!("[response too large for JSON, showing text]\n{output_text}")
+                } else {
+                    json_str
+                }
             }
+        };
+        let (output, response_truncated) = truncate_tool_output(&output, HANDLER_MAX_RESULT_BYTES);
+        let output = if response_truncated {
+            format!("[output truncated to 8KB]\n{output}")
+        } else {
+            output
         };
 
         Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(truncate_tool_output(
-                &output,
-                HANDLER_MAX_RESULT_BYTES,
-            )),
+            body: FunctionCallOutputBody::Text(output),
             success: Some(true),
         })
     }
@@ -700,8 +710,8 @@ fn parse_symbol_kind(value: Option<&str>) -> Result<Option<SymbolKind>, Function
     Ok(Some(kind))
 }
 
-fn resolve_file(file: Option<&str>, default_cwd: &Path) -> Result<PathBuf, FunctionCallError> {
-    path_argument(file, "file", default_cwd)
+fn resolve_file(file: Option<&str>, _default_cwd: &Path) -> Result<PathBuf, FunctionCallError> {
+    require_absolute_path_argument(file, "file")
 }
 
 fn resolve_root_path(path: Option<&str>, default_cwd: &Path) -> Result<PathBuf, FunctionCallError> {
@@ -934,7 +944,7 @@ pub(crate) fn create_code_intel_tool() -> ToolSpec {
         "file".to_string(),
         JsonSchema::String {
             description: Some(
-                "Absolute or cwd-relative file path for file-scoped operations.".to_string(),
+                "Absolute file path for file-scoped operations.".to_string(),
             ),
         },
     );

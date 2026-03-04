@@ -1,5 +1,6 @@
 //! LSP tool handler exposing code intelligence and preview refactor operations to the agent.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Write;
 use std::future::Future;
@@ -40,7 +41,7 @@ use crate::tools::handlers::function_arguments_from_payload;
 use crate::tools::handlers::lsp_workspace_edit::PatchLimits;
 use crate::tools::handlers::lsp_workspace_edit::workspace_edit_to_apply_patch;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::handlers::path_argument;
+use crate::tools::handlers::require_absolute_path_argument;
 use crate::tools::handlers::truncate_tool_output;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -58,7 +59,10 @@ pub struct LspToolHandler {
     /// so that subsequent queries skip the readiness delay.
     pub warmed_files: tokio::sync::Mutex<HashSet<PathBuf>>,
     /// Tracks workspace roots that have been warmed for workspace-wide queries.
-    pub warmed_workspaces: tokio::sync::Mutex<HashSet<String>>,
+    /// The `usize` value is the `Arc::as_ptr` identity of the `ServerRegistry`
+    /// so that a removeRoot + addRoot cycle (which creates a new `Arc`) causes
+    /// re-warmup even if the root name is identical.
+    pub warmed_workspaces: tokio::sync::Mutex<HashMap<String, usize>>,
 }
 
 struct FileQueryContext {
@@ -250,7 +254,7 @@ impl ToolHandler for LspToolHandler {
                 let mut symbols = Vec::new();
                 let mut any_running_clients = false;
                 for (root_name, registry) in &registries {
-                    self.warm_workspace(root_name, registry).await;
+                    self.warm_workspace(root_name, &registry).await;
                     symbols.extend(registry.workspace_symbol(query).await);
                     any_running_clients |= registry.running_client_count().await > 0;
                 }
@@ -540,7 +544,13 @@ impl ToolHandler for LspToolHandler {
             }
             result
         } else {
-            truncate_tool_output(&result, HANDLER_MAX_RESULT_BYTES)
+            let (truncated_output, was_truncated) =
+                truncate_tool_output(&result, HANDLER_MAX_RESULT_BYTES);
+            if was_truncated {
+                format!("[output truncated to 8KB]\n{truncated_output}")
+            } else {
+                truncated_output
+            }
         };
 
         Ok(ToolOutput::Function {
@@ -593,10 +603,11 @@ impl LspToolHandler {
     async fn prepare_file_query_context(
         &self,
         args: &LspToolArgs,
-        default_cwd: &Path,
+        _default_cwd: &Path,
     ) -> Result<FileQueryContext, FunctionCallError> {
-        let path = path_argument(args.file.as_deref(), "file", default_cwd)?;
+        let path = require_absolute_path_argument(args.file.as_deref(), "file")?;
         let (root_name, registry) = self.registry_for_file(&path, args.root.as_deref()).await?;
+        self.warm_workspace(&root_name, &registry).await;
         self.sync_file_for_query(&registry, &root_name, &path)
             .await?;
         Ok(FileQueryContext { path, registry })
@@ -605,9 +616,9 @@ impl LspToolHandler {
     async fn prepare_position_query_context(
         &self,
         args: &LspToolArgs,
-        default_cwd: &Path,
+        _default_cwd: &Path,
     ) -> Result<PositionedQueryContext, FunctionCallError> {
-        let path = path_argument(args.file.as_deref(), "file", default_cwd)?;
+        let path = require_absolute_path_argument(args.file.as_deref(), "file")?;
 
         // Fast-fail: validate 1-based positions before expensive server sync.
         if let (Some(line), Some(character)) = (args.line, args.character)
@@ -619,6 +630,7 @@ impl LspToolHandler {
         }
 
         let (root_name, registry) = self.registry_for_file(&path, args.root.as_deref()).await?;
+        self.warm_workspace(&root_name, &registry).await;
         self.sync_file_for_query(&registry, &root_name, &path)
             .await?;
         let (line, character) = self
@@ -650,15 +662,16 @@ impl LspToolHandler {
         let path = url::Url::parse(item.uri.as_str())
             .ok()
             .and_then(|uri| uri.to_file_path().ok());
-        let registry = if let Some(path) = path {
-            self.registry_for_file(&path, args.root.as_deref()).await?.1
+        let (root_name, registry) = if let Some(path) = path {
+            self.registry_for_file(&path, args.root.as_deref()).await?
         } else if let Some(root) = args.root.as_deref() {
-            self.registry_for_root(root).await?.1
+            self.registry_for_root(root).await?
         } else {
             return Err(FunctionCallError::RespondToModel(format!(
                 "{operation_name} could not infer a file root from item URI; pass `root` explicitly"
             )));
         };
+        self.warm_workspace(&root_name, &registry).await;
 
         let pretty = match direction {
             CallHierarchyDirection::Incoming => {
@@ -732,17 +745,26 @@ impl LspToolHandler {
 
     /// Ensure workspace-wide LSP readiness by syncing a representative file
     /// the first time a workspace-scoped query (e.g. `workspaceSymbol`) is
-    /// issued against a given root.
-    async fn warm_workspace(&self, root_name: &str, registry: &ServerRegistry) {
+    /// issued against a given root, or when the registry instance has changed
+    /// (e.g. after removeRoot + addRoot with the same name).
+    async fn warm_workspace(&self, root_name: &str, registry: &Arc<ServerRegistry>) {
+        let ptr = Arc::as_ptr(registry) as usize;
         {
             let warmed = self.warmed_workspaces.lock().await;
-            if warmed.contains(root_name) {
+            if warmed.get(root_name) == Some(&ptr) {
                 return;
             }
         }
 
-        // Shallow walk (depth ≤ 3) for the first file the registry can handle.
+        // Clear stale warmed_files entries under this root so they get
+        // re-synced with the new registry instance.
         let ws_root = registry.workspace_root().to_path_buf();
+        {
+            let mut files = self.warmed_files.lock().await;
+            files.retain(|p| !p.starts_with(&ws_root));
+        }
+
+        // Shallow walk (depth ≤ 3) for the first file the registry can handle.
         let candidate = Self::find_warmup_candidate(&ws_root, registry, 3);
 
         if let Some(file) = candidate {
@@ -753,7 +775,7 @@ impl LspToolHandler {
         self.warmed_workspaces
             .lock()
             .await
-            .insert(root_name.to_string());
+            .insert(root_name.to_string(), ptr);
     }
 
     /// Walk `dir` up to `max_depth` levels looking for the first file
@@ -1312,7 +1334,7 @@ pub(crate) fn create_lsp_tool() -> ToolSpec {
         "file".to_string(),
         JsonSchema::String {
             description: Some(
-                "Absolute or cwd-relative path to the file (required for most operations)"
+                "Absolute path to the file (required for most operations)"
                     .to_string(),
             ),
         },
