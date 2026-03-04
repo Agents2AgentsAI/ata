@@ -782,22 +782,37 @@ impl ServerRegistry {
     }
 
     async fn ensure_workspace_clients_started(&self) {
-        let candidates: Vec<(String, LspServerConfig)> = self
+        // Collect non-disabled servers.
+        let all_servers: Vec<(String, LspServerConfig)> = self
             .servers
             .iter()
-            .filter_map(|(server_id, config)| {
-                if config.disabled {
-                    return None;
-                }
-                if !dir_has_any_marker(&self.workspace_root, &config.root_markers) {
-                    return None;
-                }
-                Some((server_id.clone(), config.clone()))
-            })
+            .filter(|(_, config)| !config.disabled)
+            .map(|(id, config)| (id.clone(), config.clone()))
             .collect();
 
-        for (server_id, config) in candidates {
-            let root = self.workspace_root.clone();
+        // Skip servers that already have a running client (from warmup or prior
+        // file-based operations) — workspace_symbol fans out to ALL clients.
+        let running_server_ids: std::collections::HashSet<String> = {
+            let clients = self.clients.lock().await;
+            clients.keys().map(|(sid, _)| sid.clone()).collect()
+        };
+
+        for (server_id, config) in &all_servers {
+            if running_server_ids.contains(server_id) {
+                continue;
+            }
+
+            // Try workspace_root first, then walk subdirectories for root markers.
+            let root = if dir_has_any_marker(&self.workspace_root, &config.root_markers) {
+                self.workspace_root.clone()
+            } else if let Some(sub_root) =
+                Self::find_sub_root(&self.workspace_root, &config.root_markers, 3)
+            {
+                sub_root
+            } else {
+                continue;
+            };
+
             let key: ClientKey = (server_id.clone(), root.clone());
 
             if self.broken.lock().await.contains_key(&key) {
@@ -811,7 +826,7 @@ impl ServerRegistry {
                 }
             }
 
-            match self.spawn_client(&server_id, &config, &root, &key).await {
+            match self.spawn_client(server_id, config, &root, &key).await {
                 Ok(_) => {}
                 Err(e) => {
                     tracing::warn!(
@@ -823,6 +838,48 @@ impl ServerRegistry {
                 }
             }
         }
+    }
+
+    /// Walk subdirectories of `dir` up to `max_depth` levels looking for the
+    /// first directory that contains any of the given root markers.
+    fn find_sub_root(dir: &Path, markers: &[String], max_depth: usize) -> Option<PathBuf> {
+        Self::walk_for_sub_root(dir, markers, 0, max_depth)
+    }
+
+    fn walk_for_sub_root(
+        dir: &Path,
+        markers: &[String],
+        depth: usize,
+        max_depth: usize,
+    ) -> Option<PathBuf> {
+        if depth > max_depth {
+            return None;
+        }
+        let entries = std::fs::read_dir(dir).ok()?;
+        let mut subdirs = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            if name.starts_with('.') || name == "node_modules" {
+                continue;
+            }
+            if dir_has_any_marker(&path, markers) {
+                return Some(path);
+            }
+            subdirs.push(path);
+        }
+        for sub in subdirs {
+            if let Some(found) = Self::walk_for_sub_root(&sub, markers, depth + 1, max_depth) {
+                return Some(found);
+            }
+        }
+        None
     }
 
     pub async fn implementation(
