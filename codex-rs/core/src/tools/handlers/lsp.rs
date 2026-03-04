@@ -57,6 +57,8 @@ pub struct LspToolHandler {
     /// Tracks files that have been synced at least once (with a diagnostic wait)
     /// so that subsequent queries skip the readiness delay.
     pub warmed_files: tokio::sync::Mutex<HashSet<PathBuf>>,
+    /// Tracks workspace roots that have been warmed for workspace-wide queries.
+    pub warmed_workspaces: tokio::sync::Mutex<HashSet<String>>,
 }
 
 struct FileQueryContext {
@@ -238,7 +240,8 @@ impl ToolHandler for LspToolHandler {
                 }
                 let mut symbols = Vec::new();
                 let mut any_running_clients = false;
-                for (_, registry) in registries {
+                for (root_name, registry) in &registries {
+                    self.warm_workspace(root_name, registry).await;
                     symbols.extend(registry.workspace_symbol(query).await);
                     any_running_clients |= registry.running_client_count().await > 0;
                 }
@@ -490,10 +493,7 @@ impl ToolHandler for LspToolHandler {
                 } else {
                     out.insert_str(
                         0,
-                        &format!(
-                            "{count} diagnostic(s) for {}:\n",
-                            context.path.display()
-                        ),
+                        &format!("{count} diagnostic(s) for {}:\n", context.path.display()),
                     );
                 }
                 (out, false)
@@ -687,6 +687,73 @@ impl LspToolHandler {
         Ok(())
     }
 
+    /// Ensure workspace-wide LSP readiness by syncing a representative file
+    /// the first time a workspace-scoped query (e.g. `workspaceSymbol`) is
+    /// issued against a given root.
+    async fn warm_workspace(&self, root_name: &str, registry: &ServerRegistry) {
+        {
+            let warmed = self.warmed_workspaces.lock().await;
+            if warmed.contains(root_name) {
+                return;
+            }
+        }
+
+        // Shallow walk (depth ≤ 3) for the first file the registry can handle.
+        let ws_root = registry.workspace_root().to_path_buf();
+        let candidate = Self::find_warmup_candidate(&ws_root, registry, 3);
+
+        if let Some(file) = candidate {
+            // Best-effort: ignore errors (server may still start for other reasons).
+            let _ = self.sync_file_for_query(registry, root_name, &file).await;
+        }
+
+        self.warmed_workspaces
+            .lock()
+            .await
+            .insert(root_name.to_string());
+    }
+
+    /// Walk `dir` up to `max_depth` levels looking for the first file
+    /// that `registry.has_servers_for()` matches.
+    fn find_warmup_candidate(
+        dir: &Path,
+        registry: &ServerRegistry,
+        max_depth: usize,
+    ) -> Option<PathBuf> {
+        Self::walk_for_candidate(dir, registry, 0, max_depth)
+    }
+
+    fn walk_for_candidate(
+        dir: &Path,
+        registry: &ServerRegistry,
+        depth: usize,
+        max_depth: usize,
+    ) -> Option<PathBuf> {
+        let entries = std::fs::read_dir(dir).ok()?;
+        let mut subdirs = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && registry.has_servers_for(&path) {
+                return Some(path);
+            }
+            if path.is_dir()
+                && depth < max_depth
+                && !path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map_or(false, |n| n.starts_with('.') || n == "node_modules")
+            {
+                subdirs.push(path);
+            }
+        }
+        for sub in subdirs {
+            if let Some(found) = Self::walk_for_candidate(&sub, registry, depth + 1, max_depth) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
     async fn resolve_line_char(
         &self,
         registry: &ServerRegistry,
@@ -796,13 +863,13 @@ impl LspToolHandler {
 // Formatting helpers
 // ---------------------------------------------------------------------------
 
-fn format_definition(resp: Option<GotoDefinitionResponse>) -> String {
+fn format_definition_like(resp: Option<GotoDefinitionResponse>, not_found_msg: &str) -> String {
     match resp {
-        None => "No definition found.".to_string(),
+        None => not_found_msg.to_string(),
         Some(GotoDefinitionResponse::Scalar(loc)) => format_location(&loc),
         Some(GotoDefinitionResponse::Array(locs)) => {
             if locs.is_empty() {
-                "No definition found.".to_string()
+                not_found_msg.to_string()
             } else {
                 locs.iter()
                     .map(format_location)
@@ -812,7 +879,7 @@ fn format_definition(resp: Option<GotoDefinitionResponse>) -> String {
         }
         Some(GotoDefinitionResponse::Link(links)) => {
             if links.is_empty() {
-                "No definition found.".to_string()
+                not_found_msg.to_string()
             } else {
                 links
                     .iter()
@@ -830,9 +897,12 @@ fn format_definition(resp: Option<GotoDefinitionResponse>) -> String {
     }
 }
 
+fn format_definition(resp: Option<GotoDefinitionResponse>) -> String {
+    format_definition_like(resp, "No definition found.")
+}
+
 fn format_implementation(resp: Option<GotoImplementationResponse>) -> String {
-    // GotoImplementationResponse is a type alias for GotoDefinitionResponse.
-    format_definition(resp)
+    format_definition_like(resp, "No implementation found.")
 }
 
 fn format_references(refs: &[Location], limit: usize) -> String {

@@ -694,7 +694,15 @@ fn format_callers(root: &str, callers: &[codex_treesitter::CallerInfo]) -> Strin
 
     let mut out = vec![format!("Found {} caller(s) in [{root}]:", callers.len())];
     for caller in callers {
-        out.push(format!("{}:{} {}", caller.file, caller.line, caller.text));
+        let qual = caller
+            .qualifier
+            .as_deref()
+            .map(|q| format!(" ({q}.)"))
+            .unwrap_or_default();
+        out.push(format!(
+            "{}:{}{} {}",
+            caller.file, caller.line, qual, caller.text
+        ));
     }
     out.join("\n")
 }

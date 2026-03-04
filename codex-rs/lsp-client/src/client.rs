@@ -977,14 +977,11 @@ impl LspClient {
                                             settings.clone()
                                         } else {
                                             // Walk dot-separated path: "python.analysis" → settings["python"]["analysis"]
-                                            section.split('.').fold(
-                                                settings.clone(),
-                                                |acc, key| {
-                                                    acc.get(key)
-                                                        .cloned()
-                                                        .unwrap_or(serde_json::json!({}))
-                                                },
-                                            )
+                                            section.split('.').fold(settings.clone(), |acc, key| {
+                                                acc.get(key)
+                                                    .cloned()
+                                                    .unwrap_or(serde_json::json!({}))
+                                            })
                                         }
                                     })
                                     .collect(),
