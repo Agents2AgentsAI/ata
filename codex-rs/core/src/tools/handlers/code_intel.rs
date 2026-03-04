@@ -608,7 +608,16 @@ impl ToolHandler for CodeIntelToolHandler {
                 let json_str = serde_json::to_string_pretty(&output_json)
                     .unwrap_or_else(|_| output_text.clone());
                 if json_str.len() > HANDLER_MAX_RESULT_BYTES {
-                    format!("[response too large for JSON, showing text]\n{output_text}")
+                    // Preserve JSON contract: return valid JSON with truncation metadata
+                    // instead of unparseable plain text.
+                    let budget = HANDLER_MAX_RESULT_BYTES.saturating_sub(256);
+                    let (truncated_text, _) = truncate_tool_output(&output_text, budget);
+                    serde_json::to_string(&serde_json::json!({
+                        "truncated": true,
+                        "message": "JSON response exceeded size limit. Use response_format:\"text\" or narrow the query.",
+                        "text_fallback": truncated_text
+                    }))
+                    .unwrap_or(output_text)
                 } else {
                     json_str
                 }
