@@ -81,7 +81,11 @@ fn is_definition_line(line: &str, name: &str) -> bool {
 }
 
 fn is_test_symbol(name: &str, file: &str) -> bool {
-    name.starts_with("test_") || file.contains("test_") || file.contains("_test.")
+    name.starts_with("test_")
+        || file.contains("test_")
+        || file.contains("_test.")
+        || file.contains("/tests/")
+        || file.contains("\\tests\\")
 }
 
 fn variable_name_filter(name: &str) -> bool {

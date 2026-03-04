@@ -218,15 +218,15 @@ impl LspClient {
                 // than a legitimate handshake failure.  Convert to
                 // ProcessExitedImmediately so callers can attempt auto-install.
                 let mut guard = client.child.lock().await;
-                if let Some(ref mut child) = *guard {
-                    if let Ok(Some(exit_status)) = child.try_wait() {
-                        return Err(LspError::ProcessExitedImmediately {
-                            status: exit_status.to_string(),
-                            stderr: format!(
-                                "server exited during initialize handshake: {handshake_err}"
-                            ),
-                        });
-                    }
+                if let Some(ref mut child) = *guard
+                    && let Ok(Some(exit_status)) = child.try_wait()
+                {
+                    return Err(LspError::ProcessExitedImmediately {
+                        status: exit_status.to_string(),
+                        stderr: format!(
+                            "server exited during initialize handshake: {handshake_err}"
+                        ),
+                    });
                 }
                 Err(handshake_err)
             }
@@ -385,7 +385,7 @@ impl LspClient {
 
         let content = tokio::fs::read_to_string(path)
             .await
-            .map_err(|e| LspError::Io(e))?;
+            .map_err(LspError::Io)?;
         let uri = uri_from_path(path).ok_or_else(|| {
             LspError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -599,7 +599,26 @@ impl LspClient {
             Some(v) => v,
             None => return Vec::new(),
         };
-        self.deserialize_or_default("workspace/symbol", val)
+
+        // Try flat Vec<SymbolInformation> first (most common).
+        if let Ok(symbols) = serde_json::from_value::<Vec<SymbolInformation>>(val.clone()) {
+            return symbols;
+        }
+        // Try WorkspaceSymbolResponse enum (handles both Flat and Nested).
+        if let Ok(response) = serde_json::from_value::<WorkspaceSymbolResponse>(val) {
+            return match response {
+                WorkspaceSymbolResponse::Flat(symbols) => symbols,
+                WorkspaceSymbolResponse::Nested(symbols) => symbols
+                    .into_iter()
+                    .filter_map(workspace_symbol_to_info)
+                    .collect(),
+            };
+        }
+        tracing::debug!(
+            server = %self.server_id,
+            "workspace/symbol: failed to deserialize response"
+        );
+        Vec::new()
     }
 
     pub async fn implementation(
@@ -927,27 +946,25 @@ impl LspClient {
 
             match msg {
                 JsonRpcMessage::Response(resp) => {
-                    if let Some(id) = resp.id {
-                        if let Some(tx) = context.pending.lock().await.remove(&id) {
-                            let _ = tx.send(resp);
-                        }
+                    if let Some(id) = resp.id
+                        && let Some(tx) = context.pending.lock().await.remove(&id)
+                    {
+                        let _ = tx.send(resp);
                     }
                 }
                 JsonRpcMessage::Notification(notif) => {
-                    if notif.method == "textDocument/publishDiagnostics" {
-                        if let Some(params) = notif.params {
-                            if let Ok(diag_params) =
-                                serde_json::from_value::<PublishDiagnosticsParams>(params)
-                            {
-                                let uri_key = diag_params.uri.as_str().to_string();
-                                context
-                                    .diagnostics
-                                    .write()
-                                    .await
-                                    .insert(uri_key.clone(), diag_params.diagnostics);
-                                let _ = context.diag_tx.send(uri_key);
-                            }
-                        }
+                    if notif.method == "textDocument/publishDiagnostics"
+                        && let Some(params) = notif.params
+                        && let Ok(diag_params) =
+                            serde_json::from_value::<PublishDiagnosticsParams>(params)
+                    {
+                        let uri_key = diag_params.uri.as_str().to_string();
+                        context
+                            .diagnostics
+                            .write()
+                            .await
+                            .insert(uri_key.clone(), diag_params.diagnostics);
+                        let _ = context.diag_tx.send(uri_key);
                     }
                 }
                 JsonRpcMessage::Request(req) => {
@@ -1050,6 +1067,25 @@ impl LspClient {
             });
         }
     }
+}
+
+#[allow(deprecated)]
+fn workspace_symbol_to_info(sym: WorkspaceSymbol) -> Option<SymbolInformation> {
+    let location = match sym.location {
+        OneOf::Left(loc) => loc,
+        OneOf::Right(ws_loc) => Location {
+            uri: ws_loc.uri,
+            range: Range::default(),
+        },
+    };
+    Some(SymbolInformation {
+        name: sym.name,
+        kind: sym.kind,
+        tags: sym.tags,
+        container_name: sym.container_name,
+        location,
+        deprecated: None,
+    })
 }
 
 async fn write_framed_message(

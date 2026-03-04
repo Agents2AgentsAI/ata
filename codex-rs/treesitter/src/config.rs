@@ -78,7 +78,7 @@ impl ProjectIndexConfig {
         if let Some(extension) = Path::new(file_name)
             .extension()
             .and_then(|ext| ext.to_str())
-            .map(|ext| ext.to_ascii_lowercase())
+            .map(str::to_ascii_lowercase)
             && self.ignore_extensions.contains(&extension)
         {
             return true;

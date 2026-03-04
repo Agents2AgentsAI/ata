@@ -153,7 +153,7 @@ fn find_callers_ast(
                             .iter()
                             .find(|c| c.index as usize == qi)
                             .and_then(|c| c.node.utf8_text(source.as_bytes()).ok())
-                            .map(|s| s.to_string())
+                            .map(ToString::to_string)
                     });
 
                     let line = capture.node.start_position().row + 1;
@@ -164,9 +164,7 @@ fn find_callers_ast(
                         .trim()
                         .to_string();
 
-                    if rel_path == definition_file
-                        && is_definition_line(&line_text, symbol_name, language)
-                    {
+                    if is_definition_line(&line_text, symbol_name, language) {
                         continue;
                     }
 
@@ -192,21 +190,35 @@ fn find_callers_regex(
     rel_path: &str,
     language: Language,
     symbol_name: &str,
-    definition_file: &str,
+    _definition_file: &str,
 ) -> Vec<CallerInfo> {
-    let pattern = match regex::Regex::new(&format!(r"\b{}\b", regex::escape(symbol_name))) {
+    let pattern = match regex::Regex::new(&format!(r"\b{}\s*[!(]", regex::escape(symbol_name))) {
         Ok(pattern) => pattern,
         Err(_) => return Vec::new(),
     };
 
+    // Compute non-code ranges to filter comments/strings (same as grep scope=code).
+    let excluded_ranges = crate::content::compute_non_code_ranges(source, language);
+    let lines: Vec<&str> = source.lines().collect();
+    let line_offsets = crate::content::line_offsets(source, &lines);
+
     let mut callers = Vec::new();
 
-    for (line_idx, line) in source.lines().enumerate() {
+    for (line_idx, line) in lines.iter().enumerate() {
         if !pattern.is_match(line) {
             continue;
         }
 
-        if rel_path == definition_file && is_definition_line(line, symbol_name, language) {
+        if !excluded_ranges.is_empty()
+            && let Some(found) = pattern.find(line)
+        {
+            let byte_offset = line_offsets[line_idx] + found.start();
+            if crate::content::is_in_excluded_range(byte_offset, &excluded_ranges) {
+                continue;
+            }
+        }
+
+        if is_definition_line(line, symbol_name, language) {
             continue;
         }
 
@@ -258,7 +270,7 @@ fn with_parsed_query<R>(
 ) -> Option<R> {
     OPS_QUERY_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if !cache.contains_key(&language) {
+        if let std::collections::hash_map::Entry::Vacant(e) = cache.entry(language) {
             let config = queries::get_language_config(language)?;
             let mut parser = tree_sitter::Parser::new();
             parser.set_language(&config.language).ok()?;
@@ -279,16 +291,13 @@ fn with_parsed_query<R>(
                 .map(ToString::to_string)
                 .collect();
 
-            cache.insert(
-                language,
-                OpsQueryCache {
-                    parser,
-                    callers_query,
-                    callers_capture_names,
-                    variables_query,
-                    variables_capture_names,
-                },
-            );
+            e.insert(OpsQueryCache {
+                parser,
+                callers_query,
+                callers_capture_names,
+                variables_query,
+                variables_capture_names,
+            });
         }
 
         let entry = cache.get_mut(&language)?;
@@ -311,7 +320,7 @@ fn with_compiled_variable_patterns<R>(
     let config = queries::get_language_config(language)?;
     VARIABLE_REGEX_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if !cache.contains_key(&language) {
+        if let std::collections::hash_map::Entry::Vacant(e) = cache.entry(language) {
             let mut compiled = Vec::with_capacity(config.variable_regex_patterns.len());
             for pattern in config.variable_regex_patterns {
                 let regex = regex::Regex::new(pattern.regex).ok()?;
@@ -320,7 +329,7 @@ fn with_compiled_variable_patterns<R>(
                     regex,
                 });
             }
-            cache.insert(language, compiled);
+            e.insert(compiled);
         }
         let compiled = cache.get(&language)?;
         Some(handler(compiled, config.variable_name_filter))
@@ -340,6 +349,7 @@ pub struct TestsResult {
     pub tests: Vec<TestInfo>,
     pub total_tests: usize,
     pub truncated: bool,
+    pub total_test_symbols: usize,
 }
 
 pub fn find_tests(
@@ -353,8 +363,9 @@ pub fn find_tests(
         .get(file, symbol_name)
         .ok_or_else(|| format!("symbol '{symbol_name}' not found in '{file}'"))?;
 
-    let mut tests: Vec<TestInfo> = symbol_table
-        .test_symbols()
+    let all_test_symbols = symbol_table.test_symbols();
+    let total_test_symbols = all_test_symbols.len();
+    let mut tests: Vec<TestInfo> = all_test_symbols
         .into_par_iter()
         .filter_map(|symbol| {
             let source = std::fs::read_to_string(root.join(&symbol.file)).ok()?;
@@ -383,6 +394,7 @@ pub fn find_tests(
         tests,
         total_tests,
         truncated,
+        total_test_symbols,
     })
 }
 

@@ -92,9 +92,7 @@ fn is_test_symbol(name: &str, file: &str) -> bool {
     if in_test_location {
         // In test files, only mark symbols with test-like names to avoid
         // classifying helpers/builders as tests.
-        return name.starts_with("test")
-            || name.starts_with("Test")
-            || name.starts_with("should");
+        return name.starts_with("test") || name.starts_with("Test") || name.starts_with("should");
     }
     false
 }

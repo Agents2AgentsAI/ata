@@ -506,7 +506,7 @@ impl ServerRegistry {
             let create_result = LspClient::create(server_id, &runtime_config, root).await;
 
             // If the process exited immediately (broken shim), try auto-install and retry.
-            let create_result = match create_result {
+            match create_result {
                 Err(LspError::ProcessExitedImmediately {
                     ref status,
                     ref stderr,
@@ -558,9 +558,7 @@ impl ServerRegistry {
                     }
                 }
                 other => other,
-            };
-
-            create_result
+            }
         }
         .await;
 
@@ -774,8 +772,8 @@ impl ServerRegistry {
             clients_map.values().cloned().collect()
         };
         let query = query.to_string();
-        let symbols: Vec<SymbolInformation> =
-            self.fan_out_all(clients, "workspace_symbol", move |client| {
+        let symbols: Vec<SymbolInformation> = self
+            .fan_out_all(clients, "workspace_symbol", move |client| {
                 let query = query.clone();
                 async move { client.workspace_symbol(&query).await }
             })
@@ -787,7 +785,7 @@ impl ServerRegistry {
         // Canonicalize to handle macOS /tmp -> /private/tmp symlinks.
         let canonical_root = std::fs::canonicalize(&self.workspace_root)
             .unwrap_or_else(|_| self.workspace_root.clone());
-        symbols
+        let filtered: Vec<SymbolInformation> = symbols
             .into_iter()
             .filter(|sym| {
                 path_from_uri(&sym.location.uri)
@@ -795,7 +793,8 @@ impl ServerRegistry {
                     .map(|p| p.starts_with(&canonical_root))
                     .unwrap_or(false)
             })
-            .collect()
+            .collect();
+        Self::dedup_by_key(filtered, symbol_info_key)
     }
 
     async fn ensure_workspace_clients_started(&self) {
@@ -879,10 +878,7 @@ impl ServerRegistry {
             if !path.is_dir() {
                 continue;
             }
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if name.starts_with('.') || name == "node_modules" {
                 continue;
             }
@@ -1217,6 +1213,13 @@ fn location_key(location: &Location) -> (String, (u32, u32, u32, u32)) {
     )
 }
 
+fn symbol_info_key(sym: &SymbolInformation) -> (String, (u32, u32, u32, u32)) {
+    (
+        sym.location.uri.as_str().to_string(),
+        range_key(&sym.location.range),
+    )
+}
+
 fn call_hierarchy_item_key(item: &CallHierarchyItem) -> (String, (u32, u32, u32, u32)) {
     (item.uri.as_str().to_string(), range_key(&item.range))
 }
@@ -1366,6 +1369,7 @@ help: run `rustup component add rust-analyzer`\n"
 
     #[cfg(unix)]
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // Intentional: serializes tests that mutate PATH
     async fn spawn_client_prompts_install_on_preflight_needs_install_and_decline() {
         let _path_lock = PATH_MUTEX.lock().unwrap();
         let temp_bin = tempfile::TempDir::new().unwrap();

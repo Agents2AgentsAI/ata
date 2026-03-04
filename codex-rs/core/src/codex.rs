@@ -306,6 +306,7 @@ use codex_utils_readiness::ReadinessFlag;
 pub(crate) use file_attachments::FileInputPreparationError;
 pub(crate) use file_attachments::UrlAttachmentInjectionError;
 pub(crate) use file_attachments::file_capabilities_for_provider;
+pub(crate) use file_attachments::inject_local_pdf_paths_from_text_inputs;
 use file_attachments::refresh_uploaded_file_references;
 pub(crate) use file_attachments::resolve_and_prepare_file_inputs;
 use url_file_recovery::drop_last_turn_url_file_attachments;
@@ -3396,13 +3397,16 @@ impl Session {
             return Err(SteerInputError::EmptyInput);
         }
 
-        let (provider, config) = {
+        let (provider, config, cwd, sandbox_policy) = {
             let state = self.state.lock().await;
             (
                 state.session_configuration.provider.clone(),
                 Arc::clone(&state.session_configuration.original_config_do_not_use),
+                state.session_configuration.cwd.clone(),
+                state.session_configuration.sandbox_policy.get().clone(),
             )
         };
+        inject_local_pdf_paths_from_text_inputs(&mut input, &cwd, &sandbox_policy);
 
         let (provider_id, _) = file_capabilities_for_provider(&provider, config.model.as_deref());
         self.dedup_local_files_for_provider(&mut input, &provider_id)
@@ -4851,6 +4855,11 @@ pub(crate) async fn run_turn(
     if input.is_empty() {
         return None;
     }
+    inject_local_pdf_paths_from_text_inputs(
+        &mut input,
+        turn_context.cwd.as_path(),
+        turn_context.sandbox_policy.get(),
+    );
 
     {
         let (provider_id, _) = file_capabilities_for_provider(
@@ -9510,6 +9519,50 @@ mod tests {
 
         assert_eq!(turn_id, tc.sub_id);
         assert!(sess.has_pending_input().await);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn steer_input_auto_attaches_local_pdf_from_text() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
+
+        let file_dir = tempfile::tempdir_in(&tc.cwd).expect("temp dir");
+        let file_path = file_dir.path().join("steer.pdf");
+        std::fs::write(&file_path, b"%PDF-1.4\n").expect("write pdf");
+        let file_path_text = file_path.display().to_string();
+
+        let steer_input = vec![UserInput::Text {
+            text: format!("summarize {file_path_text}"),
+            text_elements: Vec::new(),
+        }];
+        sess.steer_input(steer_input, Some(&tc.sub_id))
+            .await
+            .expect("steering should succeed");
+
+        let pending = sess.get_pending_input().await;
+        let has_input_file = pending.iter().any(|item| match item {
+            ResponseInputItem::Message { content, .. } => content
+                .iter()
+                .any(|content_item| matches!(content_item, ContentItem::InputFile { .. })),
+            _ => false,
+        });
+
+        assert!(
+            has_input_file,
+            "expected pending steered input to include an InputFile attachment"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

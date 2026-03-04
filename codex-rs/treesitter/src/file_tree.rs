@@ -82,6 +82,10 @@ impl FileTree {
         self.files.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+
     pub fn all_paths(&self) -> Vec<String> {
         self.files.iter().map(|entry| entry.key().clone()).collect()
     }

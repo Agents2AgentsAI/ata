@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -100,15 +101,11 @@ enum CodeIntelOperation {
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 enum ResponseFormat {
+    #[default]
     Text,
     Json,
-}
-
-impl Default for ResponseFormat {
-    fn default() -> Self {
-        Self::Text
-    }
 }
 
 #[async_trait]
@@ -169,6 +166,10 @@ impl ToolHandler for CodeIntelToolHandler {
                         break;
                     }
                 }
+                // Dedup symbols from overlapping roots.
+                let mut seen = HashSet::new();
+                symbols
+                    .retain(|(_, s)| seen.insert((s.file.clone(), s.name.clone(), s.line_range.0)));
                 (
                     format_symbols(&symbols),
                     json!({
@@ -209,6 +210,10 @@ impl ToolHandler for CodeIntelToolHandler {
                     }
                 }
 
+                // Dedup symbols from overlapping roots.
+                let mut seen = HashSet::new();
+                symbols
+                    .retain(|(_, s)| seen.insert((s.file.clone(), s.name.clone(), s.line_range.0)));
                 (
                     format_symbols(&symbols),
                     json!({
@@ -254,6 +259,7 @@ impl ToolHandler for CodeIntelToolHandler {
                         "count": result.tests.len(),
                         "total_tests": result.total_tests,
                         "truncated": result.truncated,
+                        "total_test_symbols": result.total_test_symbols,
                         "tests": result.tests,
                     }),
                 )
@@ -366,6 +372,9 @@ impl ToolHandler for CodeIntelToolHandler {
                     }
                 }
 
+                // Dedup matches from overlapping roots.
+                let mut seen = HashSet::new();
+                all_matches.retain(|(_, m)| seen.insert((m.file.clone(), m.line)));
                 (
                     format_grep(pattern, total_matches, truncated, &all_matches),
                     json!({
@@ -738,7 +747,16 @@ fn format_callers(root: &str, result: &codex_treesitter::CallersResult) -> Strin
 
 fn format_tests(root: &str, result: &codex_treesitter::TestsResult) -> String {
     if result.tests.is_empty() {
-        return "No tests found.".to_string();
+        return if result.total_test_symbols == 0 {
+            format!(
+                "No test symbols indexed in [{root}]. Test detection looks for: test_* (Python), test*/describe/it in .test./.spec. files (TS/JS), test_* or tests/ (Rust/Go)."
+            )
+        } else {
+            format!(
+                "No tests found referencing this symbol ({} test symbols indexed in [{root}]).",
+                result.total_test_symbols
+            )
+        };
     }
 
     let truncation_note = if result.truncated {

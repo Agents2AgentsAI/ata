@@ -66,7 +66,7 @@ pub fn extract_symbols_from_file(
 
     SYMBOL_EXTRACT_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if !cache.contains_key(&language) {
+        if let std::collections::hash_map::Entry::Vacant(e) = cache.entry(language) {
             let mut parser = tree_sitter::Parser::new();
             parser.set_language(&config.language)?;
 
@@ -77,14 +77,11 @@ pub fn extract_symbols_from_file(
                 .map(ToString::to_string)
                 .collect();
 
-            cache.insert(
-                language,
-                SymbolExtractCache {
-                    parser,
-                    query,
-                    capture_names,
-                },
-            );
+            e.insert(SymbolExtractCache {
+                parser,
+                query,
+                capture_names,
+            });
         }
 
         let entry = cache

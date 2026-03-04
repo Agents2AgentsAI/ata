@@ -451,7 +451,7 @@ impl ToolHandler for LspToolHandler {
                 }
 
                 let chosen = choose_code_action(&previewable, title)?;
-                let edit = chosen.edit.clone().ok_or_else(|| {
+                let edit = chosen.edit.ok_or_else(|| {
                     FunctionCallError::RespondToModel(
                         "selected code action has no edit".to_string(),
                     )
@@ -585,12 +585,12 @@ impl LspToolHandler {
         let path = absolute_path_argument(args.file.as_deref(), "file")?;
 
         // Fast-fail: validate 1-based positions before expensive server sync.
-        if let (Some(line), Some(character)) = (args.line, args.character) {
-            if line == 0 || character == 0 {
-                return Err(FunctionCallError::RespondToModel(
-                    "`line` and `character` must be 1-based".to_string(),
-                ));
-            }
+        if let (Some(line), Some(character)) = (args.line, args.character)
+            && (line == 0 || character == 0)
+        {
+            return Err(FunctionCallError::RespondToModel(
+                "`line` and `character` must be 1-based".to_string(),
+            ));
         }
 
         let (root_name, registry) = self.registry_for_file(&path, args.root.as_deref()).await?;
@@ -759,7 +759,7 @@ impl LspToolHandler {
                 && !path
                     .file_name()
                     .and_then(|n| n.to_str())
-                    .map_or(false, |n| n.starts_with('.') || n == "node_modules")
+                    .is_some_and(|n| n.starts_with('.') || n == "node_modules")
             {
                 subdirs.push(path);
             }
@@ -813,37 +813,35 @@ impl LspToolHandler {
             .state
             .try_treesitter_index_for_file(path, Some(root_name))
             .await
+            && let Ok(rel) = index.rel_path_for_absolute(path)
         {
-            if let Ok(rel) = index.rel_path_for_absolute(path) {
-                let symbols = index.symbol_table().symbols_in_file(&rel);
-                let matches: Vec<_> = symbols
-                    .into_iter()
-                    .filter(|s| symbol_name_matches(&s.name, symbol))
-                    .collect();
+            let symbols = index.symbol_table().symbols_in_file(&rel);
+            let matches: Vec<_> = symbols
+                .into_iter()
+                .filter(|s| symbol_name_matches(&s.name, symbol))
+                .collect();
 
-                if matches.len() == 1 {
-                    let s = &matches[0];
-                    let line0 = (s.line_range.0 as u32).saturating_sub(1);
-                    return Ok((line0, 0));
-                }
+            if matches.len() == 1 {
+                let s = &matches[0];
+                let line0 = (s.line_range.0 as u32).saturating_sub(1);
+                return Ok((line0, 0));
+            }
 
-                if !matches.is_empty() {
-                    let mut lines = Vec::new();
-                    for s in matches {
-                        lines.push(format!(
-                            "{:?} {} [{}-{}] {}",
-                            s.kind, s.name, s.line_range.0, s.line_range.1, s.signature
-                        ));
-                    }
-                    return Err(FunctionCallError::RespondToModel(format!(
-                        "multiple symbols named '{symbol}' found in {}:\n- {}",
-                        path.display(),
-                        lines.join("\n- ")
-                    )));
+            if !matches.is_empty() {
+                let mut lines = Vec::new();
+                for s in matches {
+                    lines.push(format!(
+                        "{:?} {} [{}-{}] {}",
+                        s.kind, s.name, s.line_range.0, s.line_range.1, s.signature
+                    ));
                 }
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "multiple symbols named '{symbol}' found in {}:\n- {}",
+                    path.display(),
+                    lines.join("\n- ")
+                )));
             }
         }
-
         // Fallback: ask the server for document symbols and pick the best match.
         let resp = registry.document_symbol(path).await;
         let mut candidates = Vec::new();

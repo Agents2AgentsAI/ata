@@ -188,16 +188,6 @@ impl MultiRootState {
                     root.path.display()
                 ));
             }
-            // Reject roots that overlap (parent/child) with existing roots.
-            if let Some(existing) = roots.iter().find(|existing| {
-                root.path.starts_with(&existing.path)
-                    || existing.path.starts_with(&root.path)
-            }) {
-                return Err(format!(
-                    "root '{}' overlaps with existing root '{}' ({}); remove one to avoid duplicate results",
-                    root.name, existing.name, existing.path.display()
-                ));
-            }
             roots.push(root.clone());
         }
 
@@ -362,10 +352,10 @@ impl MultiRootState {
             let root = roots.iter().find(|root| root.name == root_name).cloned();
             // When both root name and file are provided, enforce that the file
             // actually lives inside the requested root.
-            if let (Some(root), Some(file)) = (&root, file) {
-                if !file.starts_with(&root.path) {
-                    return None;
-                }
+            if let (Some(root), Some(file)) = (&root, file)
+                && !file.starts_with(&root.path)
+            {
+                return None;
             }
             return root;
         }
