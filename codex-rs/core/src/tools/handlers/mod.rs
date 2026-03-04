@@ -93,18 +93,18 @@ pub(super) fn function_arguments_from_payload(
 }
 
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
-pub(super) fn truncate_tool_output(output: &str, max_bytes: usize) -> String {
+pub(super) fn truncate_tool_output(output: &str, max_bytes: usize) -> (String, bool) {
     if output.len() <= max_bytes {
-        return output.to_string();
+        return (output.to_string(), false);
     }
 
     let prefix = codex_utils_string::take_bytes_at_char_boundary(output, max_bytes);
     if prefix.is_empty() {
-        return "... truncated".to_string();
+        return ("... truncated".to_string(), true);
     }
 
     let cut = prefix.rfind('\n').unwrap_or(prefix.len());
-    format!("{}\n\n... truncated", &prefix[..cut])
+    (format!("{}\n\n... truncated", &prefix[..cut]), true)
 }
 
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
@@ -128,6 +128,25 @@ pub(super) fn path_argument(
     } else {
         Ok(crate::util::resolve_path(default_cwd, &path))
     }
+}
+
+/// Stricter variant of [`path_argument`] that rejects relative paths outright
+/// instead of silently resolving them against `cwd`. Use this for tool
+/// parameters where the model should always provide an absolute path.
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+pub(super) fn require_absolute_path_argument(
+    path_value: Option<&str>,
+    key: &str,
+) -> Result<PathBuf, FunctionCallError> {
+    let raw = path_value
+        .ok_or_else(|| FunctionCallError::RespondToModel(format!("`{key}` is required")))?;
+    let path = PathBuf::from(raw);
+    if !path.is_absolute() {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "`{key}` must be an absolute path, got: {raw:?}"
+        )));
+    }
+    Ok(path)
 }
 
 fn parse_arguments_with_base_path<T>(
