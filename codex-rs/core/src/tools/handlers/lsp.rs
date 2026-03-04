@@ -211,6 +211,12 @@ impl ToolHandler for LspToolHandler {
             LspOperation::DocumentSymbol => {
                 let context = self.prepare_file_query_context(&args).await?;
                 let resp = context.registry.document_symbol(&context.path).await;
+                if resp.is_none() {
+                    tracing::debug!(
+                        path = %context.path.display(),
+                        "documentSymbol returned None (server may still be initializing or file not yet analyzed)"
+                    );
+                }
                 (format_document_symbols(resp), false)
             }
             LspOperation::WorkspaceSymbol => {

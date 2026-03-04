@@ -706,7 +706,7 @@
     "LspConfig": {
       "anyOf": [
         {
-          "description": "`lsp = false` disables all LSP integration.",
+          "description": "Boolean enable flag from `lsp = true|false`.",
           "type": "boolean"
         },
         {
@@ -1594,7 +1594,7 @@
     "TreeSitterConfig": {
       "anyOf": [
         {
-          "description": "`treesitter = false` disables TreeSitter indexing.",
+          "description": "Boolean enable flag from `treesitter = true|false`.",
           "type": "boolean"
         },
         {
