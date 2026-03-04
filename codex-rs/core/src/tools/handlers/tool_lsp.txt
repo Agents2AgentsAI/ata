@@ -1,3 +1,5 @@
+Prefer reading files and writing patches directly. Only use this tool when you need specific information (e.g., finding definitions, references, or understanding types) that you cannot get from reading files.
+
 Use the `lsp` tool to query Language Server Protocol servers for code intelligence.
 
 Available operations:

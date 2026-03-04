@@ -23,7 +23,6 @@ use crate::tools::handlers::HANDLER_MAX_RESULT_BYTES;
 use crate::tools::handlers::HANDLER_MAX_RESULTS;
 use crate::tools::handlers::function_arguments_from_payload;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::handlers::path_argument;
 use crate::tools::handlers::require_absolute_path_argument;
 use crate::tools::handlers::truncate_tool_output;
 use crate::tools::registry::ToolHandler;
@@ -714,8 +713,11 @@ fn resolve_file(file: Option<&str>, _default_cwd: &Path) -> Result<PathBuf, Func
     require_absolute_path_argument(file, "file")
 }
 
-fn resolve_root_path(path: Option<&str>, default_cwd: &Path) -> Result<PathBuf, FunctionCallError> {
-    path_argument(path, "path", default_cwd)
+fn resolve_root_path(
+    path: Option<&str>,
+    _default_cwd: &Path,
+) -> Result<PathBuf, FunctionCallError> {
+    require_absolute_path_argument(path, "path")
 }
 
 fn format_symbols(symbols: &[(String, codex_treesitter::Symbol)], truncated: bool) -> String {
@@ -943,9 +945,7 @@ pub(crate) fn create_code_intel_tool() -> ToolSpec {
     properties.insert(
         "file".to_string(),
         JsonSchema::String {
-            description: Some(
-                "Absolute file path for file-scoped operations.".to_string(),
-            ),
+            description: Some("Absolute file path for file-scoped operations.".to_string()),
         },
     );
     properties.insert(

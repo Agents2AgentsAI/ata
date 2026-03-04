@@ -536,12 +536,14 @@ impl MultiRootState {
         }
     }
 
+    /// Collect raw LSP error diagnostics for a file.
+    ///
+    /// Returns `(line_1based, col_1based, message)` tuples for ERROR-severity
+    /// diagnostics. Touches the file so the server re-reads it from disk.
     #[cfg(feature = "lsp")]
-    pub async fn touch_lsp_and_collect_errors(&self, file: &Path) -> String {
-        const MAX_DIAGNOSTICS_PER_FILE: usize = 20;
-
+    pub async fn collect_lsp_errors(&self, file: &Path) -> Vec<(u32, u32, String)> {
         let Some((_, registry)) = self.lsp_registry_for_file(file, None).await else {
-            return String::new();
+            return Vec::new();
         };
 
         let all_diags = registry.touch_file(file, true).await;
@@ -552,26 +554,58 @@ impl MultiRootState {
                 if diag.severity == Some(codex_lsp_client::lsp_types::DiagnosticSeverity::ERROR) {
                     let line = diag.range.start.line + 1;
                     let col = diag.range.start.character + 1;
-                    errors.push(format!("ERROR [{line}:{col}] {}", diag.message));
+                    errors.push((line, col, diag.message.clone()));
                 }
             }
         }
+
+        errors
+    }
+
+    /// Touch a file and return formatted LSP error diagnostics.
+    ///
+    /// Used by the auto-feedback path after `apply_patch`. If `baseline` is
+    /// provided, only errors whose message text is NOT in the baseline set are
+    /// included (i.e. only *new* errors introduced by the patch).
+    #[cfg(feature = "lsp")]
+    pub async fn touch_lsp_and_collect_errors(
+        &self,
+        file: &Path,
+        baseline: Option<&std::collections::HashSet<String>>,
+    ) -> String {
+        /// Max errors shown in auto-feedback after a patch.
+        const MAX_DIAGNOSTICS_AUTO_FEEDBACK: usize = 5;
+
+        let raw_errors = self.collect_lsp_errors(file).await;
+
+        let errors: Vec<String> = raw_errors
+            .into_iter()
+            .filter(|(_, _, msg)| baseline.as_ref().is_none_or(|bl| !bl.contains(msg)))
+            .map(|(line, col, msg)| format!("ERROR [{line}:{col}] {msg}"))
+            .collect();
 
         if errors.is_empty() {
             return String::new();
         }
 
         let display_path = file.display();
-        let remaining = errors.len().saturating_sub(MAX_DIAGNOSTICS_PER_FILE);
+        let remaining = errors.len().saturating_sub(MAX_DIAGNOSTICS_AUTO_FEEDBACK);
+        let header = if baseline.is_some() {
+            "New errors from this patch"
+        } else {
+            "LSP errors detected"
+        };
         let mut out = format!(
-            "\nLSP errors detected in {display_path}, please fix:\n<diagnostics file=\"{display_path}\">\n"
+            "\n{header} in {display_path}, please fix:\n<diagnostics file=\"{display_path}\">\n"
         );
-        for error in errors.iter().take(MAX_DIAGNOSTICS_PER_FILE) {
+        for error in errors.iter().take(MAX_DIAGNOSTICS_AUTO_FEEDBACK) {
             out.push_str(error);
             out.push('\n');
         }
         if remaining > 0 {
-            out.push_str(&format!("... and {remaining} more\n"));
+            out.push_str(&format!(
+                "... and {remaining} more (use `lsp.diagnostics` to see all)\n"
+            ));
         }
         out.push_str("</diagnostics>");
         out
