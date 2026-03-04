@@ -352,18 +352,15 @@ impl ToolHandler for CodeIntelToolHandler {
                 let indices = self.indices_for_query(args.root.as_deref()).await?;
                 let mut all_matches = Vec::new();
                 let mut total_matches = 0usize;
-                let mut truncated = false;
 
                 for (root, index) in indices {
                     let result = index
                         .grep(pattern, scope, limit, 2)
                         .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
                     total_matches += result.total_matches;
-                    truncated |= result.truncated;
                     for matched in result.matches {
                         all_matches.push((root.clone(), matched));
                         if all_matches.len() >= limit {
-                            truncated = true;
                             break;
                         }
                     }
@@ -372,9 +369,13 @@ impl ToolHandler for CodeIntelToolHandler {
                     }
                 }
 
-                // Dedup matches from overlapping roots.
+                // Dedup matches from overlapping roots, then reconcile counts.
+                let pre_dedup_count = all_matches.len();
                 let mut seen = HashSet::new();
                 all_matches.retain(|(_, m)| seen.insert((m.file.clone(), m.line)));
+                let deduped_count = pre_dedup_count - all_matches.len();
+                total_matches = total_matches.saturating_sub(deduped_count);
+                let truncated = total_matches > all_matches.len();
                 (
                     format_grep(pattern, total_matches, truncated, &all_matches),
                     json!({
