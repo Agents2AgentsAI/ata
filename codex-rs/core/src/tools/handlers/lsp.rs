@@ -994,11 +994,18 @@ fn format_references(refs: &[Location], limit: usize) -> String {
     if refs.is_empty() {
         "No references found.".to_string()
     } else {
-        refs.iter()
-            .take(limit)
-            .map(format_location)
-            .collect::<Vec<_>>()
-            .join("\n")
+        let total = refs.len();
+        let shown = total.min(limit);
+        let mut lines: Vec<String> = Vec::with_capacity(shown + 1);
+        if total > limit {
+            lines.push(format!(
+                "Showing {shown} of {total} references (increase `limit` for more):"
+            ));
+        }
+        for loc in refs.iter().take(limit) {
+            lines.push(format_location(loc));
+        }
+        lines.join("\n")
     }
 }
 
