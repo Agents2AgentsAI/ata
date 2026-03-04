@@ -50,6 +50,7 @@ const CALLERS_QUERY: &str = r#"
 
 (call_expression
   function: (scoped_identifier
+    path: (_) @qualifier
     name: (identifier) @callee))
 
 (macro_invocation
