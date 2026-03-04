@@ -156,14 +156,17 @@ impl ToolHandler for CodeIntelToolHandler {
                 let query = require_param(args.query.as_deref(), "query")?;
                 let indices = self.indices_for_query(args.root.as_deref()).await?;
                 let mut symbols = Vec::new();
+                let mut hit_limit = false;
                 for (root, index) in indices {
                     for symbol in index.search_symbols(query, limit) {
                         symbols.push((root.clone(), symbol));
                         if symbols.len() >= limit {
+                            hit_limit = true;
                             break;
                         }
                     }
                     if symbols.len() >= limit {
+                        hit_limit = true;
                         break;
                     }
                 }
@@ -171,10 +174,12 @@ impl ToolHandler for CodeIntelToolHandler {
                 let mut seen = HashSet::new();
                 symbols
                     .retain(|(_, s)| seen.insert((s.file.clone(), s.name.clone(), s.line_range.0)));
+                let truncated = hit_limit;
                 (
-                    format_symbols(&symbols),
+                    format_symbols(&symbols, truncated),
                     json!({
                         "count": symbols.len(),
+                        "truncated": truncated,
                         "symbols": symbols
                             .iter()
                             .map(|(root, symbol)| json!({"root": root, "symbol": symbol}))
@@ -185,6 +190,7 @@ impl ToolHandler for CodeIntelToolHandler {
             CodeIntelOperation::Symbols => {
                 let kind = parse_symbol_kind(args.kind.as_deref())?;
                 let mut symbols = Vec::new();
+                let mut hit_limit = false;
 
                 if let Some(file) = args.file.as_deref() {
                     let path = resolve_file(Some(file), turn_cwd.as_path())?;
@@ -193,6 +199,7 @@ impl ToolHandler for CodeIntelToolHandler {
                     for symbol in index.list_symbols(kind, Some(&rel_file), limit) {
                         symbols.push((root.clone(), symbol));
                         if symbols.len() >= limit {
+                            hit_limit = true;
                             break;
                         }
                     }
@@ -202,10 +209,12 @@ impl ToolHandler for CodeIntelToolHandler {
                         for symbol in index.list_symbols(kind, None, limit) {
                             symbols.push((root.clone(), symbol));
                             if symbols.len() >= limit {
+                                hit_limit = true;
                                 break;
                             }
                         }
                         if symbols.len() >= limit {
+                            hit_limit = true;
                             break;
                         }
                     }
@@ -215,10 +224,12 @@ impl ToolHandler for CodeIntelToolHandler {
                 let mut seen = HashSet::new();
                 symbols
                     .retain(|(_, s)| seen.insert((s.file.clone(), s.name.clone(), s.line_range.0)));
+                let truncated = hit_limit;
                 (
-                    format_symbols(&symbols),
+                    format_symbols(&symbols, truncated),
                     json!({
                         "count": symbols.len(),
+                        "truncated": truncated,
                         "symbols": symbols
                             .iter()
                             .map(|(root, symbol)| json!({"root": root, "symbol": symbol}))
@@ -697,12 +708,20 @@ fn resolve_root_path(path: Option<&str>, default_cwd: &Path) -> Result<PathBuf, 
     path_argument(path, "path", default_cwd)
 }
 
-fn format_symbols(symbols: &[(String, codex_treesitter::Symbol)]) -> String {
+fn format_symbols(symbols: &[(String, codex_treesitter::Symbol)], truncated: bool) -> String {
     if symbols.is_empty() {
         return "No symbols found.".to_string();
     }
 
-    let mut out = vec![format!("Found {} symbol(s):", symbols.len())];
+    let header = if truncated {
+        format!(
+            "Found {} symbol(s) (limit reached, more may exist):",
+            symbols.len()
+        )
+    } else {
+        format!("Found {} symbol(s):", symbols.len())
+    };
+    let mut out = vec![header];
     for (root, symbol) in symbols {
         out.push(format!(
             "[{root}] {}:{} {:?} {}",
