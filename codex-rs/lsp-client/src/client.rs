@@ -44,7 +44,7 @@ const QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const DIAG_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(150);
 
 /// Maximum wait time for diagnostics after a file sync.
-const DIAG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+const DIAG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// Skip syncing very large files to avoid excessive JSON payloads.
 const MAX_SYNC_FILE_SIZE: u64 = 5 * 1024 * 1024;
@@ -174,7 +174,7 @@ impl LspClient {
             }
         });
 
-        let (diag_tx, _) = broadcast::channel(64);
+        let (diag_tx, _) = broadcast::channel(256);
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
         let diagnostics: Arc<RwLock<HashMap<String, Vec<Diagnostic>>>> =
             Arc::new(RwLock::new(HashMap::new()));
@@ -275,12 +275,19 @@ impl LspClient {
         )
         .await?;
 
-        // Send workspace/didChangeConfiguration if we have initialization_options.
-        if let Some(opts) = &self.initialization_options {
-            let params = serde_json::json!({ "settings": opts });
-            self.send_notification("workspace/didChangeConfiguration", Some(params))
-                .await?;
-        }
+        // Always send workspace/didChangeConfiguration. Some servers (notably
+        // Pyright) only issue workspace/configuration requests in response to
+        // this notification.  Without it they never fetch configuration and
+        // silently block on all subsequent file operations.
+        let settings = self
+            .initialization_options
+            .clone()
+            .unwrap_or(serde_json::json!({}));
+        self.send_notification(
+            "workspace/didChangeConfiguration",
+            Some(serde_json::json!({ "settings": settings })),
+        )
+        .await?;
 
         Ok(())
     }
@@ -481,7 +488,8 @@ impl LspClient {
                 match rx.recv().await {
                     Ok(changed_uri) if changed_uri == uri_key => break,
                     Ok(_) => continue,
-                    Err(_) => return,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => return,
                 }
             }
 
@@ -499,7 +507,8 @@ impl LspClient {
                         quiet_deadline = tokio::time::Instant::now() + DIAG_DEBOUNCE;
                     }
                     Ok(Ok(_)) => continue,
-                    Ok(Err(_)) => return,
+                    Ok(Err(broadcast::error::RecvError::Lagged(_))) => continue,
+                    Ok(Err(broadcast::error::RecvError::Closed)) => return,
                     Err(_) => return,
                 }
             }
@@ -947,11 +956,41 @@ impl LspClient {
                         | "client/registerCapability"
                         | "client/unregisterCapability" => Some(Value::Null),
                         "workspace/configuration" => {
+                            let items = req
+                                .params
+                                .as_ref()
+                                .and_then(|p| p.get("items"))
+                                .and_then(|i| i.as_array());
                             let settings = context
                                 .initialization_options
                                 .clone()
                                 .unwrap_or(serde_json::json!({}));
-                            Some(serde_json::json!([settings]))
+                            let results: Vec<Value> = match items {
+                                Some(items) => items
+                                    .iter()
+                                    .map(|item| {
+                                        let section = item
+                                            .get("section")
+                                            .and_then(|s| s.as_str())
+                                            .unwrap_or("");
+                                        if section.is_empty() {
+                                            settings.clone()
+                                        } else {
+                                            // Walk dot-separated path: "python.analysis" → settings["python"]["analysis"]
+                                            section.split('.').fold(
+                                                settings.clone(),
+                                                |acc, key| {
+                                                    acc.get(key)
+                                                        .cloned()
+                                                        .unwrap_or(serde_json::json!({}))
+                                                },
+                                            )
+                                        }
+                                    })
+                                    .collect(),
+                                None => vec![settings],
+                            };
+                            Some(Value::Array(results))
                         }
                         "workspace/workspaceFolders" => Some(serde_json::json!([{
                             "uri": context.root_uri.as_str(),
