@@ -245,6 +245,14 @@ impl ToolHandler for LspToolHandler {
                     symbols.extend(registry.workspace_symbol(query).await);
                     any_running_clients |= registry.running_client_count().await > 0;
                 }
+                // Retry once if empty — TS server may still be indexing workspace.
+                if symbols.is_empty() && any_running_clients {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    for (_root_name, registry) in &registries {
+                        symbols.extend(registry.workspace_symbol(query).await);
+                    }
+                }
+
                 if symbols.is_empty() && !any_running_clients {
                     return Err(FunctionCallError::RespondToModel(
                         "no LSP servers are running (failed to start any)".to_string(),
@@ -575,6 +583,16 @@ impl LspToolHandler {
         args: &LspToolArgs,
     ) -> Result<PositionedQueryContext, FunctionCallError> {
         let path = absolute_path_argument(args.file.as_deref(), "file")?;
+
+        // Fast-fail: validate 1-based positions before expensive server sync.
+        if let (Some(line), Some(character)) = (args.line, args.character) {
+            if line == 0 || character == 0 {
+                return Err(FunctionCallError::RespondToModel(
+                    "`line` and `character` must be 1-based".to_string(),
+                ));
+            }
+        }
+
         let (root_name, registry) = self.registry_for_file(&path, args.root.as_deref()).await?;
         self.sync_file_for_query(&registry, &root_name, &path)
             .await?;

@@ -58,8 +58,16 @@ fn is_definition_line(line: &str, name: &str) -> bool {
         || line.contains(&format!("trait {name}"))
 }
 
-fn is_test_symbol(_name: &str, file: &str) -> bool {
-    file.contains("Spec") || file.contains("Test") || file.contains("/test/")
+fn is_test_symbol(name: &str, file: &str) -> bool {
+    let in_test_location =
+        file.contains("Spec") || file.contains("Test") || file.contains("/test/");
+    if in_test_location {
+        return name.starts_with("test")
+            || name.starts_with("Test")
+            || name.starts_with("should")
+            || name == "spec";
+    }
+    false
 }
 
 fn variable_name_filter(name: &str) -> bool {

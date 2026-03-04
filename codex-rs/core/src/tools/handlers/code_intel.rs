@@ -225,12 +225,18 @@ impl ToolHandler for CodeIntelToolHandler {
                 let path = absolute_file(args.file.as_deref())?;
                 let (root, index, rel_file) =
                     self.index_for_file(&path, args.root.as_deref()).await?;
-                let callers = index
+                let result = index
                     .find_callers(symbol, &rel_file, limit)
                     .map_err(FunctionCallError::RespondToModel)?;
                 (
-                    format_callers(&root, &callers),
-                    json!({"root": root, "count": callers.len(), "callers": callers}),
+                    format_callers(&root, &result),
+                    json!({
+                        "root": root,
+                        "count": result.callers.len(),
+                        "total_callers": result.total_callers,
+                        "truncated": result.truncated,
+                        "callers": result.callers,
+                    }),
                 )
             }
             CodeIntelOperation::Tests => {
@@ -238,12 +244,18 @@ impl ToolHandler for CodeIntelToolHandler {
                 let path = absolute_file(args.file.as_deref())?;
                 let (root, index, rel_file) =
                     self.index_for_file(&path, args.root.as_deref()).await?;
-                let tests = index
+                let result = index
                     .find_tests(symbol, &rel_file, limit)
                     .map_err(FunctionCallError::RespondToModel)?;
                 (
-                    format_tests(&root, &tests),
-                    json!({"root": root, "count": tests.len(), "tests": tests}),
+                    format_tests(&root, &result),
+                    json!({
+                        "root": root,
+                        "count": result.tests.len(),
+                        "total_tests": result.total_tests,
+                        "truncated": result.truncated,
+                        "tests": result.tests,
+                    }),
                 )
             }
             CodeIntelOperation::Variables => {
@@ -310,6 +322,11 @@ impl ToolHandler for CodeIntelToolHandler {
                 let path = absolute_file(args.file.as_deref())?;
                 let (root, index, rel_file) =
                     self.index_for_file(&path, args.root.as_deref()).await?;
+                // Ensure newly created files are indexed before peek checks
+                // the FileTree cache (otherwise we get a false "outside root").
+                if path.is_file() {
+                    let _ = index.reindex_absolute_path(&path);
+                }
                 let start_line = args.line.unwrap_or(1) as usize;
                 let line_count = limit;
                 let peek = index
@@ -687,13 +704,25 @@ fn format_symbols(symbols: &[(String, codex_treesitter::Symbol)]) -> String {
     out.join("\n")
 }
 
-fn format_callers(root: &str, callers: &[codex_treesitter::CallerInfo]) -> String {
-    if callers.is_empty() {
+fn format_callers(root: &str, result: &codex_treesitter::CallersResult) -> String {
+    if result.callers.is_empty() {
         return "No callers found.".to_string();
     }
 
-    let mut out = vec![format!("Found {} caller(s) in [{root}]:", callers.len())];
-    for caller in callers {
+    let truncation_note = if result.truncated {
+        format!(
+            " (showing {}, {} total)",
+            result.callers.len(),
+            result.total_callers
+        )
+    } else {
+        String::new()
+    };
+    let mut out = vec![format!(
+        "Found {} caller(s) in [{root}]{truncation_note}:",
+        result.callers.len()
+    )];
+    for caller in &result.callers {
         let qual = caller
             .qualifier
             .as_deref()
@@ -707,13 +736,25 @@ fn format_callers(root: &str, callers: &[codex_treesitter::CallerInfo]) -> Strin
     out.join("\n")
 }
 
-fn format_tests(root: &str, tests: &[codex_treesitter::TestInfo]) -> String {
-    if tests.is_empty() {
+fn format_tests(root: &str, result: &codex_treesitter::TestsResult) -> String {
+    if result.tests.is_empty() {
         return "No tests found.".to_string();
     }
 
-    let mut out = vec![format!("Found {} test(s) in [{root}]:", tests.len())];
-    for test in tests {
+    let truncation_note = if result.truncated {
+        format!(
+            " (showing {}, {} total)",
+            result.tests.len(),
+            result.total_tests
+        )
+    } else {
+        String::new()
+    };
+    let mut out = vec![format!(
+        "Found {} test(s) in [{root}]{truncation_note}:",
+        result.tests.len()
+    )];
+    for test in &result.tests {
         out.push(format!("{}:{} {}", test.file, test.line, test.name));
         if !test.signature.is_empty() {
             out.push(format!("  {}", test.signature));

@@ -65,6 +65,13 @@ pub struct CallerInfo {
     pub qualifier: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct CallersResult {
+    pub callers: Vec<CallerInfo>,
+    pub total_callers: usize,
+    pub truncated: bool,
+}
+
 pub fn find_callers(
     root: &Path,
     file_tree: &FileTree,
@@ -72,7 +79,7 @@ pub fn find_callers(
     symbol_name: &str,
     file: &str,
     limit: usize,
-) -> Result<Vec<CallerInfo>, String> {
+) -> Result<CallersResult, String> {
     let _ = symbol_table
         .get(file, symbol_name)
         .ok_or_else(|| format!("symbol '{symbol_name}' not found in '{file}'"))?;
@@ -97,11 +104,17 @@ pub fn find_callers(
         .collect();
 
     callers.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)));
-    if callers.len() > limit {
+    let total_callers = callers.len();
+    let truncated = total_callers > limit;
+    if truncated {
         callers.truncate(limit);
     }
 
-    Ok(callers)
+    Ok(CallersResult {
+        callers,
+        total_callers,
+        truncated,
+    })
 }
 
 fn find_callers_ast(
@@ -322,13 +335,20 @@ pub struct TestInfo {
     pub signature: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct TestsResult {
+    pub tests: Vec<TestInfo>,
+    pub total_tests: usize,
+    pub truncated: bool,
+}
+
 pub fn find_tests(
     root: &Path,
     symbol_table: &SymbolTable,
     symbol_name: &str,
     file: &str,
     limit: usize,
-) -> Result<Vec<TestInfo>, String> {
+) -> Result<TestsResult, String> {
     let _ = symbol_table
         .get(file, symbol_name)
         .ok_or_else(|| format!("symbol '{symbol_name}' not found in '{file}'"))?;
@@ -353,11 +373,17 @@ pub fn find_tests(
         .collect();
 
     tests.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)));
-    if tests.len() > limit {
+    let total_tests = tests.len();
+    let truncated = total_tests > limit;
+    if truncated {
         tests.truncate(limit);
     }
 
-    Ok(tests)
+    Ok(TestsResult {
+        tests,
+        total_tests,
+        truncated,
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]

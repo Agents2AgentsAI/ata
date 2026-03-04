@@ -126,8 +126,23 @@ fn js_definition_line(line: &str, name: &str) -> bool {
     line.contains(&format!("function {name}")) || line.contains(&format!("{name} ="))
 }
 
-fn is_test_symbol(_name: &str, file: &str) -> bool {
-    file.contains(".test.") || file.contains(".spec.") || file.contains("__tests__")
+fn is_test_symbol(name: &str, file: &str) -> bool {
+    let in_test_file =
+        file.contains(".test.") || file.contains(".spec.") || file.contains("__tests__");
+    // In test files, only mark symbols that look like test constructs or
+    // follow common test-function naming patterns.  This avoids classifying
+    // helper utilities (e.g. `createServer`) as tests.
+    if in_test_file {
+        return name.starts_with("test")
+            || name.starts_with("Test")
+            || name == "describe"
+            || name == "it"
+            || name == "beforeEach"
+            || name == "afterEach"
+            || name == "beforeAll"
+            || name == "afterAll";
+    }
+    false
 }
 
 fn variable_name_filter(name: &str) -> bool {

@@ -87,8 +87,16 @@ fn is_definition_line(line: &str, name: &str) -> bool {
                 || trimmed.contains("native ")))
 }
 
-fn is_test_symbol(_name: &str, file: &str) -> bool {
-    file.contains("Test") || file.contains("/test/")
+fn is_test_symbol(name: &str, file: &str) -> bool {
+    let in_test_location = file.contains("Test") || file.contains("/test/");
+    if in_test_location {
+        // In test files, only mark symbols with test-like names to avoid
+        // classifying helpers/builders as tests.
+        return name.starts_with("test")
+            || name.starts_with("Test")
+            || name.starts_with("should");
+    }
+    false
 }
 
 fn variable_name_filter(name: &str) -> bool {
