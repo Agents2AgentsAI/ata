@@ -188,6 +188,16 @@ impl MultiRootState {
                     root.path.display()
                 ));
             }
+            // Reject roots that overlap (parent/child) with existing roots.
+            if let Some(existing) = roots.iter().find(|existing| {
+                root.path.starts_with(&existing.path)
+                    || existing.path.starts_with(&root.path)
+            }) {
+                return Err(format!(
+                    "root '{}' overlaps with existing root '{}' ({}); remove one to avoid duplicate results",
+                    root.name, existing.name, existing.path.display()
+                ));
+            }
             roots.push(root.clone());
         }
 

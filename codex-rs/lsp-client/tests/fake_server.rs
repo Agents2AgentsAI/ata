@@ -46,11 +46,15 @@ def send_message(msg):
     sys.stdout.buffer.write(body)
     sys.stdout.buffer.flush()
 
+root_uri = 'file:///'
+
 def handle_request(msg):
+    global root_uri
     method = msg.get('method', '')
     req_id = msg.get('id')
 
     if method == 'initialize':
+        root_uri = msg.get('params', {}).get('rootUri', root_uri)
         send_message({
             'jsonrpc': '2.0',
             'id': req_id,
@@ -100,6 +104,7 @@ def handle_request(msg):
     elif method == 'workspace/symbol':
         params = msg.get('params', {})
         query = params.get('query', '')
+        sym_uri = root_uri.rstrip('/') + '/test.rs'
         send_message({
             'jsonrpc': '2.0',
             'id': req_id,
@@ -108,7 +113,7 @@ def handle_request(msg):
                     'name': f'{query}_symbol',
                     'kind': 12,
                     'location': {
-                        'uri': 'file:///test.rs',
+                        'uri': sym_uri,
                         'range': {
                             'start': {'line': 0, 'character': 0},
                             'end': {'line': 0, 'character': 1}

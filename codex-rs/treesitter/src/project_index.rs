@@ -18,8 +18,6 @@ use crate::error::TreeSitterError;
 use crate::file_entry::FileEntry;
 use crate::file_entry::FileMark;
 use crate::file_tree::FileTree;
-use crate::ops::CallerInfo;
-use crate::ops::TestInfo;
 use crate::ops::VariableInfo;
 use crate::ops::{self};
 use crate::parser;
@@ -152,7 +150,7 @@ impl ProjectIndex {
         symbol: &str,
         rel_file: &str,
         limit: usize,
-    ) -> Result<Vec<CallerInfo>, String> {
+    ) -> Result<ops::CallersResult, String> {
         ops::find_callers(
             &self.root,
             &self.file_tree,
@@ -168,7 +166,7 @@ impl ProjectIndex {
         symbol: &str,
         rel_file: &str,
         limit: usize,
-    ) -> Result<Vec<TestInfo>, String> {
+    ) -> Result<ops::TestsResult, String> {
         ops::find_tests(&self.root, &self.symbol_table, symbol, rel_file, limit)
     }
 
