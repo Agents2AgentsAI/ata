@@ -36,11 +36,11 @@ use crate::tools::context::ToolOutput;
 use crate::tools::handlers::HANDLER_DEFAULT_LIMIT;
 use crate::tools::handlers::HANDLER_MAX_RESULT_BYTES;
 use crate::tools::handlers::HANDLER_MAX_RESULTS;
-use crate::tools::handlers::absolute_path_argument;
 use crate::tools::handlers::function_arguments_from_payload;
 use crate::tools::handlers::lsp_workspace_edit::PatchLimits;
 use crate::tools::handlers::lsp_workspace_edit::workspace_edit_to_apply_patch;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::path_argument;
 use crate::tools::handlers::truncate_tool_output;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -151,7 +151,8 @@ impl ToolHandler for LspToolHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let turn_cwd = invocation.turn.cwd.clone();
+        let payload = invocation.payload;
 
         let arguments = function_arguments_from_payload(payload, "lsp")?;
         let args: LspToolArgs = parse_arguments(&arguments)?;
@@ -163,7 +164,9 @@ impl ToolHandler for LspToolHandler {
 
         let (result, is_patch) = match args.operation {
             LspOperation::GoToDefinition => {
-                let context = self.prepare_position_query_context(&args).await?;
+                let context = self
+                    .prepare_position_query_context(&args, turn_cwd.as_path())
+                    .await?;
                 let (resp, resolved) = fuzz_query(
                     fuzz,
                     context.line,
@@ -179,7 +182,9 @@ impl ToolHandler for LspToolHandler {
                 (out, false)
             }
             LspOperation::FindReferences => {
-                let context = self.prepare_position_query_context(&args).await?;
+                let context = self
+                    .prepare_position_query_context(&args, turn_cwd.as_path())
+                    .await?;
                 let (refs, resolved) = fuzz_query(
                     fuzz,
                     context.line,
@@ -195,7 +200,9 @@ impl ToolHandler for LspToolHandler {
                 (out, false)
             }
             LspOperation::Hover => {
-                let context = self.prepare_position_query_context(&args).await?;
+                let context = self
+                    .prepare_position_query_context(&args, turn_cwd.as_path())
+                    .await?;
                 let (hover, resolved) = fuzz_query(
                     fuzz,
                     context.line,
@@ -211,7 +218,9 @@ impl ToolHandler for LspToolHandler {
                 (out, false)
             }
             LspOperation::DocumentSymbol => {
-                let context = self.prepare_file_query_context(&args).await?;
+                let context = self
+                    .prepare_file_query_context(&args, turn_cwd.as_path())
+                    .await?;
                 let resp = context.registry.document_symbol(&context.path).await;
                 if resp.is_none() {
                     tracing::debug!(
@@ -261,7 +270,9 @@ impl ToolHandler for LspToolHandler {
                 (format_workspace_symbols(&symbols, limit), false)
             }
             LspOperation::GoToImplementation => {
-                let context = self.prepare_position_query_context(&args).await?;
+                let context = self
+                    .prepare_position_query_context(&args, turn_cwd.as_path())
+                    .await?;
                 let (resp, resolved) = fuzz_query(
                     fuzz,
                     context.line,
@@ -281,7 +292,9 @@ impl ToolHandler for LspToolHandler {
                 (out, false)
             }
             LspOperation::PrepareCallHierarchy => {
-                let context = self.prepare_position_query_context(&args).await?;
+                let context = self
+                    .prepare_position_query_context(&args, turn_cwd.as_path())
+                    .await?;
                 let (items, _) = fuzz_query(
                     fuzz,
                     context.line,
@@ -315,7 +328,9 @@ impl ToolHandler for LspToolHandler {
                 false,
             ),
             LspOperation::PrepareRename => {
-                let context = self.prepare_position_query_context(&args).await?;
+                let context = self
+                    .prepare_position_query_context(&args, turn_cwd.as_path())
+                    .await?;
                 let (resp, resolved) = fuzz_query(
                     fuzz,
                     context.line,
@@ -342,7 +357,9 @@ impl ToolHandler for LspToolHandler {
                     ));
                 }
 
-                let context = self.prepare_position_query_context(&args).await?;
+                let context = self
+                    .prepare_position_query_context(&args, turn_cwd.as_path())
+                    .await?;
                 let (edit, _) = fuzz_query(
                     fuzz,
                     context.line,
@@ -374,7 +391,9 @@ impl ToolHandler for LspToolHandler {
                 (patch, true)
             }
             LspOperation::CodeActionPreview => {
-                let context = self.prepare_position_query_context(&args).await?;
+                let context = self
+                    .prepare_position_query_context(&args, turn_cwd.as_path())
+                    .await?;
                 let line = context.line;
                 let character = context.character;
                 let end_line = args.end_line.unwrap_or(line.saturating_add(1));
@@ -467,7 +486,9 @@ impl ToolHandler for LspToolHandler {
                 (patch, true)
             }
             LspOperation::Diagnostics => {
-                let context = self.prepare_file_query_context(&args).await?;
+                let context = self
+                    .prepare_file_query_context(&args, turn_cwd.as_path())
+                    .await?;
                 // Wait for diagnostics (touch_file with wait=true triggers the
                 // debounced diagnostic collection from all applicable servers).
                 let all_diags = context.registry.touch_file(&context.path, true).await;
@@ -570,8 +591,9 @@ impl LspToolHandler {
     async fn prepare_file_query_context(
         &self,
         args: &LspToolArgs,
+        default_cwd: &Path,
     ) -> Result<FileQueryContext, FunctionCallError> {
-        let path = absolute_path_argument(args.file.as_deref(), "file")?;
+        let path = path_argument(args.file.as_deref(), "file", default_cwd)?;
         let (root_name, registry) = self.registry_for_file(&path, args.root.as_deref()).await?;
         self.sync_file_for_query(&registry, &root_name, &path)
             .await?;
@@ -581,8 +603,9 @@ impl LspToolHandler {
     async fn prepare_position_query_context(
         &self,
         args: &LspToolArgs,
+        default_cwd: &Path,
     ) -> Result<PositionedQueryContext, FunctionCallError> {
-        let path = absolute_path_argument(args.file.as_deref(), "file")?;
+        let path = path_argument(args.file.as_deref(), "file", default_cwd)?;
 
         // Fast-fail: validate 1-based positions before expensive server sync.
         if let (Some(line), Some(character)) = (args.line, args.character)
@@ -1278,7 +1301,8 @@ pub(crate) fn create_lsp_tool() -> ToolSpec {
         "file".to_string(),
         JsonSchema::String {
             description: Some(
-                "Absolute path to the file (required for most operations)".to_string(),
+                "Absolute or cwd-relative path to the file (required for most operations)"
+                    .to_string(),
             ),
         },
     );
@@ -1330,7 +1354,7 @@ pub(crate) fn create_lsp_tool() -> ToolSpec {
     properties.insert(
         "limit".to_string(),
         JsonSchema::Number {
-            description: Some("Result limit (default 20, max 50).".to_string()),
+            description: Some("Result limit (default 10, max 50).".to_string()),
         },
     );
     properties.insert(

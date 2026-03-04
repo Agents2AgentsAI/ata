@@ -21,9 +21,9 @@ use crate::tools::context::ToolOutput;
 use crate::tools::handlers::HANDLER_DEFAULT_LIMIT;
 use crate::tools::handlers::HANDLER_MAX_RESULT_BYTES;
 use crate::tools::handlers::HANDLER_MAX_RESULTS;
-use crate::tools::handlers::absolute_path_argument;
 use crate::tools::handlers::function_arguments_from_payload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::path_argument;
 use crate::tools::handlers::truncate_tool_output;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -139,7 +139,8 @@ impl ToolHandler for CodeIntelToolHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let turn_cwd = invocation.turn.cwd.clone();
+        let payload = invocation.payload;
 
         let arguments = function_arguments_from_payload(payload, "code_intel")?;
 
@@ -186,7 +187,7 @@ impl ToolHandler for CodeIntelToolHandler {
                 let mut symbols = Vec::new();
 
                 if let Some(file) = args.file.as_deref() {
-                    let path = absolute_file(Some(file))?;
+                    let path = resolve_file(Some(file), turn_cwd.as_path())?;
                     let (root, index, rel_file) =
                         self.index_for_file(&path, args.root.as_deref()).await?;
                     for symbol in index.list_symbols(kind, Some(&rel_file), limit) {
@@ -227,7 +228,7 @@ impl ToolHandler for CodeIntelToolHandler {
             }
             CodeIntelOperation::Callers => {
                 let symbol = require_param(args.symbol.as_deref(), "symbol")?;
-                let path = absolute_file(args.file.as_deref())?;
+                let path = resolve_file(args.file.as_deref(), turn_cwd.as_path())?;
                 let (root, index, rel_file) =
                     self.index_for_file(&path, args.root.as_deref()).await?;
                 let result = index
@@ -246,7 +247,7 @@ impl ToolHandler for CodeIntelToolHandler {
             }
             CodeIntelOperation::Tests => {
                 let symbol = require_param(args.symbol.as_deref(), "symbol")?;
-                let path = absolute_file(args.file.as_deref())?;
+                let path = resolve_file(args.file.as_deref(), turn_cwd.as_path())?;
                 let (root, index, rel_file) =
                     self.index_for_file(&path, args.root.as_deref()).await?;
                 let result = index
@@ -266,7 +267,7 @@ impl ToolHandler for CodeIntelToolHandler {
             }
             CodeIntelOperation::Variables => {
                 let function = require_param(args.symbol.as_deref(), "symbol")?;
-                let path = absolute_file(args.file.as_deref())?;
+                let path = resolve_file(args.file.as_deref(), turn_cwd.as_path())?;
                 let (root, index, rel_file) =
                     self.index_for_file(&path, args.root.as_deref()).await?;
                 let variables = index
@@ -279,7 +280,7 @@ impl ToolHandler for CodeIntelToolHandler {
             }
             CodeIntelOperation::Implementation => {
                 let symbol = require_param(args.symbol.as_deref(), "symbol")?;
-                let path = absolute_file(args.file.as_deref())?;
+                let path = resolve_file(args.file.as_deref(), turn_cwd.as_path())?;
                 let (root, index, rel_file) =
                     self.index_for_file(&path, args.root.as_deref()).await?;
                 let implementation = index
@@ -325,7 +326,7 @@ impl ToolHandler for CodeIntelToolHandler {
                 (out.join("\n"), json!({"roots": roots}))
             }
             CodeIntelOperation::Peek => {
-                let path = absolute_file(args.file.as_deref())?;
+                let path = resolve_file(args.file.as_deref(), turn_cwd.as_path())?;
                 let (root, index, rel_file) =
                     self.index_for_file(&path, args.root.as_deref()).await?;
                 // Ensure newly created files are indexed before peek checks
@@ -390,7 +391,7 @@ impl ToolHandler for CodeIntelToolHandler {
                 )
             }
             CodeIntelOperation::ChunkIndices => {
-                let path = absolute_file(args.file.as_deref())?;
+                let path = resolve_file(args.file.as_deref(), turn_cwd.as_path())?;
                 let chunk_size = args.chunk_size.unwrap_or(DEFAULT_CHUNK_SIZE);
                 let overlap = args.overlap.unwrap_or(DEFAULT_CHUNK_OVERLAP);
                 let (root, index, rel_file) =
@@ -411,7 +412,7 @@ impl ToolHandler for CodeIntelToolHandler {
                     "Defined"
                 };
                 let symbol = require_param(args.symbol.as_deref(), "symbol")?;
-                let path = absolute_file(args.file.as_deref())?;
+                let path = resolve_file(args.file.as_deref(), turn_cwd.as_path())?;
                 let (root, index, rel_file) =
                     self.index_for_file(&path, args.root.as_deref()).await?;
                 let definition = require_param(args.definition.as_deref(), "definition")?;
@@ -431,7 +432,7 @@ impl ToolHandler for CodeIntelToolHandler {
                 } else {
                     "Defined"
                 };
-                let path = absolute_file(args.file.as_deref())?;
+                let path = resolve_file(args.file.as_deref(), turn_cwd.as_path())?;
                 let (root, index, rel_file) =
                     self.index_for_file(&path, args.root.as_deref()).await?;
                 let definition = require_param(args.definition.as_deref(), "definition")?;
@@ -445,7 +446,7 @@ impl ToolHandler for CodeIntelToolHandler {
                 )
             }
             CodeIntelOperation::MarkFile => {
-                let path = absolute_file(args.file.as_deref())?;
+                let path = resolve_file(args.file.as_deref(), turn_cwd.as_path())?;
                 let (root, index, rel_file) =
                     self.index_for_file(&path, args.root.as_deref()).await?;
                 let mark = require_param(args.mark.as_deref(), "mark")?;
@@ -506,7 +507,7 @@ impl ToolHandler for CodeIntelToolHandler {
             }
             CodeIntelOperation::AddRoot => {
                 let root = require_param(args.root.as_deref(), "root")?;
-                let path = absolute_root_path(args.path.as_deref())?;
+                let path = resolve_root_path(args.path.as_deref(), turn_cwd.as_path())?;
                 let added = self
                     .state
                     .add_root(root.to_string(), path)
@@ -688,12 +689,12 @@ fn parse_symbol_kind(value: Option<&str>) -> Result<Option<SymbolKind>, Function
     Ok(Some(kind))
 }
 
-fn absolute_file(file: Option<&str>) -> Result<PathBuf, FunctionCallError> {
-    absolute_path_argument(file, "file")
+fn resolve_file(file: Option<&str>, default_cwd: &Path) -> Result<PathBuf, FunctionCallError> {
+    path_argument(file, "file", default_cwd)
 }
 
-fn absolute_root_path(path: Option<&str>) -> Result<PathBuf, FunctionCallError> {
-    absolute_path_argument(path, "path")
+fn resolve_root_path(path: Option<&str>, default_cwd: &Path) -> Result<PathBuf, FunctionCallError> {
+    path_argument(path, "path", default_cwd)
 }
 
 fn format_symbols(symbols: &[(String, codex_treesitter::Symbol)]) -> String {
@@ -913,7 +914,9 @@ pub(crate) fn create_code_intel_tool() -> ToolSpec {
     properties.insert(
         "file".to_string(),
         JsonSchema::String {
-            description: Some("Absolute file path for file-scoped operations.".to_string()),
+            description: Some(
+                "Absolute or cwd-relative file path for file-scoped operations.".to_string(),
+            ),
         },
     );
     properties.insert(
@@ -957,7 +960,7 @@ pub(crate) fn create_code_intel_tool() -> ToolSpec {
     properties.insert(
         "limit".to_string(),
         JsonSchema::Number {
-            description: Some("Result count limit (default 20, max 50).".to_string()),
+            description: Some("Result count limit (default 10, max 50).".to_string()),
         },
     );
     properties.insert(
@@ -996,7 +999,7 @@ pub(crate) fn create_code_intel_tool() -> ToolSpec {
     properties.insert(
         "path".to_string(),
         JsonSchema::String {
-            description: Some("Absolute directory path for addRoot.".to_string()),
+            description: Some("Absolute or cwd-relative directory path for addRoot.".to_string()),
         },
     );
     properties.insert(

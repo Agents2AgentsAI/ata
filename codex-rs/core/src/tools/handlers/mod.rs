@@ -108,26 +108,26 @@ pub(super) fn truncate_tool_output(output: &str, max_bytes: usize) -> String {
 }
 
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
-pub(super) const HANDLER_DEFAULT_LIMIT: usize = 20;
+pub(super) const HANDLER_DEFAULT_LIMIT: usize = 10;
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
 pub(super) const HANDLER_MAX_RESULTS: usize = 50;
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
 pub(super) const HANDLER_MAX_RESULT_BYTES: usize = 8 * 1024;
 
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
-pub(super) fn absolute_path_argument(
+pub(super) fn path_argument(
     path_value: Option<&str>,
     key: &str,
+    default_cwd: &Path,
 ) -> Result<PathBuf, FunctionCallError> {
     let path = path_value
         .ok_or_else(|| FunctionCallError::RespondToModel(format!("`{key}` is required")))?;
     let path = PathBuf::from(path);
-    if !path.is_absolute() {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "`{key}` must be an absolute path"
-        )));
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(crate::util::resolve_path(default_cwd, &path))
     }
-    Ok(path)
 }
 
 fn parse_arguments_with_base_path<T>(
