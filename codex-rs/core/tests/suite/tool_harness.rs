@@ -90,6 +90,7 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
             model_provider: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -161,6 +162,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
             model_provider: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -242,6 +244,7 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
             model_provider: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -287,7 +290,10 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::ApplyPatchFreeform);
+        config
+            .features
+            .enable(Feature::ApplyPatchFreeform)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -335,6 +341,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
             model_provider: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -393,7 +400,10 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::ApplyPatchFreeform);
+        config
+            .features
+            .enable(Feature::ApplyPatchFreeform)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -436,6 +446,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
             model_provider: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,

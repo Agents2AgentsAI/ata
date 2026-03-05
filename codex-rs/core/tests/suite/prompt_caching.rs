@@ -125,7 +125,10 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
                 .web_search_mode
                 .set(WebSearchMode::Cached)
                 .expect("test web_search_mode should satisfy constraints");
-            config.features.enable(Feature::CollaborationModes);
+            config
+                .features
+                .enable(Feature::CollaborationModes)
+                .expect("test config should allow feature update");
             config.features.disable(Feature::ResearchPaperSearch);
             config.features.disable(Feature::ResearchHackerNews);
         })
@@ -226,8 +229,14 @@ async fn gpt_5_tools_without_apply_patch_append_apply_patch_instructions() -> an
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
-            config.features.disable(Feature::ApplyPatchFreeform);
-            config.features.enable(Feature::CollaborationModes);
+            config
+                .features
+                .disable(Feature::ApplyPatchFreeform)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::CollaborationModes)
+                .expect("test config should allow feature update");
             config.model = Some("gpt-5".to_string());
         })
         .build(&server)
@@ -298,7 +307,10 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     let TestCodex { codex, config, .. } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
-            config.features.enable(Feature::CollaborationModes);
+            config
+                .features
+                .enable(Feature::CollaborationModes)
+                .expect("test config should allow feature update");
         })
         .build(&server)
         .await?;
@@ -386,7 +398,10 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
-            config.features.enable(Feature::CollaborationModes);
+            config
+                .features
+                .enable(Feature::CollaborationModes)
+                .expect("test config should allow feature update");
         })
         .build(&server)
         .await?;
@@ -421,6 +436,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
             model_provider: None,
             effort: Some(Some(ReasoningEffort::High)),
             summary: Some(ReasoningSummary::Detailed),
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -510,6 +526,7 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
             model_provider: None,
             effort: Some(Some(ReasoningEffort::Low)),
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
             feature_flags: None,
@@ -658,7 +675,10 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
-            config.features.enable(Feature::CollaborationModes);
+            config
+                .features
+                .enable(Feature::CollaborationModes)
+                .expect("test config should allow feature update");
         })
         .build(&server)
         .await?;
@@ -698,6 +718,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
             model_provider: None,
             effort: Some(ReasoningEffort::High),
             summary: Some(ReasoningSummary::Detailed),
+            service_tier: None,
             collaboration_mode: None,
             final_output_json_schema: None,
             personality: None,
@@ -783,7 +804,10 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
-            config.features.enable(Feature::CollaborationModes);
+            config
+                .features
+                .enable(Feature::CollaborationModes)
+                .expect("test config should allow feature update");
         })
         .build(&server)
         .await?;
@@ -808,6 +832,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             model_provider: None,
             effort: default_effort,
             summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
+            service_tier: None,
             collaboration_mode: None,
             final_output_json_schema: None,
             personality: None,
@@ -829,6 +854,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             model_provider: None,
             effort: default_effort,
             summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
+            service_tier: None,
             collaboration_mode: None,
             final_output_json_schema: None,
             personality: None,
@@ -906,7 +932,10 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
-            config.features.enable(Feature::CollaborationModes);
+            config
+                .features
+                .enable(Feature::CollaborationModes)
+                .expect("test config should allow feature update");
         })
         .build(&server)
         .await?;
@@ -931,6 +960,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             model_provider: None,
             effort: default_effort,
             summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
+            service_tier: None,
             collaboration_mode: None,
             final_output_json_schema: None,
             personality: None,
@@ -952,6 +982,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             model_provider: None,
             effort: Some(ReasoningEffort::High),
             summary: Some(ReasoningSummary::Detailed),
+            service_tier: None,
             collaboration_mode: None,
             final_output_json_schema: None,
             personality: None,

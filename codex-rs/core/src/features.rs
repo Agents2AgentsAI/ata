@@ -119,6 +119,8 @@ pub enum Feature {
     MemoryTool,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
+    /// Allow `detail: "original"` image outputs on supported models.
+    ImageDetailOriginal,
     /// Enforce UTF8 output in Powershell.
     PowershellUtf8,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
@@ -127,6 +129,10 @@ pub enum Feature {
     Collab,
     /// Enable apps.
     Apps,
+    /// Enable plugins.
+    Plugins,
+    /// Allow the model to invoke the built-in image generation tool.
+    ImageGeneration,
     /// Route apps MCP calls through the configured gateway.
     AppsMcpGateway,
     /// Enable research tool integrations and capability wiring.
@@ -147,6 +153,10 @@ pub enum Feature {
     CollaborationModes,
     /// Enable personality selection in the TUI.
     Personality,
+    /// Enable native artifact tools.
+    Artifact,
+    /// Enable Fast mode selection in the TUI and request layer.
+    FastMode,
     /// Enable voice transcription in the TUI composer.
     VoiceTranscription,
     /// Enable experimental realtime voice conversation mode in the TUI.
@@ -263,6 +273,14 @@ impl Features {
         self
     }
 
+    pub fn set_enabled(&mut self, f: Feature, enabled: bool) -> &mut Self {
+        if enabled {
+            self.enable(f)
+        } else {
+            self.disable(f)
+        }
+    }
+
     pub fn record_legacy_usage_force(&mut self, alias: &str, feature: Feature) {
         let (summary, details) = legacy_usage_notice(alias, feature);
         self.legacy_usages.insert(LegacyFeatureUsage {
@@ -371,10 +389,7 @@ impl Features {
         }
 
         overrides.apply(&mut features);
-        if features.enabled(Feature::JsReplToolsOnly) && !features.enabled(Feature::JsRepl) {
-            tracing::warn!("js_repl_tools_only requires js_repl; disabling js_repl_tools_only");
-            features.disable(Feature::JsReplToolsOnly);
-        }
+        features.normalize_dependencies();
 
         features
     }
@@ -418,6 +433,13 @@ impl Features {
             "kb" => self.enabled(Feature::ResearchKnowledgeBase),
             "conversation-report" => self.enabled(Feature::ResearchKnowledgeBase),
             _ => true,
+        }
+    }
+
+    pub(crate) fn normalize_dependencies(&mut self) {
+        if self.enabled(Feature::JsReplToolsOnly) && !self.enabled(Feature::JsRepl) {
+            tracing::warn!("js_repl_tools_only requires js_repl; disabling js_repl_tools_only");
+            self.disable(Feature::JsReplToolsOnly);
         }
     }
 }
@@ -476,13 +498,20 @@ fn is_research_feature(f: Feature) -> bool {
 }
 
 /// Keys accepted in `[features]` tables.
-fn feature_for_key(key: &str) -> Option<Feature> {
+pub(crate) fn feature_for_key(key: &str) -> Option<Feature> {
     for spec in FEATURES {
         if spec.key == key {
             return Some(spec.id);
         }
     }
     legacy::feature_for_key(key)
+}
+
+pub(crate) fn canonical_feature_for_key(key: &str) -> Option<Feature> {
+    FEATURES
+        .iter()
+        .find(|spec| spec.key == key)
+        .map(|spec| spec.id)
 }
 
 /// Returns `true` if the provided string matches a known feature toggle key.
@@ -614,6 +643,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::ImageDetailOriginal,
+        key: "image_detail_original",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
         stage: Stage::UnderDevelopment,
@@ -717,6 +752,18 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::Plugins,
+        key: "plugins",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ImageGeneration,
+        key: "image_generation",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::AppsMcpGateway,
         key: "apps_mcp_gateway",
         stage: Stage::UnderDevelopment,
@@ -755,6 +802,18 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Personality,
         key: "personality",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::Artifact,
+        key: "artifact",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::FastMode,
+        key: "fast_mode",
         stage: Stage::Stable,
         default_enabled: true,
     },
@@ -1003,6 +1062,12 @@ mod tests {
             ))
         );
         assert_eq!(Feature::JsRepl.default_enabled(), false);
+    }
+
+    #[test]
+    fn image_generation_is_under_development() {
+        assert_eq!(Feature::ImageGeneration.stage(), Stage::UnderDevelopment);
+        assert_eq!(Feature::ImageGeneration.default_enabled(), false);
     }
 
     #[test]
