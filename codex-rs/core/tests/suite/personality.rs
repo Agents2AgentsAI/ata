@@ -44,7 +44,10 @@ const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective so
 async fn personality_does_not_mutate_base_instructions_without_template() {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.enable(Feature::Personality);
+    config
+        .features
+        .enable(Feature::Personality)
+        .expect("test config should allow feature update");
     config.personality = Some(Personality::Friendly);
 
     let model_info = codex_core::test_support::construct_model_info_offline("gpt-5.1", &config);
@@ -58,7 +61,10 @@ async fn personality_does_not_mutate_base_instructions_without_template() {
 async fn base_instructions_override_disables_personality_template() {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.enable(Feature::Personality);
+    config
+        .features
+        .enable(Feature::Personality)
+        .expect("test config should allow feature update");
     config.personality = Some(Personality::Friendly);
     config.base_instructions = Some("override instructions".to_string());
 
@@ -81,7 +87,10 @@ async fn user_turn_personality_none_does_not_add_update_message() -> anyhow::Res
     let mut builder = test_codex()
         .with_model("gpt-5.2-codex")
         .with_config(|config| {
-            config.features.enable(Feature::Personality);
+            config
+                .features
+                .enable(Feature::Personality)
+                .expect("test config should allow feature update");
         });
     let test = builder.build(&server).await?;
 
@@ -99,6 +108,7 @@ async fn user_turn_personality_none_does_not_add_update_message() -> anyhow::Res
             model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -128,7 +138,10 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
     let mut builder = test_codex()
         .with_model("gpt-5.2-codex")
         .with_config(|config| {
-            config.features.enable(Feature::Personality);
+            config
+                .features
+                .enable(Feature::Personality)
+                .expect("test config should allow feature update");
             config.personality = Some(Personality::Friendly);
         });
     let test = builder.build(&server).await?;
@@ -147,6 +160,7 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
             model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -183,7 +197,10 @@ async fn config_personality_none_sends_no_personality() -> anyhow::Result<()> {
     let mut builder = test_codex()
         .with_model("gpt-5.2-codex")
         .with_config(|config| {
-            config.features.enable(Feature::Personality);
+            config
+                .features
+                .enable(Feature::Personality)
+                .expect("test config should allow feature update");
             config.personality = Some(Personality::None);
         });
     let test = builder.build(&server).await?;
@@ -202,6 +219,7 @@ async fn config_personality_none_sends_no_personality() -> anyhow::Result<()> {
             model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -245,7 +263,10 @@ async fn default_personality_is_pragmatic_without_config_toml() -> anyhow::Resul
     let mut builder = test_codex()
         .with_model("gpt-5.2-codex")
         .with_config(|config| {
-            config.features.enable(Feature::Personality);
+            config
+                .features
+                .enable(Feature::Personality)
+                .expect("test config should allow feature update");
         });
     let test = builder.build(&server).await?;
 
@@ -263,6 +284,7 @@ async fn default_personality_is_pragmatic_without_config_toml() -> anyhow::Resul
             model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -294,7 +316,10 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
     let mut builder = test_codex()
         .with_model("exp-codex-personality")
         .with_config(|config| {
-            config.features.enable(Feature::Personality);
+            config
+                .features
+                .enable(Feature::Personality)
+                .expect("test config should allow feature update");
         });
     let test = builder.build(&server).await?;
 
@@ -312,6 +337,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -330,6 +356,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             model_provider: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
             feature_flags: None,
@@ -350,6 +377,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -395,7 +423,10 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
     let mut builder = test_codex()
         .with_model("exp-codex-personality")
         .with_config(|config| {
-            config.features.enable(Feature::Personality);
+            config
+                .features
+                .enable(Feature::Personality)
+                .expect("test config should allow feature update");
             config.personality = Some(Personality::Pragmatic);
         });
     let test = builder.build(&server).await?;
@@ -414,6 +445,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
             model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -432,6 +464,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
             model_provider: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Pragmatic),
             feature_flags: None,
@@ -452,6 +485,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
             model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -482,7 +516,10 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
 async fn instructions_uses_base_if_feature_disabled() -> anyhow::Result<()> {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.disable(Feature::Personality);
+    config
+        .features
+        .disable(Feature::Personality)
+        .expect("test config should allow feature update");
     config.personality = Some(Personality::Friendly);
 
     let model_info =
@@ -508,7 +545,10 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
     let mut builder = test_codex()
         .with_model("exp-codex-personality")
         .with_config(|config| {
-            config.features.disable(Feature::Personality);
+            config
+                .features
+                .disable(Feature::Personality)
+                .expect("test config should allow feature update");
         });
     let test = builder.build(&server).await?;
 
@@ -526,6 +566,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
             model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -544,6 +585,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
             model_provider: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Pragmatic),
             feature_flags: None,
@@ -564,6 +606,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
             model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -630,8 +673,10 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
         default_verbosity: None,
         availability_nux: None,
         apply_patch_tool_type: None,
+        web_search_tool_type: Default::default(),
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
+        supports_image_detail_original: false,
         context_window: Some(128_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
@@ -654,7 +699,10 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
     let mut builder = test_codex()
         .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.features.enable(Feature::Personality);
+            config
+                .features
+                .enable(Feature::Personality)
+                .expect("test config should allow feature update");
             config.model = Some(remote_slug.to_string());
             config.personality = Some(Personality::Friendly);
         });
@@ -676,6 +724,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
             model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
             feature_flags: None,
@@ -741,8 +790,10 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         default_verbosity: None,
         availability_nux: None,
         apply_patch_tool_type: None,
+        web_search_tool_type: Default::default(),
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
+        supports_image_detail_original: false,
         context_window: Some(128_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
@@ -769,7 +820,10 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
     let mut builder = test_codex()
         .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.features.enable(Feature::Personality);
+            config
+                .features
+                .enable(Feature::Personality)
+                .expect("test config should allow feature update");
             config.model = Some("gpt-5.2-codex".to_string());
         });
     let test = builder.build(&server).await?;
@@ -790,6 +844,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -808,6 +863,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             model_provider: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
             feature_flags: None,
@@ -828,6 +884,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,

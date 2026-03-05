@@ -5,6 +5,7 @@ use crate::path_utils::write_atomically;
 use anyhow::Context;
 use codex_config::CONFIG_TOML_FILE;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use std::collections::BTreeMap;
@@ -27,6 +28,8 @@ pub enum ConfigEdit {
         effort: Option<ReasoningEffort>,
         model_provider: Option<String>,
     },
+    /// Update the service tier preference for future turns.
+    SetServiceTier { service_tier: Option<ServiceTier> },
     /// Update the active (or default) model personality.
     SetModelPersonality { personality: Option<Personality> },
     /// Toggle the acknowledgement flag under `[notice]`.
@@ -401,6 +404,10 @@ impl ConfigDocument {
                 );
                 mutated
             }),
+            ConfigEdit::SetServiceTier { service_tier } => Ok(self.write_profile_value(
+                &["service_tier"],
+                service_tier.map(|service_tier| value(service_tier.to_string())),
+            )),
             ConfigEdit::SetModelPersonality { personality } => Ok(self.write_profile_value(
                 &["personality"],
                 personality.map(|personality| value(personality.to_string())),
@@ -864,6 +871,11 @@ impl ConfigEditsBuilder {
             effort,
             model_provider,
         });
+        self
+    }
+
+    pub fn set_service_tier(mut self, service_tier: Option<ServiceTier>) -> Self {
+        self.edits.push(ConfigEdit::SetServiceTier { service_tier });
         self
     }
 
