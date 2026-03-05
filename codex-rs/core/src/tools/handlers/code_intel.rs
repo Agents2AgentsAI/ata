@@ -609,7 +609,7 @@ impl ToolHandler for CodeIntelToolHandler {
                     .unwrap_or_else(|_| output_text.clone());
                 if json_str.len() > HANDLER_MAX_RESULT_BYTES {
                     // Preserve JSON contract: return valid JSON with truncation metadata
-                    // instead of unparseable plain text.
+                    // instead of unparsable plain text.
                     let budget = HANDLER_MAX_RESULT_BYTES.saturating_sub(256);
                     let (truncated_text, _) = truncate_tool_output(&output_text, budget);
                     serde_json::to_string(&serde_json::json!({
