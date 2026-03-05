@@ -362,6 +362,9 @@
             "js_repl_tools_only": {
               "type": "boolean"
             },
+            "lsp": {
+              "type": "boolean"
+            },
             "memories": {
               "type": "boolean"
             },
@@ -450,6 +453,9 @@
               "type": "boolean"
             },
             "steer": {
+              "type": "boolean"
+            },
+            "treesitter": {
               "type": "boolean"
             },
             "undo": {
@@ -696,6 +702,82 @@
         }
       },
       "type": "object"
+    },
+    "LspConfig": {
+      "anyOf": [
+        {
+          "description": "Boolean enable flag from `lsp = true|false`.",
+          "type": "boolean"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/definitions/LspServerConfigToml"
+          },
+          "description": "Per-server configuration map.",
+          "type": "object"
+        }
+      ],
+      "description": "Top-level LSP configuration: either a simple boolean (disabled) or a map of per-server overrides."
+    },
+    "LspServerConfigToml": {
+      "anyOf": [
+        {
+          "description": "`[lsp.server-name]\\ndisabled = true`",
+          "properties": {
+            "disabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "disabled"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Full server configuration.",
+          "properties": {
+            "command": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "disabled": {
+              "default": false,
+              "type": "boolean"
+            },
+            "env": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {},
+              "type": "object"
+            },
+            "extensions": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "initialization_options": {
+              "default": null
+            },
+            "root_markers": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Per-server override in config.toml. Either just disable or provide full config."
     },
     "MemoriesToml": {
       "additionalProperties": false,
@@ -1509,6 +1591,76 @@
       },
       "type": "object"
     },
+    "TreeSitterConfig": {
+      "anyOf": [
+        {
+          "description": "Boolean enable flag from `treesitter = true|false`.",
+          "type": "boolean"
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TreeSitterConfigMap"
+            }
+          ],
+          "description": "Detailed TreeSitter configuration map."
+        }
+      ],
+      "description": "Top-level TreeSitter configuration: either a simple boolean (disabled) or a configuration map."
+    },
+    "TreeSitterConfigMap": {
+      "additionalProperties": false,
+      "description": "TreeSitter index behavior in config.toml.",
+      "properties": {
+        "annotation_store_path": {
+          "default": null,
+          "description": "Optional annotation persistence path. Relative paths are resolved from root.",
+          "type": "string"
+        },
+        "disabled_languages": {
+          "default": [],
+          "description": "Language names to disable (e.g. \"rust\", \"python\", \"typescript\").",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ignore_extensions": {
+          "default": [],
+          "description": "Extra ignored file extensions/suffixes (for example: \"pdf\", \"min.js\").",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ignore_patterns": {
+          "default": [],
+          "description": "Extra ignore globs relative to the root.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "max_file_size": {
+          "default": 1048576,
+          "description": "Maximum file size for indexing (bytes).",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "persist_annotations": {
+          "default": true,
+          "description": "Reserved for future annotation persistence support.",
+          "type": "boolean"
+        },
+        "watch": {
+          "default": true,
+          "description": "Reserved for future file watching support.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "TrustLevel": {
       "description": "Represents the trust level for a project directory. This determines the approval policy and sandbox mode applied.",
       "enum": [
@@ -1917,6 +2069,9 @@
         "js_repl_tools_only": {
           "type": "boolean"
         },
+        "lsp": {
+          "type": "boolean"
+        },
         "memories": {
           "type": "boolean"
         },
@@ -2005,6 +2160,9 @@
           "type": "boolean"
         },
         "steer": {
+          "type": "boolean"
+        },
+        "treesitter": {
           "type": "boolean"
         },
         "undo": {
@@ -2121,6 +2279,15 @@
         }
       ],
       "description": "Directory where Codex writes log files, for example `codex-tui.log`. Defaults to `$CODEX_HOME/log`."
+    },
+    "lsp": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/LspConfig"
+        }
+      ],
+      "default": null,
+      "description": "LSP server integration configuration."
     },
     "mcp_oauth_callback_port": {
       "description": "Optional fixed port for the local HTTP callback server used during MCP OAuth login. When unset, Codex will bind to an ephemeral port chosen by the OS.",
@@ -2384,6 +2551,15 @@
         }
       ],
       "description": "Nested tools section for feature toggles"
+    },
+    "treesitter": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/TreeSitterConfig"
+        }
+      ],
+      "default": null,
+      "description": "TreeSitter indexing configuration."
     },
     "tui": {
       "allOf": [

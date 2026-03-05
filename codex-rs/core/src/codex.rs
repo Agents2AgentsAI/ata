@@ -171,8 +171,10 @@ pub enum SteerInputError {
     EmptyInput,
     InvalidFileInput(String),
 }
+
 use crate::data::SharedDataToolkit;
 
+mod code_intel;
 mod file_attachments;
 mod url_file_recovery;
 
@@ -304,6 +306,7 @@ use codex_utils_readiness::ReadinessFlag;
 pub(crate) use file_attachments::FileInputPreparationError;
 pub(crate) use file_attachments::UrlAttachmentInjectionError;
 pub(crate) use file_attachments::file_capabilities_for_provider;
+pub(crate) use file_attachments::inject_local_pdf_paths_from_text_inputs;
 use file_attachments::refresh_uploaded_file_references;
 pub(crate) use file_attachments::resolve_and_prepare_file_inputs;
 use url_file_recovery::drop_last_turn_url_file_attachments;
@@ -1293,7 +1296,28 @@ impl Session {
             (auth, mcp_servers, auth_statuses)
         };
 
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        let multi_root_fut = {
+            let cwd = session_configuration.cwd.clone();
+            let config_for_multi_root = Arc::clone(&config);
+            async move { code_intel::init_multi_root_state(cwd, config_for_multi_root.as_ref()).await }
+        };
+
         // Join all independent futures.
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        let (
+            rollout_recorder_and_state_db,
+            (history_log_id, history_entry_count),
+            (auth, mcp_servers, auth_statuses),
+            multi_root_state,
+        ) = tokio::join!(
+            rollout_fut,
+            history_meta_fut,
+            auth_and_mcp_fut,
+            multi_root_fut
+        );
+
+        #[cfg(not(any(feature = "lsp", feature = "treesitter")))]
         let (
             rollout_recorder_and_state_db,
             (history_log_id, history_entry_count),
@@ -1556,6 +1580,8 @@ impl Session {
                 config.codex_home.clone(),
                 config.cli_auth_credentials_store_mode,
             ),
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state,
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
@@ -1576,6 +1602,10 @@ impl Session {
             document_cache: crate::tools::handlers::DocumentCache::new(),
             next_internal_sub_id: AtomicU64::new(0),
         });
+
+        #[cfg(feature = "lsp")]
+        code_intel::setup_lsp_install_callback(&sess).await;
+
         if let Some(network_policy_decider_session) = network_policy_decider_session {
             let mut guard = network_policy_decider_session.write().await;
             *guard = Arc::downgrade(&sess);
@@ -3367,13 +3397,16 @@ impl Session {
             return Err(SteerInputError::EmptyInput);
         }
 
-        let (provider, config) = {
+        let (provider, config, cwd, sandbox_policy) = {
             let state = self.state.lock().await;
             (
                 state.session_configuration.provider.clone(),
                 Arc::clone(&state.session_configuration.original_config_do_not_use),
+                state.session_configuration.cwd.clone(),
+                state.session_configuration.sandbox_policy.get().clone(),
             )
         };
+        inject_local_pdf_paths_from_text_inputs(&mut input, &cwd, &sandbox_policy);
 
         let (provider_id, _) = file_capabilities_for_provider(&provider, config.model.as_deref());
         self.dedup_local_files_for_provider(&mut input, &provider_id)
@@ -4531,6 +4564,8 @@ mod handlers {
             .unified_exec_manager
             .terminate_all_processes()
             .await;
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        super::code_intel::shutdown_code_intel(&sess.services).await;
         info!("Shutting down Codex instance");
         let history = sess.clone_history().await;
         let turn_count = history
@@ -4820,6 +4855,11 @@ pub(crate) async fn run_turn(
     if input.is_empty() {
         return None;
     }
+    inject_local_pdf_paths_from_text_inputs(
+        &mut input,
+        turn_context.cwd.as_path(),
+        turn_context.sandbox_policy.get(),
+    );
 
     {
         let (provider_id, _) = file_capabilities_for_provider(
@@ -5870,8 +5910,14 @@ async fn built_tools(
             connectors::filter_codex_apps_tools_by_policy(selected_mcp_tools, &turn_context.config);
     }
 
+    // Clone tools_config and inject unified multi-root code intelligence state if available.
+    #[allow(unused_mut)]
+    let mut tools_config = turn_context.tools_config.clone();
+    #[cfg(any(feature = "lsp", feature = "treesitter"))]
+    code_intel::inject_multi_root_state(&mut tools_config, &sess.services);
+
     Ok(Arc::new(ToolRouter::from_config_with_toolkits(
-        &turn_context.tools_config,
+        &tools_config,
         has_mcp_servers.then(|| {
             mcp_tools
                 .into_iter()
@@ -8585,6 +8631,8 @@ mod tests {
                 config.codex_home.clone(),
                 config.cli_auth_credentials_store_mode,
             ),
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
@@ -8753,6 +8801,8 @@ mod tests {
                 config.codex_home.clone(),
                 config.cli_auth_credentials_store_mode,
             ),
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
@@ -9469,6 +9519,50 @@ mod tests {
 
         assert_eq!(turn_id, tc.sub_id);
         assert!(sess.has_pending_input().await);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn steer_input_auto_attaches_local_pdf_from_text() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
+
+        let file_dir = tempfile::tempdir_in(&tc.cwd).expect("temp dir");
+        let file_path = file_dir.path().join("steer.pdf");
+        std::fs::write(&file_path, b"%PDF-1.4\n").expect("write pdf");
+        let file_path_text = file_path.display().to_string();
+
+        let steer_input = vec![UserInput::Text {
+            text: format!("summarize {file_path_text}"),
+            text_elements: Vec::new(),
+        }];
+        sess.steer_input(steer_input, Some(&tc.sub_id))
+            .await
+            .expect("steering should succeed");
+
+        let pending = sess.get_pending_input().await;
+        let has_input_file = pending.iter().any(|item| match item {
+            ResponseInputItem::Message { content, .. } => content
+                .iter()
+                .any(|content_item| matches!(content_item, ContentItem::InputFile { .. })),
+            _ => false,
+        });
+
+        assert!(
+            has_input_file,
+            "expected pending steered input to include an InputFile attachment"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
