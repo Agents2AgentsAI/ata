@@ -267,6 +267,11 @@ while True:
         handle_notification(msg)
 "#;
 
+/// Returns the Python interpreter command for the current platform.
+fn python_command() -> &'static str {
+    if cfg!(windows) { "python" } else { "python3" }
+}
+
 /// Write the fake LSP server script to a temp file and return its path.
 fn write_fake_server(dir: &TempDir) -> PathBuf {
     let script_path = dir.path().join("fake_lsp.py");
@@ -281,7 +286,10 @@ fn write_fake_server(dir: &TempDir) -> PathBuf {
 fn fake_config(script: &Path) -> LspServerConfig {
     LspServerConfig {
         extensions: vec![".rs".into()],
-        command: vec!["python3".into(), script.to_string_lossy().to_string()],
+        command: vec![
+            python_command().into(),
+            script.to_string_lossy().to_string(),
+        ],
         command_candidates: Vec::new(),
         env: HashMap::new(),
         root_markers: vec!["Cargo.toml".into()],

@@ -139,7 +139,7 @@ async fn output_with_login() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 async fn output_without_login() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -211,7 +211,7 @@ async fn pipe_output_without_login() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 async fn shell_command_times_out_with_timeout_ms() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
