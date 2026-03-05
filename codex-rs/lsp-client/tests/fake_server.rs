@@ -653,7 +653,10 @@ async fn code_action_resolve_populates_edit() {
         })
         .find(|a| a.title == "Lazy quickfix")
         .expect("expected 'Lazy quickfix' action");
-    assert!(lazy_action.edit.is_none(), "lazy action should have no edit before resolve");
+    assert!(
+        lazy_action.edit.is_none(),
+        "lazy action should have no edit before resolve"
+    );
     assert!(lazy_action.data.is_some(), "lazy action should have data");
 
     // Resolve it — should now have an edit.

@@ -500,7 +500,8 @@ impl ToolHandler for LspToolHandler {
 
                 let edit = chosen.edit.ok_or_else(|| {
                     FunctionCallError::RespondToModel(
-                        "selected code action has no edit (resolve did not provide one)".to_string(),
+                        "selected code action has no edit (resolve did not provide one)"
+                            .to_string(),
                     )
                 })?;
                 let patch = workspace_edit_to_apply_patch(
