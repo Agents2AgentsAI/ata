@@ -1251,10 +1251,14 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Arc;
+    #[cfg(unix)]
     use std::sync::Mutex;
+    #[cfg(unix)]
     use std::sync::atomic::AtomicUsize;
+    #[cfg(unix)]
     use std::sync::atomic::Ordering;
 
+    #[cfg(unix)]
     static PATH_MUTEX: Mutex<()> = Mutex::new(());
 
     fn rust_analyzer_like_rustup_error() -> &'static str {
@@ -1355,10 +1359,12 @@ help: run `rustup component add rust-analyzer`\n"
         path
     }
 
+    #[cfg(unix)]
     struct PathGuard {
         old: String,
     }
 
+    #[cfg(unix)]
     impl PathGuard {
         fn prepend(dir: &std::path::Path) -> Self {
             let old = std::env::var("PATH").unwrap_or_default();
@@ -1370,6 +1376,7 @@ help: run `rustup component add rust-analyzer`\n"
         }
     }
 
+    #[cfg(unix)]
     impl Drop for PathGuard {
         fn drop(&mut self) {
             unsafe {
