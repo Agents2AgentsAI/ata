@@ -123,7 +123,7 @@ async fn shell_command_works() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 async fn output_with_login() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
