@@ -523,68 +523,77 @@ mod tests {
 
     #[test]
     fn rewrites_npm_global_to_managed_prefix() {
+        let home = codex_home();
+        let expected_prefix = home.join("lsp").join("npm");
+        let expected_cache = home.join("lsp").join("cache").join("npm");
         let cmd = vec![
             "npm".to_string(),
             "install".to_string(),
             "-g".to_string(),
             "pyright".to_string(),
         ];
-        let rewritten = rewrite_lsp_install_command(codex_home().as_path(), &cmd);
+        let rewritten = rewrite_lsp_install_command(home.as_path(), &cmd);
         assert!(
             rewritten
                 .windows(2)
-                .any(|w| w == ["--prefix", "/tmp/codex-home-test/lsp/npm"])
+                .any(|w| w[0] == "--prefix" && w[1] == expected_prefix.to_string_lossy().as_ref())
         );
         assert!(
             rewritten
                 .windows(2)
-                .any(|w| w == ["--cache", "/tmp/codex-home-test/lsp/cache/npm"])
+                .any(|w| w[0] == "--cache" && w[1] == expected_cache.to_string_lossy().as_ref())
         );
     }
 
     #[test]
     fn rewrites_dotnet_tool_install_to_tool_path() {
+        let home = codex_home();
+        let expected_bin = home.join("lsp").join("bin");
         let cmd = vec![
             "dotnet".to_string(),
             "tool".to_string(),
             "install".to_string(),
             "csharp-ls".to_string(),
         ];
-        let rewritten = rewrite_lsp_install_command(codex_home().as_path(), &cmd);
+        let rewritten = rewrite_lsp_install_command(home.as_path(), &cmd);
         assert!(
             rewritten
                 .windows(2)
-                .any(|w| w == ["--tool-path", "/tmp/codex-home-test/lsp/bin"])
+                .any(|w| w[0] == "--tool-path" && w[1] == expected_bin.to_string_lossy().as_ref())
         );
     }
 
     #[test]
     fn rewrites_gem_install_to_bindir() {
+        let home = codex_home();
+        let expected_bin = home.join("lsp").join("bin");
         let cmd = vec![
             "gem".to_string(),
             "install".to_string(),
             "rubocop".to_string(),
         ];
-        let rewritten = rewrite_lsp_install_command(codex_home().as_path(), &cmd);
+        let rewritten = rewrite_lsp_install_command(home.as_path(), &cmd);
         assert!(
             rewritten
                 .windows(2)
-                .any(|w| w == ["--bindir", "/tmp/codex-home-test/lsp/bin"])
+                .any(|w| w[0] == "--bindir" && w[1] == expected_bin.to_string_lossy().as_ref())
         );
     }
 
     #[test]
     fn rewrites_pip_install_to_managed_prefix() {
+        let home = codex_home();
+        let expected_prefix = home.join("lsp").join("pip");
         let cmd = vec![
             "pip".to_string(),
             "install".to_string(),
             "python-lsp-server".to_string(),
         ];
-        let rewritten = rewrite_lsp_install_command(codex_home().as_path(), &cmd);
+        let rewritten = rewrite_lsp_install_command(home.as_path(), &cmd);
         assert!(
             rewritten
                 .windows(2)
-                .any(|w| w == ["--prefix", "/tmp/codex-home-test/lsp/pip"])
+                .any(|w| w[0] == "--prefix" && w[1] == expected_prefix.to_string_lossy().as_ref())
         );
     }
 
