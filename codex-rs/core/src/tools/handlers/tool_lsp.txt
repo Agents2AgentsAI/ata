@@ -1,4 +1,4 @@
-Prefer reading files and writing patches directly. Only use this tool when you need specific information (e.g., finding definitions, references, or understanding types) that you cannot get from reading files.
+Use this tool for semantic, type-aware code intelligence: finding definitions, references, implementations, hover info, and safe rename/code-action previews. For simple file reads or text edits, prefer reading files and writing patches directly.
 
 Use the `lsp` tool to query Language Server Protocol servers for code intelligence.
 
