@@ -30,11 +30,13 @@ fn expand_large_stack_test(mut item: ItemFn) -> TokenStream2 {
     let name = &item.sig.ident;
     let body = &item.block;
 
+    let stack_size = LARGE_STACK_TEST_STACK_SIZE_BYTES;
     let thread_body = if is_async {
         quote! {
             {
                 let runtime = ::tokio::runtime::Builder::new_multi_thread()
                     .worker_threads(2)
+                    .thread_stack_size(#stack_size)
                     .enable_all()
                     .build()
                     .unwrap_or_else(|error| {
