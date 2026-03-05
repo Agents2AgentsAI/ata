@@ -1997,12 +1997,12 @@ impl App {
             let feature_key = feature.key();
             if *enabled {
                 // Update the in-memory configs.
-                self.config.features.enable(*feature);
+                let _ = self.config.features.enable(*feature);
                 self.chat_widget.set_feature_enabled(*feature, true);
                 builder = builder.set_feature_enabled(feature_key, true);
             } else {
                 // Update the in-memory configs.
-                self.config.features.disable(*feature);
+                let _ = self.config.features.disable(*feature);
                 self.chat_widget.set_feature_enabled(*feature, false);
                 if feature.default_enabled() {
                     builder = builder.set_feature_enabled(feature_key, false);
