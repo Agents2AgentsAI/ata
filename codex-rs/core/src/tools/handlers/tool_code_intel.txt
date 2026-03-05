@@ -1,4 +1,4 @@
-Prefer reading files and writing patches directly. Only use this tool when you need specific information (e.g., finding callers, tests, or project structure) that you cannot get from reading files.
+Use this tool for fast structural code intelligence: symbol search, caller/test tracing, project structure, and scoped grep. For simple file reads or text edits, prefer reading files and writing patches directly.
 
 Use the `code_intel` tool for fast, structural code intelligence powered by tree-sitter.
 
