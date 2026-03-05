@@ -240,7 +240,7 @@ async fn ensure_lsp_toolchain_dirs(codex_home: &Path) {
     let _ = tokio::fs::create_dir_all(&pip_prefix).await;
 }
 
-#[cfg(feature = "lsp")]
+#[cfg(all(unix, feature = "lsp"))]
 fn shell_quote(arg: &str) -> String {
     if arg.is_empty() {
         return "''".to_string();
