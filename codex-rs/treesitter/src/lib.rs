@@ -1,0 +1,39 @@
+//! Standalone tree-sitter based code-intelligence primitives for codex-rs.
+
+pub mod annotations;
+pub mod chunking;
+pub mod config;
+pub mod content;
+pub mod error;
+pub mod file_entry;
+pub mod file_tree;
+pub mod ops;
+pub mod parser;
+pub mod project_index;
+pub mod queries;
+pub mod symbol;
+pub mod symbol_table;
+pub mod walker;
+
+pub use annotations::AnnotationLoadStats;
+pub use annotations::AnnotationSaveStats;
+pub use chunking::ChunkIndicesResult;
+pub use config::ProjectIndexConfig;
+pub use content::GrepMatch;
+pub use content::GrepResult;
+pub use content::GrepScope;
+pub use content::PeekResult;
+pub use error::TreeSitterError;
+pub use file_entry::FileEntry;
+pub use file_entry::FileMark;
+pub use file_entry::Language;
+pub use file_tree::FileTree;
+pub use ops::CallerInfo;
+pub use ops::CallersResult;
+pub use ops::TestInfo;
+pub use ops::TestsResult;
+pub use ops::VariableInfo;
+pub use project_index::ProjectIndex;
+pub use symbol::Symbol;
+pub use symbol::SymbolKind;
+pub use symbol_table::SymbolTable;

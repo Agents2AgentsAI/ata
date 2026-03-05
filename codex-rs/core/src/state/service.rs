@@ -62,4 +62,7 @@ pub(crate) struct SessionServices {
     pub(crate) state_db: Option<StateDbHandle>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
+    /// Unified code intelligence state across root(s).
+    #[cfg(any(feature = "lsp", feature = "treesitter"))]
+    pub(crate) multi_root_state: Option<Arc<crate::state::MultiRootState>>,
 }

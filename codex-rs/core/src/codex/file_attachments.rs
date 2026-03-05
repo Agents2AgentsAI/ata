@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -16,6 +17,7 @@ use codex_api::file_support::upload::OpenAiFileUpload;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use codex_utils_file::FileProcessingError;
 use codex_utils_file::analyze_file;
@@ -122,6 +124,186 @@ fn dedup_local_files_from_cache(
                 filename: hit.filename,
                 source_path: std::mem::take(path),
             };
+        }
+    }
+}
+
+fn extract_local_pdf_paths_from_text_inputs(
+    inputs: &[UserInput],
+    cwd: &Path,
+    sandbox_policy: &SandboxPolicy,
+) -> Vec<PathBuf> {
+    let mut discovered = Vec::new();
+    let mut seen = HashSet::new();
+    for input in inputs {
+        let UserInput::Text { text, .. } = input else {
+            continue;
+        };
+        for token in split_text_path_tokens(text) {
+            let candidate = strip_wrapping_quote_pair(token);
+            if !is_pdf_path_token(candidate) || looks_like_url(candidate) {
+                continue;
+            }
+            let resolved = resolve_candidate_path(candidate, cwd);
+            let Ok(canonical) = std::fs::canonicalize(&resolved) else {
+                continue;
+            };
+            if !canonical.is_file()
+                || !is_canonical_path_within_allowed_roots(&canonical, cwd, sandbox_policy)
+            {
+                continue;
+            }
+            if seen.insert(canonical.clone()) {
+                discovered.push(canonical);
+            }
+        }
+    }
+    discovered
+}
+
+fn split_text_path_tokens(text: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let mut chars = text.char_indices().peekable();
+
+    while let Some((start, ch)) = chars.next() {
+        if ch.is_whitespace() {
+            continue;
+        }
+
+        if ch == '"' || ch == '\'' {
+            let quote = ch;
+            let mut token_end = text.len();
+            let mut found_closing = false;
+            for (idx, next_ch) in chars.by_ref() {
+                if next_ch == quote {
+                    token_end = idx + next_ch.len_utf8();
+                    found_closing = true;
+                    break;
+                }
+            }
+
+            if found_closing
+                && chars
+                    .peek()
+                    .is_none_or(|(_, trailing)| trailing.is_whitespace())
+            {
+                tokens.push(&text[start..token_end]);
+                continue;
+            }
+
+            while let Some((idx, next_ch)) = chars.peek().copied() {
+                if next_ch.is_whitespace() {
+                    token_end = idx;
+                    break;
+                }
+                token_end = idx + next_ch.len_utf8();
+                let _ = chars.next();
+            }
+            tokens.push(&text[start..token_end]);
+            continue;
+        }
+
+        let mut token_end = text.len();
+        while let Some((idx, next_ch)) = chars.peek().copied() {
+            if next_ch.is_whitespace() {
+                token_end = idx;
+                break;
+            }
+            token_end = idx + next_ch.len_utf8();
+            let _ = chars.next();
+        }
+        tokens.push(&text[start..token_end]);
+    }
+
+    tokens
+}
+
+fn strip_wrapping_quote_pair(token: &str) -> &str {
+    if token.len() >= 2
+        && ((token.starts_with('"') && token.ends_with('"'))
+            || (token.starts_with('\'') && token.ends_with('\'')))
+    {
+        return &token[1..token.len() - 1];
+    }
+    token
+}
+
+fn is_pdf_path_token(token: &str) -> bool {
+    !token.is_empty() && token.to_ascii_lowercase().ends_with(".pdf")
+}
+
+fn looks_like_url(token: &str) -> bool {
+    token.contains("://")
+}
+
+fn resolve_candidate_path(token: &str, cwd: &Path) -> PathBuf {
+    let path = PathBuf::from(token);
+    if path.is_absolute() {
+        path
+    } else {
+        cwd.join(path)
+    }
+}
+
+fn canonical_or_path(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn is_canonical_path_within_allowed_roots(
+    canonical_path: &Path,
+    cwd: &Path,
+    sandbox_policy: &SandboxPolicy,
+) -> bool {
+    let canonical_cwd = canonical_or_path(cwd);
+    if canonical_path.starts_with(&canonical_cwd) {
+        return true;
+    }
+
+    sandbox_policy
+        .get_writable_roots_with_cwd(cwd)
+        .iter()
+        .any(|root| {
+            if root.is_path_writable(canonical_path) {
+                return true;
+            }
+
+            let canonical_root = canonical_or_path(root.root.as_path());
+            if !canonical_path.starts_with(&canonical_root) {
+                return false;
+            }
+
+            for read_only_subpath in &root.read_only_subpaths {
+                let canonical_subpath = canonical_or_path(read_only_subpath.as_path());
+                if canonical_path.starts_with(&canonical_subpath) {
+                    return false;
+                }
+            }
+            true
+        })
+}
+
+pub(crate) fn inject_local_pdf_paths_from_text_inputs(
+    inputs: &mut Vec<UserInput>,
+    cwd: &Path,
+    sandbox_policy: &SandboxPolicy,
+) {
+    let mut seen_paths = HashSet::new();
+    for input in inputs.iter() {
+        match input {
+            UserInput::LocalFile { path } => {
+                seen_paths.insert(canonical_or_path(path));
+            }
+            UserInput::UploadedFile { source_path, .. } => {
+                seen_paths.insert(canonical_or_path(source_path));
+            }
+            _ => {}
+        }
+    }
+
+    let discovered = extract_local_pdf_paths_from_text_inputs(inputs, cwd, sandbox_policy);
+    for path in discovered {
+        if seen_paths.insert(path.clone()) {
+            inputs.push(UserInput::LocalFile { path });
         }
     }
 }
@@ -760,6 +942,8 @@ mod tests {
     use crate::auth::login_with_provider_api_key;
     use crate::codex::SteerInputError;
     use crate::config::ConfigBuilder;
+    use codex_protocol::protocol::ReadOnlyAccess;
+    use codex_protocol::protocol::SandboxPolicy;
 
     use pretty_assertions::assert_eq;
     use wiremock::Mock;
@@ -768,6 +952,150 @@ mod tests {
     use wiremock::matchers::header;
     use wiremock::matchers::method;
     use wiremock::matchers::path;
+
+    fn workspace_policy_restricted_to_cwd() -> SandboxPolicy {
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: ReadOnlyAccess::FullAccess,
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        }
+    }
+
+    fn local_file_count(inputs: &[UserInput]) -> usize {
+        inputs
+            .iter()
+            .filter(|input| matches!(input, UserInput::LocalFile { .. }))
+            .count()
+    }
+
+    #[test]
+    fn inject_local_pdf_paths_from_text_inputs_attaches_relative_pdf_in_cwd() {
+        let cwd = tempfile::tempdir().expect("cwd");
+        let file = cwd.path().join("report.pdf");
+        std::fs::write(&file, b"%PDF-1.4\n").expect("write pdf");
+
+        let mut inputs = vec![UserInput::Text {
+            text: "summarize report.pdf".to_string(),
+            text_elements: Vec::new(),
+        }];
+        inject_local_pdf_paths_from_text_inputs(
+            &mut inputs,
+            cwd.path(),
+            &workspace_policy_restricted_to_cwd(),
+        );
+
+        assert_eq!(local_file_count(&inputs), 1);
+        assert_eq!(
+            inputs,
+            vec![
+                UserInput::Text {
+                    text: "summarize report.pdf".to_string(),
+                    text_elements: Vec::new(),
+                },
+                UserInput::LocalFile {
+                    path: std::fs::canonicalize(file).expect("canonical report path"),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn inject_local_pdf_paths_from_text_inputs_attaches_quoted_pdf_path_with_spaces() {
+        let cwd = tempfile::tempdir().expect("cwd");
+        let file = cwd.path().join("meeting notes.pdf");
+        std::fs::write(&file, b"%PDF-1.4\n").expect("write pdf");
+
+        let mut inputs = vec![UserInput::Text {
+            text: "summarize \"meeting notes.pdf\"".to_string(),
+            text_elements: Vec::new(),
+        }];
+        inject_local_pdf_paths_from_text_inputs(
+            &mut inputs,
+            cwd.path(),
+            &workspace_policy_restricted_to_cwd(),
+        );
+
+        assert_eq!(local_file_count(&inputs), 1);
+    }
+
+    #[test]
+    fn inject_local_pdf_paths_from_text_inputs_ignores_missing_paths() {
+        let cwd = tempfile::tempdir().expect("cwd");
+        let mut inputs = vec![UserInput::Text {
+            text: "summarize missing.pdf".to_string(),
+            text_elements: Vec::new(),
+        }];
+
+        inject_local_pdf_paths_from_text_inputs(
+            &mut inputs,
+            cwd.path(),
+            &workspace_policy_restricted_to_cwd(),
+        );
+
+        assert_eq!(local_file_count(&inputs), 0);
+    }
+
+    #[test]
+    fn inject_local_pdf_paths_from_text_inputs_ignores_paths_outside_allowed_roots() {
+        let cwd = tempfile::tempdir().expect("cwd");
+        let outside_dir = tempfile::tempdir().expect("outside");
+        let outside_pdf = outside_dir.path().join("outside.pdf");
+        std::fs::write(&outside_pdf, b"%PDF-1.4\n").expect("write outside pdf");
+        let outside_pdf_text = outside_pdf.display().to_string();
+
+        let mut inputs = vec![UserInput::Text {
+            text: format!("summarize {outside_pdf_text}"),
+            text_elements: Vec::new(),
+        }];
+        inject_local_pdf_paths_from_text_inputs(
+            &mut inputs,
+            cwd.path(),
+            &workspace_policy_restricted_to_cwd(),
+        );
+
+        assert_eq!(local_file_count(&inputs), 0);
+    }
+
+    #[test]
+    fn inject_local_pdf_paths_from_text_inputs_ignores_urls() {
+        let cwd = tempfile::tempdir().expect("cwd");
+        let mut inputs = vec![UserInput::Text {
+            text: "summarize https://example.com/report.pdf".to_string(),
+            text_elements: Vec::new(),
+        }];
+
+        inject_local_pdf_paths_from_text_inputs(
+            &mut inputs,
+            cwd.path(),
+            &workspace_policy_restricted_to_cwd(),
+        );
+
+        assert_eq!(local_file_count(&inputs), 0);
+    }
+
+    #[test]
+    fn inject_local_pdf_paths_from_text_inputs_dedups_repeated_tokens_and_existing_entries() {
+        let cwd = tempfile::tempdir().expect("cwd");
+        let file = cwd.path().join("report.pdf");
+        std::fs::write(&file, b"%PDF-1.4\n").expect("write pdf");
+
+        let mut inputs = vec![
+            UserInput::Text {
+                text: "report.pdf report.pdf".to_string(),
+                text_elements: Vec::new(),
+            },
+            UserInput::LocalFile { path: file },
+        ];
+        inject_local_pdf_paths_from_text_inputs(
+            &mut inputs,
+            cwd.path(),
+            &workspace_policy_restricted_to_cwd(),
+        );
+
+        assert_eq!(local_file_count(&inputs), 1);
+    }
 
     #[tokio::test]
     async fn steer_input_surfaces_file_prepare_errors() {
