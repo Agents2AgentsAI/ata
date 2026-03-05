@@ -755,10 +755,7 @@ impl LspClient {
     }
 
     /// Resolve a code action to populate its `edit` field via `codeAction/resolve`.
-    pub async fn code_action_resolve(
-        &self,
-        action: CodeAction,
-    ) -> Option<CodeAction> {
+    pub async fn code_action_resolve(&self, action: CodeAction) -> Option<CodeAction> {
         let val = self.query("codeAction/resolve", action).await?;
         if val.is_null() {
             return None;

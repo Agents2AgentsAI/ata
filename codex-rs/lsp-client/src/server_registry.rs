@@ -1051,11 +1051,7 @@ impl ServerRegistry {
     /// Resolve a code action (populate its `edit` field) via `codeAction/resolve`.
     ///
     /// `path` is used to route to the correct language server.
-    pub async fn code_action_resolve(
-        &self,
-        path: &Path,
-        action: CodeAction,
-    ) -> Option<CodeAction> {
+    pub async fn code_action_resolve(&self, path: &Path, action: CodeAction) -> Option<CodeAction> {
         self.first_match(path, |client| {
             let action = action.clone();
             async move { client.code_action_resolve(action).await }
