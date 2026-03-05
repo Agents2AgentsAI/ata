@@ -33,8 +33,6 @@ use super::textarea::TextAreaState;
 
 const BASE_CLI_BUG_ISSUE_URL: &str =
     "https://github.com/Agents2AgentsAI/ata/issues/new?template=2-bug-report.yml";
-/// Internal routing link for employee feedback follow-ups. This must not be shown to external users.
-const CODEX_FEEDBACK_INTERNAL_URL: &str = "http://go/codex-feedback-internal";
 
 /// The target audience for feedback follow-up instructions.
 ///

@@ -716,7 +716,8 @@ impl super::ChatWidget {
             .features
             .enabled(codex_core::features::Feature::VoiceMode)
         {
-            self.config
+            let _ = self
+                .config
                 .features
                 .enable(codex_core::features::Feature::VoiceMode);
             self.app_event_tx.send(AppEvent::UpdateFeatureFlags {
