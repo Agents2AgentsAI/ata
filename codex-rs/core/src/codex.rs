@@ -984,9 +984,19 @@ impl SessionConfiguration {
         if let Some(flags) = &updates.feature_flags {
             // Start from the original baseline to preserve legacy toggles, etc.
             let mut managed = self.original_config_do_not_use.features.clone();
-            let mut inner = managed.get().clone();
-            inner.apply_map(flags);
-            let _ = managed.set(inner);
+            for (key, enabled) in flags {
+                if let Some(feature) = crate::features::feature_for_key(key) {
+                    if let Err(err) = managed.set_enabled(feature, *enabled) {
+                        tracing::warn!(
+                            error = %err,
+                            feature = key,
+                            "feature flag override rejected by constraints"
+                        );
+                    }
+                } else {
+                    tracing::warn!(feature = key, "unknown feature key in override");
+                }
+            }
             next_configuration.features_override = Some(managed);
         }
         if let Some(app_server_client_name) = updates.app_server_client_name.clone() {
