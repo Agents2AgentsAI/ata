@@ -1,6 +1,9 @@
 pub(crate) mod agent_jobs;
 pub mod apply_patch;
+mod artifacts;
 pub(crate) mod attach_url_files;
+#[cfg(feature = "treesitter")]
+pub(crate) mod code_intel;
 #[cfg(feature = "data")]
 pub(crate) mod data;
 pub(crate) mod document_reader;
@@ -8,6 +11,10 @@ mod dynamic;
 mod grep_files;
 mod js_repl;
 mod list_dir;
+#[cfg(feature = "lsp")]
+pub(crate) mod lsp;
+#[cfg(feature = "lsp")]
+pub(crate) mod lsp_workspace_edit;
 mod mcp;
 mod mcp_resource;
 pub(crate) mod multi_agents;
@@ -32,6 +39,7 @@ use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::normalize_additional_permissions;
 pub use apply_patch::ApplyPatchHandler;
+pub use artifacts::ArtifactsHandler;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 #[cfg(feature = "data")]
@@ -71,6 +79,60 @@ where
     serde_json::from_str(arguments).map_err(|err| {
         FunctionCallError::RespondToModel(format!("failed to parse function arguments: {err}"))
     })
+}
+
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+pub(super) fn function_arguments_from_payload(
+    payload: crate::tools::context::ToolPayload,
+    handler_name: &str,
+) -> Result<String, FunctionCallError> {
+    match payload {
+        crate::tools::context::ToolPayload::Function { arguments } => Ok(arguments),
+        _ => Err(FunctionCallError::RespondToModel(format!(
+            "{handler_name} handler received unsupported payload"
+        ))),
+    }
+}
+
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+pub(super) fn truncate_tool_output(output: &str, max_bytes: usize) -> (String, bool) {
+    if output.len() <= max_bytes {
+        return (output.to_string(), false);
+    }
+
+    let prefix = codex_utils_string::take_bytes_at_char_boundary(output, max_bytes);
+    if prefix.is_empty() {
+        return ("... truncated".to_string(), true);
+    }
+
+    let cut = prefix.rfind('\n').unwrap_or(prefix.len());
+    (format!("{}\n\n... truncated", &prefix[..cut]), true)
+}
+
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+pub(super) const HANDLER_DEFAULT_LIMIT: usize = 10;
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+pub(super) const HANDLER_MAX_RESULTS: usize = 50;
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+pub(super) const HANDLER_MAX_RESULT_BYTES: usize = 8 * 1024;
+
+/// Rejects relative paths outright instead of silently resolving them against
+/// `cwd`. Use this for tool parameters where the model should always provide
+/// an absolute path.
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+pub(super) fn require_absolute_path_argument(
+    path_value: Option<&str>,
+    key: &str,
+) -> Result<PathBuf, FunctionCallError> {
+    let raw = path_value
+        .ok_or_else(|| FunctionCallError::RespondToModel(format!("`{key}` is required")))?;
+    let path = PathBuf::from(raw);
+    if !path.is_absolute() {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "`{key}` must be an absolute path, got: {raw:?}"
+        )));
+    }
+    Ok(path)
 }
 
 fn parse_arguments_with_base_path<T>(

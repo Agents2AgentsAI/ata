@@ -137,7 +137,7 @@ async fn build_test_codex(server: &wiremock::MockServer) -> Result<TestCodex> {
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model(MODEL_WITH_TOOL)
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
+            let _ = config.features.enable(Feature::RemoteModels);
         });
     builder.build(server).await
 }

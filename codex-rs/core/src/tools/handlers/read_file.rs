@@ -1,6 +1,7 @@
 use codex_protocol::models::FunctionCallOutputBody;
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use codex_utils_string::take_bytes_at_char_boundary;
@@ -99,7 +100,12 @@ impl ToolHandler for ReadFileHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation {
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            session,
+            payload,
+            ..
+        } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -146,6 +152,28 @@ impl ToolHandler for ReadFileHandler {
                 indentation::read_block(&path, offset, limit, indentation).await?
             }
         };
+
+        // Warm up LSP/tree-sitter for this file (fire-and-forget).
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        if let Some(ref multi_root_state) = session.services.multi_root_state {
+            #[cfg(feature = "lsp")]
+            {
+                let state = Arc::clone(multi_root_state);
+                let path = path.clone();
+                tokio::spawn(async move {
+                    state.touch_lsp_nowait(&path).await;
+                });
+            }
+            #[cfg(feature = "treesitter")]
+            {
+                let state = Arc::clone(multi_root_state);
+                let path = path.clone();
+                tokio::spawn(async move {
+                    state.reindex_file(&path).await;
+                });
+            }
+        }
+
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(collected.join("\n")),
             success: Some(true),

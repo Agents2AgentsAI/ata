@@ -7,6 +7,7 @@ use crate::config_loader::RequirementSource;
 pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
+pub use codex_protocol::config_types::ServiceTier;
 pub use codex_protocol::config_types::WebSearchMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
@@ -26,7 +27,7 @@ pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 pub const DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 16;
 pub const DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
 pub const DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS: i64 = 6;
-pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL: usize = 1_024;
+pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 256;
 pub const DEFAULT_MEMORIES_MAX_UNUSED_DAYS: i64 = 30;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
@@ -377,12 +378,14 @@ const fn default_opt_in_disabled() -> Option<bool> {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct MemoriesToml {
+    /// When `true`, web searches and MCP tool calls mark the thread `memory_mode` as `"polluted"`.
+    pub no_memories_if_mcp_or_web_search: Option<bool>,
     /// When `false`, newly created threads are stored with `memory_mode = "disabled"` in the state DB.
     pub generate_memories: Option<bool>,
     /// When `false`, skip injecting memory usage instructions into developer prompts.
     pub use_memories: Option<bool>,
     /// Maximum number of recent raw memories retained for global consolidation.
-    pub max_raw_memories_for_global: Option<usize>,
+    pub max_raw_memories_for_consolidation: Option<usize>,
     /// Maximum number of days since a memory was last used before it becomes ineligible for phase 2 selection.
     pub max_unused_days: Option<i64>,
     /// Maximum age of the threads used for memories.
@@ -392,37 +395,39 @@ pub struct MemoriesToml {
     /// Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.
     pub min_rollout_idle_hours: Option<i64>,
     /// Model used for thread summarisation.
-    pub phase_1_model: Option<String>,
+    pub extract_model: Option<String>,
     /// Model used for memory consolidation.
-    pub phase_2_model: Option<String>,
+    pub consolidation_model: Option<String>,
 }
 
 /// Effective memories settings after defaults are applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoriesConfig {
+    pub no_memories_if_mcp_or_web_search: bool,
     pub generate_memories: bool,
     pub use_memories: bool,
-    pub max_raw_memories_for_global: usize,
+    pub max_raw_memories_for_consolidation: usize,
     pub max_unused_days: i64,
     pub max_rollout_age_days: i64,
     pub max_rollouts_per_startup: usize,
     pub min_rollout_idle_hours: i64,
-    pub phase_1_model: Option<String>,
-    pub phase_2_model: Option<String>,
+    pub extract_model: Option<String>,
+    pub consolidation_model: Option<String>,
 }
 
 impl Default for MemoriesConfig {
     fn default() -> Self {
         Self {
+            no_memories_if_mcp_or_web_search: false,
             generate_memories: true,
             use_memories: true,
-            max_raw_memories_for_global: DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+            max_raw_memories_for_consolidation: DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
             max_unused_days: DEFAULT_MEMORIES_MAX_UNUSED_DAYS,
             max_rollout_age_days: DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS,
             max_rollouts_per_startup: DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP,
             min_rollout_idle_hours: DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS,
-            phase_1_model: None,
-            phase_2_model: None,
+            extract_model: None,
+            consolidation_model: None,
         }
     }
 }
@@ -431,11 +436,14 @@ impl From<MemoriesToml> for MemoriesConfig {
     fn from(toml: MemoriesToml) -> Self {
         let defaults = Self::default();
         Self {
+            no_memories_if_mcp_or_web_search: toml
+                .no_memories_if_mcp_or_web_search
+                .unwrap_or(defaults.no_memories_if_mcp_or_web_search),
             generate_memories: toml.generate_memories.unwrap_or(defaults.generate_memories),
             use_memories: toml.use_memories.unwrap_or(defaults.use_memories),
-            max_raw_memories_for_global: toml
-                .max_raw_memories_for_global
-                .unwrap_or(defaults.max_raw_memories_for_global)
+            max_raw_memories_for_consolidation: toml
+                .max_raw_memories_for_consolidation
+                .unwrap_or(defaults.max_raw_memories_for_consolidation)
                 .min(4096),
             max_unused_days: toml
                 .max_unused_days
@@ -453,8 +461,8 @@ impl From<MemoriesToml> for MemoriesConfig {
                 .min_rollout_idle_hours
                 .unwrap_or(defaults.min_rollout_idle_hours)
                 .clamp(1, 48),
-            phase_1_model: toml.phase_1_model,
-            phase_2_model: toml.phase_2_model,
+            extract_model: toml.extract_model,
+            consolidation_model: toml.consolidation_model,
         }
     }
 }
@@ -770,6 +778,13 @@ impl Notice {
 #[schemars(deny_unknown_fields)]
 pub struct SkillConfig {
     pub path: AbsolutePathBuf,
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct PluginConfig {
+    #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
 
@@ -1286,4 +1301,105 @@ mod tests {
             "unexpected error: {err}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// LSP Configuration
+// ---------------------------------------------------------------------------
+
+/// Top-level LSP configuration: either a simple boolean (disabled) or a map of
+/// per-server overrides.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[serde(untagged)]
+pub enum LspConfig {
+    /// Boolean enable flag from `lsp = true|false`.
+    Enabled(bool),
+    /// Per-server configuration map.
+    Servers(HashMap<String, LspServerConfigToml>),
+}
+
+/// Per-server override in config.toml. Either just disable or provide full config.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[serde(untagged)]
+pub enum LspServerConfigToml {
+    /// `[lsp.server-name]\ndisabled = true`
+    DisabledOnly { disabled: bool },
+    /// Full server configuration.
+    Full {
+        command: Vec<String>,
+        #[serde(default)]
+        extensions: Vec<String>,
+        #[serde(default)]
+        root_markers: Vec<String>,
+        #[serde(default)]
+        env: HashMap<String, String>,
+        #[serde(default)]
+        initialization_options: Option<serde_json::Value>,
+        #[serde(default)]
+        disabled: bool,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// TreeSitter Configuration
+// ---------------------------------------------------------------------------
+
+/// Top-level TreeSitter configuration: either a simple boolean (disabled) or a
+/// configuration map.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[serde(untagged)]
+pub enum TreeSitterConfig {
+    /// Boolean enable flag from `treesitter = true|false`.
+    Enabled(bool),
+    /// Detailed TreeSitter configuration map.
+    Config(TreeSitterConfigMap),
+}
+
+/// TreeSitter index behavior in config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TreeSitterConfigMap {
+    /// Maximum file size for indexing (bytes).
+    #[serde(default = "default_treesitter_max_file_size")]
+    pub max_file_size: u64,
+    /// Extra ignore globs relative to the root.
+    #[serde(default)]
+    pub ignore_patterns: Vec<String>,
+    /// Extra ignored file extensions/suffixes (for example: "pdf", "min.js").
+    #[serde(default)]
+    pub ignore_extensions: Vec<String>,
+    /// Language names to disable (e.g. "rust", "python", "typescript").
+    #[serde(default)]
+    pub disabled_languages: Vec<String>,
+    /// Optional annotation persistence path. Relative paths are resolved from root.
+    #[serde(default)]
+    pub annotation_store_path: Option<String>,
+    /// Reserved for future file watching support.
+    #[serde(default = "default_treesitter_true")]
+    pub watch: bool,
+    /// Reserved for future annotation persistence support.
+    #[serde(default = "default_treesitter_true")]
+    pub persist_annotations: bool,
+}
+
+impl Default for TreeSitterConfigMap {
+    fn default() -> Self {
+        Self {
+            max_file_size: default_treesitter_max_file_size(),
+            ignore_patterns: Vec::new(),
+            ignore_extensions: Vec::new(),
+            disabled_languages: Vec::new(),
+            annotation_store_path: None,
+            watch: default_treesitter_true(),
+            persist_annotations: default_treesitter_true(),
+        }
+    }
+}
+
+pub const fn default_treesitter_max_file_size() -> u64 {
+    1_048_576
+}
+
+const fn default_treesitter_true() -> bool {
+    true
 }

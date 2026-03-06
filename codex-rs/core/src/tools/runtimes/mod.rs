@@ -61,10 +61,9 @@ fn command_with_ata_shell_wrapper(command: &[String]) -> Option<Vec<String>> {
 pub(crate) fn resolve_agent_ata_command(command: &[String]) -> (Vec<String>, bool) {
     if let Some((program, args)) = command.split_first()
         && is_ata_program(program)
+        && let Some(updated) = command_with_current_exe(args)
     {
-        if let Some(updated) = command_with_current_exe(args) {
-            return (updated, true);
-        }
+        return (updated, true);
     }
 
     if let Some(commands) = crate::bash::parse_shell_lc_plain_commands(command)

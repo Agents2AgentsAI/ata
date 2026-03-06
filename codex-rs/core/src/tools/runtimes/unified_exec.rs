@@ -18,6 +18,7 @@ use crate::tools::runtimes::CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::runtimes::resolve_agent_ata_command;
+use crate::tools::runtimes::shell::zsh_fork_backend;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -30,6 +31,8 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
+use crate::tools::spec::UnifiedExecBackendConfig;
+use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
@@ -65,11 +68,12 @@ pub struct UnifiedExecApprovalKey {
 
 pub struct UnifiedExecRuntime<'a> {
     manager: &'a UnifiedExecProcessManager,
+    backend: UnifiedExecBackendConfig,
 }
 
 impl<'a> UnifiedExecRuntime<'a> {
-    pub fn new(manager: &'a UnifiedExecProcessManager) -> Self {
-        Self { manager }
+    pub fn new(manager: &'a UnifiedExecProcessManager, backend: UnifiedExecBackendConfig) -> Self {
+        Self { manager, backend }
     }
 }
 
@@ -192,6 +196,47 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         if let Some(network) = req.network.as_ref() {
             network.apply_to_env(&mut env);
         }
+        if self.backend == UnifiedExecBackendConfig::ZshFork {
+            let spec = build_command_spec(
+                &command,
+                &req.cwd,
+                &env,
+                ExecExpiration::DefaultTimeout,
+                req.sandbox_permissions,
+                req.additional_permissions.clone(),
+                req.justification.clone(),
+            )
+            .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
+            let exec_env = attempt
+                .env_for(spec, req.network.as_ref())
+                .map_err(|err| ToolError::Codex(err.into()))?;
+            match zsh_fork_backend::maybe_prepare_unified_exec(req, attempt, ctx, exec_env).await? {
+                Some(prepared) => {
+                    return self
+                        .manager
+                        .open_session_with_exec_env(
+                            &prepared.exec_request,
+                            req.tty,
+                            prepared.spawn_lifecycle,
+                        )
+                        .await
+                        .map_err(|err| match err {
+                            UnifiedExecError::SandboxDenied { output, .. } => {
+                                ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                                    output: Box::new(output),
+                                    network_policy_decision: None,
+                                }))
+                            }
+                            other => ToolError::Rejected(other.to_string()),
+                        });
+                }
+                None => {
+                    tracing::warn!(
+                        "UnifiedExec ZshFork backend specified, but conditions for using it were not met, falling back to direct execution",
+                    );
+                }
+            }
+        }
         let spec = build_command_spec(
             &command,
             &req.cwd,
@@ -206,7 +251,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .env_for(spec, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
         self.manager
-            .open_session_with_exec_env(&exec_env, req.tty)
+            .open_session_with_exec_env(&exec_env, req.tty, Box::new(NoopSpawnLifecycle))
             .await
             .map_err(|err| match err {
                 UnifiedExecError::SandboxDenied { output, .. } => {

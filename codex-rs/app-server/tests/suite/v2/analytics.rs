@@ -28,7 +28,7 @@ async fn app_server_default_analytics_disabled_when_unset() -> Result<()> {
     config.analytics_enabled = None;
 
     let provider =
-        codex_core::otel_init::build_provider(&config, SERVICE_VERSION, Some("codex_app_server"))
+        codex_core::otel_init::build_provider(&config, SERVICE_VERSION, Some("codex-app-server"))
             .map_err(|err| anyhow::anyhow!(err.to_string()))?;
 
     // With analytics unset in the config, metrics are disabled.
@@ -49,7 +49,7 @@ async fn app_server_opted_in_analytics_enables_metrics() -> Result<()> {
     config.analytics_enabled = Some(true);
 
     let provider =
-        codex_core::otel_init::build_provider(&config, SERVICE_VERSION, Some("codex_app_server"))
+        codex_core::otel_init::build_provider(&config, SERVICE_VERSION, Some("codex-app-server"))
             .map_err(|err| anyhow::anyhow!(err.to_string()))?;
 
     let has_metrics = provider.as_ref().and_then(|otel| otel.metrics()).is_some();

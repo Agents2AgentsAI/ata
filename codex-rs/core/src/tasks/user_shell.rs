@@ -14,7 +14,7 @@ use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::StreamOutput;
-use crate::exec::execute_exec_env;
+use crate::exec::execute_exec_request;
 use crate::exec_env::CODEX_SESSION_ID_ENV_VAR;
 use crate::exec_env::create_env;
 use crate::parse_command::parse_command;
@@ -67,6 +67,10 @@ impl UserShellCommandTask {
 impl SessionTask for UserShellCommandTask {
     fn kind(&self) -> TaskKind {
         TaskKind::Regular
+    }
+
+    fn span_name(&self) -> &'static str {
+        "session_task.user_shell"
     }
 
     async fn run(
@@ -198,7 +202,7 @@ pub(crate) async fn execute_user_shell_command(
         tx_event: session.get_tx_event(),
     });
 
-    let exec_result = execute_exec_env(exec_env, &sandbox_policy, stdout_stream)
+    let exec_result = execute_exec_request(exec_env, &sandbox_policy, stdout_stream, None)
         .or_cancel(&cancellation_token)
         .await;
 
