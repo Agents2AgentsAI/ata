@@ -1427,10 +1427,10 @@ dependencies = [
  "codex-chatgpt",
  "codex-cloud-requirements",
  "codex-core",
- "codex-execpolicy",
  "codex-feedback",
  "codex-file-search",
  "codex-login",
+ "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
  "codex-shell-command",
@@ -1441,7 +1441,6 @@ dependencies = [
  "codex-utils-json-to-toml",
  "core_test_support",
  "futures",
- "os_info",
  "owo-colors",
  "pretty_assertions",
  "rmcp",
@@ -1473,12 +1472,14 @@ dependencies = [
  "codex-utils-cargo-bin",
  "inventory",
  "pretty_assertions",
+ "rmcp",
  "schemars 0.8.22",
  "serde",
  "serde_json",
+ "serde_with",
  "shlex",
  "similar",
- "strum_macros 0.27.2",
+ "strum_macros 0.28.0",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
@@ -1493,9 +1494,15 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-app-server-protocol",
+ "codex-core",
+ "codex-otel",
  "codex-protocol",
+ "codex-utils-cli",
  "serde",
  "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
  "tungstenite",
  "url",
  "uuid",
@@ -1529,6 +1536,25 @@ dependencies = [
  "dotenvy",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "codex-artifacts"
+version = "0.0.0"
+dependencies = [
+ "codex-package-manager",
+ "pretty_assertions",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+ "which",
+ "wiremock",
+ "zip",
 ]
 
 [[package]]
@@ -1760,6 +1786,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-arg0",
+ "codex-artifacts",
  "codex-async-utils",
  "codex-client",
  "codex-config",
@@ -1783,9 +1810,11 @@ dependencies = [
  "codex-test-macros",
  "codex-treesitter",
  "codex-utils-absolute-path",
+ "codex-utils-cache",
  "codex-utils-cargo-bin",
  "codex-utils-file",
  "codex-utils-home-dir",
+ "codex-utils-image",
  "codex-utils-pty",
  "codex-utils-readiness",
  "codex-utils-stream-parser",
@@ -1813,6 +1842,7 @@ dependencies = [
  "notify",
  "once_cell",
  "openssl-sys",
+ "opentelemetry",
  "opentelemetry_sdk",
  "os_info",
  "predicates",
@@ -1842,6 +1872,7 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "toml_edit 0.24.1+spec-1.1.0",
  "tracing",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "tracing-test",
  "url",
@@ -1919,6 +1950,7 @@ dependencies = [
  "codex-arg0",
  "codex-cloud-requirements",
  "codex-core",
+ "codex-otel",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
@@ -1928,6 +1960,8 @@ dependencies = [
  "codex-utils-sandbox-summary",
  "core_test_support",
  "libc",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "owo-colors",
  "predicates",
  "pretty_assertions",
@@ -1939,6 +1973,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "ts-rs",
  "uuid",
@@ -2002,6 +2037,7 @@ dependencies = [
  "sentry",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
@@ -2238,13 +2274,33 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "strum_macros 0.27.2",
+ "strum_macros 0.28.0",
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "codex-package-manager"
+version = "0.0.0"
+dependencies = [
+ "fd-lock",
+ "flate2",
+ "pretty_assertions",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+ "wiremock",
+ "zip",
 ]
 
 [[package]]
@@ -2276,7 +2332,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "strum 0.27.2",
- "strum_macros 0.27.2",
+ "strum_macros 0.28.0",
  "sys-locale",
  "tempfile",
  "tracing",
@@ -2583,7 +2639,7 @@ dependencies = [
  "serial_test",
  "shlex",
  "strum 0.27.2",
- "strum_macros 0.27.2",
+ "strum_macros 0.28.0",
  "supports-color 3.0.2",
  "syntect",
  "tempfile",
@@ -4010,6 +4066,17 @@ dependencies = [
  "libc",
  "thiserror 1.0.69",
  "winapi",
+]
+
+[[package]]
+name = "filetime"
+version = "0.2.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f98844151eee8917efc50bd9e8318cb963ae8b297431495d3f758616ea5c57db"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "libredox",
 ]
 
 [[package]]
@@ -9431,9 +9498,9 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
-version = "0.27.2"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7695ce3845ea4b33927c055a39dc438a45b059f7c1b3d91d38d10355fb8cbca7"
+checksum = "ab85eea0270ee17587ed4156089e10b9e6880ee688791d45a905f5b1ca36f664"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -9564,6 +9631,17 @@ name = "tagptr"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
+
+[[package]]
+name = "tar"
+version = "0.4.44"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d863878d212c87a19c1a610eb53bb01fe12951c0501cf5a0d65f724914a667a"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
+]
 
 [[package]]
 name = "tempfile"
@@ -11819,6 +11897,16 @@ dependencies = [
  "rusticata-macros",
  "thiserror 2.0.18",
  "time",
+]
+
+[[package]]
+name = "xattr"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
+dependencies = [
+ "libc",
+ "rustix 1.1.4",
 ]
 
 [[package]]

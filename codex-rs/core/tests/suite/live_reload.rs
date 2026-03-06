@@ -66,6 +66,7 @@ async fn submit_skill_turn(test: &TestCodex, skill_path: PathBuf, prompt: &str) 
             model_provider: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,

@@ -450,7 +450,6 @@ pub fn finalize_gemini_stream(
     events.push(ResponseEvent::Completed {
         response_id: String::new(),
         token_usage,
-        can_append: false,
     });
 
     events

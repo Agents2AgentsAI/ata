@@ -6,7 +6,7 @@ expression: terminal.backend()
   an API key for usage-based billing
 
 > 1. Sign in with ChatGPT
-     Usage included with Plus, Pro, Team, and Enterprise plans
+     Usage included with Plus, Pro, Business, and Enterprise plans
 
   2. Sign in with Device Code
      Sign in from another device with a one-time code

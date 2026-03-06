@@ -646,7 +646,7 @@ mod tests {
             built_in_model_providers()["gemini"].clone(),
             SessionSource::Cli,
             None,
-            None,
+            false,
             false,
             false,
             None,

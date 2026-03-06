@@ -594,7 +594,6 @@ pub fn parse_anthropic_event(
             events.push(ResponseEvent::Completed {
                 response_id: state.response_id.clone(),
                 token_usage: Some(token_usage),
-                can_append: false,
             });
         }
 
