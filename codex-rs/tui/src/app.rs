@@ -1981,13 +1981,6 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
-    /// Convenience helper used by voice-mode (and other callers) to apply
-    /// feature flag changes through the standard `UpdateFeatureFlags` event path.
-    async fn apply_feature_flag_updates(&mut self, updates: Vec<(Feature, bool)>) {
-        self.app_event_tx
-            .send(AppEvent::UpdateFeatureFlags { updates });
-    }
-
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
@@ -3341,11 +3334,13 @@ impl App {
                         .features
                         .enabled(codex_core::features::Feature::VoiceMode)
                 {
-                    self.apply_feature_flag_updates(vec![(
-                        codex_core::features::Feature::VoiceMode,
-                        true,
-                    )])
-                    .await;
+                    self.app_event_tx
+                        .send(AppEvent::UpdateFeatureFlags {
+                            updates: vec![(
+                                codex_core::features::Feature::VoiceMode,
+                                true,
+                            )],
+                        });
                 }
                 tui.frame_requester().schedule_frame();
             }
@@ -5963,63 +5958,6 @@ mod tests {
             app.config.model_reasoning_effort,
             Some(ReasoningEffortConfig::High)
         );
-    }
-
-    #[tokio::test]
-    async fn apply_feature_flag_updates_sends_update_event() {
-        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let initial_hn = app.config.features.enabled(Feature::ResearchHackerNews);
-        let target_hn = !initial_hn;
-
-        let updates = vec![
-            (Feature::ResearchHackerNews, target_hn),
-            (Feature::Research, false),
-        ];
-        app.apply_feature_flag_updates(updates.clone()).await;
-
-        // The method delegates to the event loop — config is NOT mutated inline.
-        assert_eq!(
-            app.config.features.enabled(Feature::ResearchHackerNews),
-            initial_hn
-        );
-
-        // Verify the correct UpdateFeatureFlags event was queued.
-        let event = app_event_rx
-            .try_recv()
-            .expect("expected UpdateFeatureFlags event");
-        match event {
-            AppEvent::UpdateFeatureFlags {
-                updates: received_updates,
-            } => {
-                assert_eq!(received_updates, updates);
-            }
-            other => panic!("expected UpdateFeatureFlags, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn apply_feature_flag_updates_empty_sends_event() {
-        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let initial_hn = app.config.features.enabled(Feature::ResearchHackerNews);
-
-        app.apply_feature_flag_updates(Vec::new()).await;
-
-        // Config unchanged since handler hasn't run.
-        assert_eq!(
-            app.config.features.enabled(Feature::ResearchHackerNews),
-            initial_hn
-        );
-
-        // Event is still queued (handler will short-circuit on empty).
-        let event = app_event_rx
-            .try_recv()
-            .expect("expected UpdateFeatureFlags event");
-        match event {
-            AppEvent::UpdateFeatureFlags { updates } => {
-                assert!(updates.is_empty());
-            }
-            other => panic!("expected UpdateFeatureFlags, got {other:?}"),
-        }
     }
 
     #[tokio::test]
