@@ -730,6 +730,26 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::Lsp,
+        key: "lsp",
+        stage: Stage::Experimental {
+            name: "LSP Integration",
+            menu_description: "Enable Language Server Protocol integration for diagnostics and code intelligence queries.",
+            announcement: "NEW: LSP integration provides real-time diagnostics and code navigation. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::TreeSitter,
+        key: "treesitter",
+        stage: Stage::Experimental {
+            name: "Tree-sitter Code Intel",
+            menu_description: "Enable fast structural code intelligence powered by tree-sitter indexing.",
+            announcement: "NEW: Tree-sitter code intelligence adds symbol search and structure exploration. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Research,
         key: "research",
         stage: Stage::UnderDevelopment,
@@ -912,26 +932,6 @@ pub const FEATURES: &[FeatureSpec] = &[
             name: "Scheduler",
             menu_description: "Background job scheduler for cron/event triggers",
             announcement: "Scheduler is now enabled.",
-        },
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::Lsp,
-        key: "lsp",
-        stage: Stage::Experimental {
-            name: "LSP Integration",
-            menu_description: "Enable Language Server Protocol integration for diagnostics and code intelligence queries.",
-            announcement: "NEW: LSP integration provides real-time diagnostics and code navigation. Enable in /experimental!",
-        },
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::TreeSitter,
-        key: "treesitter",
-        stage: Stage::Experimental {
-            name: "Tree-sitter Code Intel",
-            menu_description: "Enable fast structural code intelligence powered by tree-sitter indexing.",
-            announcement: "NEW: Tree-sitter code intelligence adds symbol search and structure exploration. Enable in /experimental!",
         },
         default_enabled: false,
     },
