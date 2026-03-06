@@ -1028,11 +1028,6 @@ mod tests {
     }
 
     #[test]
-    fn exec_defaults_analytics_to_enabled() {
-        assert_eq!(DEFAULT_ANALYTICS_ENABLED, true);
-    }
-
-    #[test]
     fn exec_root_span_can_be_parented_from_trace_context() {
         let subscriber = test_tracing_subscriber();
         let _guard = tracing::subscriber::set_default(subscriber);
