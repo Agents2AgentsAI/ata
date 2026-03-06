@@ -341,6 +341,7 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
             model_provider: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,

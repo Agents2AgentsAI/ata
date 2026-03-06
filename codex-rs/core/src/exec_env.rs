@@ -100,7 +100,7 @@ where
         let session_id = inherited_session_id
             .unwrap_or(thread_id.as_str())
             .to_string();
-        env_map.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.clone());
+        env_map.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id);
         env_map.insert(CODEX_SESSION_ID_ENV_VAR.to_string(), session_id);
     }
 

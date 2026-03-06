@@ -15,6 +15,7 @@ use tokio::sync::oneshot;
 
 use crate::codex::TurnContext;
 use crate::protocol::ReviewDecision;
+use crate::protocol::TokenUsage;
 use crate::tasks::SessionTask;
 
 /// Metadata about the currently running turn.
@@ -74,6 +75,8 @@ pub(crate) struct TurnState {
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
     url_attachments_injected: usize,
+    pub(crate) tool_calls: u64,
+    pub(crate) token_usage_at_turn_start: TokenUsage,
 }
 
 impl TurnState {

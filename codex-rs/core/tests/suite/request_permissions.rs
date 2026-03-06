@@ -136,6 +136,7 @@ async fn submit_turn(
             model_provider: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -202,7 +203,10 @@ async fn with_additional_permissions_requires_approval_under_on_request() -> Res
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
-        config.features.enable(Feature::RequestPermissions);
+        config
+            .features
+            .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -281,7 +285,10 @@ async fn relative_additional_permissions_resolve_against_tool_workdir() -> Resul
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
-        config.features.enable(Feature::RequestPermissions);
+        config
+            .features
+            .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -373,7 +380,10 @@ async fn read_only_with_additional_permissions_widens_to_unrequested_cwd_write()
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
-        config.features.enable(Feature::RequestPermissions);
+        config
+            .features
+            .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -463,7 +473,10 @@ async fn read_only_with_additional_permissions_widens_to_unrequested_tmp_write()
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
-        config.features.enable(Feature::RequestPermissions);
+        config
+            .features
+            .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -554,7 +567,10 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
-        config.features.enable(Feature::RequestPermissions);
+        config
+            .features
+            .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -652,7 +668,10 @@ async fn with_additional_permissions_denied_approval_blocks_execution() -> Resul
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
-        config.features.enable(Feature::RequestPermissions);
+        config
+            .features
+            .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 

@@ -50,6 +50,7 @@ use crate::unified_exec::generate_chunk_id;
 use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
 use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
+use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
 use crate::unified_exec::resolve_max_tokens;
 use crate::workspace_kb::CODEX_KB_PATH_ENV_VAR;
@@ -531,6 +532,7 @@ impl UnifiedExecProcessManager {
         &self,
         env: &ExecRequest,
         tty: bool,
+        mut spawn_lifecycle: SpawnLifecycleHandle,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let (program, args) = env
             .command
@@ -558,7 +560,8 @@ impl UnifiedExecProcessManager {
         };
         let spawned =
             spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-        UnifiedExecProcess::from_spawned(spawned, env.sandbox).await
+        spawn_lifecycle.after_spawn();
+        UnifiedExecProcess::from_spawned(spawned, env.sandbox, spawn_lifecycle).await
     }
 
     pub(super) async fn open_session_with_sandbox(
@@ -596,7 +599,8 @@ impl UnifiedExecProcessManager {
         explicit_env_overrides.insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_path);
 
         let mut orchestrator = ToolOrchestrator::new();
-        let mut runtime = UnifiedExecRuntime::new(self);
+        let mut runtime =
+            UnifiedExecRuntime::new(self, context.turn.tools_config.unified_exec_backend);
         let exec_approval_requirement = context
             .session
             .services

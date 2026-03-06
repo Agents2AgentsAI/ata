@@ -57,7 +57,9 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
+      # 2026-03-04: temporarily change releases to use thin LTO because
+      # Ubuntu ARM is timing out at 60 minutes.
+      CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'thin' }}
       # TODO: Re-enable once Apple signing is configured.
       HAS_APPLE_SIGNING: "false"
       # HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
@@ -224,6 +226,7 @@ jobs:
       - name: Cargo build
         shell: bash
         run: |
+          echo "CARGO_PROFILE_RELEASE_LTO: ${CARGO_PROFILE_RELEASE_LTO}"
           if [[ "${{ contains(matrix.target, 'windows') }}" == 'true' ]]; then
             cargo build --target ${{ matrix.target }} --release --timings -p codex-cli -p codex-responses-api-proxy -p codex-windows-sandbox --bin ata --bin ata-responses-api-proxy --bin ata-windows-sandbox-setup --bin ata-command-runner
           else
@@ -231,7 +234,7 @@ jobs:
           fi
 
       - name: Upload Cargo timings
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: cargo-timings-rust-release-${{ matrix.target }}
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
@@ -481,7 +484,7 @@ jobs:
             zstd -T0 -19 --rm "$dest/$base"
           done
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           # Upload the per-binary .zst files as well as the new .tar.gz
@@ -551,7 +554,7 @@ jobs:
 
           echo "path=${notes_path}" >> "${GITHUB_OUTPUT}"
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
 
@@ -628,9 +631,10 @@ jobs:
             --package ata-responses-api-proxy \
             --package ata-sdk
 
-      - name: Stage macOS and Linux installer script
+      - name: Stage installer scripts
         run: |
           cp scripts/install/install.sh dist/install.sh
+          cp scripts/install/install.ps1 dist/install.ps1
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

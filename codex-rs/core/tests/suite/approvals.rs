@@ -561,6 +561,7 @@ async fn submit_turn(
             model_provider: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -1646,7 +1647,10 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy.clone());
         for feature in features {
-            config.features.enable(feature);
+            config
+                .features
+                .enable(feature)
+                .expect("test config should allow feature update");
         }
     });
     let test = builder.build(&server).await?;
