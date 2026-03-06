@@ -2111,6 +2111,13 @@ impl super::ChatWidget {
     /// has buffered samples, since `on_voice_tts_finished` transitions the
     /// phase to Idle as soon as all TTS chunks are enqueued — the player
     /// may still be playing buffered audio.
+    /// Whether voice mode is currently active (on, regardless of phase).
+    pub(crate) fn is_voice_mode_active(&self) -> bool {
+        self.voice_mode_state
+            .as_ref()
+            .is_some_and(|s| s.is_active())
+    }
+
     pub(crate) fn is_voice_speaking(&self) -> bool {
         self.voice_mode_state.as_ref().is_some_and(|s| {
             s.phase == VoiceModePhase::Speaking
