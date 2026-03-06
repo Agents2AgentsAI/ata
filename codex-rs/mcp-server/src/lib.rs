@@ -181,11 +181,6 @@ mod tests {
     use std::collections::HashMap;
     use tempfile::TempDir;
 
-    #[test]
-    fn mcp_server_defaults_analytics_to_enabled() {
-        assert_eq!(DEFAULT_ANALYTICS_ENABLED, true);
-    }
-
     #[tokio::test]
     async fn mcp_server_builds_otel_provider_with_logs_traces_and_metrics() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;

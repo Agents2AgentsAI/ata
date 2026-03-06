@@ -129,8 +129,8 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
                 .features
                 .enable(Feature::CollaborationModes)
                 .expect("test config should allow feature update");
-            config.features.disable(Feature::ResearchPaperSearch);
-            config.features.disable(Feature::ResearchHackerNews);
+            let _ = config.features.disable(Feature::ResearchPaperSearch);
+            let _ = config.features.disable(Feature::ResearchHackerNews);
         })
         .build(&server)
         .await?;

@@ -443,6 +443,20 @@ client_request_definitions! {
         params: FuzzyFileSearchSessionStopParams,
         response: FuzzyFileSearchSessionStopResponse,
     },
+
+    // --- ATA-specific APIs (not in upstream) ---
+    GetUserSavedConfig {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v1::GetUserSavedConfigResponse,
+    },
+    SetDefaultModel {
+        params: v1::SetDefaultModelParams,
+        response: v1::SetDefaultModelResponse,
+    },
+    UserInfo {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v1::UserInfoResponse,
+    },
 }
 
 /// Generates an `enum ServerRequest` where each variant is a request that the
