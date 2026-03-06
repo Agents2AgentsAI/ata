@@ -79,9 +79,15 @@ impl ChatWidget {
     pub(super) fn rendered_user_message_event_from_event(
         event: &UserMessageEvent,
     ) -> RenderedUserMessageEvent {
-        Self::rendered_user_message_event_from_parts(
+        // Strip voice mode instruction prefixes so the dedup key matches
+        // the original user text stored by submit_user_message.
+        let (message, text_elements) = super::strip_system_instruction_prefix(
             event.message.clone(),
             event.text_elements.clone(),
+        );
+        Self::rendered_user_message_event_from_parts(
+            message,
+            text_elements,
             event.local_images.clone(),
             event.images.clone().unwrap_or_default(),
         )

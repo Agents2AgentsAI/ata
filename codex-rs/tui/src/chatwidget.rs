@@ -1449,7 +1449,19 @@ impl ChatWidget {
         self.finalize_completed_assistant_message(Some(&message));
     }
 
-    fn on_agent_message_delta(&mut self, delta: String) {
+    fn on_agent_message_delta(&mut self, delta: String, from_replay: bool) {
+        // When voice mode is active, the parser strips <voice> tags from the
+        // display text and routes tagged content to TTS.  Skip during replay
+        // so resuming a session doesn't re-narrate old messages.
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        let delta = if from_replay {
+            delta
+        } else {
+            self.on_voice_mode_agent_delta(&delta).unwrap_or(delta)
+        };
+        #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
+        let _ = from_replay;
+
         if self.is_suppressing_streaming_for_reader() {
             return;
         }
@@ -4904,19 +4916,22 @@ impl ChatWidget {
                 .into_iter()
                 .map(|img| img.path)
                 .collect::<Vec<_>>();
+            // Store the dedup key using the original text (no 🎙️ prefix) so
+            // that the ItemCompleted comparison matches after stripping the
+            // voice mode instruction prefix from the core event.
+            self.last_rendered_user_message_event =
+                Some(Self::rendered_user_message_event_from_parts(
+                    text.clone(),
+                    text_elements.clone(),
+                    local_image_paths.clone(),
+                    remote_image_urls.clone(),
+                ));
             // Prefix voice input with 🎙️ in the display prompt.
             let display_text = if voice_input {
                 format!("🎙️ {text}")
             } else {
                 text
             };
-            self.last_rendered_user_message_event =
-                Some(Self::rendered_user_message_event_from_parts(
-                    display_text.clone(),
-                    text_elements.clone(),
-                    local_image_paths.clone(),
-                    remote_image_urls.clone(),
-                ));
             self.add_to_history(history_cell::new_user_prompt(
                 display_text,
                 text_elements,
@@ -5049,7 +5064,7 @@ impl ChatWidget {
             }
             EventMsg::AgentMessage(AgentMessageEvent { .. }) => {}
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
-                self.on_agent_message_delta(delta)
+                self.on_agent_message_delta(delta, from_replay)
             }
             EventMsg::PlanDelta(event) => self.on_plan_delta(event.delta),
             EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta })
@@ -9248,25 +9263,43 @@ fn strip_system_instruction_prefix(
     message: String,
     text_elements: Vec<codex_protocol::user_input::TextElement>,
 ) -> (String, Vec<codex_protocol::user_input::TextElement>) {
-    // Voice mode instruction prefixes end with a double newline.
-    if message.starts_with("[VOICE MODE")
-        && let Some(pos) = message.find("\n\n")
-    {
-        let prefix_len = pos + 2;
-        let stripped = message[prefix_len..].to_string();
-        let adjusted = text_elements
-            .into_iter()
-            .filter_map(|el| {
-                if el.byte_range.end <= prefix_len {
-                    return None; // element is entirely within the prefix
-                }
-                Some(el.map_range(|r| codex_protocol::user_input::ByteRange {
-                    start: r.start.saturating_sub(prefix_len),
-                    end: r.end.saturating_sub(prefix_len),
-                }))
-            })
-            .collect();
-        return (stripped, adjusted);
+    // Voice mode instruction prefixes: strip the known constant if present,
+    // otherwise fall back to stripping up to the last `\n\n` boundary.
+    if message.starts_with("[VOICE MODE") {
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        let known_prefixes: &[&str] = &[
+            crate::chatwidget::voice_mode::VOICE_MODE_INSTRUCTION,
+            crate::chatwidget::voice_mode::VOICE_MODE_OFF_INSTRUCTION,
+        ];
+        #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
+        let known_prefixes: &[&str] = &[];
+
+        // Try exact match against known instruction constants first.
+        let prefix_len = known_prefixes
+            .iter()
+            .find(|p| message.starts_with(**p))
+            .map(|p| p.len())
+            // Fallback: strip up to the last `\n\n` so multi-paragraph
+            // prefixes are fully removed.
+            .or_else(|| message.rfind("\n\n").map(|pos| pos + 2))
+            .unwrap_or(0);
+
+        if prefix_len > 0 {
+            let stripped = message[prefix_len..].to_string();
+            let adjusted = text_elements
+                .into_iter()
+                .filter_map(|el| {
+                    if el.byte_range.end <= prefix_len {
+                        return None; // element is entirely within the prefix
+                    }
+                    Some(el.map_range(|r| codex_protocol::user_input::ByteRange {
+                        start: r.start.saturating_sub(prefix_len),
+                        end: r.end.saturating_sub(prefix_len),
+                    }))
+                })
+                .collect();
+            return (stripped, adjusted);
+        }
     }
 
     // Document reader close feedback is entirely a system instruction.
