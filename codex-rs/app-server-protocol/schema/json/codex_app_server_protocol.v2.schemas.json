@@ -1916,6 +1916,76 @@
           ],
           "title": "FuzzyFileSearchRequest",
           "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "getUserSavedConfig"
+              ],
+              "title": "GetUserSavedConfigRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "GetUserSavedConfigRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "setDefaultModel"
+              ],
+              "title": "SetDefaultModelRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SetDefaultModelParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "SetDefaultModelRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "userInfo"
+              ],
+              "title": "UserInfoRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "UserInfoRequest",
+          "type": "object"
         }
       ],
       "title": "ClientRequest"
@@ -11341,6 +11411,27 @@
           "type": "object"
         }
       ]
+    },
+    "SetDefaultModelParams": {
+      "properties": {
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reasoningEffort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "Settings": {
       "description": "Settings for a collaboration mode.",

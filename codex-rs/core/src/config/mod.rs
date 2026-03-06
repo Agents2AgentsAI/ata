@@ -2335,7 +2335,8 @@ impl Config {
                 .analytics
                 .as_ref()
                 .and_then(|a| a.enabled)
-                .or(cfg.analytics.as_ref().and_then(|a| a.enabled)),
+                .or(cfg.analytics.as_ref().and_then(|a| a.enabled))
+                .or(Some(false)),
             feedback_enabled: cfg
                 .feedback
                 .as_ref()

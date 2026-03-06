@@ -2000,80 +2000,6 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
-    async fn apply_feature_flag_updates(&mut self, updates: Vec<(Feature, bool)>) {
-        if updates.is_empty() {
-            return;
-        }
-        let _windows_sandbox_changed = updates.iter().any(|(feature, _)| {
-            matches!(
-                feature,
-                Feature::WindowsSandbox | Feature::WindowsSandboxElevated
-            )
-        });
-        let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
-            .with_profile(self.active_profile.as_deref());
-        for (feature, enabled) in &updates {
-            let feature_key = feature.key();
-            if *enabled {
-                // Update the in-memory configs.
-                let _ = self.config.features.enable(*feature);
-                self.chat_widget.set_feature_enabled(*feature, true);
-                builder = builder.set_feature_enabled(feature_key, true);
-            } else {
-                // Update the in-memory configs.
-                let _ = self.config.features.disable(*feature);
-                self.chat_widget.set_feature_enabled(*feature, false);
-                if feature.default_enabled() {
-                    builder = builder.set_feature_enabled(feature_key, false);
-                } else {
-                    // If the feature already default to `false`, we drop the key
-                    // in the config file so that the user does not miss the feature
-                    // once it gets globally released.
-                    builder = builder.with_edits(vec![ConfigEdit::ClearPath {
-                        segments: vec!["features".to_string(), feature_key.to_string()],
-                    }]);
-                }
-            }
-        }
-
-        // Notify core so changes take effect without restart.
-        let feature_flags: BTreeMap<String, bool> = updates
-            .iter()
-            .map(|(feature, enabled)| (feature.key().to_string(), *enabled))
-            .collect();
-
-        #[cfg(target_os = "windows")]
-        let windows_sandbox_level = if _windows_sandbox_changed {
-            Some(WindowsSandboxLevel::from_config(&self.config))
-        } else {
-            None
-        };
-        #[cfg(not(target_os = "windows"))]
-        let windows_sandbox_level = None;
-
-        self.app_event_tx
-            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                cwd: None,
-                approval_policy: None,
-                sandbox_policy: None,
-                windows_sandbox_level,
-                model: None,
-                model_provider: None,
-                effort: None,
-                summary: None,
-                service_tier: None,
-                collaboration_mode: None,
-                personality: None,
-                feature_flags: Some(feature_flags),
-            }));
-
-        if let Err(err) = builder.apply().await {
-            tracing::error!(error = %err, "failed to persist feature flags");
-            self.chat_widget
-                .add_error_message(format!("Failed to update experimental features: {err}"));
-        }
-    }
-
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
@@ -3024,6 +2950,14 @@ impl App {
                         }]);
                     }
                 }
+
+                // ATA: notify core of feature flag changes so they take effect
+                // without restart.
+                let feature_flags: BTreeMap<String, bool> = updates
+                    .iter()
+                    .map(|(f, e)| (f.key().to_string(), *e))
+                    .collect();
+
                 if windows_sandbox_changed {
                     #[cfg(target_os = "windows")]
                     {
@@ -3035,14 +2969,37 @@ impl App {
                                 sandbox_policy: None,
                                 windows_sandbox_level: Some(windows_sandbox_level),
                                 model: None,
+                                model_provider: None,
                                 effort: None,
                                 summary: None,
                                 service_tier: None,
                                 collaboration_mode: None,
                                 personality: None,
+                                feature_flags: Some(feature_flags.clone()),
                             }));
                     }
                 }
+
+                // ATA: always propagate feature_flags even when sandbox didn't
+                // change, so core picks up the new flags.
+                if !windows_sandbox_changed {
+                    self.app_event_tx
+                        .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                            cwd: None,
+                            approval_policy: None,
+                            sandbox_policy: None,
+                            windows_sandbox_level: None,
+                            model: None,
+                            model_provider: None,
+                            effort: None,
+                            summary: None,
+                            service_tier: None,
+                            collaboration_mode: None,
+                            personality: None,
+                            feature_flags: Some(feature_flags),
+                        }));
+                }
+
                 if let Err(err) = builder.apply().await {
                     tracing::error!(error = %err, "failed to persist feature flags");
                     self.chat_widget.add_error_message(format!(
@@ -3396,11 +3353,9 @@ impl App {
                         .features
                         .enabled(codex_core::features::Feature::VoiceMode)
                 {
-                    self.apply_feature_flag_updates(vec![(
-                        codex_core::features::Feature::VoiceMode,
-                        true,
-                    )])
-                    .await;
+                    self.app_event_tx.send(AppEvent::UpdateFeatureFlags {
+                        updates: vec![(codex_core::features::Feature::VoiceMode, true)],
+                    });
                 }
                 tui.frame_requester().schedule_frame();
             }
@@ -6018,66 +5973,6 @@ mod tests {
             app.config.model_reasoning_effort,
             Some(ReasoningEffortConfig::High)
         );
-    }
-
-    #[tokio::test]
-    async fn apply_feature_flag_updates_emits_override_with_feature_flags() {
-        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let initial_hn = app.config.features.enabled(Feature::ResearchHackerNews);
-        let target_hn = !initial_hn;
-
-        app.apply_feature_flag_updates(vec![
-            (Feature::ResearchHackerNews, target_hn),
-            (Feature::Research, false),
-        ])
-        .await;
-
-        assert_eq!(
-            app.config.features.enabled(Feature::ResearchHackerNews),
-            target_hn
-        );
-        assert_eq!(app.config.features.enabled(Feature::Research), false);
-
-        let mut emitted_feature_flags = None;
-        let mut emitted_windows_sandbox_level = None;
-        while let Ok(event) = app_event_rx.try_recv() {
-            if let AppEvent::CodexOp(Op::OverrideTurnContext {
-                feature_flags: Some(flags),
-                windows_sandbox_level,
-                ..
-            }) = event
-            {
-                emitted_windows_sandbox_level = Some(windows_sandbox_level);
-                emitted_feature_flags = Some(flags);
-                break;
-            }
-        }
-
-        let feature_flags =
-            emitted_feature_flags.expect("expected OverrideTurnContext with feature flags");
-        assert_eq!(
-            feature_flags.get(Feature::ResearchHackerNews.key()),
-            Some(&target_hn)
-        );
-        assert_eq!(feature_flags.get(Feature::Research.key()), Some(&false));
-        #[cfg(target_os = "windows")]
-        let _ = emitted_windows_sandbox_level;
-        #[cfg(not(target_os = "windows"))]
-        assert_eq!(emitted_windows_sandbox_level, Some(None));
-    }
-
-    #[tokio::test]
-    async fn apply_feature_flag_updates_empty_updates_is_noop() {
-        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let initial_hn = app.config.features.enabled(Feature::ResearchHackerNews);
-
-        app.apply_feature_flag_updates(Vec::new()).await;
-
-        assert_eq!(
-            app.config.features.enabled(Feature::ResearchHackerNews),
-            initial_hn
-        );
-        assert_eq!(app_event_rx.try_recv().is_err(), true);
     }
 
     #[tokio::test]

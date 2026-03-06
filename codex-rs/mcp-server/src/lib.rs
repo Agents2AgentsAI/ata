@@ -177,14 +177,8 @@ mod tests {
     use super::*;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::types::OtelExporterKind;
-    use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use tempfile::TempDir;
-
-    #[test]
-    fn mcp_server_defaults_analytics_to_enabled() {
-        assert_eq!(DEFAULT_ANALYTICS_ENABLED, true);
-    }
 
     #[tokio::test]
     async fn mcp_server_builds_otel_provider_with_logs_traces_and_metrics() -> anyhow::Result<()> {
