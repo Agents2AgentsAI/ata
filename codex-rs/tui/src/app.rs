@@ -1985,7 +1985,7 @@ impl App {
         if updates.is_empty() {
             return;
         }
-        let _windows_sandbox_changed = updates.iter().any(|(feature, _)| {
+        let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
             matches!(
                 feature,
                 Feature::WindowsSandbox | Feature::WindowsSandboxElevated
@@ -1995,25 +1995,31 @@ impl App {
             .with_profile(self.active_profile.as_deref());
         for (feature, enabled) in &updates {
             let feature_key = feature.key();
-            if *enabled {
-                // Update the in-memory configs.
-                let _ = self.config.features.enable(*feature);
-                self.chat_widget.set_feature_enabled(*feature, true);
+            if let Err(err) = self.config.features.set_enabled(*feature, *enabled) {
+                tracing::error!(
+                    error = %err,
+                    feature = feature_key,
+                    "failed to update constrained feature flags"
+                );
+                self.chat_widget.add_error_message(format!(
+                    "Failed to update experimental feature `{feature_key}`: {err}"
+                ));
+                continue;
+            }
+            let effective_enabled = self.config.features.enabled(*feature);
+            self.chat_widget
+                .set_feature_enabled(*feature, effective_enabled);
+            if effective_enabled {
                 builder = builder.set_feature_enabled(feature_key, true);
+            } else if feature.default_enabled() {
+                builder = builder.set_feature_enabled(feature_key, false);
             } else {
-                // Update the in-memory configs.
-                let _ = self.config.features.disable(*feature);
-                self.chat_widget.set_feature_enabled(*feature, false);
-                if feature.default_enabled() {
-                    builder = builder.set_feature_enabled(feature_key, false);
-                } else {
-                    // If the feature already default to `false`, we drop the key
-                    // in the config file so that the user does not miss the feature
-                    // once it gets globally released.
-                    builder = builder.with_edits(vec![ConfigEdit::ClearPath {
-                        segments: vec!["features".to_string(), feature_key.to_string()],
-                    }]);
-                }
+                // If the feature already default to `false`, we drop the key
+                // in the config file so that the user does not miss the feature
+                // once it gets globally released.
+                builder = builder.with_edits(vec![ConfigEdit::ClearPath {
+                    segments: vec!["features".to_string(), feature_key.to_string()],
+                }]);
             }
         }
 
@@ -2024,13 +2030,16 @@ impl App {
             .collect();
 
         #[cfg(target_os = "windows")]
-        let windows_sandbox_level = if _windows_sandbox_changed {
+        let windows_sandbox_level = if windows_sandbox_changed {
             Some(WindowsSandboxLevel::from_config(&self.config))
         } else {
             None
         };
         #[cfg(not(target_os = "windows"))]
-        let windows_sandbox_level = None;
+        let windows_sandbox_level = {
+            let _ = windows_sandbox_changed;
+            None
+        };
 
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::OverrideTurnContext {
@@ -2965,71 +2974,7 @@ impl App {
                 }
             }
             AppEvent::UpdateFeatureFlags { updates } => {
-                if updates.is_empty() {
-                    return Ok(AppRunControl::Continue);
-                }
-                let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
-                    matches!(
-                        feature,
-                        Feature::WindowsSandbox | Feature::WindowsSandboxElevated
-                    )
-                });
-                let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_profile(self.active_profile.as_deref());
-                for (feature, enabled) in &updates {
-                    let feature_key = feature.key();
-                    if let Err(err) = self.config.features.set_enabled(*feature, *enabled) {
-                        tracing::error!(
-                            error = %err,
-                            feature = feature_key,
-                            "failed to update constrained feature flags"
-                        );
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to update experimental feature `{feature_key}`: {err}"
-                        ));
-                        continue;
-                    }
-                    let effective_enabled = self.config.features.enabled(*feature);
-                    self.chat_widget
-                        .set_feature_enabled(*feature, effective_enabled);
-                    if effective_enabled {
-                        builder = builder.set_feature_enabled(feature_key, true);
-                    } else if feature.default_enabled() {
-                        builder = builder.set_feature_enabled(feature_key, false);
-                    } else {
-                        // If the feature already default to `false`, we drop the key
-                        // in the config file so that the user does not miss the feature
-                        // once it gets globally released.
-                        builder = builder.with_edits(vec![ConfigEdit::ClearPath {
-                            segments: vec!["features".to_string(), feature_key.to_string()],
-                        }]);
-                    }
-                }
-                if windows_sandbox_changed {
-                    #[cfg(target_os = "windows")]
-                    {
-                        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
-                        self.app_event_tx
-                            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                                cwd: None,
-                                approval_policy: None,
-                                sandbox_policy: None,
-                                windows_sandbox_level: Some(windows_sandbox_level),
-                                model: None,
-                                effort: None,
-                                summary: None,
-                                service_tier: None,
-                                collaboration_mode: None,
-                                personality: None,
-                            }));
-                    }
-                }
-                if let Err(err) = builder.apply().await {
-                    tracing::error!(error = %err, "failed to persist feature flags");
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to update experimental features: {err}"
-                    ));
-                }
+                self.apply_feature_flag_updates(updates).await;
             }
             AppEvent::SkipNextWorldWritableScan => {
                 self.windows_sandbox.skip_world_writable_scan_once = true;
