@@ -2115,7 +2115,7 @@ impl super::ChatWidget {
     pub(crate) fn is_voice_mode_active(&self) -> bool {
         self.voice_mode_state
             .as_ref()
-            .is_some_and(|s| s.is_active())
+            .is_some_and(VoiceModeState::is_active)
     }
 
     pub(crate) fn is_voice_speaking(&self) -> bool {
