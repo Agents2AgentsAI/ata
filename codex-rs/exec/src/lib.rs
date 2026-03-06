@@ -79,8 +79,6 @@ use codex_core::default_client::set_default_originator;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
 
-const DEFAULT_ANALYTICS_ENABLED: bool = true;
-
 enum InitialOperation {
     UserTurn {
         items: Vec<UserInput>,
@@ -1027,11 +1025,6 @@ mod tests {
         let provider = SdkTracerProvider::builder().build();
         let tracer = provider.tracer("codex-exec-tests");
         tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer))
-    }
-
-    #[test]
-    fn exec_defaults_analytics_to_enabled() {
-        assert_eq!(DEFAULT_ANALYTICS_ENABLED, true);
     }
 
     #[test]

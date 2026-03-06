@@ -829,6 +829,25 @@ impl CodexMessageProcessor {
                 self.upload_feedback(to_connection_request_id(request_id), params)
                     .await;
             }
+            // --- ATA-specific dispatches (not in upstream) ---
+            ClientRequest::GetUserSavedConfig {
+                request_id,
+                params: _,
+            } => {
+                self.get_user_saved_config(to_connection_request_id(request_id))
+                    .await;
+            }
+            ClientRequest::SetDefaultModel { request_id, params } => {
+                self.set_default_model(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::UserInfo {
+                request_id,
+                params: _,
+            } => {
+                self.get_user_info(to_connection_request_id(request_id))
+                    .await;
+            }
         }
     }
 
