@@ -3334,13 +3334,9 @@ impl App {
                         .features
                         .enabled(codex_core::features::Feature::VoiceMode)
                 {
-                    self.app_event_tx
-                        .send(AppEvent::UpdateFeatureFlags {
-                            updates: vec![(
-                                codex_core::features::Feature::VoiceMode,
-                                true,
-                            )],
-                        });
+                    self.app_event_tx.send(AppEvent::UpdateFeatureFlags {
+                        updates: vec![(codex_core::features::Feature::VoiceMode, true)],
+                    });
                 }
                 tui.frame_requester().schedule_frame();
             }
