@@ -2939,47 +2939,34 @@ impl App {
                     .map(|(f, e)| (f.key().to_string(), *e))
                     .collect();
 
-                if windows_sandbox_changed {
+                let windows_sandbox_level = if windows_sandbox_changed {
                     #[cfg(target_os = "windows")]
                     {
-                        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
-                        self.app_event_tx
-                            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                                cwd: None,
-                                approval_policy: None,
-                                sandbox_policy: None,
-                                windows_sandbox_level: Some(windows_sandbox_level),
-                                model: None,
-                                model_provider: None,
-                                effort: None,
-                                summary: None,
-                                service_tier: None,
-                                collaboration_mode: None,
-                                personality: None,
-                                feature_flags: Some(feature_flags.clone()),
-                            }));
+                        Some(WindowsSandboxLevel::from_config(&self.config))
                     }
-                }
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        None
+                    }
+                } else {
+                    None
+                };
 
-                // ATA: always propagate feature_flags even when sandbox didn't
-                // change, so core picks up the new flags.
-                if !windows_sandbox_changed {
-                    self.app_event_tx
-                        .send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                            cwd: None,
-                            approval_policy: None,
-                            sandbox_policy: None,
-                            windows_sandbox_level: None,
-                            model: None,
-                            model_provider: None,
-                            effort: None,
-                            summary: None,
-                            service_tier: None,
-                            collaboration_mode: None,
-                            personality: None,
-                            feature_flags: Some(feature_flags),
-                        }));
-                }
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                        cwd: None,
+                        approval_policy: None,
+                        sandbox_policy: None,
+                        windows_sandbox_level,
+                        model: None,
+                        model_provider: None,
+                        effort: None,
+                        summary: None,
+                        service_tier: None,
+                        collaboration_mode: None,
+                        personality: None,
+                        feature_flags: Some(feature_flags),
+                    }));
 
                 if let Err(err) = builder.apply().await {
                     tracing::error!(error = %err, "failed to persist feature flags");
