@@ -1410,6 +1410,13 @@ impl App {
             self.chat_widget.thread_id(),
             self.chat_widget.thread_name(),
         );
+        // Capture voice mode state before tearing down the old widget so we can
+        // reconcile after the new widget is created. The new widget auto-enables
+        // voice mode based on the (possibly stale) in-memory config, so we need
+        // to match the user's actual /voice toggle state.
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        let was_voice_active = self.chat_widget.is_voice_mode_active();
+
         self.shutdown_current_thread().await;
         if let Err(err) = self.server.remove_and_close_all_threads().await {
             tracing::warn!(error = %err, "failed to close all threads");
@@ -1432,6 +1439,18 @@ impl App {
             otel_manager: self.otel_manager.clone(),
         };
         self.chat_widget = ChatWidget::new(init, self.server.clone());
+
+        // Reconcile voice mode: if the user had toggled it off with /voice but
+        // the stale in-memory config caused auto-enable, turn it back off.
+        // Conversely, if it was on but didn't auto-enable, turn it on.
+        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+        {
+            let new_voice_active = self.chat_widget.is_voice_mode_active();
+            if was_voice_active != new_voice_active {
+                self.chat_widget.toggle_voice_mode();
+            }
+        }
+
         self.reset_thread_event_state();
         if let Some(summary) = summary {
             let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
