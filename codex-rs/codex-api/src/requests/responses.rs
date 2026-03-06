@@ -41,6 +41,7 @@ pub struct ResponsesRequestBuilder<'a> {
     conversation_id: Option<String>,
     session_source: Option<SessionSource>,
     store_override: Option<bool>,
+    service_tier: Option<String>,
     headers: HeaderMap,
     compression: Compression,
 }
@@ -100,6 +101,11 @@ impl<'a> ResponsesRequestBuilder<'a> {
         self
     }
 
+    pub fn service_tier(mut self, tier: Option<String>) -> Self {
+        self.service_tier = tier;
+        self
+    }
+
     pub fn extra_headers(mut self, headers: HeaderMap) -> Self {
         self.headers = headers;
         self
@@ -138,6 +144,7 @@ impl<'a> ResponsesRequestBuilder<'a> {
             store,
             stream: true,
             include: self.include,
+            service_tier: self.service_tier,
             prompt_cache_key: self.prompt_cache_key,
             text: self.text,
         };

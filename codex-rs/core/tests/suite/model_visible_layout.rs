@@ -102,7 +102,10 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
     let mut builder = test_codex()
         .with_model("gpt-5.2-codex")
         .with_config(|config| {
-            config.features.enable(Feature::Personality);
+            config
+                .features
+                .enable(Feature::Personality)
+                .expect("test config should allow feature update");
             config.personality = Some(Personality::Pragmatic);
         });
     let test = builder.build(&server).await?;
@@ -123,6 +126,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -147,6 +151,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
             feature_flags: None,
@@ -226,6 +231,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -250,6 +256,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -336,7 +343,10 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
 
     let mut resume_builder = test_codex().with_config(|config| {
         config.model = Some("gpt-5.2-codex".to_string());
-        config.features.enable(Feature::Personality);
+        config
+            .features
+            .enable(Feature::Personality)
+            .expect("test config should allow feature update");
         config.personality = Some(Personality::Pragmatic);
     });
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
@@ -357,6 +367,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
             model_provider: None,
             effort: resumed.config.model_reasoning_effort,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
             feature_flags: None,
@@ -447,6 +458,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
             model_provider: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,

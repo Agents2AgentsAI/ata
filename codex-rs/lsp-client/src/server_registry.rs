@@ -783,13 +783,13 @@ impl ServerRegistry {
         // LSP servers (e.g. gopls) may return symbols from stdlib or module
         // caches that live far outside the registered project root.
         // Canonicalize to handle macOS /tmp -> /private/tmp symlinks.
-        let canonical_root = std::fs::canonicalize(&self.workspace_root)
+        let canonical_root = dunce::canonicalize(&self.workspace_root)
             .unwrap_or_else(|_| self.workspace_root.clone());
         let filtered: Vec<SymbolInformation> = symbols
             .into_iter()
             .filter(|sym| {
                 path_from_uri(&sym.location.uri)
-                    .and_then(|p| std::fs::canonicalize(&p).ok().or(Some(p)))
+                    .and_then(|p| dunce::canonicalize(&p).ok().or(Some(p)))
                     .map(|p| p.starts_with(&canonical_root))
                     .unwrap_or(false)
             })

@@ -224,7 +224,6 @@ async fn stream_provider_response<State, ParseEvent, ParseTrailing>(
                     .send(Ok(ResponseEvent::Completed {
                         response_id: String::new(),
                         token_usage: None,
-                        can_append: false,
                     }))
                     .await;
                 return;

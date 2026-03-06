@@ -1,5 +1,6 @@
 pub(crate) mod agent_jobs;
 pub mod apply_patch;
+mod artifacts;
 pub(crate) mod attach_url_files;
 #[cfg(feature = "treesitter")]
 pub(crate) mod code_intel;
@@ -38,6 +39,7 @@ use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::normalize_additional_permissions;
 pub use apply_patch::ApplyPatchHandler;
+pub use artifacts::ArtifactsHandler;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 #[cfg(feature = "data")]

@@ -56,6 +56,7 @@ async fn submit_user_turn(
             model_provider: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode,
             personality: None,
             feature_flags: None,
@@ -137,6 +138,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
             model_provider: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
             feature_flags: None,
@@ -169,7 +171,10 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
 async fn shell_command_empty_script_with_collaboration_mode_does_not_panic() -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5").with_config(|config| {
-        config.features.enable(Feature::CollaborationModes);
+        config
+            .features
+            .enable(Feature::CollaborationModes)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
     let call_id = "shell-empty-script-collab";
@@ -221,8 +226,14 @@ async fn shell_command_empty_script_with_collaboration_mode_does_not_panic() -> 
 async fn unified_exec_empty_script_with_collaboration_mode_does_not_panic() -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5").with_config(|config| {
-        config.features.enable(Feature::UnifiedExec);
-        config.features.enable(Feature::CollaborationModes);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::CollaborationModes)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
     let call_id = "unified-exec-empty-script-collab";
@@ -274,7 +285,10 @@ async fn unified_exec_empty_script_with_collaboration_mode_does_not_panic() -> R
 async fn shell_command_whitespace_script_with_collaboration_mode_does_not_panic() -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5").with_config(|config| {
-        config.features.enable(Feature::CollaborationModes);
+        config
+            .features
+            .enable(Feature::CollaborationModes)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
     let call_id = "shell-whitespace-script-collab";
@@ -326,8 +340,14 @@ async fn shell_command_whitespace_script_with_collaboration_mode_does_not_panic(
 async fn unified_exec_whitespace_script_with_collaboration_mode_does_not_panic() -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5").with_config(|config| {
-        config.features.enable(Feature::UnifiedExec);
-        config.features.enable(Feature::CollaborationModes);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::CollaborationModes)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
     let call_id = "unified-exec-whitespace-script-collab";
