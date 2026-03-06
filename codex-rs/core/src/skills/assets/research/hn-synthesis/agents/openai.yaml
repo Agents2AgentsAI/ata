@@ -1,7 +1,0 @@
-interface:
-  display_name: "HN Synthesis"
-  short_description: "Search and synthesize Hacker News discussions into KB cards"
-  default_prompt: "Use $hn-synthesis to find and analyze Hacker News discussions on this topic"
-
-policy:
-  allow_implicit_invocation: true

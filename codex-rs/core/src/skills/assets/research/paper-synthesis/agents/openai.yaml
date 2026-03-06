@@ -1,7 +1,0 @@
-interface:
-  display_name: "Paper Synthesis"
-  short_description: "Summarize and explain research papers"
-  default_prompt: "Use $paper-synthesis to explain this paper in depth"
-
-policy:
-  allow_implicit_invocation: true

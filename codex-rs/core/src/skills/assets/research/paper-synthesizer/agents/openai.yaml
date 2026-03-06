@@ -1,6 +1,0 @@
-interface:
-  display_name: "Paper Synthesizer"
-  short_description: "Internal subagent skill for paper synthesis"
-
-policy:
-  allow_implicit_invocation: false
