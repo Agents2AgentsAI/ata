@@ -5966,63 +5966,60 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_feature_flag_updates_emits_override_with_feature_flags() {
+    async fn apply_feature_flag_updates_sends_update_event() {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let initial_hn = app.config.features.enabled(Feature::ResearchHackerNews);
         let target_hn = !initial_hn;
 
-        app.apply_feature_flag_updates(vec![
+        let updates = vec![
             (Feature::ResearchHackerNews, target_hn),
             (Feature::Research, false),
-        ])
-        .await;
+        ];
+        app.apply_feature_flag_updates(updates.clone()).await;
 
+        // The method delegates to the event loop — config is NOT mutated inline.
         assert_eq!(
             app.config.features.enabled(Feature::ResearchHackerNews),
-            target_hn
+            initial_hn
         );
-        assert_eq!(app.config.features.enabled(Feature::Research), false);
 
-        let mut emitted_feature_flags = None;
-        let mut emitted_windows_sandbox_level = None;
-        while let Ok(event) = app_event_rx.try_recv() {
-            if let AppEvent::CodexOp(Op::OverrideTurnContext {
-                feature_flags: Some(flags),
-                windows_sandbox_level,
-                ..
-            }) = event
-            {
-                emitted_windows_sandbox_level = Some(windows_sandbox_level);
-                emitted_feature_flags = Some(flags);
-                break;
+        // Verify the correct UpdateFeatureFlags event was queued.
+        let event = app_event_rx
+            .try_recv()
+            .expect("expected UpdateFeatureFlags event");
+        match event {
+            AppEvent::UpdateFeatureFlags {
+                updates: received_updates,
+            } => {
+                assert_eq!(received_updates, updates);
             }
+            other => panic!("expected UpdateFeatureFlags, got {other:?}"),
         }
-
-        let feature_flags =
-            emitted_feature_flags.expect("expected OverrideTurnContext with feature flags");
-        assert_eq!(
-            feature_flags.get(Feature::ResearchHackerNews.key()),
-            Some(&target_hn)
-        );
-        assert_eq!(feature_flags.get(Feature::Research.key()), Some(&false));
-        #[cfg(target_os = "windows")]
-        let _ = emitted_windows_sandbox_level;
-        #[cfg(not(target_os = "windows"))]
-        assert_eq!(emitted_windows_sandbox_level, Some(None));
     }
 
     #[tokio::test]
-    async fn apply_feature_flag_updates_empty_updates_is_noop() {
+    async fn apply_feature_flag_updates_empty_sends_event() {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let initial_hn = app.config.features.enabled(Feature::ResearchHackerNews);
 
         app.apply_feature_flag_updates(Vec::new()).await;
 
+        // Config unchanged since handler hasn't run.
         assert_eq!(
             app.config.features.enabled(Feature::ResearchHackerNews),
             initial_hn
         );
-        assert_eq!(app_event_rx.try_recv().is_err(), true);
+
+        // Event is still queued (handler will short-circuit on empty).
+        let event = app_event_rx
+            .try_recv()
+            .expect("expected UpdateFeatureFlags event");
+        match event {
+            AppEvent::UpdateFeatureFlags { updates } => {
+                assert!(updates.is_empty());
+            }
+            other => panic!("expected UpdateFeatureFlags, got {other:?}"),
+        }
     }
 
     #[tokio::test]
