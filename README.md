@@ -5,6 +5,18 @@
 
 ---
 
+We are building **Ata** to be the AI assistant that can solve software engineering _and_ research problems end-to-end — not just another code-assist tool. On top of the vanilla Codex CLI, Ata adds:
+
+- **Multiple AI providers** — OpenAI, Anthropic, and Gemini. We also provide on-premise self-hosted solutions; contact us at accounts@agents2agents.ai for details.
+- **Research tools** — Paper Search (Semantic Scholar, arXiv, OpenAlex), Patent Search (EPO), and Zotero integration
+- **LSP and Tree-sitter support** — for deeper semantic understanding of your codebase
+- **Voice support** — powered by ElevenLabs
+- **Research View** — a dedicated reading experience for papers and patents
+
+And many more capabilities coming soon.
+
+---
+
 ## Quickstart
 
 ### Installing and running Ata CLI
@@ -46,8 +58,10 @@ You can use `ata` with ChatGPT plan or OpenAI, Anthropic, or Gemini API key. All
 
 ## Docs
 
-- **Coming soon** - consult [Ata docs](https://github.com/Agents2AgentsAI/ata/tree/main/docs) for now
 - [**Installing & building**](./docs/install.md)
+- [**Setting up LSP & Tree-sitter**](./docs/lsp-treesitter-setup.md)
+- [**Setting up Paper Search**](./docs/paper-search-setup.md)
+- [**Setting up Patent Search**](./docs/patent-search-setup.md)
 - [**Setting up Zotero**](./docs/zotero-setup.md)
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
