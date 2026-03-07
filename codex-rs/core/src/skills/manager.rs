@@ -24,6 +24,7 @@ use crate::skills::build_implicit_skill_path_indexes;
 use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
 use crate::skills::loader::skill_roots;
+use crate::skills::system::install_research_skills;
 use crate::skills::system::install_system_skills;
 use crate::skills::system::install_workspace_skills;
 
@@ -37,6 +38,9 @@ impl SkillsManager {
     pub fn new(codex_home: PathBuf, plugins_manager: Arc<PluginsManager>) -> Self {
         if let Err(err) = install_system_skills(&codex_home) {
             tracing::error!("failed to install system skills: {err}");
+        }
+        if let Err(err) = install_research_skills(&codex_home) {
+            tracing::error!("failed to install research skills: {err}");
         }
         if let Err(err) = install_workspace_skills(&codex_home) {
             tracing::error!("failed to install workspace skills: {err}");
@@ -259,6 +263,8 @@ mod tests {
     use crate::config_loader::ConfigLayerStack;
     use crate::config_loader::ConfigRequirementsToml;
     use crate::plugins::PluginsManager;
+    use crate::skills::system::research_cache_root_dir;
+    use crate::skills::system::workspace_cache_root_dir;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::PathBuf;
@@ -302,6 +308,23 @@ mod tests {
         let outcome2 = skills_manager.skills_for_config(&cfg);
         assert_eq!(outcome2.errors, outcome1.errors);
         assert_eq!(outcome2.skills, outcome1.skills);
+    }
+
+    #[test]
+    fn skills_manager_installs_workspace_and_research_skill_caches() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
+
+        let _skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager);
+
+        assert!(
+            workspace_cache_root_dir(codex_home.path()).is_dir(),
+            "workspace system skills cache should be installed during manager init"
+        );
+        assert!(
+            research_cache_root_dir(codex_home.path()).is_dir(),
+            "research system skills cache should be installed during manager init"
+        );
     }
 
     #[tokio::test]

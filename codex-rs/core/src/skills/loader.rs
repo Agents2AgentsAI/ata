@@ -264,9 +264,8 @@ fn skill_roots_from_layer_stack_inner(
                 });
 
                 // Research skills are cached under `$CODEX_HOME/skills/.system-research`.
-                // The directory only exists when the binary was compiled with the
-                // `research` feature; otherwise `discover_skills_under_root` returns
-                // immediately because the path doesn't exist on disk.
+                // Installation is best-effort at startup. If the directory does not
+                // exist on disk, `discover_skills_under_root` returns immediately.
                 roots.push(SkillRoot {
                     path: research_cache_root_dir(config_folder.as_path()),
                     scope: SkillScope::System,
