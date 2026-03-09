@@ -73,9 +73,10 @@ impl Drop for FileLock {
     }
 }
 
-// Stub for non-Unix platforms (no-op lock).
+// Best-effort lock for non-Unix platforms backed by exclusive lockfile creation.
 #[cfg(not(unix))]
 pub struct FileLock {
+    file: Option<std::fs::File>,
     path: PathBuf,
 }
 
@@ -85,9 +86,34 @@ impl FileLock {
         if let Some(parent) = lock_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        Ok(Self {
-            path: lock_path.to_path_buf(),
-        })
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(LOCK_TIMEOUT_S);
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(lock_path)
+            {
+                Ok(mut file) => {
+                    use std::io::Write;
+                    let _ = writeln!(file, "pid={}", std::process::id());
+                    return Ok(Self {
+                        file: Some(file),
+                        path: lock_path.to_path_buf(),
+                    });
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if std::time::Instant::now() >= deadline {
+                        return Err(WorkspaceError::LockTimeout {
+                            path: lock_path.to_path_buf(),
+                            timeout_secs: LOCK_TIMEOUT_S,
+                        });
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(LOCK_POLL_INTERVAL_MS));
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
     }
 
     pub fn release(self) {
@@ -96,5 +122,13 @@ impl FileLock {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+}
+
+#[cfg(not(unix))]
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        let _ = self.file.take();
+        let _ = std::fs::remove_file(&self.path);
     }
 }

@@ -247,7 +247,7 @@ pub fn run(workspace_id: &str, spec_path: &Path, dry_run: bool) -> Result<Value,
     set_field::run(
         workspace_id,
         "specSource",
-        &format!("\"{}\"", spec_source.replace('"', "\\\"")),
+        &serde_json::to_string(&spec_source)?,
     )?;
 
     // Audit

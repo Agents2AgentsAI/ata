@@ -37,6 +37,10 @@ pub fn short_hash(name: &str) -> String {
 /// Generate a workspace ID from a human-readable name.
 pub fn workspace_id_from_name(name: &str, attempt: u32) -> String {
     let hash_val = short_hash(name);
+    workspace_id_from_name_with_hash(name, &hash_val, attempt)
+}
+
+pub fn workspace_id_from_name_with_hash(name: &str, hash_val: &str, attempt: u32) -> String {
     let suffix = if attempt == 0 {
         format!("-{hash_val}")
     } else {
@@ -131,5 +135,13 @@ mod tests {
         assert!(id.starts_with("repo-"));
         // prefix-timestamp-uuid = at least 40 chars
         assert!(id.len() > 40);
+    }
+
+    #[test]
+    fn workspace_id_with_fixed_hash_only_changes_attempt_suffix() {
+        let first = workspace_id_from_name_with_hash("My Workspace", "deadbeef", 0);
+        let second = workspace_id_from_name_with_hash("My Workspace", "deadbeef", 1);
+        assert_eq!(first, "my-workspace-deadbeef");
+        assert_eq!(second, "my-workspace-deadbeef-1");
     }
 }

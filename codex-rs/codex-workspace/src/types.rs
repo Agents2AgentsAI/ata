@@ -61,7 +61,7 @@ pub struct RunEntry {
     pub created_at: i64,
     pub updated_at: i64,
     pub root_path: String,
-    pub status: String,
+    pub status: RunStatus,
     pub source: RunSource,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -79,7 +79,7 @@ pub struct RunSource {
 }
 
 /// Record of how a repo was cloned.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CloneRecord {
     #[serde(default)]
@@ -91,18 +91,18 @@ pub struct CloneRecord {
     #[serde(default)]
     pub filter: String,
     #[serde(default)]
-    pub submodules: String,
+    pub submodules: SubmodulePolicy,
     #[serde(default)]
-    pub lfs: String,
+    pub lfs: LfsPolicy,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
 /// Pin state for a repo.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PinState {
-    pub mode: String,
+    pub mode: PinMode,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pinned_sha: String,
     #[serde(flatten)]
@@ -126,7 +126,7 @@ pub struct GitState {
 }
 
 /// Workspace policies.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Policies {
     #[serde(default)]
@@ -139,7 +139,7 @@ pub struct Policies {
 }
 
 /// Default clone policy settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DefaultClonePolicy {
     #[serde(default = "default_depth")]
@@ -151,11 +151,61 @@ pub struct DefaultClonePolicy {
     #[serde(default = "default_filter")]
     pub filter: String,
     #[serde(default = "default_submodules")]
-    pub submodules: String,
+    pub submodules: SubmodulePolicy,
     #[serde(default = "default_lfs")]
-    pub lfs: String,
+    pub lfs: LfsPolicy,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunStatus {
+    Created,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl std::str::FromStr for RunStatus {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "created" => Ok(Self::Created),
+            "running" => Ok(Self::Running),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "cancelled" => Ok(Self::Cancelled),
+            other => Err(other.to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PinMode {
+    #[default]
+    Tracking,
+    Pinned,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SubmodulePolicy {
+    #[default]
+    None,
+    Recursive,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LfsPolicy {
+    #[default]
+    Auto,
+    Always,
+    Never,
 }
 
 fn default_depth() -> i64 {
@@ -167,11 +217,11 @@ fn default_true() -> bool {
 fn default_filter() -> String {
     "blob:limit=1m".to_string()
 }
-fn default_submodules() -> String {
-    "none".to_string()
+fn default_submodules() -> SubmodulePolicy {
+    SubmodulePolicy::None
 }
-fn default_lfs() -> String {
-    "auto".to_string()
+fn default_lfs() -> LfsPolicy {
+    LfsPolicy::Auto
 }
 
 impl Default for DefaultClonePolicy {
@@ -181,8 +231,18 @@ impl Default for DefaultClonePolicy {
             single_branch: true,
             no_tags: true,
             filter: "blob:limit=1m".to_string(),
-            submodules: "none".to_string(),
-            lfs: "auto".to_string(),
+            submodules: SubmodulePolicy::None,
+            lfs: LfsPolicy::Auto,
+            extra: Map::new(),
+        }
+    }
+}
+
+impl Default for Policies {
+    fn default() -> Self {
+        Self {
+            default_clone: DefaultClonePolicy::default(),
+            repo_hosts_allowlist: None,
             extra: Map::new(),
         }
     }
@@ -246,6 +306,23 @@ pub struct WorkspaceSummary {
 /// Schema version constant.
 pub const SCHEMA_VERSION: u32 = 2;
 
+pub fn manifest_collection_mut<'a>(
+    manifest: &'a mut WorkspaceManifest,
+    collection: &str,
+) -> Result<&'a mut Vec<Value>, crate::error::WorkspaceError> {
+    match collection {
+        "papers" => Ok(&mut manifest.papers),
+        "datasets" => Ok(&mut manifest.datasets),
+        "artifacts" => Ok(&mut manifest.artifacts),
+        "links" => Ok(&mut manifest.links),
+        "snapshots" => Ok(&mut manifest.snapshots),
+        "indexes" => Ok(&mut manifest.indexes),
+        _ => Err(crate::error::WorkspaceError::UnknownCollection(
+            collection.to_string(),
+        )),
+    }
+}
+
 /// Create a new default manifest.
 pub fn new_manifest(workspace_id: &str, name: &str) -> WorkspaceManifest {
     let now = chrono::Utc::now().timestamp();
@@ -264,11 +341,7 @@ pub fn new_manifest(workspace_id: &str, name: &str) -> WorkspaceManifest {
         links: Vec::new(),
         snapshots: Vec::new(),
         indexes: Vec::new(),
-        policies: Policies {
-            default_clone: DefaultClonePolicy::default(),
-            repo_hosts_allowlist: None,
-            extra: Map::new(),
-        },
+        policies: Policies::default(),
         knowledge_base: KnowledgeBase {
             path: "knowledge-base".to_string(),
             extra: Map::new(),

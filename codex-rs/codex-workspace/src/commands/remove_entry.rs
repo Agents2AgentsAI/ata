@@ -1,7 +1,7 @@
 use crate::error::WorkspaceError;
 use crate::manifest::with_locked_manifest;
 use crate::types::WorkspaceManifest;
-use serde_json::Value;
+use crate::types::manifest_collection_mut;
 
 /// Remove an entry by ID from a named collection in the manifest.
 pub fn run(
@@ -13,7 +13,7 @@ pub fn run(
     let entry_id = entry_id.to_string();
 
     with_locked_manifest(workspace_id, None, move |m| {
-        let vec = get_collection_mut(m, &collection)?;
+        let vec = manifest_collection_mut(m, &collection)?;
         let before_len = vec.len();
         vec.retain(|v| {
             v.get("id")
@@ -26,19 +26,4 @@ pub fn run(
         }
         Ok(())
     })
-}
-
-fn get_collection_mut<'a>(
-    m: &'a mut WorkspaceManifest,
-    collection: &str,
-) -> Result<&'a mut Vec<Value>, WorkspaceError> {
-    match collection {
-        "papers" => Ok(&mut m.papers),
-        "datasets" => Ok(&mut m.datasets),
-        "artifacts" => Ok(&mut m.artifacts),
-        "links" => Ok(&mut m.links),
-        "snapshots" => Ok(&mut m.snapshots),
-        "indexes" => Ok(&mut m.indexes),
-        _ => Err(WorkspaceError::UnknownCollection(collection.to_string())),
-    }
 }

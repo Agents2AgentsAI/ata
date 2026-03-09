@@ -1,5 +1,7 @@
 use crate::error::WorkspaceError;
+use crate::git;
 use crate::manifest::with_locked_manifest;
+use crate::types::PinMode;
 use crate::types::WorkspaceManifest;
 
 /// Pin a repo to a specific SHA.
@@ -8,6 +10,9 @@ pub fn run(
     alias: &str,
     sha: &str,
 ) -> Result<WorkspaceManifest, WorkspaceError> {
+    if !git::is_valid_commit_sha(sha) {
+        return Err(WorkspaceError::InvalidSha(sha.to_string()));
+    }
     let alias = alias.to_string();
     let sha = sha.to_string();
 
@@ -17,7 +22,7 @@ pub fn run(
             .iter_mut()
             .find(|r| r.alias == alias)
             .ok_or_else(|| WorkspaceError::EntryNotFound(alias.clone()))?;
-        repo.pin.mode = "pinned".to_string();
+        repo.pin.mode = PinMode::Pinned;
         repo.pin.pinned_sha = sha;
         Ok(())
     })

@@ -19,6 +19,15 @@ fn read_workspace_selection_file_with(
     path: &std::path::Path,
     workspace_exists: &dyn Fn(&str) -> bool,
 ) -> Option<String> {
+    let wid = read_workspace_selection_id(path)?;
+    if workspace_exists(&wid) {
+        Some(wid)
+    } else {
+        None
+    }
+}
+
+fn read_workspace_selection_id(path: &std::path::Path) -> Option<String> {
     if !path.is_file() {
         return None;
     }
@@ -40,15 +49,12 @@ fn read_workspace_selection_file_with(
         raw.to_string()
     };
 
-    if !wid.is_empty() && workspace_exists(&wid) {
-        Some(wid)
-    } else {
-        None
-    }
+    (!wid.is_empty()).then_some(wid)
 }
 
 /// Write the active workspace selection (session-aware).
 pub fn write_selection(workspace_id: &str) -> Result<(), WorkspaceError> {
+    prune_stale_selection_files()?;
     let sp = paths::selection_path();
     if let Some(parent) = sp.parent() {
         std::fs::create_dir_all(parent)?;
@@ -64,6 +70,7 @@ pub fn write_selection(workspace_id: &str) -> Result<(), WorkspaceError> {
 
 /// Read the session-scoped workspace selection.
 pub fn read_session_workspace() -> Option<String> {
+    let _ = prune_stale_selection_files();
     let scoped_path = paths::selection_path();
     let global_path = paths::global_selection_path();
     read_session_workspace_from_paths_with(&scoped_path, &global_path, &|wid| {
@@ -85,6 +92,50 @@ fn read_session_workspace_from_paths_with(
     }
 
     None
+}
+
+pub fn clear_workspace_selection(workspace_id: &str) -> Result<(), WorkspaceError> {
+    cleanup_selection_files(&paths::codex_home(), &|wid| {
+        wid == workspace_id || !paths::manifest_path(wid).is_file()
+    })
+}
+
+pub fn prune_stale_selection_files() -> Result<(), WorkspaceError> {
+    cleanup_selection_files(&paths::codex_home(), &|wid| {
+        !paths::manifest_path(wid).is_file()
+    })
+}
+
+fn cleanup_selection_files(
+    codex_home: &Path,
+    should_remove: &dyn Fn(&str) -> bool,
+) -> Result<(), WorkspaceError> {
+    cleanup_selection_path(&paths::global_selection_path_for(codex_home), should_remove)?;
+
+    let sessions_root = codex_home.join("sessions");
+    if sessions_root.is_dir() {
+        for entry in std::fs::read_dir(&sessions_root)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            cleanup_selection_path(&entry.path().join("workspace.json"), should_remove)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn cleanup_selection_path(
+    path: &Path,
+    should_remove: &dyn Fn(&str) -> bool,
+) -> Result<(), WorkspaceError> {
+    if let Some(wid) = read_workspace_selection_id(path)
+        && should_remove(&wid)
+    {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
 }
 
 /// Discover project-pinned workspace by walking ancestors from cwd.
@@ -190,5 +241,23 @@ mod tests {
 
         let result = read_session_workspace_from_paths_with(&scoped_path, &global_path, &|_| false);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn cleanup_selection_files_removes_deleted_workspace_references() {
+        let temp = TempDir::new().expect("create temp dir");
+        let scoped_path = temp
+            .path()
+            .join("sessions")
+            .join("thread-1")
+            .join("workspace.json");
+        let global_path = temp.path().join(".workspace_selected");
+        write_selection_file(&scoped_path, "deleted-ws");
+        write_selection_file(&global_path, "kept-ws");
+
+        cleanup_selection_files(temp.path(), &|wid| wid == "deleted-ws").unwrap();
+
+        assert!(!scoped_path.exists());
+        assert!(global_path.exists());
     }
 }

@@ -1,5 +1,6 @@
 use crate::types::DefaultClonePolicy;
 use crate::types::GitState;
+use crate::types::SubmodulePolicy;
 use std::path::Path;
 use std::process::Command;
 
@@ -22,10 +23,14 @@ pub fn build_clone_args(policy: &DefaultClonePolicy, full: bool) -> Vec<String> 
     if !policy.filter.is_empty() && policy.filter != "null" {
         args.push(format!("--filter={}", policy.filter));
     }
-    if policy.submodules == "recursive" {
+    if policy.submodules == SubmodulePolicy::Recursive {
         args.push("--recurse-submodules".to_string());
     }
     args
+}
+
+pub fn is_valid_commit_sha(sha: &str) -> bool {
+    sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// Read HEAD sha, ref, and default branch from a cloned repo.
@@ -51,12 +56,13 @@ pub fn read_git_state(repo_dir: &Path) -> GitState {
     if default_branch.is_empty() {
         default_branch = "main".to_string();
     }
+    let shallow = git(&["rev-parse", "--is-shallow-repository"]) == "true";
 
     GitState {
         head_sha,
         head_ref,
         default_branch,
-        shallow: false,
+        shallow,
         extra: serde_json::Map::new(),
     }
 }
@@ -77,6 +83,37 @@ pub fn lfs_pull(repo_dir: &Path) {
     let _ = Command::new("git")
         .args(["-C", repo_dir.to_str().unwrap_or("."), "lfs", "pull"])
         .output();
+}
+
+pub fn prepare_reference_mirror(url: &str, mirror_path: &Path) -> bool {
+    if let Some(parent) = mirror_path.parent()
+        && std::fs::create_dir_all(parent).is_err()
+    {
+        return false;
+    }
+
+    let status = if mirror_path.is_dir() {
+        Command::new("git")
+            .args([
+                "-C",
+                mirror_path.to_str().unwrap_or("."),
+                "remote",
+                "update",
+                "--prune",
+            ])
+            .status()
+    } else {
+        Command::new("git")
+            .args([
+                "clone",
+                "--mirror",
+                url,
+                mirror_path.to_str().unwrap_or("."),
+            ])
+            .status()
+    };
+
+    status.map(|value| value.success()).unwrap_or(false)
 }
 
 /// Add a git worktree.
@@ -199,5 +236,16 @@ mod tests {
             "rust-lang/rust"
         );
         assert_eq!(derive_repo_key("https://github.com/org/repo/"), "org/repo");
+    }
+
+    #[test]
+    fn test_is_valid_commit_sha() {
+        assert!(is_valid_commit_sha(
+            "0123456789abcdef0123456789abcdef01234567"
+        ));
+        assert!(!is_valid_commit_sha("0123456"));
+        assert!(!is_valid_commit_sha(
+            "zz23456789abcdef0123456789abcdef01234567"
+        ));
     }
 }

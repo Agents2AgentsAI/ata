@@ -104,7 +104,7 @@ pub fn resolve_at_spec(workspace_id: &str, spec: &str) -> Result<PathBuf, Worksp
     }
 
     // @notes[/path...]
-    if rest == "notes" || rest.starts_with("notes/") || rest.starts_with("notes") {
+    if rest == "notes" || rest.starts_with("notes/") {
         let suffix = rest
             .strip_prefix("notes")
             .unwrap_or("")
@@ -174,5 +174,18 @@ mod tests {
         assert!(is_reserved_alias("run"));
         assert!(is_reserved_alias("kb"));
         assert!(!is_reserved_alias("my-repo"));
+    }
+
+    #[test]
+    fn test_resolve_repo_aliases_that_start_with_notes() {
+        let workspace_id = "workspace-1";
+        let resolved = resolve_at_spec(workspace_id, "@notebook/docs").unwrap();
+        assert_eq!(
+            resolved,
+            workspace_root(workspace_id)
+                .join("repos")
+                .join("notebook")
+                .join("docs")
+        );
     }
 }

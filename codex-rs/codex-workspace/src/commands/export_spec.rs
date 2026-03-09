@@ -47,7 +47,8 @@ pub fn run(workspace_id: &str, output: Option<&Path>) -> Result<String, Workspac
         schema_version: 1,
         name: manifest.name.clone(),
         repos,
-        policies: Some(manifest.policies.clone()),
+        policies: (manifest.policies != crate::types::Policies::default())
+            .then_some(manifest.policies.clone()),
         labels: manifest.labels,
         extra: Map::new(), // Don't export runtime extra fields
     };

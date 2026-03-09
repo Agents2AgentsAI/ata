@@ -105,6 +105,12 @@ pub enum WorkspaceError {
     #[error("invalid JSON: {0}")]
     InvalidJson(String),
 
+    #[error("invalid commit SHA '{0}': expected 40 hexadecimal characters")]
+    InvalidSha(String),
+
+    #[error("invalid run status '{0}': expected created, running, completed, failed, or cancelled")]
+    InvalidRunStatus(String),
+
     #[error("collection '{0}' not found in manifest")]
     UnknownCollection(String),
 

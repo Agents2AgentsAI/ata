@@ -22,10 +22,33 @@ pub fn codex_home() -> PathBuf {
 
 /// Minimal home dir lookup without pulling in `dirs` as a direct dep.
 fn home_dir() -> Option<PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
+    home_dir_from_env(
+        std::env::var("HOME").ok().as_deref(),
+        std::env::var("USERPROFILE").ok().as_deref(),
+        std::env::var("HOMEDRIVE").ok().as_deref(),
+        std::env::var("HOMEPATH").ok().as_deref(),
+    )
+}
+
+fn home_dir_from_env(
+    home: Option<&str>,
+    userprofile: Option<&str>,
+    homedrive: Option<&str>,
+    homepath: Option<&str>,
+) -> Option<PathBuf> {
+    if let Some(value) = home.filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(value));
+    }
+    if let Some(value) = userprofile.filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(value));
+    }
+    match (
+        homedrive.filter(|value| !value.is_empty()),
+        homepath.filter(|value| !value.is_empty()),
+    ) {
+        (Some(drive), Some(path)) => Some(PathBuf::from(format!("{drive}{path}"))),
+        _ => None,
+    }
 }
 
 /// Root directory for all workspaces.
@@ -289,6 +312,18 @@ mod tests {
         assert_eq!(
             selection_path_for(codex_home, None),
             codex_home.join(".workspace_selected")
+        );
+    }
+
+    #[test]
+    fn home_dir_from_env_uses_windows_fallbacks() {
+        assert_eq!(
+            home_dir_from_env(None, Some("C:/Users/test"), None, None),
+            Some(PathBuf::from("C:/Users/test"))
+        );
+        assert_eq!(
+            home_dir_from_env(None, None, Some("C:"), Some("\\Users\\test")),
+            Some(PathBuf::from("C:\\Users\\test"))
         );
     }
 }

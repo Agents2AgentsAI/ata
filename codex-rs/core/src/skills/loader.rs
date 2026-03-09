@@ -1004,6 +1004,10 @@ mod tests {
                     SkillScope::System,
                     user_folder.join("skills").join(".system-research")
                 ),
+                (
+                    SkillScope::System,
+                    user_folder.join("skills").join(".system-workspace")
+                ),
                 (SkillScope::Admin, system_folder.join("skills")),
             ]
         );
@@ -1066,6 +1070,10 @@ mod tests {
                 (
                     SkillScope::System,
                     user_folder.join("skills").join(".system-research")
+                ),
+                (
+                    SkillScope::System,
+                    user_folder.join("skills").join(".system-workspace")
                 ),
             ]
         );
@@ -2709,7 +2717,12 @@ permissions:
                 .into_iter()
                 .map(|root| root.scope)
                 .collect();
-        let mut expected = vec![SkillScope::User, SkillScope::System, SkillScope::System];
+        let mut expected = vec![
+            SkillScope::User,
+            SkillScope::System,
+            SkillScope::System,
+            SkillScope::System,
+        ];
         if home_dir().is_some() {
             expected.insert(1, SkillScope::User);
         }
