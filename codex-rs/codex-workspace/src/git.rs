@@ -69,11 +69,15 @@ pub fn read_git_state(repo_dir: &Path) -> GitState {
 }
 
 /// Run `git clone` with the given arguments.
-pub fn clone_repo(url: &str, dest: &Path, extra_args: &[String]) -> Result<i32, std::io::Error> {
+pub fn clone_repo<S: AsRef<std::ffi::OsStr>>(
+    source: S,
+    dest: &Path,
+    extra_args: &[String],
+) -> Result<i32, std::io::Error> {
     let mut cmd = Command::new("git");
     cmd.arg("clone");
     cmd.args(extra_args);
-    cmd.arg(url);
+    cmd.arg(source);
     cmd.arg(dest);
     let status = cmd.status()?;
     Ok(status.code().unwrap_or(1))
@@ -143,7 +147,9 @@ pub fn resolve_ref(repo_dir: &Path, ref_name: &str) -> Option<String> {
 
 /// Fetch a specific SHA (if needed) and checkout to it.
 pub fn fetch_and_checkout(repo_dir: &Path, sha: &str) -> Result<bool, std::io::Error> {
-    // Try fetch first (needed for shallow clones or if sha not present locally)
+    // Fetch is opportunistic here: it may fail even when the target object is
+    // already available locally, and checkout success is the authoritative
+    // signal for whether the requested SHA can be used.
     let _ = Command::new("git")
         .arg("-C")
         .arg(repo_dir)

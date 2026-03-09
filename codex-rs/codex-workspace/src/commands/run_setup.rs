@@ -53,8 +53,7 @@ pub fn run(
             }
         }
         "clone" => {
-            let exit_code =
-                crate::git::clone_repo(repo_path.to_str().unwrap_or("."), &code_root, &[])?;
+            let exit_code = crate::git::clone_repo(&repo_path, &code_root, &[])?;
             if exit_code != 0 {
                 let _ = std::fs::remove_dir_all(&run_root);
                 return Err(WorkspaceError::GitCloneFailed(exit_code));
