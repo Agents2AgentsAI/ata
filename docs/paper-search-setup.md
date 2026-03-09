@@ -12,22 +12,22 @@ Paper search works out of the box with no API keys required. Optional credential
 
 ## Tools Available To Agents
 
-| Tool | Description |
-| ---- | ----------- |
-| `paper_search` | Search papers across all three sources |
-| `paper_get` | Get detailed paper info by DOI, arXiv ID, or Semantic Scholar ID |
-| `paper_citations` | Get papers that cite a given paper |
-| `paper_references` | Get papers referenced by a given paper |
-| `paper_recommendations` | Get recommendations based on example papers |
+| Tool                    | Description                                                      |
+| ----------------------- | ---------------------------------------------------------------- |
+| `paper_search`          | Search papers across all three sources                           |
+| `paper_get`             | Get detailed paper info by DOI, arXiv ID, or Semantic Scholar ID |
+| `paper_citations`       | Get papers that cite a given paper                               |
+| `paper_references`      | Get papers referenced by a given paper                           |
+| `paper_recommendations` | Get recommendations based on example papers                      |
 
 ## Optional Configuration
 
 All environment variables below are optional. Paper search works without any of them.
 
-| Variable | Description |
-| -------- | ----------- |
+| Variable                   | Description                                                                                                                                                                                        |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `SEMANTIC_SCHOLAR_API_KEY` | Increases rate limits on non-search Semantic Scholar endpoints. Search is capped at 1 RPS regardless. Get one at [Semantic Scholar API](https://www.semanticscholar.org/product/api#api-key-form). |
-| `OPENALEX_EMAIL` | Courtesy email for OpenAlex requests. Provides access to the polite pool with better rate limits. |
+| `OPENALEX_EMAIL`           | Courtesy email for OpenAlex requests. Provides access to the polite pool with better rate limits.                                                                                                  |
 
 Set them in your shell profile:
 
