@@ -42,11 +42,7 @@ use crate::realtime_conversation::handle_start as handle_realtime_conversation_s
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use crate::rollout::session_index;
 use crate::stream_events_utils::HandleOutputCtx;
-use crate::stream_events_utils::handle_non_tool_response_item;
-use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
-use crate::stream_events_utils::raw_assistant_output_text_from_item;
-use crate::stream_events_utils::record_completed_response_item;
 use crate::terminal;
 use crate::truncate::TruncationPolicy;
 use crate::turn_metadata::TurnMetadataState;
@@ -322,6 +318,7 @@ pub(crate) use file_attachments::UrlAttachmentInjectionError;
 pub(crate) use file_attachments::file_capabilities_for_provider;
 use file_attachments::refresh_uploaded_file_references;
 pub(crate) use file_attachments::resolve_and_prepare_file_inputs;
+#[cfg(test)]
 use response_events::AssistantMessageStreamParsers;
 use response_events::StreamingResponseState;
 use response_events::drain_in_flight;
@@ -1708,7 +1705,7 @@ impl Session {
             &mcp_servers,
             auth_statuses.clone(),
             tx_event.clone(),
-            auth.as_ref(),
+            auth,
         )
         .await?;
         sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
@@ -6184,7 +6181,7 @@ async fn try_run_sampling_request(
                     .await;
                 response_state.mark_turn_diff_ready();
                 response_state.note_pending_follow_up(&sess).await;
-                break Ok(response_state.into_result());
+                break Ok(response_state.result());
             }
             ResponseEvent::OutputTextDelta(delta) => {
                 response_state

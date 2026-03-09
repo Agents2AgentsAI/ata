@@ -75,10 +75,13 @@ impl StreamingResponseState {
             tool_runtime: tool_runtime.clone(),
             cancellation_token: cancellation_token.child_token(),
         };
-        let output_result =
-            crate::stream_events_utils::handle_output_item_done(&mut ctx, item, previously_active_item)
-                .instrument(handle_responses)
-                .await?;
+        let output_result = crate::stream_events_utils::handle_output_item_done(
+            &mut ctx,
+            item,
+            previously_active_item,
+        )
+        .instrument(handle_responses)
+        .await?;
         if let Some(agent_message) = output_result.last_agent_message {
             self.last_agent_message = Some(agent_message);
         }
@@ -93,12 +96,15 @@ impl StreamingResponseState {
         item: ResponseItem,
     ) {
         let plan_mode = self.plan_mode_state.is_some();
-        if let Some(turn_item) = crate::stream_events_utils::handle_non_tool_response_item(&item, plan_mode) {
+        if let Some(turn_item) =
+            crate::stream_events_utils::handle_non_tool_response_item(&item, plan_mode)
+        {
             let mut turn_item = turn_item;
             let mut seeded_parsed: Option<ParsedAssistantTextDelta> = None;
             let mut seeded_item_id: Option<String> = None;
             if matches!(turn_item, TurnItem::AgentMessage(_))
-                && let Some(raw_text) = crate::stream_events_utils::raw_assistant_output_text_from_item(&item)
+                && let Some(raw_text) =
+                    crate::stream_events_utils::raw_assistant_output_text_from_item(&item)
             {
                 let item_id = turn_item.id();
                 let mut seeded = self
@@ -132,8 +138,14 @@ impl StreamingResponseState {
                 seeded_item_id.as_deref(),
                 seeded_parsed,
             ) {
-                emit_streamed_assistant_text_delta(sess, turn_context, Some(state), item_id, parsed)
-                    .await;
+                emit_streamed_assistant_text_delta(
+                    sess,
+                    turn_context,
+                    Some(state),
+                    item_id,
+                    parsed,
+                )
+                .await;
             }
             match turn_item {
                 TurnItem::AgentMessage(_) => self.active_agent_message_item = Some(turn_item),
@@ -265,10 +277,10 @@ impl StreamingResponseState {
         self.should_emit_turn_diff
     }
 
-    pub(super) fn into_result(self) -> SamplingRequestResult {
+    pub(super) fn result(&self) -> SamplingRequestResult {
         SamplingRequestResult {
             needs_follow_up: self.needs_follow_up,
-            last_agent_message: self.last_agent_message,
+            last_agent_message: self.last_agent_message.clone(),
         }
     }
 }
@@ -587,7 +599,10 @@ async fn emit_agent_message_in_plan_mode(
 
     maybe_emit_pending_agent_message_start(sess, turn_context, state, &agent_message_id).await;
 
-    if !state.started_agent_message_items.contains(&agent_message_id) {
+    if !state
+        .started_agent_message_items
+        .contains(&agent_message_id)
+    {
         let start_item = state
             .pending_agent_message_items
             .remove(&agent_message_id)
@@ -642,7 +657,9 @@ async fn handle_assistant_item_done_in_plan_mode(
     {
         maybe_complete_plan_item_from_message(sess, turn_context, state, item).await;
 
-        if let Some(turn_item) = crate::stream_events_utils::handle_non_tool_response_item(item, true) {
+        if let Some(turn_item) =
+            crate::stream_events_utils::handle_non_tool_response_item(item, true)
+        {
             emit_turn_item_in_plan_mode(
                 sess,
                 turn_context,
