@@ -1,5 +1,6 @@
 use crate::error::WorkspaceError;
 use crate::paths;
+use crate::selection;
 
 /// Delete a workspace directory tree.
 pub fn run(workspace_id: &str) -> Result<(), WorkspaceError> {
@@ -11,5 +12,6 @@ pub fn run(workspace_id: &str) -> Result<(), WorkspaceError> {
         return Err(WorkspaceError::WorkspaceNotFound(workspace_id.to_string()));
     }
     std::fs::remove_dir_all(&root)?;
+    selection::clear_workspace_selection(workspace_id)?;
     Ok(())
 }

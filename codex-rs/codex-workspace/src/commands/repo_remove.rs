@@ -13,24 +13,21 @@ pub fn run(workspace_id: &str, alias: &str) -> Result<(), WorkspaceError> {
     }
 
     let alias_owned = alias.to_string();
-    let removed_id = {
-        let alias_for_closure = alias_owned.clone();
-        let manifest = with_locked_manifest(workspace_id, None, move |m| {
-            // Find the repo ID before removing
-            let _id = m
-                .repos
-                .iter()
-                .find(|r| r.alias == alias_for_closure)
-                .map(|r| r.id.clone());
+    let removed_id = std::cell::RefCell::new(None);
+    {
+        let alias_for_closure = alias_owned.as_str();
+        with_locked_manifest(workspace_id, None, |m| {
+            removed_id.replace(
+                m.repos
+                    .iter()
+                    .find(|r| r.alias == alias_for_closure)
+                    .map(|r| r.id.clone()),
+            );
             m.repos.retain(|r| r.alias != alias_for_closure);
             Ok(())
         })?;
-        manifest
-            .repos
-            .iter()
-            .find(|r| r.alias == alias_owned)
-            .map(|r| r.id.clone())
-    };
+    }
+    let removed_id = removed_id.into_inner();
 
     // Audit
     let mut target = json!({"type": "repo", "alias": &alias_owned});

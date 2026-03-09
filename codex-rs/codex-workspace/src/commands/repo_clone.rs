@@ -1,11 +1,15 @@
 use crate::audit::write_audit;
 use crate::error::WorkspaceError;
 use crate::git;
+use crate::lock::FileLock;
+use crate::manifest::bump_version;
 use crate::manifest::read_manifest;
-use crate::manifest::with_locked_manifest;
+use crate::manifest::write_manifest_atomic;
 use crate::paths;
 use crate::resolve::is_reserved_alias;
 use crate::types::CloneRecord;
+use crate::types::LfsPolicy;
+use crate::types::PinMode;
 use crate::types::PinState;
 use crate::types::RepoEntry;
 use crate::url_validation::check_host_allowlist;
@@ -21,7 +25,7 @@ use std::sync::LazyLock;
 static ALIAS_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9_-]+$").expect("valid regex"));
 
-/// Full repo_add flow: validate URL → clone → register → audit.
+/// Full repo_add flow: validate URL -> clone -> register -> audit.
 /// Returns JSON-serializable result.
 pub fn run(
     workspace_id: &str,
@@ -29,7 +33,6 @@ pub fn run(
     alias: &str,
     full: bool,
 ) -> Result<serde_json::Value, WorkspaceError> {
-    // Validate alias
     if is_reserved_alias(alias) {
         return Err(WorkspaceError::ReservedAlias(alias.to_string()));
     }
@@ -39,29 +42,28 @@ pub fn run(
         });
     }
 
-    // 1. Validate URL
     validate_repo_url(url)?;
-    let manifest = read_manifest(workspace_id)?;
-    check_host_allowlist(url, manifest.policies.repo_hosts_allowlist.as_deref())?;
 
-    // 2. Check alias not already used
-    for repo in &manifest.repos {
-        if repo.alias == alias {
-            return Err(WorkspaceError::AliasExists(alias.to_string()));
-        }
-    }
-
-    let version = manifest.manifest_version;
-    let clone_policy = &manifest.policies.default_clone;
-
-    // 3. Build clone args
-    let clone_args = git::build_clone_args(clone_policy, full);
-
-    // 4. Clone
     let root = paths::workspace_root(workspace_id);
     let clone_dest = root.join("repos").join(alias);
+    let lock = FileLock::acquire(&paths::lock_path(workspace_id))?;
+
+    let mut manifest = read_manifest(workspace_id)?;
+    check_host_allowlist(url, manifest.policies.repo_hosts_allowlist.as_deref())?;
+
+    if manifest.repos.iter().any(|repo| repo.alias == alias) {
+        return Err(WorkspaceError::AliasExists(alias.to_string()));
+    }
     if clone_dest.exists() {
         return Err(WorkspaceError::DirectoryExists(clone_dest));
+    }
+
+    let clone_policy = manifest.policies.default_clone.clone();
+    let mut clone_args = git::build_clone_args(&clone_policy, full);
+    let mirror_path = paths::mirror_cache_path(url);
+    if git::prepare_reference_mirror(url, &mirror_path) {
+        clone_args.push("--reference-if-able".to_string());
+        clone_args.push(mirror_path.display().to_string());
     }
 
     let exit_code = git::clone_repo(url, &clone_dest, &clone_args)?;
@@ -69,18 +71,11 @@ pub fn run(
         return Err(WorkspaceError::GitCloneFailed(exit_code));
     }
 
-    // 4b. LFS pull if policy says so
-    let lfs_policy = &clone_policy.lfs;
-    if lfs_policy == "always" || lfs_policy == "auto" {
+    if matches!(clone_policy.lfs, LfsPolicy::Always | LfsPolicy::Auto) {
         git::lfs_pull(&clone_dest);
     }
 
-    // 5. Read git state
-    let mut git_state = git::read_git_state(&clone_dest);
-    let depth = if full { 0 } else { clone_policy.depth };
-    git_state.shallow = depth > 0;
-
-    // 6. Build repo entry
+    let git_state = git::read_git_state(&clone_dest);
     let repo_id = make_id("repo");
     let repo_key = git::derive_repo_key(url);
 
@@ -90,8 +85,8 @@ pub fn run(
             single_branch: false,
             no_tags: false,
             filter: String::new(),
-            submodules: clone_policy.submodules.clone(),
-            lfs: clone_policy.lfs.clone(),
+            submodules: clone_policy.submodules,
+            lfs: clone_policy.lfs,
             extra: Map::new(),
         }
     } else {
@@ -100,13 +95,13 @@ pub fn run(
             single_branch: clone_policy.single_branch,
             no_tags: clone_policy.no_tags,
             filter: clone_policy.filter.clone(),
-            submodules: clone_policy.submodules.clone(),
-            lfs: clone_policy.lfs.clone(),
+            submodules: clone_policy.submodules,
+            lfs: clone_policy.lfs,
             extra: Map::new(),
         }
     };
 
-    let repo_entry = RepoEntry {
+    manifest.repos.push(RepoEntry {
         id: repo_id.clone(),
         alias: alias.to_string(),
         repo_key,
@@ -115,35 +110,24 @@ pub fn run(
         notes_path: format!("notes/repos/{alias}"),
         clone: clone_record,
         pin: PinState {
-            mode: "tracking".to_string(),
+            mode: PinMode::Tracking,
             pinned_sha: String::new(),
             extra: Map::new(),
         },
         state: git_state.clone(),
         extra: Map::new(),
-    };
-
-    // 7. Mutate manifest with optimistic concurrency
-    let alias_owned = alias.to_string();
-    let result = with_locked_manifest(workspace_id, Some(version), move |m| {
-        m.repos.push(repo_entry);
-        Ok(())
     });
+    bump_version(&mut manifest);
+    if let Err(err) = write_manifest_atomic(workspace_id, &manifest) {
+        let _ = std::fs::remove_dir_all(&clone_dest);
+        return Err(err);
+    }
+    drop(lock);
 
-    match result {
-        Err(e @ WorkspaceError::VersionConflict { .. }) => {
-            // Clean up the clone since we can't register it
-            let _ = std::fs::remove_dir_all(&clone_dest);
-            return Err(e);
-        }
-        other => other?,
-    };
-
-    // 8. Create notes dir
+    let alias_owned = alias.to_string();
     let notes_dir = root.join("notes").join("repos").join(&alias_owned);
     std::fs::create_dir_all(notes_dir)?;
 
-    // 9. Audit
     write_audit(
         workspace_id,
         "repo_add",
@@ -151,7 +135,6 @@ pub fn run(
         None,
     )?;
 
-    // 10. Output result
     Ok(json!({
         "repoId": repo_id,
         "alias": alias_owned,

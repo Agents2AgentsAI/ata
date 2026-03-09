@@ -1,4 +1,5 @@
 use crate::error::WorkspaceError;
+use crate::git;
 use crate::types::Policies;
 use serde::Deserialize;
 use serde::Serialize;
@@ -85,6 +86,14 @@ pub fn validate_spec(spec: &WorkspaceSpec) -> Result<(), WorkspaceError> {
             return Err(WorkspaceError::InvalidSpec(format!(
                 "duplicate alias: '{}'",
                 repo.alias
+            )));
+        }
+        if let Some(sha) = &repo.sha
+            && !git::is_valid_commit_sha(sha)
+        {
+            return Err(WorkspaceError::InvalidSpec(format!(
+                "repo '{}': invalid sha '{}'",
+                repo.alias, sha
             )));
         }
     }
@@ -218,7 +227,7 @@ mod tests {
             repos: vec![RepoSpec {
                 url: "https://github.com/a/b.git".to_string(),
                 alias: "repo-a".to_string(),
-                sha: Some("abc123".to_string()),
+                sha: Some("0123456789abcdef0123456789abcdef01234567".to_string()),
                 r#ref: None,
                 full: false,
                 extra: Map::new(),
@@ -238,7 +247,7 @@ mod tests {
             repos: vec![RepoSpec {
                 url: "https://github.com/a/b.git".to_string(),
                 alias: "myrepo".to_string(),
-                sha: Some("deadbeef".to_string()),
+                sha: Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string()),
                 r#ref: Some("main".to_string()),
                 full: false,
                 extra: Map::new(),
@@ -251,6 +260,30 @@ mod tests {
         let parsed: WorkspaceSpec = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.name, spec.name);
         assert_eq!(parsed.repos.len(), 1);
-        assert_eq!(parsed.repos[0].sha.as_deref(), Some("deadbeef"));
+        assert_eq!(
+            parsed.repos[0].sha.as_deref(),
+            Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_invalid_sha() {
+        let spec = WorkspaceSpec {
+            schema_version: 1,
+            name: "test".to_string(),
+            repos: vec![RepoSpec {
+                url: "https://github.com/a/b.git".to_string(),
+                alias: "repo-a".to_string(),
+                sha: Some("abc123".to_string()),
+                r#ref: None,
+                full: false,
+                extra: Map::new(),
+            }],
+            policies: None,
+            labels: Map::new(),
+            extra: Map::new(),
+        };
+
+        assert!(validate_spec(&spec).is_err());
     }
 }

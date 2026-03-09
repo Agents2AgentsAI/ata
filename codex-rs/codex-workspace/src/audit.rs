@@ -52,6 +52,7 @@ pub fn append_audit_entry(workspace_id: &str, entry: &AuditEntry) -> Result<(), 
         .append(true)
         .open(&ap)?;
     file.write_all(line.as_bytes())?;
+    file.sync_all()?;
     Ok(())
 }
 
@@ -100,30 +101,8 @@ pub fn query_audit(
             Err(_) => continue,
         };
 
-        // Time filtering: parse ISO timestamp
-        if (since.is_some() || until.is_some())
-            && let Some(ts_str) = entry.get("ts").and_then(|v| v.as_str())
-            && let Ok(dt) = chrono::NaiveDateTime::parse_from_str(ts_str, "%Y-%m-%dT%H:%M:%SZ")
-        {
-            let ts_unix = dt.and_utc().timestamp();
-            if let Some(s) = since
-                && ts_unix < s
-            {
-                continue;
-            }
-            if let Some(u) = until
-                && ts_unix > u
-            {
-                continue;
-            }
-        }
-
-        // Op filtering
-        if let Some(ref ops_set) = ops_set {
-            let op = entry.get("op").and_then(|v| v.as_str()).unwrap_or("");
-            if !ops_set.contains(op) {
-                continue;
-            }
+        if !entry_matches_filters(&entry, since, until, ops_set.as_ref()) {
+            continue;
         }
 
         results.push(entry);
@@ -133,4 +112,81 @@ pub fn query_audit(
     }
 
     Ok(results)
+}
+
+fn entry_matches_filters(
+    entry: &Value,
+    since: Option<i64>,
+    until: Option<i64>,
+    ops_set: Option<&std::collections::HashSet<String>>,
+) -> bool {
+    if since.is_some() || until.is_some() {
+        let ts_unix = entry
+            .get("ts")
+            .and_then(|value| value.as_str())
+            .and_then(parse_audit_timestamp);
+        let Some(ts_unix) = ts_unix else {
+            return false;
+        };
+
+        if let Some(start) = since
+            && ts_unix < start
+        {
+            return false;
+        }
+        if let Some(end) = until
+            && ts_unix > end
+        {
+            return false;
+        }
+    }
+
+    if let Some(ops_set) = ops_set {
+        let op = entry
+            .get("op")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if !ops_set.contains(op) {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn parse_audit_timestamp(ts: &str) -> Option<i64> {
+    chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%SZ")
+        .ok()
+        .map(|value| value.and_utc().timestamp())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use std::collections::HashSet;
+
+    #[test]
+    fn malformed_timestamp_is_excluded_when_time_filter_is_active() {
+        let entry = json!({"ts": "not-a-time", "op": "repo_add"});
+        assert!(!entry_matches_filters(&entry, Some(1), None, None));
+    }
+
+    #[test]
+    fn malformed_timestamp_is_allowed_without_time_filter() {
+        let entry = json!({"ts": "not-a-time", "op": "repo_add"});
+        assert!(entry_matches_filters(&entry, None, None, None));
+    }
+
+    #[test]
+    fn op_filter_still_applies_after_timestamp_check() {
+        let entry = json!({"ts": "2026-03-09T00:00:00Z", "op": "repo_add"});
+        let mut ops = HashSet::new();
+        ops.insert("repo_remove".to_string());
+        assert_eq!(
+            entry_matches_filters(&entry, Some(0), None, Some(&ops)),
+            false
+        );
+    }
 }

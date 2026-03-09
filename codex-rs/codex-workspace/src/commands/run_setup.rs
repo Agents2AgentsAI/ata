@@ -6,6 +6,7 @@ use crate::manifest::with_locked_manifest;
 use crate::paths;
 use crate::types::RunEntry;
 use crate::types::RunSource;
+use crate::types::RunStatus;
 use crate::workspace_id::make_id;
 use serde_json::Map;
 use serde_json::json;
@@ -84,7 +85,7 @@ pub fn run(
         "name": run_name,
         "createdAt": now,
         "updatedAt": now,
-        "status": "created",
+        "status": RunStatus::Created,
         "source": {"repoAlias": source_alias, "sha": &head_sha},
         "strategy": &actual_strategy,
         "commands": [],
@@ -103,10 +104,10 @@ pub fn run(
         created_at: now,
         updated_at: now,
         root_path: format!("runs/{run_id}"),
-        status: "created".to_string(),
+        status: RunStatus::Created,
         source: RunSource {
             repo_alias: source_alias.to_string(),
-            sha: String::new(),
+            sha: head_sha.clone(),
             extra: Map::new(),
         },
         extra: Map::new(),
@@ -150,12 +151,75 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
         let ty = entry.file_type()?;
+        let path = entry.path();
         let dest_path = dst.join(entry.file_name());
-        if ty.is_dir() {
-            copy_dir_recursive(&entry.path(), &dest_path)?;
+        if ty.is_symlink() {
+            copy_symlink(&path, &dest_path)?;
+        } else if ty.is_dir() {
+            copy_dir_recursive(&path, &dest_path)?;
         } else {
-            std::fs::copy(entry.path(), dest_path)?;
+            std::fs::copy(path, dest_path)?;
         }
     }
     Ok(())
+}
+
+fn copy_symlink(src: &std::path::Path, dst: &std::path::Path) -> Result<(), WorkspaceError> {
+    let target = std::fs::read_link(src)?;
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&target, dst)?;
+    }
+    #[cfg(windows)]
+    {
+        if std::fs::metadata(src)
+            .map(|meta| meta.is_dir())
+            .unwrap_or(false)
+        {
+            std::os::windows::fs::symlink_dir(&target, dst)?;
+        } else {
+            std::os::windows::fs::symlink_file(&target, dst)?;
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "symlink copying is not supported on this platform",
+        )
+        .into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_dir_recursive_preserves_symlinks() {
+        let src = TempDir::new().expect("create source temp dir");
+        let dst = TempDir::new().expect("create destination temp dir");
+        std::fs::create_dir_all(src.path().join("dir")).expect("create source dir");
+        std::fs::write(src.path().join("dir").join("file.txt"), "hello")
+            .expect("write source file");
+        std::os::unix::fs::symlink("dir", src.path().join("dir-link"))
+            .expect("create source symlink");
+
+        copy_dir_recursive(src.path(), dst.path()).expect("copy directory tree");
+
+        let copied = dst.path().join("dir-link");
+        assert!(
+            std::fs::symlink_metadata(&copied)
+                .expect("read copied metadata")
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_link(copied).expect("read copied symlink"),
+            std::path::PathBuf::from("dir")
+        );
+    }
 }
