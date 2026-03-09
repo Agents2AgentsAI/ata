@@ -121,19 +121,16 @@ fn resolve_workspace_id(
     session_id: Option<&str>,
     thread_id: Option<&str>,
 ) -> String {
-    if let Some(workspace_id) =
-        codex_workspace::selection::discover_project_pin_for(codex_home, cwd)
-    {
-        return workspace_id;
-    }
-
-    if let Some(workspace_id) =
-        codex_workspace::selection::read_session_workspace_for(codex_home, session_id, thread_id)
-    {
-        return workspace_id;
-    }
-
-    "global".to_string()
+    codex_workspace::workspace_resolution::resolve_selected_workspace_for(
+        codex_home,
+        Some(cwd),
+        None,
+        session_id,
+        thread_id,
+    )
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| "global".to_string())
 }
 
 #[cfg(test)]
