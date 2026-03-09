@@ -77,7 +77,7 @@ pub(super) async fn try_run_zsh_fork(
         return Ok(None);
     }
 
-    let spec = build_command_spec(
+    let mut spec = build_command_spec(
         command,
         &req.cwd,
         &req.env,
@@ -86,6 +86,7 @@ pub(super) async fn try_run_zsh_fork(
         req.additional_permissions.clone(),
         req.justification.clone(),
     )?;
+    spec.workspace_kb_root = req.workspace_kb_root.clone();
     let sandbox_exec_request = attempt
         .env_for(spec, req.network.as_ref())
         .map_err(|err| ToolError::Codex(err.into()))?;
@@ -882,6 +883,7 @@ impl CoreShellCommandExecutor {
                     args: args.to_vec(),
                     cwd: workdir.to_path_buf(),
                     env,
+                    workspace_kb_root: None,
                     expiration: ExecExpiration::DefaultTimeout,
                     sandbox_permissions: if additional_permissions.is_some() {
                         SandboxPermissions::WithAdditionalPermissions

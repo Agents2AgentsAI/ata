@@ -54,6 +54,7 @@ use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
 use crate::unified_exec::resolve_max_tokens;
 use crate::workspace_kb::CODEX_KB_PATH_ENV_VAR;
+use crate::workspace_kb::kb_writable_root;
 use crate::workspace_kb::resolve_kb_path;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
@@ -594,6 +595,7 @@ impl UnifiedExecProcessManager {
         )
         .to_string_lossy()
         .to_string();
+        let workspace_kb_root = kb_writable_root(std::path::Path::new(&kb_path));
         env.insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_path.clone());
         let mut explicit_env_overrides = context.turn.shell_environment_policy.r#set.clone();
         explicit_env_overrides.insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_path);
@@ -618,6 +620,7 @@ impl UnifiedExecProcessManager {
             cwd,
             env,
             explicit_env_overrides,
+            workspace_kb_root,
             network: request.network.clone(),
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,

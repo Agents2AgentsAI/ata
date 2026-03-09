@@ -360,6 +360,10 @@ impl ShellHandler {
         } = args;
 
         let mut exec_params = exec_params;
+        let workspace_kb_root = exec_params
+            .env
+            .get(CODEX_KB_PATH_ENV_VAR)
+            .and_then(|kb_path| crate::workspace_kb::kb_writable_root(Path::new(kb_path)));
         let dependency_env = session.dependency_env().await;
         if !dependency_env.is_empty() {
             exec_params.env.extend(dependency_env.clone());
@@ -371,8 +375,12 @@ impl ShellHandler {
                 explicit_env_overrides.insert(key.clone(), value.clone());
             }
         }
-        if let Some(kb_path) = exec_params.env.get(CODEX_KB_PATH_ENV_VAR) {
-            explicit_env_overrides.insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_path.clone());
+        if let Some(kb_root) = workspace_kb_root.as_ref() {
+            let kb_path = kb_root.as_path().display().to_string();
+            exec_params
+                .env
+                .insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_path.clone());
+            explicit_env_overrides.insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_path);
         }
 
         let request_permission_enabled = session.features().enabled(Feature::RequestPermissions);
@@ -444,6 +452,7 @@ impl ShellHandler {
             timeout_ms: exec_params.expiration.timeout_ms(),
             env: exec_params.env.clone(),
             explicit_env_overrides,
+            workspace_kb_root,
             network: exec_params.network.clone(),
             sandbox_permissions: exec_params.sandbox_permissions,
             additional_permissions: normalized_additional_permissions,
