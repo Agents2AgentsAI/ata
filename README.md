@@ -5,13 +5,13 @@
 
 ---
 
-We are building **Ata** to be the AI assistant that can solve software engineering _and_ research problems end-to-end — not just another code-assist tool. On top of the vanilla Codex CLI, Ata adds:
+We are building **Ata** to be the AI assistant that can solve software engineering _and_ research problems end-to-end -- not just another code-assist tool. On top of the vanilla Codex CLI, Ata adds:
 
-- **Multiple AI providers** — OpenAI, Anthropic, and Gemini. We also provide on-premise self-hosted solutions; contact us at accounts@agents2agents.ai for details.
-- **Research tools** — Paper Search (Semantic Scholar, arXiv, OpenAlex), Patent Search (EPO), and Zotero integration
-- **LSP and Tree-sitter support** — for deeper semantic understanding of your codebase
-- **Voice support** — powered by ElevenLabs
-- **Research View** — a dedicated reading experience for papers and patents
+- **Multiple AI providers** -- OpenAI, Anthropic, and Gemini. We also provide on-premise self-hosted solutions; contact us at accounts@agents2agents.ai for details.
+- **Research tools** -- Paper Search (Semantic Scholar, arXiv, OpenAlex), Patent Search (EPO), and Zotero integration
+- **LSP and Tree-sitter support** -- for deeper semantic understanding of your codebase
+- **Voice support** -- powered by ElevenLabs
+- **Research View** -- a dedicated reading experience for papers and patents
 
 And many more capabilities coming soon.
 
