@@ -1,12 +1,13 @@
 mod gemini_oauth;
+mod gemini_revoke;
 mod providers;
+mod refresh;
 mod storage;
 #[cfg(test)]
 pub(crate) mod test_utils;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
 #[cfg(test)]
@@ -18,7 +19,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
-use std::time::Duration as StdDuration;
 
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_otel::TelemetryAuthMode;
@@ -54,6 +54,7 @@ pub use crate::auth::providers::login_with_provider_oauth;
 pub use crate::auth::providers::provider_env_var;
 pub use crate::auth::providers::read_api_key_from_env;
 pub use crate::auth::providers::resolve_gemini_auth_source;
+pub use crate::auth::refresh::CLIENT_ID;
 pub use crate::auth::storage::AuthCredentialsStoreMode;
 pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
@@ -68,8 +69,10 @@ use crate::token_data::parse_chatgpt_jwt_claims;
 use crate::util::try_parse_error_message;
 use codex_client::CodexHttpClient;
 use codex_protocol::account::PlanType as AccountPlanType;
-use serde_json::Value;
 use thiserror::Error;
+
+use crate::auth::gemini_revoke::revoke_gemini_oauth_tokens_for_store;
+use crate::auth::refresh::request_chatgpt_token_refresh;
 
 /// Account type for the current user.
 ///
@@ -686,215 +689,6 @@ fn persist_tokens(
     auth_dot_json.last_refresh = Some(Utc::now());
     storage.save(&auth_dot_json)?;
     Ok(auth_dot_json)
-}
-
-// Requests refreshed ChatGPT OAuth tokens from the auth service using a refresh token.
-// The caller is responsible for persisting any returned tokens.
-async fn request_chatgpt_token_refresh(
-    refresh_token: String,
-    client: &CodexHttpClient,
-) -> Result<RefreshResponse, RefreshTokenError> {
-    let refresh_request = RefreshRequest {
-        client_id: CLIENT_ID,
-        grant_type: "refresh_token",
-        refresh_token,
-    };
-
-    let endpoint = refresh_token_endpoint();
-
-    // Use shared client factory to include standard headers
-    let response = client
-        .post(endpoint.as_str())
-        .header("Content-Type", "application/json")
-        .json(&refresh_request)
-        .send()
-        .await
-        .map_err(|err| RefreshTokenError::Transient(std::io::Error::other(err)))?;
-
-    let status = response.status();
-    if status.is_success() {
-        let refresh_response = response
-            .json::<RefreshResponse>()
-            .await
-            .map_err(|err| RefreshTokenError::Transient(std::io::Error::other(err)))?;
-        Ok(refresh_response)
-    } else {
-        let body = response.text().await.unwrap_or_default();
-        tracing::error!("Failed to refresh token: {status}: {body}");
-        if status == StatusCode::UNAUTHORIZED {
-            let failed = classify_refresh_token_failure(&body);
-            Err(RefreshTokenError::Permanent(failed))
-        } else {
-            let message = try_parse_error_message(&body);
-            Err(RefreshTokenError::Transient(std::io::Error::other(
-                format!("Failed to refresh token: {status}: {message}"),
-            )))
-        }
-    }
-}
-
-fn classify_refresh_token_failure(body: &str) -> RefreshTokenFailedError {
-    let code = extract_refresh_token_error_code(body);
-
-    let normalized_code = code.as_deref().map(str::to_ascii_lowercase);
-    let reason = match normalized_code.as_deref() {
-        Some("refresh_token_expired") => RefreshTokenFailedReason::Expired,
-        Some("refresh_token_reused") => RefreshTokenFailedReason::Exhausted,
-        Some("refresh_token_invalidated") => RefreshTokenFailedReason::Revoked,
-        _ => RefreshTokenFailedReason::Other,
-    };
-
-    if reason == RefreshTokenFailedReason::Other {
-        tracing::warn!(
-            backend_code = normalized_code.as_deref(),
-            backend_body = body,
-            "Encountered unknown 401 response while refreshing token"
-        );
-    }
-
-    let message = match reason {
-        RefreshTokenFailedReason::Expired => REFRESH_TOKEN_EXPIRED_MESSAGE.to_string(),
-        RefreshTokenFailedReason::Exhausted => REFRESH_TOKEN_REUSED_MESSAGE.to_string(),
-        RefreshTokenFailedReason::Revoked => REFRESH_TOKEN_INVALIDATED_MESSAGE.to_string(),
-        RefreshTokenFailedReason::Other => REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
-    };
-
-    RefreshTokenFailedError::new(reason, message)
-}
-
-fn extract_refresh_token_error_code(body: &str) -> Option<String> {
-    if body.trim().is_empty() {
-        return None;
-    }
-
-    let Value::Object(map) = serde_json::from_str::<Value>(body).ok()? else {
-        return None;
-    };
-
-    if let Some(error_value) = map.get("error") {
-        match error_value {
-            Value::Object(obj) => {
-                if let Some(code) = obj.get("code").and_then(Value::as_str) {
-                    return Some(code.to_string());
-                }
-            }
-            Value::String(code) => {
-                return Some(code.to_string());
-            }
-            _ => {}
-        }
-    }
-
-    map.get("code").and_then(Value::as_str).map(str::to_string)
-}
-
-#[derive(Serialize)]
-struct RefreshRequest {
-    client_id: &'static str,
-    grant_type: &'static str,
-    refresh_token: String,
-}
-
-#[derive(Deserialize, Clone)]
-struct RefreshResponse {
-    id_token: Option<String>,
-    access_token: Option<String>,
-    refresh_token: Option<String>,
-}
-
-// Shared constant for token refresh (client id used for oauth token refresh flow)
-pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
-
-fn refresh_token_endpoint() -> String {
-    std::env::var(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR)
-        .unwrap_or_else(|_| REFRESH_TOKEN_URL.to_string())
-}
-
-fn gemini_oauth_revoke_endpoint() -> String {
-    std::env::var(GEMINI_OAUTH_REVOKE_URL_OVERRIDE_ENV_VAR)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| GEMINI_OAUTH_REVOKE_URL.to_string())
-}
-
-fn revoke_gemini_oauth_tokens_for_store(
-    codex_home: &Path,
-    auth_credentials_store_mode: AuthCredentialsStoreMode,
-) {
-    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-    let refresh_token = match storage.load() {
-        Ok(Some(auth_dot_json)) => auth_dot_json
-            .get_provider_oauth_credential(PROVIDER_GEMINI)
-            .map(|credential| credential.refresh)
-            .filter(|token| !token.trim().is_empty()),
-        Ok(None) => None,
-        Err(err) => {
-            tracing::warn!(
-                mode = ?auth_credentials_store_mode,
-                error = %err,
-                "Failed to load auth storage while preparing Gemini OAuth revocation"
-            );
-            None
-        }
-    };
-
-    if let Some(refresh_token) = refresh_token
-        && let Err(err) = revoke_gemini_refresh_token(&refresh_token)
-    {
-        tracing::warn!(
-            mode = ?auth_credentials_store_mode,
-            error = %err,
-            "Failed to revoke Gemini OAuth refresh token during logout; proceeding with local credential removal"
-        );
-    }
-}
-
-fn revoke_gemini_refresh_token(refresh_token: &str) -> std::io::Result<()> {
-    let trimmed_token = refresh_token.trim();
-    if trimmed_token.is_empty() {
-        return Ok(());
-    }
-
-    let endpoint = gemini_oauth_revoke_endpoint();
-    let body = format!(
-        "token={token}&token_type_hint=refresh_token",
-        token = urlencoding::encode(trimmed_token)
-    );
-    std::thread::spawn(move || revoke_gemini_refresh_token_with_client(endpoint, body))
-        .join()
-        .map_err(|_| std::io::Error::other("revoke request thread panicked"))?
-}
-
-fn revoke_gemini_refresh_token_with_client(endpoint: String, body: String) -> std::io::Result<()> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|err| std::io::Error::other(format!("build revoke runtime failed: {err}")))?;
-
-    runtime.block_on(async move {
-        let client = crate::default_client::build_reqwest_client_with_timeouts(
-            Some(StdDuration::from_secs(10)),
-            Some(StdDuration::from_secs(10)),
-        );
-        let response = client
-            .post(&endpoint)
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(body)
-            .send()
-            .await
-            .map_err(|err| std::io::Error::other(format!("revoke request failed: {err}")))?;
-
-        let status = response.status();
-        if status.is_success() || status == StatusCode::BAD_REQUEST {
-            return Ok(());
-        }
-
-        let body = response.text().await.unwrap_or_default();
-        Err(std::io::Error::other(format!(
-            "revoke endpoint returned {status}: {body}"
-        )))
-    })
 }
 
 impl AuthDotJson {
