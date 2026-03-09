@@ -27,6 +27,9 @@ pub enum WorkspaceError {
     #[error("cannot delete the global workspace")]
     DeleteGlobal,
 
+    #[error("workspace deletion requires --force")]
+    DeleteRequiresForce,
+
     #[error("path spec must start with '@'")]
     SpecMissingAt,
 

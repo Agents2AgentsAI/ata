@@ -131,12 +131,12 @@ pub fn worktree_add(repo_dir: &Path, dest: &Path, rev: &str) -> Result<bool, std
     Ok(output.status.success())
 }
 
-/// Remove a git worktree.
-pub fn worktree_remove(repo_dir: &Path, worktree_path: &Path) -> bool {
+/// Remove a git worktree from the worktree itself.
+pub fn worktree_remove(worktree_path: &Path) -> bool {
     Command::new("git")
         .args([
             "-C",
-            repo_dir.to_str().unwrap_or("."),
+            worktree_path.to_str().unwrap_or("."),
             "worktree",
             "remove",
             worktree_path.to_str().unwrap_or("."),
@@ -145,30 +145,6 @@ pub fn worktree_remove(repo_dir: &Path, worktree_path: &Path) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
-}
-
-/// Get the common git dir (for worktree cleanup).
-pub fn git_common_dir(path: &Path) -> Option<std::path::PathBuf> {
-    Command::new("git")
-        .args([
-            "-C",
-            path.to_str().unwrap_or("."),
-            "rev-parse",
-            "--git-common-dir",
-        ])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            let p = std::path::PathBuf::from(&s);
-            // --git-common-dir returns relative to the worktree, resolve it
-            if p.is_absolute() {
-                p.parent().unwrap_or(&p).to_path_buf()
-            } else {
-                path.join(&p).parent().unwrap_or(path).to_path_buf()
-            }
-        })
 }
 
 /// Resolve a git ref (branch/tag) to a commit SHA in a local checkout.

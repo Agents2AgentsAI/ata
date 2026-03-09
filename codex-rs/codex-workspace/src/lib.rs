@@ -53,6 +53,9 @@ pub enum Command {
     Delete {
         /// Workspace ID to delete.
         id: String,
+        /// Required for destructive deletion.
+        #[arg(long)]
+        force: bool,
     },
 
     /// Resolve @-path alias to absolute path.
@@ -354,8 +357,8 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
             Ok(0)
         }
 
-        Command::Delete { id } => {
-            commands::delete::run(&id)?;
+        Command::Delete { id, force } => {
+            commands::delete::run(&id, force)?;
             println!("deleted: {id}");
             Ok(0)
         }
