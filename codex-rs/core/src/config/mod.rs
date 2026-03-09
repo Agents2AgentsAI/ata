@@ -95,24 +95,34 @@ use toml_edit::DocumentMut;
 
 pub mod edit;
 mod managed_features;
+mod mcp_config;
 mod network_proxy_spec;
 mod permissions;
 pub mod profile;
+mod project;
 pub mod schema;
 pub mod service;
 pub mod types;
+mod web_search;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
 pub use codex_network_proxy::NetworkProxyAuditMetadata;
 
 pub use managed_features::ManagedFeatures;
+pub use mcp_config::load_global_mcp_servers;
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
 pub use permissions::NetworkToml;
 pub use permissions::PermissionsToml;
+pub use project::ProjectConfig;
+pub use project::set_project_trust_level;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
+pub(crate) use project::set_project_trust_level_inner;
+pub(crate) use web_search::resolve_web_search_mode_for_turn;
+use mcp_config::constrain_mcp_servers;
+use web_search::resolve_web_search_mode;
 
 /// Well-known prefix for provider-fallback warnings in `startup_warnings`.
 /// The TUI checks for this prefix to force the login screen when a fallback
@@ -754,46 +764,6 @@ fn load_model_catalog(
         .transpose()
 }
 
-fn filter_mcp_servers_by_requirements(
-    mcp_servers: &mut HashMap<String, McpServerConfig>,
-    mcp_requirements: Option<&Sourced<BTreeMap<String, McpServerRequirement>>>,
-) {
-    let Some(allowlist) = mcp_requirements else {
-        return;
-    };
-
-    let source = allowlist.source.clone();
-    for (name, server) in mcp_servers.iter_mut() {
-        let allowed = allowlist
-            .value
-            .get(name)
-            .is_some_and(|requirement| mcp_server_matches_requirement(requirement, server));
-        if allowed {
-            server.disabled_reason = None;
-        } else {
-            server.enabled = false;
-            server.disabled_reason = Some(McpServerDisabledReason::Requirements {
-                source: source.clone(),
-            });
-        }
-    }
-}
-
-fn constrain_mcp_servers(
-    mcp_servers: HashMap<String, McpServerConfig>,
-    mcp_requirements: Option<&Sourced<BTreeMap<String, McpServerRequirement>>>,
-) -> ConstraintResult<Constrained<HashMap<String, McpServerConfig>>> {
-    if mcp_requirements.is_none() {
-        return Ok(Constrained::allow_any(mcp_servers));
-    }
-
-    let mcp_requirements = mcp_requirements.cloned();
-    Constrained::normalized(mcp_servers, move |mut servers| {
-        filter_mcp_servers_by_requirements(&mut servers, mcp_requirements.as_ref());
-        servers
-    })
-}
-
 fn apply_requirement_constrained_value<T>(
     field_name: &'static str,
     configured_value: T,
@@ -827,165 +797,6 @@ where
     }
 
     Ok(())
-}
-
-fn mcp_server_matches_requirement(
-    requirement: &McpServerRequirement,
-    server: &McpServerConfig,
-) -> bool {
-    match &requirement.identity {
-        McpServerIdentity::Command {
-            command: want_command,
-        } => matches!(
-            &server.transport,
-            McpServerTransportConfig::Stdio { command: got_command, .. }
-                if got_command == want_command
-        ),
-        McpServerIdentity::Url { url: want_url } => matches!(
-            &server.transport,
-            McpServerTransportConfig::StreamableHttp { url: got_url, .. }
-                if got_url == want_url
-        ),
-    }
-}
-
-pub async fn load_global_mcp_servers(
-    codex_home: &Path,
-) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
-    // In general, Config::load_with_cli_overrides() should be used to load the
-    // full config with requirements.toml applied, but in this case, we need
-    // access to the raw TOML in order to warn the user about deprecated fields.
-    //
-    // Note that a more precise way to do this would be to audit the individual
-    // config layers for deprecated fields rather than reporting on the merged
-    // result.
-    let cli_overrides = Vec::<(String, TomlValue)>::new();
-    // There is no cwd/project context for this query, so this will not include
-    // MCP servers defined in in-repo .codex/ folders.
-    let cwd: Option<AbsolutePathBuf> = None;
-    let config_layer_stack = load_config_layers_state(
-        codex_home,
-        cwd,
-        &cli_overrides,
-        LoaderOverrides::default(),
-        CloudRequirementsLoader::default(),
-    )
-    .await?;
-    let merged_toml = config_layer_stack.effective_config();
-    let Some(servers_value) = merged_toml.get("mcp_servers") else {
-        return Ok(BTreeMap::new());
-    };
-
-    ensure_no_inline_bearer_tokens(servers_value)?;
-
-    servers_value
-        .clone()
-        .try_into()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-}
-
-/// We briefly allowed plain text bearer_token fields in MCP server configs.
-/// We want to warn people who recently added these fields but can remove this after a few months.
-fn ensure_no_inline_bearer_tokens(value: &TomlValue) -> std::io::Result<()> {
-    let Some(servers_table) = value.as_table() else {
-        return Ok(());
-    };
-
-    for (server_name, server_value) in servers_table {
-        if let Some(server_table) = server_value.as_table()
-            && server_table.contains_key("bearer_token")
-        {
-            let message = format!(
-                "mcp_servers.{server_name} uses unsupported `bearer_token`; set `bearer_token_env_var`."
-            );
-            return Err(std::io::Error::new(ErrorKind::InvalidData, message));
-        }
-    }
-
-    Ok(())
-}
-
-pub(crate) fn set_project_trust_level_inner(
-    doc: &mut DocumentMut,
-    project_path: &Path,
-    trust_level: TrustLevel,
-) -> anyhow::Result<()> {
-    // Ensure we render a human-friendly structure:
-    //
-    // [projects]
-    // [projects."/path/to/project"]
-    // trust_level = "trusted" or "untrusted"
-    //
-    // rather than inline tables like:
-    //
-    // [projects]
-    // "/path/to/project" = { trust_level = "trusted" }
-    let project_key = project_path.to_string_lossy().to_string();
-
-    // Ensure top-level `projects` exists as a non-inline, explicit table. If it
-    // exists but was previously represented as a non-table (e.g., inline),
-    // replace it with an explicit table.
-    {
-        let root = doc.as_table_mut();
-        // If `projects` exists but isn't a standard table (e.g., it's an inline table),
-        // convert it to an explicit table while preserving existing entries.
-        let existing_projects = root.get("projects").cloned();
-        if existing_projects.as_ref().is_none_or(|i| !i.is_table()) {
-            let mut projects_tbl = toml_edit::Table::new();
-            projects_tbl.set_implicit(true);
-
-            // If there was an existing inline table, migrate its entries to explicit tables.
-            if let Some(inline_tbl) = existing_projects.as_ref().and_then(|i| i.as_inline_table()) {
-                for (k, v) in inline_tbl.iter() {
-                    if let Some(inner_tbl) = v.as_inline_table() {
-                        let new_tbl = inner_tbl.clone().into_table();
-                        projects_tbl.insert(k, toml_edit::Item::Table(new_tbl));
-                    }
-                }
-            }
-
-            root.insert("projects", toml_edit::Item::Table(projects_tbl));
-        }
-    }
-    let Some(projects_tbl) = doc["projects"].as_table_mut() else {
-        return Err(anyhow::anyhow!(
-            "projects table missing after initialization"
-        ));
-    };
-
-    // Ensure the per-project entry is its own explicit table. If it exists but
-    // is not a table (e.g., an inline table), replace it with an explicit table.
-    let needs_proj_table = !projects_tbl.contains_key(project_key.as_str())
-        || projects_tbl
-            .get(project_key.as_str())
-            .and_then(|i| i.as_table())
-            .is_none();
-    if needs_proj_table {
-        projects_tbl.insert(project_key.as_str(), toml_edit::table());
-    }
-    let Some(proj_tbl) = projects_tbl
-        .get_mut(project_key.as_str())
-        .and_then(|i| i.as_table_mut())
-    else {
-        return Err(anyhow::anyhow!("project table missing for {project_key}"));
-    };
-    proj_tbl.set_implicit(false);
-    proj_tbl["trust_level"] = toml_edit::value(trust_level.to_string());
-    Ok(())
-}
-
-/// Patch `CODEX_HOME/config.toml` project state to set trust level.
-/// Use with caution.
-pub fn set_project_trust_level(
-    codex_home: &Path,
-    project_path: &Path,
-    trust_level: TrustLevel,
-) -> anyhow::Result<()> {
-    use crate::config::edit::ConfigEditsBuilder;
-
-    ConfigEditsBuilder::new(codex_home)
-        .set_project_trust_level(project_path, trust_level)
-        .apply_blocking()
 }
 
 /// Save the default OSS provider preference to config.toml
@@ -1363,22 +1174,6 @@ impl From<ConfigToml> for UserSavedConfig {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct ProjectConfig {
-    pub trust_level: Option<TrustLevel>,
-}
-
-impl ProjectConfig {
-    pub fn is_trusted(&self) -> bool {
-        matches!(self.trust_level, Some(TrustLevel::Trusted))
-    }
-
-    pub fn is_untrusted(&self) -> bool {
-        matches!(self.trust_level, Some(TrustLevel::Untrusted))
-    }
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RealtimeAudioConfig {
     pub microphone: Option<String>,
@@ -1584,28 +1379,6 @@ impl ConfigToml {
         sandbox_policy
     }
 
-    /// Resolves the cwd to an existing project, or returns None if ConfigToml
-    /// does not contain a project corresponding to cwd or a git repo for cwd
-    pub fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
-        let projects = self.projects.clone().unwrap_or_default();
-
-        if let Some(project_config) = projects.get(&resolved_cwd.to_string_lossy().to_string()) {
-            return Some(project_config.clone());
-        }
-
-        // If cwd lives inside a git repo/worktree, check whether the root git project
-        // (the primary repository working directory) is trusted. This lets
-        // worktrees inherit trust from the main project.
-        if let Some(repo_root) = resolve_root_git_project_for_trust(resolved_cwd)
-            && let Some(project_config_for_root) =
-                projects.get(&repo_root.to_string_lossy().to_string_lossy().to_string())
-        {
-            return Some(project_config_for_root.clone());
-        }
-
-        None
-    }
-
     pub fn get_config_profile(
         &self,
         override_profile: Option<String>,
@@ -1682,60 +1455,6 @@ pub fn resolve_oss_provider(
             config_toml.oss_provider.clone()
         }
     }
-}
-
-/// Resolve the web search mode from explicit config and feature flags.
-fn resolve_web_search_mode(
-    config_toml: &ConfigToml,
-    config_profile: &ConfigProfile,
-    features: &Features,
-) -> Option<WebSearchMode> {
-    if let Some(mode) = config_profile.web_search.or(config_toml.web_search) {
-        return Some(mode);
-    }
-    if features.enabled(Feature::WebSearchCached) {
-        return Some(WebSearchMode::Cached);
-    }
-    if features.enabled(Feature::WebSearchRequest) {
-        return Some(WebSearchMode::Live);
-    }
-    None
-}
-
-pub(crate) fn resolve_web_search_mode_for_turn(
-    web_search_mode: &Constrained<WebSearchMode>,
-    sandbox_policy: &SandboxPolicy,
-) -> WebSearchMode {
-    let preferred = web_search_mode.value();
-
-    if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
-        && preferred != WebSearchMode::Disabled
-    {
-        for mode in [
-            WebSearchMode::Live,
-            WebSearchMode::Cached,
-            WebSearchMode::Disabled,
-        ] {
-            if web_search_mode.can_set(&mode).is_ok() {
-                return mode;
-            }
-        }
-    } else {
-        if web_search_mode.can_set(&preferred).is_ok() {
-            return preferred;
-        }
-        for mode in [
-            WebSearchMode::Cached,
-            WebSearchMode::Live,
-            WebSearchMode::Disabled,
-        ] {
-            if web_search_mode.can_set(&mode).is_ok() {
-                return mode;
-            }
-        }
-    }
-
-    WebSearchMode::Disabled
 }
 
 impl Config {
