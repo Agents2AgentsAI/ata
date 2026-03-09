@@ -1,5 +1,6 @@
 use crate::error::WorkspaceError;
 use crate::git;
+use crate::manifest::read_manifest;
 use crate::manifest::with_locked_manifest;
 use crate::paths;
 use crate::types::WorkspaceManifest;
@@ -18,20 +19,20 @@ pub fn run(
     let head_sha = head_sha.to_string();
     let head_ref = head_ref.map(str::to_string);
     let workspace_root = paths::workspace_root(workspace_id);
+    let manifest = read_manifest(workspace_id)?;
+    let checkout_path = manifest
+        .repo_by_alias(&alias)?
+        .checkout_path_buf(&workspace_root);
+    let git_state = git::read_git_state(&checkout_path);
 
     with_locked_manifest(workspace_id, None, move |m| {
-        let repo = m
-            .repos
-            .iter_mut()
-            .find(|r| r.alias == alias)
-            .ok_or_else(|| WorkspaceError::EntryNotFound(alias.clone()))?;
+        let repo = m.repo_by_alias_mut(&alias)?;
         repo.state.head_sha = head_sha;
         if let Some(ref hr) = head_ref {
             repo.state.head_ref = hr.clone();
         }
-        let git_state = git::read_git_state(&workspace_root.join(&repo.checkout_path));
         if !git_state.default_branch.is_empty() {
-            repo.state.default_branch = git_state.default_branch;
+            repo.state.default_branch = git_state.default_branch.clone();
         }
         repo.state.shallow = git_state.shallow;
         Ok(())

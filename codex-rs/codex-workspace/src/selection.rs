@@ -67,14 +67,12 @@ fn read_workspace_selection_id(path: &std::path::Path) -> Option<String> {
 
 /// Write the active workspace selection (session-aware).
 pub fn write_selection(workspace_id: &str) -> Result<(), WorkspaceError> {
-    let codex_home = paths::codex_home();
-    let session_id = std::env::var("CODEX_SESSION_ID").ok();
-    let thread_id = std::env::var("CODEX_THREAD_ID").ok();
+    let context = paths::SessionContext::from_env();
     write_selection_for(
-        &codex_home,
+        &context.codex_home,
         workspace_id,
-        session_id.as_deref(),
-        thread_id.as_deref(),
+        context.session_id.as_deref(),
+        context.thread_id.as_deref(),
     )
 }
 
@@ -104,10 +102,11 @@ pub fn write_selection_for(
 /// Read the session-scoped workspace selection.
 pub fn read_session_workspace() -> Option<String> {
     let _ = prune_stale_selection_files();
+    let context = paths::SessionContext::from_env();
     read_session_workspace_for(
-        &paths::codex_home(),
-        std::env::var("CODEX_SESSION_ID").ok().as_deref(),
-        std::env::var("CODEX_THREAD_ID").ok().as_deref(),
+        &context.codex_home,
+        context.session_id.as_deref(),
+        context.thread_id.as_deref(),
     )
 }
 

@@ -10,23 +10,20 @@ use std::path::Path;
 /// If `explicit` is `Some`, returns that immediately.
 /// Otherwise walks: project pin → session selection → global fallback.
 pub fn resolve_workspace(explicit: Option<&str>) -> Result<String, WorkspaceError> {
-    let codex_home = paths::codex_home();
-    let cwd = std::env::current_dir().ok();
-    let session_id = std::env::var("CODEX_SESSION_ID").ok();
-    let thread_id = std::env::var("CODEX_THREAD_ID").ok();
+    let context = paths::SessionContext::from_env();
 
     if let Some(wid) = resolve_selected_workspace_for(
-        &codex_home,
-        cwd.as_deref(),
+        &context.codex_home,
+        context.cwd.as_deref(),
         explicit,
-        session_id.as_deref(),
-        thread_id.as_deref(),
+        context.session_id.as_deref(),
+        context.thread_id.as_deref(),
     )? {
         return Ok(wid);
     }
 
     // 4. Global fallback — ensure it exists
-    ensure_global_workspace_for(&codex_home)?;
+    ensure_global_workspace_for(&context.codex_home)?;
     Ok("global".to_string())
 }
 
@@ -66,14 +63,7 @@ fn ensure_global_workspace_for(codex_home: &Path) -> Result<(), WorkspaceError> 
     }
     paths::ensure_workspaces_root_for(codex_home)?;
     let root = paths::workspace_root_for(codex_home, wid);
-    for sub in paths::init_dirs() {
-        let dir = if sub.is_empty() {
-            root.clone()
-        } else {
-            root.join(sub)
-        };
-        std::fs::create_dir_all(dir)?;
-    }
+    paths::create_workspace_dirs(&root)?;
     let manifest = new_manifest(wid, "global");
     let manifest_path = paths::manifest_path_for(codex_home, wid);
     let data = serde_json::to_string_pretty(&manifest)?;

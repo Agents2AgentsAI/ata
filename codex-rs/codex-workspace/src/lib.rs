@@ -601,17 +601,14 @@ fn resolve_workspace_or_create_from_spec(
     explicit: Option<&str>,
     spec_path: &str,
 ) -> Result<String, WorkspaceError> {
-    let codex_home = paths::codex_home();
-    let cwd = std::env::current_dir().ok();
-    let session_id = std::env::var("CODEX_SESSION_ID").ok();
-    let thread_id = std::env::var("CODEX_THREAD_ID").ok();
+    let context = paths::SessionContext::from_env();
 
     if let Some(wid) = workspace_resolution::resolve_selected_workspace_for(
-        &codex_home,
-        cwd.as_deref(),
+        &context.codex_home,
+        context.cwd.as_deref(),
         explicit,
-        session_id.as_deref(),
-        thread_id.as_deref(),
+        context.session_id.as_deref(),
+        context.thread_id.as_deref(),
     )? {
         return Ok(wid);
     }

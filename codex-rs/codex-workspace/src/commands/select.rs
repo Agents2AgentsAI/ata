@@ -5,14 +5,12 @@ use std::path::Path;
 
 /// Set the active workspace selection.
 pub fn run(workspace_id: &str) -> Result<(), WorkspaceError> {
-    let codex_home = paths::codex_home();
-    let session_id = std::env::var("CODEX_SESSION_ID").ok();
-    let thread_id = std::env::var("CODEX_THREAD_ID").ok();
+    let context = paths::SessionContext::from_env();
     run_for(
-        &codex_home,
+        &context.codex_home,
         workspace_id,
-        session_id.as_deref(),
-        thread_id.as_deref(),
+        context.session_id.as_deref(),
+        context.thread_id.as_deref(),
     )
 }
 

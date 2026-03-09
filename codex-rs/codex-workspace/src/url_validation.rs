@@ -61,11 +61,13 @@ pub fn extract_host(url: &str) -> String {
 pub fn check_host_allowlist(url: &str, allowlist: Option<&[String]>) -> Result<(), WorkspaceError> {
     if let Some(allowed) = allowlist {
         let host = extract_host(url);
-        let allowed_lower: Vec<String> = allowed.iter().map(|h| h.to_lowercase()).collect();
-        if !allowed_lower.contains(&host) {
+        if !allowed
+            .iter()
+            .any(|allowed_host| allowed_host.eq_ignore_ascii_case(&host))
+        {
             return Err(WorkspaceError::HostNotAllowed {
                 host,
-                allowlist: allowed_lower,
+                allowlist: allowed.iter().map(|value| value.to_lowercase()).collect(),
             });
         }
     }

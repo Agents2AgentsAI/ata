@@ -43,7 +43,7 @@ pub fn run(
     validate_repo_url(url)?;
 
     let root = paths::workspace_root(workspace_id);
-    let clone_dest = root.join("repos").join(alias);
+    let clone_dest = paths::repo_checkout_path(workspace_id, alias);
     let manifest = read_manifest(workspace_id)?;
     check_host_allowlist(url, manifest.policies.repo_hosts_allowlist.as_deref())?;
 
@@ -54,6 +54,7 @@ pub fn run(
         return Err(WorkspaceError::DirectoryExists(clone_dest));
     }
 
+    let manifest_version = manifest.manifest_version;
     let clone_policy = manifest.policies.default_clone;
     let mut clone_args = git::build_clone_args(&clone_policy, full);
     let mirror_path = paths::mirror_cache_path(url);
@@ -79,26 +80,18 @@ pub fn run(
     let notes_dir_existed = notes_dir.exists();
     std::fs::create_dir_all(&notes_dir)?;
 
-    let clone_record = if full {
-        CloneRecord {
-            depth: 0,
-            single_branch: false,
-            no_tags: false,
-            filter: String::new(),
-            submodules: clone_policy.submodules,
-            lfs: clone_policy.lfs,
-            extra: Map::new(),
-        }
-    } else {
-        CloneRecord {
-            depth: clone_policy.depth,
-            single_branch: clone_policy.single_branch,
-            no_tags: clone_policy.no_tags,
-            filter: clone_policy.filter.clone(),
-            submodules: clone_policy.submodules,
-            lfs: clone_policy.lfs,
-            extra: Map::new(),
-        }
+    let clone_record = CloneRecord {
+        depth: if full { 0 } else { clone_policy.depth },
+        single_branch: !full && clone_policy.single_branch,
+        no_tags: !full && clone_policy.no_tags,
+        filter: if full {
+            String::new()
+        } else {
+            clone_policy.filter.clone()
+        },
+        submodules: clone_policy.submodules,
+        lfs: clone_policy.lfs,
+        extra: Map::new(),
     };
 
     let repo_entry = RepoEntry {
@@ -119,11 +112,18 @@ pub fn run(
     };
     let url_owned = url.to_string();
     let alias_for_manifest = alias_owned.clone();
+    let clone_policy_for_manifest = clone_policy;
     let update_result = with_locked_manifest(workspace_id, None, move |manifest| {
         check_host_allowlist(
             &url_owned,
             manifest.policies.repo_hosts_allowlist.as_deref(),
         )?;
+        if manifest.policies.default_clone != clone_policy_for_manifest {
+            return Err(WorkspaceError::VersionConflict {
+                expected: manifest_version,
+                actual: manifest.manifest_version,
+            });
+        }
         if manifest
             .repos
             .iter()

@@ -44,17 +44,13 @@ pub fn plan(workspace_id: &str, spec: &WorkspaceSpec) -> Result<Vec<RepoAction>,
     let mut actions = Vec::new();
 
     for repo_spec in &spec.repos {
-        let existing = manifest.repos.iter().find(|r| r.alias == repo_spec.alias);
+        let existing = manifest.repo_by_alias(&repo_spec.alias).ok();
 
         let action = match existing {
             None => ActionKind::Add,
             Some(existing_repo) => {
                 if let Some(target_sha) = &repo_spec.sha {
-                    let current_sha = if !existing_repo.pin.pinned_sha.is_empty() {
-                        &existing_repo.pin.pinned_sha
-                    } else {
-                        &existing_repo.state.head_sha
-                    };
+                    let current_sha = existing_repo.effective_sha();
                     if current_sha != target_sha {
                         ActionKind::Pin {
                             current_sha: current_sha.to_string(),
@@ -66,16 +62,10 @@ pub fn plan(workspace_id: &str, spec: &WorkspaceSpec) -> Result<Vec<RepoAction>,
                 } else if let Some(ref_name) = &repo_spec.r#ref {
                     // Ref without sha — resolve at runtime, but try to detect
                     // if checkout already matches by resolving locally.
-                    let checkout = paths::workspace_root(workspace_id)
-                        .join("repos")
-                        .join(&repo_spec.alias);
+                    let checkout = paths::repo_checkout_path(workspace_id, &repo_spec.alias);
                     if let Some(resolved) = git::resolve_ref(&checkout, ref_name) {
-                        let current_sha = if !existing_repo.pin.pinned_sha.is_empty() {
-                            &existing_repo.pin.pinned_sha
-                        } else {
-                            &existing_repo.state.head_sha
-                        };
-                        if current_sha != &resolved {
+                        let current_sha = existing_repo.effective_sha();
+                        if current_sha != resolved {
                             ActionKind::Pin {
                                 current_sha: current_sha.to_string(),
                                 target_sha: resolved,
@@ -135,9 +125,7 @@ pub fn run(workspace_id: &str, spec_path: &Path, dry_run: bool) -> Result<Value,
                     repo_spec.full,
                 )?;
 
-                let checkout_path = paths::workspace_root(workspace_id)
-                    .join("repos")
-                    .join(&repo_spec.alias);
+                let checkout_path = paths::repo_checkout_path(workspace_id, &repo_spec.alias);
 
                 // Determine target SHA: explicit sha, or resolve ref in fresh checkout
                 let target_sha = repo_spec.sha.clone().or_else(|| {
@@ -164,9 +152,7 @@ pub fn run(workspace_id: &str, spec_path: &Path, dry_run: bool) -> Result<Value,
             ActionKind::Pin { target_sha, .. } => {
                 repo_pin::run(workspace_id, &repo_spec.alias, target_sha)?;
 
-                let checkout_path = paths::workspace_root(workspace_id)
-                    .join("repos")
-                    .join(&repo_spec.alias);
+                let checkout_path = paths::repo_checkout_path(workspace_id, &repo_spec.alias);
                 pin_checkout(workspace_id, &repo_spec.alias, &checkout_path, target_sha);
 
                 apply_repo_extra(workspace_id, &repo_spec.alias, &repo_spec.extra)?;
@@ -178,9 +164,7 @@ pub fn run(workspace_id: &str, spec_path: &Path, dry_run: bool) -> Result<Value,
                 }));
             }
             ActionKind::Ref { ref_name } => {
-                let checkout_path = paths::workspace_root(workspace_id)
-                    .join("repos")
-                    .join(&repo_spec.alias);
+                let checkout_path = paths::repo_checkout_path(workspace_id, &repo_spec.alias);
 
                 if let Some(resolved) = git::resolve_ref(&checkout_path, ref_name) {
                     repo_pin::run(workspace_id, &repo_spec.alias, &resolved)?;
@@ -298,11 +282,7 @@ fn apply_repo_extra(
     let alias = alias.to_string();
     let extra = extra.clone();
     with_locked_manifest(workspace_id, None, move |m| {
-        let repo = m
-            .repos
-            .iter_mut()
-            .find(|r| r.alias == alias)
-            .ok_or_else(|| WorkspaceError::EntryNotFound(alias.clone()))?;
+        let repo = m.repo_by_alias_mut(&alias)?;
         for (key, value) in extra {
             repo.extra.insert(key, value);
         }
