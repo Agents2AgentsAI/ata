@@ -1,3 +1,5 @@
+use codex_protocol::protocol::SandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -18,6 +20,68 @@ pub(crate) fn resolve_kb_path(
 
     let workspace_id = resolve_workspace_id(codex_home, cwd, session_id, thread_id);
     codex_workspace::paths::workspace_root_for(codex_home, &workspace_id).join("knowledge-base")
+}
+
+pub(crate) fn kb_writable_root(kb_path: &Path) -> Option<AbsolutePathBuf> {
+    if kb_path.as_os_str().is_empty() || !kb_path.is_absolute() {
+        tracing::warn!(
+            "ignoring non-absolute CODEX_KB_PATH when deriving sandbox writable roots: {}",
+            kb_path.display()
+        );
+        return None;
+    }
+
+    if let Err(err) = std::fs::create_dir_all(kb_path) {
+        tracing::warn!(
+            "failed to create CODEX_KB_PATH directory {} for sandbox writable roots: {err}",
+            kb_path.display()
+        );
+        return None;
+    }
+
+    let Ok(kb_root) = AbsolutePathBuf::from_absolute_path(kb_path) else {
+        tracing::warn!(
+            "ignoring invalid CODEX_KB_PATH when deriving sandbox writable roots: {}",
+            kb_path.display()
+        );
+        return None;
+    };
+
+    Some(kb_root)
+}
+
+pub(crate) fn with_kb_writable_root(
+    policy: &SandboxPolicy,
+    kb_root: Option<&AbsolutePathBuf>,
+) -> SandboxPolicy {
+    let Some(kb_root) = kb_root else {
+        return policy.clone();
+    };
+
+    match policy {
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots,
+            read_only_access,
+            exclude_tmpdir_env_var,
+            exclude_slash_tmp,
+            network_access,
+        } => {
+            let mut writable_roots = writable_roots.clone();
+            if !writable_roots.iter().any(|root| root == kb_root) {
+                writable_roots.push(kb_root.clone());
+            }
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots,
+                read_only_access: read_only_access.clone(),
+                exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
+                exclude_slash_tmp: *exclude_slash_tmp,
+                network_access: *network_access,
+            }
+        }
+        SandboxPolicy::DangerFullAccess
+        | SandboxPolicy::ExternalSandbox { .. }
+        | SandboxPolicy::ReadOnly { .. } => policy.clone(),
+    }
 }
 
 fn resolve_override_kb_path(codex_home: &Path, kb_path_override: &str) -> Option<PathBuf> {
@@ -75,6 +139,8 @@ fn resolve_workspace_id(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::ReadOnlyAccess;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
@@ -208,5 +274,57 @@ mod tests {
             Some("thread-1"),
         );
         assert_eq!(path, codex_home.join("custom-kb"));
+    }
+
+    #[test]
+    fn with_kb_writable_root_adds_resolved_kb_path_for_workspace_write() {
+        let temp = TempDir::new().expect("temp dir");
+        let kb_path = temp.path().join("kb");
+        let kb_root = kb_writable_root(&kb_path).expect("kb writable root");
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: vec![],
+            },
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+
+        let updated = with_kb_writable_root(&policy, Some(&kb_root));
+
+        let expected_kb_root =
+            AbsolutePathBuf::from_absolute_path(&kb_path).expect("absolute kb path");
+        assert_eq!(
+            updated,
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![expected_kb_root],
+                read_only_access: ReadOnlyAccess::Restricted {
+                    include_platform_defaults: false,
+                    readable_roots: vec![],
+                },
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            }
+        );
+    }
+
+    #[test]
+    fn with_kb_writable_root_ignores_non_workspace_write_policies() {
+        let temp = TempDir::new().expect("temp dir");
+        let kb_root = kb_writable_root(temp.path().join("kb").as_path()).expect("kb writable root");
+        let policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: vec![],
+            },
+            network_access: false,
+        };
+
+        let updated = with_kb_writable_root(&policy, Some(&kb_root));
+
+        assert_eq!(updated, policy);
     }
 }

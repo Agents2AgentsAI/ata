@@ -36,6 +36,7 @@ use crate::tools::sandboxing::with_cached_approval;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -47,6 +48,7 @@ pub struct ShellRequest {
     pub timeout_ms: Option<u64>,
     pub env: HashMap<String, String>,
     pub explicit_env_overrides: HashMap<String, String>,
+    pub workspace_kb_root: Option<AbsolutePathBuf>,
     pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
@@ -237,7 +239,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             );
         }
 
-        let spec = build_command_spec(
+        let mut spec = build_command_spec(
             &command,
             &req.cwd,
             &env,
@@ -246,6 +248,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             req.additional_permissions.clone(),
             req.justification.clone(),
         )?;
+        spec.workspace_kb_root = req.workspace_kb_root.clone();
         let env = attempt
             .env_for(spec, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;

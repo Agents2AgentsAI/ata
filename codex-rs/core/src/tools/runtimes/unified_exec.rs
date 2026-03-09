@@ -39,6 +39,7 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -49,6 +50,7 @@ pub struct UnifiedExecRequest {
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub explicit_env_overrides: HashMap<String, String>,
+    pub workspace_kb_root: Option<AbsolutePathBuf>,
     pub network: Option<NetworkProxy>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
@@ -197,7 +199,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             network.apply_to_env(&mut env);
         }
         if self.backend == UnifiedExecBackendConfig::ZshFork {
-            let spec = build_command_spec(
+            let mut spec = build_command_spec(
                 &command,
                 &req.cwd,
                 &env,
@@ -207,6 +209,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 req.justification.clone(),
             )
             .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
+            spec.workspace_kb_root = req.workspace_kb_root.clone();
             let exec_env = attempt
                 .env_for(spec, req.network.as_ref())
                 .map_err(|err| ToolError::Codex(err.into()))?;
@@ -237,7 +240,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 }
             }
         }
-        let spec = build_command_spec(
+        let mut spec = build_command_spec(
             &command,
             &req.cwd,
             &env,
@@ -247,6 +250,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             req.justification.clone(),
         )
         .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
+        spec.workspace_kb_root = req.workspace_kb_root.clone();
         let exec_env = attempt
             .env_for(spec, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;

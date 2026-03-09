@@ -112,6 +112,7 @@ pub(crate) fn build_command_spec(
         args: args.to_vec(),
         cwd: cwd.to_path_buf(),
         env,
+        workspace_kb_root: None,
         expiration,
         sandbox_permissions,
         additional_permissions,

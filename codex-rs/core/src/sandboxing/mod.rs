@@ -43,6 +43,7 @@ pub struct CommandSpec {
     pub args: Vec<String>,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
+    pub workspace_kb_root: Option<AbsolutePathBuf>,
     pub expiration: ExecExpiration,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
@@ -332,6 +333,10 @@ impl SandboxManager {
             } else {
                 policy.clone()
             };
+        let effective_policy = crate::workspace_kb::with_kb_writable_root(
+            &effective_policy,
+            spec.workspace_kb_root.as_ref(),
+        );
         let mut env = spec.env;
         if !effective_policy.has_full_network_access() {
             env.insert(
@@ -436,9 +441,12 @@ pub async fn execute_exec_request_with_after_spawn(
 
 #[cfg(test)]
 mod tests {
+    use super::CommandSpec;
     use super::SandboxManager;
+    use super::SandboxTransformRequest;
     use super::normalize_additional_permissions;
     use super::sandbox_policy_with_additional_permissions;
+    use crate::exec::ExecExpiration;
     use crate::exec::SandboxType;
     use crate::protocol::ReadOnlyAccess;
     use crate::protocol::SandboxPolicy;
@@ -549,5 +557,64 @@ mod tests {
                 network_access: true,
             }
         );
+    }
+
+    #[test]
+    fn transform_adds_kb_path_as_workspace_writable_root() {
+        let manager = SandboxManager::new();
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let cwd = temp_dir.path().join("cwd");
+        let kb_path = temp_dir.path().join("workspace-kb");
+        let kb_root =
+            AbsolutePathBuf::from_absolute_path(&kb_path).expect("absolute workspace kb path");
+        std::fs::create_dir_all(&cwd).expect("create cwd");
+
+        let exec_request = manager
+            .transform(SandboxTransformRequest {
+                spec: CommandSpec {
+                    program: "echo".to_string(),
+                    args: vec!["hello".to_string()],
+                    cwd: cwd.clone(),
+                    env: std::collections::HashMap::new(),
+                    workspace_kb_root: Some(kb_root),
+                    expiration: ExecExpiration::DefaultTimeout,
+                    sandbox_permissions: super::SandboxPermissions::UseDefault,
+                    additional_permissions: None,
+                    justification: None,
+                },
+                policy: &SandboxPolicy::WorkspaceWrite {
+                    writable_roots: vec![],
+                    read_only_access: ReadOnlyAccess::Restricted {
+                        include_platform_defaults: false,
+                        readable_roots: vec![],
+                    },
+                    network_access: false,
+                    exclude_tmpdir_env_var: true,
+                    exclude_slash_tmp: true,
+                },
+                sandbox: SandboxType::None,
+                enforce_managed_network: false,
+                network: None,
+                sandbox_policy_cwd: &cwd,
+                #[cfg(target_os = "macos")]
+                macos_seatbelt_profile_extensions: None,
+                codex_linux_sandbox_exe: None,
+                use_linux_sandbox_bwrap: false,
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            })
+            .expect("transform exec request");
+
+        match exec_request.sandbox_policy {
+            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+                assert!(
+                    writable_roots
+                        .iter()
+                        .any(|root| root.as_path() == kb_path.as_path()),
+                    "expected KB path {} in writable roots",
+                    kb_path.display()
+                );
+            }
+            other => panic!("expected workspace-write policy, got {other:?}"),
+        }
     }
 }
