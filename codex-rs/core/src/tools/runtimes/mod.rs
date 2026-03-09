@@ -87,6 +87,7 @@ pub(crate) fn resolve_agent_ata_command(command: &[String]) -> (Vec<String>, boo
 
 /// Shared helper to construct a CommandSpec from a tokenized command line.
 /// Validates that at least a program is present.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn build_command_spec(
     command: &[String],
     cwd: &Path,
@@ -104,6 +105,28 @@ pub(crate) fn build_command_spec(
             "1".to_string(),
         );
     }
+    build_command_spec_from_resolved_command(
+        &command,
+        cwd,
+        &env,
+        expiration,
+        sandbox_permissions,
+        additional_permissions,
+        justification,
+    )
+}
+
+/// Shared helper for callers that have already resolved `ata` commands and
+/// applied any accompanying env changes.
+pub(crate) fn build_command_spec_from_resolved_command(
+    command: &[String],
+    cwd: &Path,
+    env: &HashMap<String, String>,
+    expiration: ExecExpiration,
+    sandbox_permissions: SandboxPermissions,
+    additional_permissions: Option<PermissionProfile>,
+    justification: Option<String>,
+) -> Result<CommandSpec, ToolError> {
     let (program, args) = command
         .split_first()
         .ok_or_else(|| ToolError::Rejected("command args are empty".to_string()))?;
@@ -111,7 +134,7 @@ pub(crate) fn build_command_spec(
         program: program.clone(),
         args: args.to_vec(),
         cwd: cwd.to_path_buf(),
-        env,
+        env: env.clone(),
         workspace_kb_root: None,
         expiration,
         sandbox_permissions,

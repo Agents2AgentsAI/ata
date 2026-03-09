@@ -15,7 +15,7 @@ use crate::shell::ShellType;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR;
-use crate::tools::runtimes::build_command_spec;
+use crate::tools::runtimes::build_command_spec_from_resolved_command;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::runtimes::resolve_agent_ata_command;
 use crate::tools::runtimes::shell::zsh_fork_backend;
@@ -199,7 +199,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             network.apply_to_env(&mut env);
         }
         if self.backend == UnifiedExecBackendConfig::ZshFork {
-            let mut spec = build_command_spec(
+            let mut spec = build_command_spec_from_resolved_command(
                 &command,
                 &req.cwd,
                 &env,
@@ -240,7 +240,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 }
             }
         }
-        let mut spec = build_command_spec(
+        let mut spec = build_command_spec_from_resolved_command(
             &command,
             &req.cwd,
             &env,
