@@ -8,11 +8,7 @@ pub fn run(workspace_id: &str, alias: &str) -> Result<WorkspaceManifest, Workspa
     let alias = alias.to_string();
 
     with_locked_manifest(workspace_id, None, move |m| {
-        let repo = m
-            .repos
-            .iter_mut()
-            .find(|r| r.alias == alias)
-            .ok_or_else(|| WorkspaceError::EntryNotFound(alias.clone()))?;
+        let repo = m.repo_by_alias_mut(&alias)?;
         repo.pin.mode = PinMode::Tracking;
         repo.pin.pinned_sha = String::new();
         Ok(())

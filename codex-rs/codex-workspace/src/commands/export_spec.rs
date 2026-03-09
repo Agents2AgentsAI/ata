@@ -25,14 +25,7 @@ fn run_for(
         .repos
         .iter()
         .map(|repo| {
-            // Use pinned SHA if pinned, otherwise head SHA
-            let sha = if !repo.pin.pinned_sha.is_empty() {
-                Some(repo.pin.pinned_sha.clone())
-            } else if !repo.state.head_sha.is_empty() {
-                Some(repo.state.head_sha.clone())
-            } else {
-                None
-            };
+            let sha = (!repo.effective_sha().is_empty()).then(|| repo.effective_sha().to_string());
 
             // Use head_ref as the ref if available
             let r#ref = if !repo.state.head_ref.is_empty() {

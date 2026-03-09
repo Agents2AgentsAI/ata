@@ -52,6 +52,33 @@ fn home_dir_from_env(
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SessionContext {
+    pub codex_home: PathBuf,
+    pub session_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub cwd: Option<PathBuf>,
+}
+
+impl SessionContext {
+    pub fn from_env() -> Self {
+        Self {
+            codex_home: codex_home(),
+            session_id: std::env::var("CODEX_SESSION_ID")
+                .ok()
+                .filter(|value| !value.is_empty()),
+            thread_id: std::env::var("CODEX_THREAD_ID")
+                .ok()
+                .filter(|value| !value.is_empty()),
+            cwd: std::env::current_dir().ok(),
+        }
+    }
+
+    pub fn scope_id(&self) -> Option<String> {
+        workspace_scope_id(self.session_id.as_deref(), self.thread_id.as_deref())
+    }
+}
+
 /// Root directory for all workspaces.
 pub fn workspaces_root() -> PathBuf {
     codex_home().join("workspaces")
@@ -93,6 +120,10 @@ pub fn workspace_root(workspace_id: &str) -> PathBuf {
 /// Root directory for a specific workspace under a specific Codex home.
 pub fn workspace_root_for(codex_home: &std::path::Path, workspace_id: &str) -> PathBuf {
     workspaces_root_for(codex_home).join(workspace_id)
+}
+
+pub fn repo_checkout_path(workspace_id: &str, alias: &str) -> PathBuf {
+    workspace_root(workspace_id).join("repos").join(alias)
 }
 
 /// Path to the workspace manifest file.
@@ -162,11 +193,9 @@ pub fn selection_path_for(codex_home: &std::path::Path, scope_id: Option<&str>) 
 
 /// Path to the active workspace selection file (session-aware).
 pub fn selection_path() -> PathBuf {
-    let codex_home = codex_home();
-    let session_id = std::env::var("CODEX_SESSION_ID").ok();
-    let thread_id = std::env::var("CODEX_THREAD_ID").ok();
-    let scope_id = workspace_scope_id(session_id.as_deref(), thread_id.as_deref());
-    selection_path_for(&codex_home, scope_id.as_deref())
+    let context = SessionContext::from_env();
+    let scope_id = context.scope_id();
+    selection_path_for(&context.codex_home, scope_id.as_deref())
 }
 
 /// Path to the global legacy workspace selection file.
@@ -180,14 +209,14 @@ pub fn lock_file_path(workspace_id: &str, level: &str, target_id: Option<&str>) 
     match level {
         "workspace" => root.join("locks").join("workspace.lock"),
         "kb" => root.join("knowledge-base").join("kb.lock"),
-        "run" => root
-            .join("runs")
-            .join(target_id.unwrap_or(""))
-            .join("run.lock"),
-        "index" => root
-            .join("indexes")
-            .join(target_id.unwrap_or(""))
-            .join("index.lock"),
+        "run" => match target_id {
+            Some(target_id) => root.join("runs").join(target_id).join("run.lock"),
+            None => root.join("locks").join("run.lock"),
+        },
+        "index" => match target_id {
+            Some(target_id) => root.join("indexes").join(target_id).join("index.lock"),
+            None => root.join("locks").join("index.lock"),
+        },
         _ => root.join("locks").join(format!("{level}.lock")),
     }
 }
@@ -226,7 +255,8 @@ fn normalize_repo_key(url: &str) -> String {
     if key.ends_with(".git") {
         key.truncate(key.len() - 4);
     }
-    key = key.trim_end_matches('/').to_string();
+    let trimmed_len = key.trim_end_matches('/').len();
+    key.truncate(trimmed_len);
     key
 }
 
@@ -256,6 +286,18 @@ pub fn init_dirs() -> Vec<&'static str> {
         "knowledge-base/assets",
         "knowledge-base/staging",
     ]
+}
+
+pub fn create_workspace_dirs(root: &std::path::Path) -> std::io::Result<()> {
+    for sub in init_dirs() {
+        let dir = if sub.is_empty() {
+            root.to_path_buf()
+        } else {
+            root.join(sub)
+        };
+        std::fs::create_dir_all(dir)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -355,6 +397,33 @@ mod tests {
             selection_path_for(codex_home, None),
             codex_home.join(".workspace_selected")
         );
+    }
+
+    #[test]
+    fn lock_file_path_uses_workspace_lock_dir_when_target_missing() {
+        assert_eq!(
+            lock_file_path("workspace-1", "run", None),
+            workspace_root("workspace-1").join("locks").join("run.lock")
+        );
+        assert_eq!(
+            lock_file_path("workspace-1", "index", None),
+            workspace_root("workspace-1")
+                .join("locks")
+                .join("index.lock")
+        );
+    }
+
+    #[test]
+    fn create_workspace_dirs_creates_nested_layout() {
+        let temp = TempDir::new().expect("create temp dir");
+        let root = temp.path().join("workspace-1");
+
+        create_workspace_dirs(&root).expect("create workspace dirs");
+
+        assert!(root.join("repos").is_dir());
+        assert!(root.join("runs").is_dir());
+        assert!(root.join("knowledge-base").join("staging").is_dir());
+        assert!(root.join("notes").join("workspace").is_dir());
     }
 
     #[test]

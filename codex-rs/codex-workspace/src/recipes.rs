@@ -132,7 +132,7 @@ ata workspace audit --workspace "$WID" \
 
 const RECIPE_LINK_ADD: &str = r#"# Add a link between two resources
 ata workspace add-entry --collection links \
-  --json '{"from":{"type":"<from_type>","id":"<from_id>"},"to":{"type":"<to_type>","id":"<to_id>"},"kind":"<kind>"}' \
+  --json '{"id":"link-<unique_id>","from":{"type":"<from_type>","id":"<from_id>"},"to":{"type":"<to_type>","id":"<to_id>"},"kind":"<kind>"}' \
   --workspace "$WID"
 # Common kinds: implements, uses, produces, derived_from, related_to
 "#;

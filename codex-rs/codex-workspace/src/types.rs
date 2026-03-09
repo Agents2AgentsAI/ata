@@ -35,6 +35,25 @@ pub struct WorkspaceManifest {
     pub extra: Map<String, Value>,
 }
 
+impl WorkspaceManifest {
+    pub fn repo_by_alias(&self, alias: &str) -> Result<&RepoEntry, crate::error::WorkspaceError> {
+        self.repos
+            .iter()
+            .find(|repo| repo.alias == alias)
+            .ok_or_else(|| crate::error::WorkspaceError::EntryNotFound(alias.to_string()))
+    }
+
+    pub fn repo_by_alias_mut(
+        &mut self,
+        alias: &str,
+    ) -> Result<&mut RepoEntry, crate::error::WorkspaceError> {
+        self.repos
+            .iter_mut()
+            .find(|repo| repo.alias == alias)
+            .ok_or_else(|| crate::error::WorkspaceError::EntryNotFound(alias.to_string()))
+    }
+}
+
 /// Repository entry in the manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +69,20 @@ pub struct RepoEntry {
     pub state: GitState,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+impl RepoEntry {
+    pub fn effective_sha(&self) -> &str {
+        if !self.pin.pinned_sha.is_empty() {
+            &self.pin.pinned_sha
+        } else {
+            &self.state.head_sha
+        }
+    }
+
+    pub fn checkout_path_buf(&self, workspace_root: &std::path::Path) -> std::path::PathBuf {
+        workspace_root.join(&self.checkout_path)
+    }
 }
 
 /// Run entry in the manifest.
@@ -144,9 +177,9 @@ pub struct Policies {
 pub struct DefaultClonePolicy {
     #[serde(default = "default_depth")]
     pub depth: i64,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_single_branch")]
     pub single_branch: bool,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_no_tags")]
     pub no_tags: bool,
     #[serde(default = "default_filter")]
     pub filter: String,
@@ -210,31 +243,41 @@ pub enum LfsPolicy {
     Never,
 }
 
+const DEFAULT_CLONE_DEPTH: i64 = 1;
+const DEFAULT_CLONE_SINGLE_BRANCH: bool = true;
+const DEFAULT_CLONE_NO_TAGS: bool = true;
+const DEFAULT_CLONE_FILTER: &str = "blob:limit=1m";
+const DEFAULT_CLONE_SUBMODULES: SubmodulePolicy = SubmodulePolicy::None;
+const DEFAULT_CLONE_LFS: LfsPolicy = LfsPolicy::Auto;
+
 fn default_depth() -> i64 {
-    1
+    DEFAULT_CLONE_DEPTH
 }
-fn default_true() -> bool {
-    true
+fn default_single_branch() -> bool {
+    DEFAULT_CLONE_SINGLE_BRANCH
+}
+fn default_no_tags() -> bool {
+    DEFAULT_CLONE_NO_TAGS
 }
 fn default_filter() -> String {
-    "blob:limit=1m".to_string()
+    DEFAULT_CLONE_FILTER.to_string()
 }
 fn default_submodules() -> SubmodulePolicy {
-    SubmodulePolicy::None
+    DEFAULT_CLONE_SUBMODULES
 }
 fn default_lfs() -> LfsPolicy {
-    LfsPolicy::Auto
+    DEFAULT_CLONE_LFS
 }
 
 impl Default for DefaultClonePolicy {
     fn default() -> Self {
         Self {
-            depth: 1,
-            single_branch: true,
-            no_tags: true,
-            filter: "blob:limit=1m".to_string(),
-            submodules: SubmodulePolicy::None,
-            lfs: LfsPolicy::Auto,
+            depth: DEFAULT_CLONE_DEPTH,
+            single_branch: DEFAULT_CLONE_SINGLE_BRANCH,
+            no_tags: DEFAULT_CLONE_NO_TAGS,
+            filter: DEFAULT_CLONE_FILTER.to_string(),
+            submodules: DEFAULT_CLONE_SUBMODULES,
+            lfs: DEFAULT_CLONE_LFS,
             extra: Map::new(),
         }
     }
@@ -362,5 +405,69 @@ pub fn new_manifest(workspace_id: &str, name: &str) -> WorkspaceManifest {
         },
         labels: Map::new(),
         extra: Map::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn repo_helpers_find_alias_and_prefer_pinned_sha() {
+        let mut manifest = new_manifest("workspace-1", "Workspace One");
+        manifest.repos.push(RepoEntry {
+            id: "repo-1".to_string(),
+            alias: "repo".to_string(),
+            repo_key: "org/repo".to_string(),
+            remote_url: "https://github.com/org/repo.git".to_string(),
+            checkout_path: "repos/repo".to_string(),
+            notes_path: "notes/repos/repo".to_string(),
+            clone: CloneRecord {
+                depth: 1,
+                single_branch: true,
+                no_tags: true,
+                filter: "blob:limit=1m".to_string(),
+                submodules: SubmodulePolicy::None,
+                lfs: LfsPolicy::Auto,
+                extra: Map::new(),
+            },
+            pin: PinState {
+                mode: PinMode::Pinned,
+                pinned_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
+                extra: Map::new(),
+            },
+            state: GitState {
+                head_sha: "fedcba9876543210fedcba9876543210fedcba98".to_string(),
+                head_ref: "main".to_string(),
+                default_branch: "main".to_string(),
+                shallow: false,
+                extra: Map::new(),
+            },
+            extra: Map::new(),
+        });
+
+        let repo = manifest.repo_by_alias("repo").expect("find repo by alias");
+        assert_eq!(
+            repo.effective_sha(),
+            "0123456789abcdef0123456789abcdef01234567"
+        );
+        assert_eq!(
+            repo.checkout_path_buf(std::path::Path::new("/tmp/workspace")),
+            std::path::Path::new("/tmp/workspace").join("repos/repo")
+        );
+
+        manifest
+            .repo_by_alias_mut("repo")
+            .expect("find mutable repo by alias")
+            .pin
+            .pinned_sha = String::new();
+        assert_eq!(
+            manifest
+                .repo_by_alias("repo")
+                .expect("find repo after mutation")
+                .effective_sha(),
+            "fedcba9876543210fedcba9876543210fedcba98"
+        );
     }
 }

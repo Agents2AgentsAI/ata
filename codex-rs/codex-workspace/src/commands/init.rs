@@ -32,9 +32,7 @@ pub fn run(name: &str) -> Result<String, WorkspaceError> {
     };
 
     let root = paths::workspace_root(&workspace_id);
-    for sub in paths::init_dirs().into_iter().filter(|sub| !sub.is_empty()) {
-        std::fs::create_dir_all(root.join(sub))?;
-    }
+    paths::create_workspace_dirs(&root)?;
 
     write_manifest_atomic(&workspace_id, &new_manifest(&workspace_id, name))?;
     Ok(workspace_id)

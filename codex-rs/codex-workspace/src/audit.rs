@@ -7,16 +7,11 @@ use serde_json::Value;
 
 /// Build the audit actor from environment variables.
 pub fn build_actor() -> AuditActor {
-    let session_id = std::env::var("CODEX_SESSION_ID")
-        .ok()
-        .filter(|s| !s.is_empty());
-    let thread_id = std::env::var("CODEX_THREAD_ID")
-        .ok()
-        .filter(|s| !s.is_empty());
+    let context = paths::SessionContext::from_env();
     AuditActor {
         kind: "agent".to_string(),
-        session_id,
-        thread_id,
+        session_id: context.session_id,
+        thread_id: context.thread_id,
     }
 }
 

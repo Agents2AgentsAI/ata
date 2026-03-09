@@ -24,15 +24,13 @@ pub fn run(
 
     // 1. Verify source repo exists
     let manifest = read_manifest(workspace_id)?;
-    let _source_repo = manifest
-        .repos
-        .iter()
-        .find(|r| r.alias == source_alias)
-        .ok_or_else(|| WorkspaceError::SourceRepoNotFound(source_alias.to_string()))?;
+    manifest
+        .repo_by_alias(source_alias)
+        .map_err(|_| WorkspaceError::SourceRepoNotFound(source_alias.to_string()))?;
 
     let version = manifest.manifest_version;
     let root = paths::workspace_root(workspace_id);
-    let repo_path = root.join("repos").join(source_alias);
+    let repo_path = paths::repo_checkout_path(workspace_id, source_alias);
 
     // 2. Create run structure
     let run_id = make_id("run");
@@ -69,13 +67,7 @@ pub fn run(
     }
 
     // 4. Read HEAD SHA from materialized code
-    let head_sha = std::process::Command::new("git")
-        .args(["-C", code_root.to_str().unwrap_or("."), "rev-parse", "HEAD"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default();
+    let head_sha = crate::git::read_git_state(&code_root).head_sha;
 
     // 5. Write run.json
     let now = chrono::Utc::now().timestamp();

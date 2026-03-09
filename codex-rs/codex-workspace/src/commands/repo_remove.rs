@@ -10,11 +10,7 @@ pub fn run(workspace_id: &str, alias: &str) -> Result<(), WorkspaceError> {
     let alias_for_closure = alias_owned.clone();
     let mut removed_id = None;
     with_locked_manifest(workspace_id, None, |m| {
-        removed_id = m
-            .repos
-            .iter()
-            .find(|r| r.alias == alias_for_closure)
-            .map(|r| r.id.clone());
+        removed_id = Some(m.repo_by_alias(&alias_for_closure)?.id.clone());
         m.repos.retain(|r| r.alias != alias_for_closure);
         Ok(())
     })?;
