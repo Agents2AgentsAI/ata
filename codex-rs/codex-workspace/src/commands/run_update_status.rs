@@ -10,9 +10,7 @@ pub fn run(
     status: &str,
 ) -> Result<WorkspaceManifest, WorkspaceError> {
     let run_id = run_id.to_string();
-    let status = status
-        .parse::<RunStatus>()
-        .map_err(WorkspaceError::InvalidRunStatus)?;
+    let status = status.parse::<RunStatus>()?;
 
     with_locked_manifest(workspace_id, None, move |m| {
         let entry = m

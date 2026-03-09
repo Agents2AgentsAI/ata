@@ -1,5 +1,6 @@
 use crate::error::WorkspaceError;
 use crate::manifest::with_locked_manifest;
+use crate::types::MANIFEST_COLLECTIONS;
 use crate::types::WorkspaceManifest;
 use serde_json::Value;
 
@@ -33,9 +34,11 @@ fn validate_mutable_path(path: &str) -> Result<(), WorkspaceError> {
         "createdAt",
         "updatedAt",
         "manifestVersion",
+        "repos",
+        "runs",
     ];
     let top_level = path.split('.').next().unwrap_or("");
-    if protected.contains(&top_level) {
+    if protected.contains(&top_level) || MANIFEST_COLLECTIONS.contains(&top_level) {
         return Err(WorkspaceError::ProtectedFieldPath(path.to_string()));
     }
     Ok(())
@@ -82,6 +85,14 @@ mod tests {
         ));
         assert!(matches!(
             validate_mutable_path("manifestVersion"),
+            Err(WorkspaceError::ProtectedFieldPath(_))
+        ));
+        assert!(matches!(
+            validate_mutable_path("repos"),
+            Err(WorkspaceError::ProtectedFieldPath(_))
+        ));
+        assert!(matches!(
+            validate_mutable_path("indexes"),
             Err(WorkspaceError::ProtectedFieldPath(_))
         ));
     }

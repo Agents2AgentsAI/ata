@@ -169,7 +169,7 @@ pub enum RunStatus {
 }
 
 impl std::str::FromStr for RunStatus {
-    type Err = String;
+    type Err = crate::error::WorkspaceError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
@@ -178,7 +178,9 @@ impl std::str::FromStr for RunStatus {
             "completed" => Ok(Self::Completed),
             "failed" => Ok(Self::Failed),
             "cancelled" => Ok(Self::Cancelled),
-            other => Err(other.to_string()),
+            other => Err(crate::error::WorkspaceError::InvalidRunStatus(
+                other.to_string(),
+            )),
         }
     }
 }
@@ -294,7 +296,7 @@ pub struct AuditActor {
 }
 
 /// Summary info for workspace listing.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceSummary {
     pub id: String,
@@ -305,11 +307,25 @@ pub struct WorkspaceSummary {
 
 /// Schema version constant.
 pub const SCHEMA_VERSION: u32 = 2;
+pub const MANIFEST_COLLECTIONS: &[&str] = &[
+    "papers",
+    "datasets",
+    "artifacts",
+    "links",
+    "snapshots",
+    "indexes",
+];
 
 pub fn manifest_collection_mut<'a>(
     manifest: &'a mut WorkspaceManifest,
     collection: &str,
 ) -> Result<&'a mut Vec<Value>, crate::error::WorkspaceError> {
+    if !MANIFEST_COLLECTIONS.contains(&collection) {
+        return Err(crate::error::WorkspaceError::UnknownCollection(
+            collection.to_string(),
+        ));
+    }
+
     match collection {
         "papers" => Ok(&mut manifest.papers),
         "datasets" => Ok(&mut manifest.datasets),
@@ -317,9 +333,7 @@ pub fn manifest_collection_mut<'a>(
         "links" => Ok(&mut manifest.links),
         "snapshots" => Ok(&mut manifest.snapshots),
         "indexes" => Ok(&mut manifest.indexes),
-        _ => Err(crate::error::WorkspaceError::UnknownCollection(
-            collection.to_string(),
-        )),
+        _ => unreachable!("manifest collections list must stay in sync"),
     }
 }
 

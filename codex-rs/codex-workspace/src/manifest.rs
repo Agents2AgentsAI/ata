@@ -6,13 +6,15 @@ use std::path::Path;
 
 /// Read a workspace manifest from disk.
 pub fn read_manifest(workspace_id: &str) -> Result<WorkspaceManifest, WorkspaceError> {
-    let mp = paths::manifest_path(workspace_id);
-    if !mp.is_file() {
-        return Err(WorkspaceError::ManifestNotFound(mp));
-    }
-    let data = std::fs::read_to_string(&mp)?;
-    let manifest: WorkspaceManifest = serde_json::from_str(&data)?;
-    Ok(manifest)
+    read_manifest_path(&paths::manifest_path(workspace_id))
+}
+
+/// Read a workspace manifest from disk under an explicit Codex home.
+pub fn read_manifest_for(
+    codex_home: &Path,
+    workspace_id: &str,
+) -> Result<WorkspaceManifest, WorkspaceError> {
+    read_manifest_path(&paths::manifest_path_for(codex_home, workspace_id))
 }
 
 /// Write a manifest atomically (write to temp, fsync, rename, fsync dir).
@@ -20,7 +22,16 @@ pub fn write_manifest_atomic(
     workspace_id: &str,
     manifest: &WorkspaceManifest,
 ) -> Result<(), WorkspaceError> {
-    let mp = paths::manifest_path(workspace_id);
+    write_manifest_atomic_for(&paths::codex_home(), workspace_id, manifest)
+}
+
+/// Write a manifest atomically under an explicit Codex home.
+pub fn write_manifest_atomic_for(
+    codex_home: &Path,
+    workspace_id: &str,
+    manifest: &WorkspaceManifest,
+) -> Result<(), WorkspaceError> {
+    let mp = paths::manifest_path_for(codex_home, workspace_id);
     let data = serde_json::to_string_pretty(manifest)?;
     atomic_write(&mp, data.as_bytes())
 }
@@ -84,5 +95,14 @@ where
     bump_version(&mut manifest);
     write_manifest_atomic(workspace_id, &manifest)?;
 
+    Ok(manifest)
+}
+
+fn read_manifest_path(path: &Path) -> Result<WorkspaceManifest, WorkspaceError> {
+    if !path.is_file() {
+        return Err(WorkspaceError::ManifestNotFound(path.to_path_buf()));
+    }
+    let data = std::fs::read_to_string(path)?;
+    let manifest: WorkspaceManifest = serde_json::from_str(&data)?;
     Ok(manifest)
 }

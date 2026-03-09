@@ -1,10 +1,8 @@
 use crate::audit::write_audit;
 use crate::error::WorkspaceError;
 use crate::git;
-use crate::lock::FileLock;
-use crate::manifest::bump_version;
 use crate::manifest::read_manifest;
-use crate::manifest::write_manifest_atomic;
+use crate::manifest::with_locked_manifest;
 use crate::paths;
 use crate::resolve::is_reserved_alias;
 use crate::types::CloneRecord;
@@ -46,12 +44,7 @@ pub fn run(
 
     let root = paths::workspace_root(workspace_id);
     let clone_dest = root.join("repos").join(alias);
-    // Keep clone side effects, manifest mutation, notes creation, and audit ordering
-    // under one workspace lock. `with_locked_manifest` is not a good fit here because
-    // the external `git clone` must be ordered against the manifest snapshot we validate.
-    let lock = FileLock::acquire(&paths::lock_path(workspace_id))?;
-
-    let mut manifest = read_manifest(workspace_id)?;
+    let manifest = read_manifest(workspace_id)?;
     check_host_allowlist(url, manifest.policies.repo_hosts_allowlist.as_deref())?;
 
     if manifest.repos.iter().any(|repo| repo.alias == alias) {
@@ -61,7 +54,7 @@ pub fn run(
         return Err(WorkspaceError::DirectoryExists(clone_dest));
     }
 
-    let clone_policy = manifest.policies.default_clone.clone();
+    let clone_policy = manifest.policies.default_clone;
     let mut clone_args = git::build_clone_args(&clone_policy, full);
     let mirror_path = paths::mirror_cache_path(url);
     if git::prepare_reference_mirror(url, &mirror_path) {
@@ -83,6 +76,7 @@ pub fn run(
     let repo_key = git::derive_repo_key(url);
     let alias_owned = alias.to_string();
     let notes_dir = root.join("notes").join("repos").join(&alias_owned);
+    let notes_dir_existed = notes_dir.exists();
     std::fs::create_dir_all(&notes_dir)?;
 
     let clone_record = if full {
@@ -107,7 +101,7 @@ pub fn run(
         }
     };
 
-    manifest.repos.push(RepoEntry {
+    let repo_entry = RepoEntry {
         id: repo_id.clone(),
         alias: alias.to_string(),
         repo_key,
@@ -122,10 +116,29 @@ pub fn run(
         },
         state: git_state.clone(),
         extra: Map::new(),
+    };
+    let url_owned = url.to_string();
+    let alias_for_manifest = alias_owned.clone();
+    let update_result = with_locked_manifest(workspace_id, None, move |manifest| {
+        check_host_allowlist(
+            &url_owned,
+            manifest.policies.repo_hosts_allowlist.as_deref(),
+        )?;
+        if manifest
+            .repos
+            .iter()
+            .any(|repo| repo.alias == alias_for_manifest)
+        {
+            return Err(WorkspaceError::AliasExists(alias_for_manifest));
+        }
+        manifest.repos.push(repo_entry);
+        Ok(())
     });
-    bump_version(&mut manifest);
-    if let Err(err) = write_manifest_atomic(workspace_id, &manifest) {
+    if let Err(err) = update_result {
         let _ = std::fs::remove_dir_all(&clone_dest);
+        if !notes_dir_existed {
+            let _ = std::fs::remove_dir_all(&notes_dir);
+        }
         return Err(err);
     }
 
@@ -135,7 +148,6 @@ pub fn run(
         vec![json!({"type": "repo", "id": &repo_id, "alias": &alias_owned})],
         None,
     )?;
-    drop(lock);
 
     Ok(json!({
         "repoId": repo_id,

@@ -93,6 +93,9 @@ pub enum WorkspaceError {
     #[error("--target-id is required for lock level '{0}'")]
     TargetIdRequired(String),
 
+    #[error("invalid target id '{id}': must be a single relative path component")]
+    InvalidTargetId { id: String },
+
     #[error("unknown lock level: {0}")]
     UnknownLockLevel(String),
 
@@ -128,6 +131,9 @@ pub enum WorkspaceError {
 
     #[error("field path '{0}' is invalid or unsupported")]
     InvalidFieldPath(String),
+
+    #[error("collection entry must be a JSON object with a non-empty string 'id' field")]
+    InvalidCollectionEntryId,
 
     #[error("directory already exists: {0}")]
     DirectoryExists(PathBuf),

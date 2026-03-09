@@ -104,6 +104,13 @@ pub enum Command {
         limit: usize,
     },
 
+    /// Validate workspace manifest and on-disk repo/run directories.
+    Validate {
+        /// Workspace ID (default: resolved).
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+
     /// Run command under fine-grained lock.
     RunLocked {
         /// Lock level.
@@ -397,6 +404,13 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
             Ok(0)
         }
 
+        Command::Validate { workspace } => {
+            let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
+            let report = commands::validate::run(&wid)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(if report.ok { 0 } else { 1 })
+        }
+
         Command::RunLocked {
             level,
             workspace,
@@ -587,17 +601,19 @@ fn resolve_workspace_or_create_from_spec(
     explicit: Option<&str>,
     spec_path: &str,
 ) -> Result<String, WorkspaceError> {
-    // If explicit workspace given, use it
-    if let Some(wid) = explicit {
-        return Ok(wid.to_string());
-    }
+    let codex_home = paths::codex_home();
+    let cwd = std::env::current_dir().ok();
+    let session_id = std::env::var("CODEX_SESSION_ID").ok();
+    let thread_id = std::env::var("CODEX_THREAD_ID").ok();
 
-    // Try normal resolution (project pin, session, global)
-    let resolved = workspace_resolution::resolve_workspace(None)?;
-
-    // If we resolved to something other than "global", use it
-    if resolved != "global" {
-        return Ok(resolved);
+    if let Some(wid) = workspace_resolution::resolve_selected_workspace_for(
+        &codex_home,
+        cwd.as_deref(),
+        explicit,
+        session_id.as_deref(),
+        thread_id.as_deref(),
+    )? {
+        return Ok(wid);
     }
 
     // Create a new workspace from the spec name
