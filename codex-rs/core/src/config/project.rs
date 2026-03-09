@@ -26,11 +26,17 @@ pub(crate) fn set_project_trust_level_inner(
     {
         let root = doc.as_table_mut();
         let existing_projects = root.get("projects").cloned();
-        if existing_projects.as_ref().is_none_or(|item| !item.is_table()) {
+        if existing_projects
+            .as_ref()
+            .is_none_or(|item| !item.is_table())
+        {
             let mut projects_tbl = toml_edit::Table::new();
             projects_tbl.set_implicit(true);
 
-            if let Some(inline_tbl) = existing_projects.as_ref().and_then(|item| item.as_inline_table()) {
+            if let Some(inline_tbl) = existing_projects
+                .as_ref()
+                .and_then(|item| item.as_inline_table())
+            {
                 for (key, value) in inline_tbl.iter() {
                     if let Some(inner_tbl) = value.as_inline_table() {
                         let new_tbl = inner_tbl.clone().into_table();

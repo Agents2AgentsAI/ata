@@ -3,9 +3,6 @@ use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
 
-use codex_app_server_protocol::AuthMode as ApiAuthMode;
-
-use crate::auth::OPENAI_API_KEY_ENV_VAR;
 use crate::auth::storage::AUTH_JSON_VERSION;
 use crate::auth::storage::AuthDotJson;
 
@@ -35,7 +32,9 @@ pub struct ProviderOauthCredential {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProviderCredential {
-    Api { key: String },
+    Api {
+        key: String,
+    },
     Oauth {
         #[serde(flatten)]
         credential: ProviderOauthCredential,

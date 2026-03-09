@@ -12,7 +12,7 @@ pub use storage_ops::get_provider_api_key;
 pub use storage_ops::get_provider_oauth_credential;
 pub use storage_ops::login_with_provider_api_key;
 pub use storage_ops::login_with_provider_oauth;
-pub(super) use storage_ops::remove_provider;
+pub(crate) use storage_ops::remove_provider;
 pub use types::ANTHROPIC_API_KEY_ENV_VAR;
 pub use types::GOOGLE_API_KEY_ENV_VAR;
 pub use types::GeminiAuthSource;
@@ -28,11 +28,15 @@ pub use types::ProviderOauthCredential;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::AuthCredentialsStoreMode;
+    use crate::auth::AuthDotJson;
+    use crate::auth::OPENAI_API_KEY_ENV_VAR;
     use crate::auth::storage::AUTH_JSON_VERSION;
     use crate::auth::storage::AuthStorageBackend;
     use crate::auth::storage::FileAuthStorage;
     use crate::auth::storage::get_auth_file;
     use crate::auth::test_utils::EnvVarGuard;
+    use chrono::Utc;
     use codex_app_server_protocol::AuthMode;
     use pretty_assertions::assert_eq;
     use serde_json::json;

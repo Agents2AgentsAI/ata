@@ -85,7 +85,7 @@ pub fn get_provider_oauth_credential(
     }
 }
 
-pub(super) fn remove_provider(
+pub(crate) fn remove_provider(
     codex_home: &Path,
     provider_id: &str,
     auth_credentials_store_mode: AuthCredentialsStoreMode,

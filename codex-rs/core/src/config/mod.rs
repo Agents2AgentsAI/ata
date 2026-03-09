@@ -110,6 +110,9 @@ pub use codex_config::ConstraintResult;
 pub use codex_network_proxy::NetworkProxyAuditMetadata;
 
 pub use managed_features::ManagedFeatures;
+use mcp_config::constrain_mcp_servers;
+#[cfg(test)]
+use mcp_config::filter_mcp_servers_by_requirements;
 pub use mcp_config::load_global_mcp_servers;
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
@@ -117,12 +120,11 @@ pub use permissions::NetworkToml;
 pub use permissions::PermissionsToml;
 pub use project::ProjectConfig;
 pub use project::set_project_trust_level;
+pub(crate) use project::set_project_trust_level_inner;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
-pub(crate) use project::set_project_trust_level_inner;
-pub(crate) use web_search::resolve_web_search_mode_for_turn;
-use mcp_config::constrain_mcp_servers;
 use web_search::resolve_web_search_mode;
+pub(crate) use web_search::resolve_web_search_mode_for_turn;
 
 /// Well-known prefix for provider-fallback warnings in `startup_warnings`.
 /// The TUI checks for this prefix to force the login screen when a fallback
