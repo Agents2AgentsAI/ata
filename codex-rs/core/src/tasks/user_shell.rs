@@ -32,7 +32,7 @@ use crate::tools::format_exec_output_str;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::user_shell_command::user_shell_command_record_item;
 use crate::workspace_kb::CODEX_KB_PATH_ENV_VAR;
-use crate::workspace_kb::resolve_kb_path;
+use crate::workspace_kb::resolve_kb_env;
 
 use super::SessionTask;
 use super::SessionTaskContext;
@@ -126,7 +126,7 @@ pub(crate) async fn execute_user_shell_command(
     let use_login_shell = true;
     let session_shell = session.user_shell();
     let thread_id = session.conversation_id.to_string();
-    let kb_path = resolve_kb_path(
+    let kb_env = resolve_kb_env(
         turn_context.config.codex_home.as_path(),
         turn_context.cwd.as_path(),
         turn_context
@@ -140,11 +140,9 @@ pub(crate) async fn execute_user_shell_command(
             .get(CODEX_SESSION_ID_ENV_VAR)
             .map(String::as_str),
         Some(thread_id.as_str()),
-    )
-    .to_string_lossy()
-    .to_string();
+    );
     let mut explicit_env_overrides = turn_context.shell_environment_policy.r#set.clone();
-    explicit_env_overrides.insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_path.clone());
+    explicit_env_overrides.insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_env.kb_path.clone());
     let display_command = session_shell.derive_exec_args(&command, use_login_shell);
     let exec_command = maybe_wrap_shell_lc_with_snapshot(
         &display_command,
@@ -156,7 +154,7 @@ pub(crate) async fn execute_user_shell_command(
         &turn_context.shell_environment_policy,
         Some(session.conversation_id),
     );
-    env.insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_path);
+    env.insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_env.kb_path);
 
     let call_id = Uuid::new_v4().to_string();
     let raw_command = command;

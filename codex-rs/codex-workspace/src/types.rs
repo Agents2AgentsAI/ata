@@ -174,18 +174,13 @@ pub struct Policies {
 /// Default clone policy settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(default)]
 pub struct DefaultClonePolicy {
-    #[serde(default = "default_depth")]
     pub depth: i64,
-    #[serde(default = "default_single_branch")]
     pub single_branch: bool,
-    #[serde(default = "default_no_tags")]
     pub no_tags: bool,
-    #[serde(default = "default_filter")]
     pub filter: String,
-    #[serde(default = "default_submodules")]
     pub submodules: SubmodulePolicy,
-    #[serde(default = "default_lfs")]
     pub lfs: LfsPolicy,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -249,25 +244,6 @@ const DEFAULT_CLONE_NO_TAGS: bool = true;
 const DEFAULT_CLONE_FILTER: &str = "blob:limit=1m";
 const DEFAULT_CLONE_SUBMODULES: SubmodulePolicy = SubmodulePolicy::None;
 const DEFAULT_CLONE_LFS: LfsPolicy = LfsPolicy::Auto;
-
-fn default_depth() -> i64 {
-    DEFAULT_CLONE_DEPTH
-}
-fn default_single_branch() -> bool {
-    DEFAULT_CLONE_SINGLE_BRANCH
-}
-fn default_no_tags() -> bool {
-    DEFAULT_CLONE_NO_TAGS
-}
-fn default_filter() -> String {
-    DEFAULT_CLONE_FILTER.to_string()
-}
-fn default_submodules() -> SubmodulePolicy {
-    DEFAULT_CLONE_SUBMODULES
-}
-fn default_lfs() -> LfsPolicy {
-    DEFAULT_CLONE_LFS
-}
 
 impl Default for DefaultClonePolicy {
     fn default() -> Self {
@@ -350,35 +326,33 @@ pub struct WorkspaceSummary {
 
 /// Schema version constant.
 pub const SCHEMA_VERSION: u32 = 2;
-pub const MANIFEST_COLLECTIONS: &[&str] = &[
-    "papers",
-    "datasets",
-    "artifacts",
-    "links",
-    "snapshots",
-    "indexes",
-];
 
-pub fn manifest_collection_mut<'a>(
-    manifest: &'a mut WorkspaceManifest,
-    collection: &str,
-) -> Result<&'a mut Vec<Value>, crate::error::WorkspaceError> {
-    if !MANIFEST_COLLECTIONS.contains(&collection) {
-        return Err(crate::error::WorkspaceError::UnknownCollection(
-            collection.to_string(),
-        ));
-    }
+macro_rules! manifest_collections {
+    ($( $name:literal => $field:ident ),+ $(,)?) => {
+        pub const MANIFEST_COLLECTIONS: &[&str] = &[$($name),+];
 
-    match collection {
-        "papers" => Ok(&mut manifest.papers),
-        "datasets" => Ok(&mut manifest.datasets),
-        "artifacts" => Ok(&mut manifest.artifacts),
-        "links" => Ok(&mut manifest.links),
-        "snapshots" => Ok(&mut manifest.snapshots),
-        "indexes" => Ok(&mut manifest.indexes),
-        _ => unreachable!("manifest collections list must stay in sync"),
-    }
+        pub fn manifest_collection_mut<'a>(
+            manifest: &'a mut WorkspaceManifest,
+            collection: &str,
+        ) -> Result<&'a mut Vec<Value>, crate::error::WorkspaceError> {
+            match collection {
+                $( $name => Ok(&mut manifest.$field), )+
+                _ => Err(crate::error::WorkspaceError::UnknownCollection(
+                    collection.to_string(),
+                )),
+            }
+        }
+    };
 }
+
+manifest_collections!(
+    "papers" => papers,
+    "datasets" => datasets,
+    "artifacts" => artifacts,
+    "links" => links,
+    "snapshots" => snapshots,
+    "indexes" => indexes,
+);
 
 /// Create a new default manifest.
 pub fn new_manifest(workspace_id: &str, name: &str) -> WorkspaceManifest {
@@ -468,6 +442,20 @@ mod tests {
                 .expect("find repo after mutation")
                 .effective_sha(),
             "fedcba9876543210fedcba9876543210fedcba98"
+        );
+    }
+
+    #[test]
+    fn default_clone_policy_serde_uses_default_impl_for_missing_fields() {
+        let policy: DefaultClonePolicy =
+            serde_json::from_str(r#"{"depth": 5}"#).expect("deserialize clone policy");
+
+        assert_eq!(
+            policy,
+            DefaultClonePolicy {
+                depth: 5,
+                ..DefaultClonePolicy::default()
+            }
         );
     }
 }
