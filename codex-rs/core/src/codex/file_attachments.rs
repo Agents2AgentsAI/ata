@@ -27,11 +27,22 @@ use codex_utils_file::file_name_or_default;
 use futures::stream::StreamExt;
 use tracing::warn;
 
+mod cache;
+mod paths;
+mod provider;
+
 use super::Session;
 use super::TurnContext;
 use crate::ModelProviderInfo;
 use crate::config::Config;
 use crate::model_provider_info::WireApi;
+use cache::dedup_local_files_from_cache;
+use cache::record_upload_paths;
+use paths::inject_local_pdf_paths_from_text_inputs;
+pub(crate) use provider::file_capabilities_for_provider;
+use provider::max_raw_inline_bytes;
+use provider::upload_base_url_for_provider;
+use provider::upload_service_for_provider;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum UrlAttachmentInjectionError {
@@ -70,332 +81,6 @@ pub(crate) enum FileInputPreparationError {
         total_mb: f64,
         max_mb: f64,
     },
-}
-
-pub(crate) fn file_capabilities_for_provider(
-    provider: &ModelProviderInfo,
-    model: Option<&str>,
-) -> (String, FileCapabilityConfig) {
-    let provider_id = match provider.wire_api {
-        WireApi::Responses => "openai",
-        WireApi::AnthropicMessages => "anthropic",
-        WireApi::GeminiGenerate => "gemini",
-    };
-    (
-        provider_id.to_string(),
-        file_capabilities_for(provider_id, model),
-    )
-}
-
-/// Rewrite `LocalFile` inputs to `UploadedFile` when the cache has a valid
-/// entry for the same canonical path, provider, and mtime.
-fn dedup_local_files_from_cache(
-    inputs: &mut [UserInput],
-    cache: &FileReferenceCache,
-    provider_id: &str,
-    now: SystemTime,
-) {
-    for input in inputs.iter_mut() {
-        let UserInput::LocalFile { path } = input else {
-            continue;
-        };
-        let Ok(canonical) = std::fs::canonicalize(&*path) else {
-            tracing::debug!(path = %path.display(), "file dedup: canonicalize failed");
-            continue;
-        };
-        let Ok(metadata) = std::fs::metadata(&canonical) else {
-            tracing::debug!(path = %canonical.display(), "file dedup: metadata failed");
-            continue;
-        };
-        let Ok(mtime) = metadata.modified() else {
-            tracing::debug!(path = %canonical.display(), "file dedup: mtime failed");
-            continue;
-        };
-
-        if let Some(hit) = cache.lookup_by_path(&canonical, mtime, provider_id, now) {
-            tracing::debug!(
-                path = %path.display(),
-                file_id = %hit.file_id,
-                "reusing previously uploaded file"
-            );
-            *input = UserInput::UploadedFile {
-                file_id: hit.file_id,
-                mime_type: hit.mime_type,
-                filename: hit.filename,
-                source_path: std::mem::take(path),
-            };
-        }
-    }
-}
-
-fn extract_local_pdf_paths_from_text_inputs(
-    inputs: &[UserInput],
-    cwd: &Path,
-    sandbox_policy: &SandboxPolicy,
-) -> Vec<PathBuf> {
-    let mut discovered = Vec::new();
-    let mut seen = HashSet::new();
-    for input in inputs {
-        let UserInput::Text { text, .. } = input else {
-            continue;
-        };
-        for token in split_text_path_tokens(text) {
-            let candidate = strip_wrapping_quote_pair(token);
-            if !is_pdf_path_token(candidate) || looks_like_url(candidate) {
-                continue;
-            }
-            let resolved = resolve_candidate_path(candidate, cwd);
-            let Ok(canonical) = std::fs::canonicalize(&resolved) else {
-                continue;
-            };
-            if !canonical.is_file()
-                || !is_canonical_path_within_allowed_roots(&canonical, cwd, sandbox_policy)
-            {
-                continue;
-            }
-            if seen.insert(canonical.clone()) {
-                discovered.push(canonical);
-            }
-        }
-    }
-    discovered
-}
-
-fn split_text_path_tokens(text: &str) -> Vec<&str> {
-    let mut tokens = Vec::new();
-    let mut chars = text.char_indices().peekable();
-
-    while let Some((start, ch)) = chars.next() {
-        if ch.is_whitespace() {
-            continue;
-        }
-
-        if ch == '"' || ch == '\'' {
-            let quote = ch;
-            let mut token_end = text.len();
-            let mut found_closing = false;
-            for (idx, next_ch) in chars.by_ref() {
-                if next_ch == quote {
-                    token_end = idx + next_ch.len_utf8();
-                    found_closing = true;
-                    break;
-                }
-            }
-
-            if found_closing
-                && chars
-                    .peek()
-                    .is_none_or(|(_, trailing)| trailing.is_whitespace())
-            {
-                tokens.push(&text[start..token_end]);
-                continue;
-            }
-
-            while let Some((idx, next_ch)) = chars.peek().copied() {
-                if next_ch.is_whitespace() {
-                    token_end = idx;
-                    break;
-                }
-                token_end = idx + next_ch.len_utf8();
-                let _ = chars.next();
-            }
-            tokens.push(&text[start..token_end]);
-            continue;
-        }
-
-        let mut token_end = text.len();
-        while let Some((idx, next_ch)) = chars.peek().copied() {
-            if next_ch.is_whitespace() {
-                token_end = idx;
-                break;
-            }
-            token_end = idx + next_ch.len_utf8();
-            let _ = chars.next();
-        }
-        tokens.push(&text[start..token_end]);
-    }
-
-    tokens
-}
-
-fn strip_wrapping_quote_pair(token: &str) -> &str {
-    if token.len() >= 2
-        && ((token.starts_with('"') && token.ends_with('"'))
-            || (token.starts_with('\'') && token.ends_with('\'')))
-    {
-        return &token[1..token.len() - 1];
-    }
-    token
-}
-
-fn is_pdf_path_token(token: &str) -> bool {
-    !token.is_empty() && token.to_ascii_lowercase().ends_with(".pdf")
-}
-
-fn looks_like_url(token: &str) -> bool {
-    token.contains("://")
-}
-
-fn resolve_candidate_path(token: &str, cwd: &Path) -> PathBuf {
-    let path = PathBuf::from(token);
-    if path.is_absolute() {
-        path
-    } else {
-        cwd.join(path)
-    }
-}
-
-fn canonical_or_path(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-}
-
-fn is_canonical_path_within_allowed_roots(
-    canonical_path: &Path,
-    cwd: &Path,
-    sandbox_policy: &SandboxPolicy,
-) -> bool {
-    let canonical_cwd = canonical_or_path(cwd);
-    if canonical_path.starts_with(&canonical_cwd) {
-        return true;
-    }
-
-    sandbox_policy
-        .get_writable_roots_with_cwd(cwd)
-        .iter()
-        .any(|root| {
-            if root.is_path_writable(canonical_path) {
-                return true;
-            }
-
-            let canonical_root = canonical_or_path(root.root.as_path());
-            if !canonical_path.starts_with(&canonical_root) {
-                return false;
-            }
-
-            for read_only_subpath in &root.read_only_subpaths {
-                let canonical_subpath = canonical_or_path(read_only_subpath.as_path());
-                if canonical_path.starts_with(&canonical_subpath) {
-                    return false;
-                }
-            }
-            true
-        })
-}
-
-pub(crate) fn inject_local_pdf_paths_from_text_inputs(
-    inputs: &mut Vec<UserInput>,
-    cwd: &Path,
-    sandbox_policy: &SandboxPolicy,
-) {
-    let mut seen_paths = HashSet::new();
-    for input in inputs.iter() {
-        match input {
-            UserInput::LocalFile { path } => {
-                seen_paths.insert(canonical_or_path(path));
-            }
-            UserInput::UploadedFile { source_path, .. } => {
-                seen_paths.insert(canonical_or_path(source_path));
-            }
-            _ => {}
-        }
-    }
-
-    let discovered = extract_local_pdf_paths_from_text_inputs(inputs, cwd, sandbox_policy);
-    for path in discovered {
-        if seen_paths.insert(path.clone()) {
-            inputs.push(UserInput::LocalFile { path });
-        }
-    }
-}
-
-/// After a successful upload round, record path→file_id mappings for future dedup.
-fn record_upload_paths(cache: &mut FileReferenceCache, inputs: &[UserInput]) {
-    for input in inputs {
-        let UserInput::UploadedFile {
-            file_id,
-            mime_type,
-            filename,
-            source_path,
-        } = input
-        else {
-            continue;
-        };
-        let Ok(canonical) = std::fs::canonicalize(source_path) else {
-            tracing::debug!(
-                path = %source_path.display(),
-                "record_upload_paths: canonicalize failed"
-            );
-            continue;
-        };
-        let Ok(metadata) = std::fs::metadata(&canonical) else {
-            tracing::debug!(
-                path = %canonical.display(),
-                "record_upload_paths: metadata failed"
-            );
-            continue;
-        };
-        let Ok(mtime) = metadata.modified() else {
-            tracing::debug!(path = %canonical.display(), "record_upload_paths: mtime failed");
-            continue;
-        };
-        let Some(uploaded) = cache.get(file_id) else {
-            tracing::warn!(
-                file_id,
-                "skipping path record: file_id not found in cache entries"
-            );
-            continue;
-        };
-        let (expires_at, provider) = (uploaded.expires_at, uploaded.provider.clone());
-        cache.record_path(
-            canonical.clone(),
-            file_id,
-            &provider,
-            mime_type.clone(),
-            filename.clone(),
-            mtime,
-            expires_at,
-        );
-        tracing::debug!(
-            path = %canonical.display(),
-            file_id,
-            provider,
-            "recorded file upload path in cache"
-        );
-    }
-}
-
-/// Convert a base64 payload budget into raw-byte budget using the 4:3 base64 expansion ratio.
-fn max_raw_inline_bytes(max_inline_payload_bytes: u64) -> u64 {
-    max_inline_payload_bytes.saturating_mul(3).saturating_div(4)
-}
-
-fn upload_base_url_for_provider(provider_id: &str, provider: &ModelProviderInfo) -> String {
-    let fallback = match provider_id {
-        "openai" => "https://api.openai.com",
-        "anthropic" => "https://api.anthropic.com",
-        "gemini" => "https://generativelanguage.googleapis.com",
-        _ => "",
-    };
-    let base = provider
-        .base_url
-        .as_deref()
-        .unwrap_or(fallback)
-        .trim_end_matches('/');
-
-    match provider_id {
-        "openai" | "anthropic" => base.strip_suffix("/v1").unwrap_or(base).to_string(),
-        "gemini" => base.strip_suffix("/v1beta").unwrap_or(base).to_string(),
-        _ => base.to_string(),
-    }
-}
-
-fn upload_service_for_provider(provider_id: &str) -> Option<Box<dyn FileUploadService>> {
-    match provider_id {
-        "openai" => Some(Box::new(OpenAiFileUpload)),
-        "anthropic" => Some(Box::new(AnthropicFileUpload)),
-        "gemini" => Some(Box::new(GeminiFileUpload)),
-        _ => None,
-    }
 }
 
 async fn delete_uploaded_files_best_effort(
@@ -917,6 +602,32 @@ impl Session {
     ) {
         let cache = self.services.file_reference_cache.lock().await;
         dedup_local_files_from_cache(input, &cache, provider_id, SystemTime::now());
+    }
+
+    pub(crate) async fn prepare_session_file_inputs(
+        &self,
+        input: &mut Vec<UserInput>,
+        provider: &ModelProviderInfo,
+        config: &Config,
+        cwd: &Path,
+        sandbox_policy: &SandboxPolicy,
+    ) -> Result<Vec<String>, FileInputPreparationError> {
+        inject_local_pdf_paths_from_text_inputs(input, cwd, sandbox_policy);
+
+        let (provider_id, _) = file_capabilities_for_provider(provider, config.model.as_deref());
+        self.dedup_local_files_for_provider(input, &provider_id)
+            .await;
+
+        let outcome = resolve_and_prepare_file_inputs(
+            input,
+            provider,
+            config,
+            self.file_upload_http_client(),
+        )
+        .await?;
+        self.record_uploaded_files_and_paths(outcome.uploaded_files, input)
+            .await;
+        Ok(outcome.warnings)
     }
 
     pub(crate) async fn record_uploaded_files_and_paths(
