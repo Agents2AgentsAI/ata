@@ -33,30 +33,31 @@ pub fn is_valid_commit_sha(sha: &str) -> bool {
     sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+fn git_output(repo_dir: &Path, args: &[&str]) -> Option<String> {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo_dir)
+        .args(args)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 /// Read HEAD sha, ref, and default branch from a cloned repo.
 pub fn read_git_state(repo_dir: &Path) -> GitState {
-    let git = |args: &[&str]| -> String {
-        let mut cmd_args = vec!["-C", repo_dir.to_str().unwrap_or(".")];
-        cmd_args.extend_from_slice(args);
-        Command::new("git")
-            .args(&cmd_args)
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default()
-    };
-
-    let head_sha = git(&["rev-parse", "HEAD"]);
-    let head_ref = git(&["symbolic-ref", "--short", "HEAD"]);
-    let mut default_branch = git(&["rev-parse", "--abbrev-ref", "origin/HEAD"]);
+    let head_sha = git_output(repo_dir, &["rev-parse", "HEAD"]).unwrap_or_default();
+    let head_ref = git_output(repo_dir, &["symbolic-ref", "--short", "HEAD"]).unwrap_or_default();
+    let mut default_branch =
+        git_output(repo_dir, &["rev-parse", "--abbrev-ref", "origin/HEAD"]).unwrap_or_default();
     if let Some(stripped) = default_branch.strip_prefix("origin/") {
         default_branch = stripped.to_string();
     }
     if default_branch.is_empty() {
         default_branch = "main".to_string();
     }
-    let shallow = git(&["rev-parse", "--is-shallow-repository"]) == "true";
+    let shallow =
+        git_output(repo_dir, &["rev-parse", "--is-shallow-repository"]).as_deref() == Some("true");
 
     GitState {
         head_sha,
@@ -81,7 +82,9 @@ pub fn clone_repo(url: &str, dest: &Path, extra_args: &[String]) -> Result<i32, 
 /// Run `git lfs pull` in a directory.
 pub fn lfs_pull(repo_dir: &Path) {
     let _ = Command::new("git")
-        .args(["-C", repo_dir.to_str().unwrap_or("."), "lfs", "pull"])
+        .arg("-C")
+        .arg(repo_dir)
+        .args(["lfs", "pull"])
         .output();
 }
 
@@ -94,22 +97,14 @@ pub fn prepare_reference_mirror(url: &str, mirror_path: &Path) -> bool {
 
     let status = if mirror_path.is_dir() {
         Command::new("git")
-            .args([
-                "-C",
-                mirror_path.to_str().unwrap_or("."),
-                "remote",
-                "update",
-                "--prune",
-            ])
+            .arg("-C")
+            .arg(mirror_path)
+            .args(["remote", "update", "--prune"])
             .status()
     } else {
         Command::new("git")
-            .args([
-                "clone",
-                "--mirror",
-                url,
-                mirror_path.to_str().unwrap_or("."),
-            ])
+            .args(["clone", "--mirror", url])
+            .arg(mirror_path)
             .status()
     };
 
@@ -119,14 +114,11 @@ pub fn prepare_reference_mirror(url: &str, mirror_path: &Path) -> bool {
 /// Add a git worktree.
 pub fn worktree_add(repo_dir: &Path, dest: &Path, rev: &str) -> Result<bool, std::io::Error> {
     let output = Command::new("git")
-        .args([
-            "-C",
-            repo_dir.to_str().unwrap_or("."),
-            "worktree",
-            "add",
-            dest.to_str().unwrap_or("."),
-            rev,
-        ])
+        .arg("-C")
+        .arg(repo_dir)
+        .args(["worktree", "add"])
+        .arg(dest)
+        .arg(rev)
         .output()?;
     Ok(output.status.success())
 }
@@ -134,14 +126,11 @@ pub fn worktree_add(repo_dir: &Path, dest: &Path, rev: &str) -> Result<bool, std
 /// Remove a git worktree from the worktree itself.
 pub fn worktree_remove(worktree_path: &Path) -> bool {
     Command::new("git")
-        .args([
-            "-C",
-            worktree_path.to_str().unwrap_or("."),
-            "worktree",
-            "remove",
-            worktree_path.to_str().unwrap_or("."),
-            "--force",
-        ])
+        .arg("-C")
+        .arg(worktree_path)
+        .args(["worktree", "remove"])
+        .arg(worktree_path)
+        .arg("--force")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -149,37 +138,22 @@ pub fn worktree_remove(worktree_path: &Path) -> bool {
 
 /// Resolve a git ref (branch/tag) to a commit SHA in a local checkout.
 pub fn resolve_ref(repo_dir: &Path, ref_name: &str) -> Option<String> {
-    Command::new("git")
-        .args([
-            "-C",
-            repo_dir.to_str().unwrap_or("."),
-            "rev-parse",
-            ref_name,
-        ])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|s| !s.is_empty())
+    git_output(repo_dir, &["rev-parse", ref_name]).filter(|value| !value.is_empty())
 }
 
 /// Fetch a specific SHA (if needed) and checkout to it.
 pub fn fetch_and_checkout(repo_dir: &Path, sha: &str) -> Result<bool, std::io::Error> {
     // Try fetch first (needed for shallow clones or if sha not present locally)
     let _ = Command::new("git")
-        .args([
-            "-C",
-            repo_dir.to_str().unwrap_or("."),
-            "fetch",
-            "origin",
-            sha,
-            "--depth",
-            "1",
-        ])
+        .arg("-C")
+        .arg(repo_dir)
+        .args(["fetch", "origin", sha, "--depth", "1"])
         .output();
     // Checkout
     let output = Command::new("git")
-        .args(["-C", repo_dir.to_str().unwrap_or("."), "checkout", sha])
+        .arg("-C")
+        .arg(repo_dir)
+        .args(["checkout", sha])
         .output()?;
     Ok(output.status.success())
 }

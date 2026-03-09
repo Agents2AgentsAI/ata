@@ -45,6 +45,9 @@ pub fn run(
     let root = paths::workspace_root(workspace_id);
     let clone_dest = paths::repo_checkout_path(workspace_id, alias);
     let manifest = read_manifest(workspace_id)?;
+    // Fast-fail preflight checks avoid doing slow git work for obviously invalid
+    // requests. These conditions are re-validated against the live manifest
+    // during final registration under the workspace lock.
     check_host_allowlist(url, manifest.policies.repo_hosts_allowlist.as_deref())?;
 
     if manifest.repos.iter().any(|repo| repo.alias == alias) {

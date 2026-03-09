@@ -5,6 +5,27 @@ use std::path::PathBuf;
 
 pub(crate) const CODEX_KB_PATH_ENV_VAR: &str = "CODEX_KB_PATH";
 
+pub(crate) struct ResolvedKbEnv {
+    pub kb_path: String,
+    pub workspace_kb_root: Option<AbsolutePathBuf>,
+}
+
+pub(crate) fn resolve_kb_env(
+    codex_home: &Path,
+    cwd: &Path,
+    kb_path_override: Option<&str>,
+    session_id: Option<&str>,
+    thread_id: Option<&str>,
+) -> ResolvedKbEnv {
+    let kb_path = resolve_kb_path(codex_home, cwd, kb_path_override, session_id, thread_id);
+    let workspace_kb_root = kb_writable_root(&kb_path);
+
+    ResolvedKbEnv {
+        kb_path: kb_path.to_string_lossy().to_string(),
+        workspace_kb_root,
+    }
+}
+
 pub(crate) fn resolve_kb_path(
     codex_home: &Path,
     cwd: &Path,
@@ -271,6 +292,34 @@ mod tests {
             Some("thread-1"),
         );
         assert_eq!(path, codex_home.join("custom-kb"));
+    }
+
+    #[test]
+    fn resolve_kb_env_returns_matching_path_and_writable_root() {
+        let temp = TempDir::new().expect("temp dir");
+        let codex_home = temp.path().join(".ata");
+        let cwd = temp.path().join("project");
+        std::fs::create_dir_all(&cwd).expect("create cwd");
+
+        let resolved = resolve_kb_env(
+            &codex_home,
+            &cwd,
+            Some("custom-kb"),
+            Some("session-1"),
+            Some("thread-1"),
+        );
+
+        assert_eq!(
+            resolved.kb_path,
+            codex_home.join("custom-kb").display().to_string()
+        );
+        assert_eq!(
+            resolved.workspace_kb_root,
+            Some(
+                AbsolutePathBuf::from_absolute_path(codex_home.join("custom-kb").as_path())
+                    .expect("absolute kb path")
+            )
+        );
     }
 
     #[test]

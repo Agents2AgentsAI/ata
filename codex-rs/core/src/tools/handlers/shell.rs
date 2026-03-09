@@ -36,7 +36,7 @@ use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::spec::ShellCommandBackendConfig;
 use crate::workspace_kb::CODEX_KB_PATH_ENV_VAR;
-use crate::workspace_kb::resolve_kb_path;
+use crate::workspace_kb::resolve_kb_env;
 use codex_protocol::models::PermissionProfile;
 
 pub struct ShellHandler;
@@ -70,7 +70,7 @@ fn inject_kb_path_env(
     cwd: &Path,
     thread_id: &str,
 ) {
-    let kb_path = resolve_kb_path(
+    let kb_env = resolve_kb_env(
         turn_context.config.codex_home.as_path(),
         cwd,
         turn_context
@@ -85,10 +85,7 @@ fn inject_kb_path_env(
             .map(String::as_str),
         Some(thread_id),
     );
-    env.insert(
-        CODEX_KB_PATH_ENV_VAR.to_string(),
-        kb_path.to_string_lossy().to_string(),
-    );
+    env.insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_env.kb_path);
 }
 
 impl ShellHandler {
