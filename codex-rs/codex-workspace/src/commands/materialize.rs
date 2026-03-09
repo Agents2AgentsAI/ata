@@ -1,8 +1,5 @@
 use crate::audit::write_audit;
 use crate::commands::repo_clone;
-use crate::commands::repo_pin;
-use crate::commands::repo_update_state;
-use crate::commands::set_field;
 use crate::error::WorkspaceError;
 use crate::git;
 use crate::manifest::read_manifest;
@@ -10,6 +7,8 @@ use crate::manifest::with_locked_manifest;
 use crate::paths;
 use crate::spec::WorkspaceSpec;
 use crate::spec::read_spec;
+use crate::types::GitState;
+use crate::types::PinMode;
 use crate::url_validation::check_host_allowlist;
 use crate::url_validation::validate_repo_url;
 use serde_json::Value;
@@ -36,6 +35,14 @@ pub enum ActionKind {
     Ref { ref_name: String },
     /// Repo exists and matches spec — nothing to do.
     Skip,
+}
+
+#[derive(Debug, Clone)]
+struct RepoManifestUpdate {
+    alias: String,
+    pin_sha: Option<String>,
+    state: Option<GitState>,
+    extra: serde_json::Map<String, Value>,
 }
 
 /// Compute what materialize would do without executing.
@@ -112,9 +119,16 @@ pub fn run(workspace_id: &str, spec_path: &Path, dry_run: bool) -> Result<Value,
     validate_materialize_preflight(workspace_id, &spec, &actions)?;
 
     let mut results: Vec<Value> = Vec::new();
+    let mut repo_updates: Vec<RepoManifestUpdate> = Vec::new();
 
     for (i, action) in actions.iter().enumerate() {
         let repo_spec = &spec.repos[i];
+        let mut repo_update = RepoManifestUpdate {
+            alias: repo_spec.alias.clone(),
+            pin_sha: None,
+            state: None,
+            extra: repo_spec.extra.clone(),
+        };
         match &action.action {
             ActionKind::Add => {
                 // Clone the repo
@@ -137,11 +151,9 @@ pub fn run(workspace_id: &str, spec_path: &Path, dry_run: bool) -> Result<Value,
 
                 // Pin and checkout if we have a target SHA
                 if let Some(sha) = &target_sha {
-                    repo_pin::run(workspace_id, &repo_spec.alias, sha)?;
-                    pin_checkout(workspace_id, &repo_spec.alias, &checkout_path, sha);
+                    repo_update.pin_sha = Some(sha.clone());
+                    repo_update.state = pin_checkout(&repo_spec.alias, &checkout_path, sha);
                 }
-
-                apply_repo_extra(workspace_id, &repo_spec.alias, &repo_spec.extra)?;
 
                 results.push(json!({
                     "alias": repo_spec.alias,
@@ -150,12 +162,9 @@ pub fn run(workspace_id: &str, spec_path: &Path, dry_run: bool) -> Result<Value,
                 }));
             }
             ActionKind::Pin { target_sha, .. } => {
-                repo_pin::run(workspace_id, &repo_spec.alias, target_sha)?;
-
                 let checkout_path = paths::repo_checkout_path(workspace_id, &repo_spec.alias);
-                pin_checkout(workspace_id, &repo_spec.alias, &checkout_path, target_sha);
-
-                apply_repo_extra(workspace_id, &repo_spec.alias, &repo_spec.extra)?;
+                repo_update.pin_sha = Some(target_sha.clone());
+                repo_update.state = pin_checkout(&repo_spec.alias, &checkout_path, target_sha);
 
                 results.push(json!({
                     "alias": repo_spec.alias,
@@ -167,8 +176,8 @@ pub fn run(workspace_id: &str, spec_path: &Path, dry_run: bool) -> Result<Value,
                 let checkout_path = paths::repo_checkout_path(workspace_id, &repo_spec.alias);
 
                 if let Some(resolved) = git::resolve_ref(&checkout_path, ref_name) {
-                    repo_pin::run(workspace_id, &repo_spec.alias, &resolved)?;
-                    pin_checkout(workspace_id, &repo_spec.alias, &checkout_path, &resolved);
+                    repo_update.pin_sha = Some(resolved.clone());
+                    repo_update.state = pin_checkout(&repo_spec.alias, &checkout_path, &resolved);
 
                     results.push(json!({
                         "alias": repo_spec.alias,
@@ -187,56 +196,63 @@ pub fn run(workspace_id: &str, spec_path: &Path, dry_run: bool) -> Result<Value,
                         "reason": format!("could not resolve ref '{ref_name}'"),
                     }));
                 }
-
-                apply_repo_extra(workspace_id, &repo_spec.alias, &repo_spec.extra)?;
             }
             ActionKind::Skip => {
-                // Still apply extra fields in case they changed
-                apply_repo_extra(workspace_id, &repo_spec.alias, &repo_spec.extra)?;
-
                 results.push(json!({
                     "alias": repo_spec.alias,
                     "action": "skipped",
                 }));
             }
         }
+        repo_updates.push(repo_update);
     }
 
-    // Merge spec-level policies and labels (additive, not overwrite)
-    if spec.policies.is_some() || !spec.labels.is_empty() {
-        let spec_policies = spec.policies.clone();
-        let spec_labels = spec.labels.clone();
-        with_locked_manifest(workspace_id, None, move |m| {
-            if let Some(sp) = spec_policies {
-                let mut existing =
-                    serde_json::to_value(&m.policies).map_err(WorkspaceError::Json)?;
-                let incoming = serde_json::to_value(&sp).map_err(WorkspaceError::Json)?;
-                if let (Some(base), Some(patch)) = (existing.as_object_mut(), incoming.as_object())
-                {
-                    for (k, v) in patch {
-                        base.insert(k.clone(), v.clone());
-                    }
-                }
-                m.policies = serde_json::from_value(existing).map_err(WorkspaceError::Json)?;
-            }
-            for (k, v) in spec_labels {
-                m.labels.insert(k, v);
-            }
-            Ok(())
-        })?;
-    }
-
-    // Record spec source provenance
     let spec_source = spec_path
         .canonicalize()
         .unwrap_or_else(|_| spec_path.to_path_buf())
         .display()
         .to_string();
-    set_field::run(
-        workspace_id,
-        "specSource",
-        &serde_json::to_string(&spec_source)?,
-    )?;
+    let spec_policies = spec.policies.clone();
+    let spec_labels = spec.labels.clone();
+    with_locked_manifest(workspace_id, None, move |m| {
+        for repo_update in repo_updates {
+            let repo = m.repo_by_alias_mut(&repo_update.alias)?;
+            if let Some(pin_sha) = repo_update.pin_sha {
+                repo.pin.mode = PinMode::Pinned;
+                repo.pin.pinned_sha = pin_sha;
+            }
+            if let Some(git_state) = repo_update.state {
+                repo.state.head_sha = git_state.head_sha;
+                if !git_state.head_ref.is_empty() {
+                    repo.state.head_ref = git_state.head_ref;
+                }
+                if !git_state.default_branch.is_empty() {
+                    repo.state.default_branch = git_state.default_branch;
+                }
+                repo.state.shallow = git_state.shallow;
+            }
+            for (key, value) in repo_update.extra {
+                repo.extra.insert(key, value);
+            }
+        }
+
+        if let Some(sp) = spec_policies {
+            let mut existing = serde_json::to_value(&m.policies).map_err(WorkspaceError::Json)?;
+            let incoming = serde_json::to_value(&sp).map_err(WorkspaceError::Json)?;
+            if let (Some(base), Some(patch)) = (existing.as_object_mut(), incoming.as_object()) {
+                for (key, value) in patch {
+                    base.insert(key.clone(), value.clone());
+                }
+            }
+            m.policies = serde_json::from_value(existing).map_err(WorkspaceError::Json)?;
+        }
+        for (key, value) in spec_labels {
+            m.labels.insert(key, value);
+        }
+        m.extra
+            .insert("specSource".to_string(), Value::String(spec_source));
+        Ok(())
+    })?;
 
     // Audit
     write_audit(
@@ -253,42 +269,13 @@ pub fn run(workspace_id: &str, spec_path: &Path, dry_run: bool) -> Result<Value,
     }))
 }
 
-/// After pinning, checkout the SHA and update the repo's git state in the manifest.
-fn pin_checkout(workspace_id: &str, alias: &str, checkout_path: &Path, sha: &str) {
+/// After pinning, checkout the SHA and return the resulting git state.
+fn pin_checkout(alias: &str, checkout_path: &Path, sha: &str) -> Option<GitState> {
     if let Err(e) = git::fetch_and_checkout(checkout_path, sha) {
         eprintln!("warning: git checkout failed for {alias}: {e}");
-        return;
+        return None;
     }
-    let git_state = git::read_git_state(checkout_path);
-    if let Err(e) = repo_update_state::run(
-        workspace_id,
-        alias,
-        &git_state.head_sha,
-        Some(git_state.head_ref.as_str()).filter(|s| !s.is_empty()),
-    ) {
-        eprintln!("warning: failed to update git state for {alias}: {e}");
-    }
-}
-
-/// Apply extra fields from a RepoSpec to the corresponding RepoEntry.
-fn apply_repo_extra(
-    workspace_id: &str,
-    alias: &str,
-    extra: &serde_json::Map<String, Value>,
-) -> Result<(), WorkspaceError> {
-    if extra.is_empty() {
-        return Ok(());
-    }
-    let alias = alias.to_string();
-    let extra = extra.clone();
-    with_locked_manifest(workspace_id, None, move |m| {
-        let repo = m.repo_by_alias_mut(&alias)?;
-        for (key, value) in extra {
-            repo.extra.insert(key, value);
-        }
-        Ok(())
-    })?;
-    Ok(())
+    Some(git::read_git_state(checkout_path))
 }
 
 fn validate_materialize_preflight(
