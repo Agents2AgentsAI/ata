@@ -84,6 +84,9 @@ pub enum WorkspaceError {
     #[error("git clone failed (exit {0})")]
     GitCloneFailed(i32),
 
+    #[error("git checkout failed for repo '{alias}' at commit '{sha}'")]
+    GitCheckoutFailed { alias: String, sha: String },
+
     #[error("git worktree add failed: {0}")]
     GitWorktreeFailed(String),
 

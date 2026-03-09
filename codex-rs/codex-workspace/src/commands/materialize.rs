@@ -9,6 +9,7 @@ use crate::spec::WorkspaceSpec;
 use crate::spec::read_spec;
 use crate::types::GitState;
 use crate::types::PinMode;
+use crate::types::WorkspaceManifest;
 use crate::url_validation::check_host_allowlist;
 use crate::url_validation::validate_repo_url;
 use serde_json::Value;
@@ -48,6 +49,14 @@ struct RepoManifestUpdate {
 /// Compute what materialize would do without executing.
 pub fn plan(workspace_id: &str, spec: &WorkspaceSpec) -> Result<Vec<RepoAction>, WorkspaceError> {
     let manifest = read_manifest(workspace_id)?;
+    Ok(plan_from_manifest(workspace_id, &manifest, spec))
+}
+
+fn plan_from_manifest(
+    workspace_id: &str,
+    manifest: &WorkspaceManifest,
+    spec: &WorkspaceSpec,
+) -> Vec<RepoAction> {
     let mut actions = Vec::new();
 
     for repo_spec in &spec.repos {
@@ -97,7 +106,7 @@ pub fn plan(workspace_id: &str, spec: &WorkspaceSpec) -> Result<Vec<RepoAction>,
         });
     }
 
-    Ok(actions)
+    actions
 }
 
 /// Materialize a workspace spec file into a workspace.
@@ -110,13 +119,18 @@ pub fn plan(workspace_id: &str, spec: &WorkspaceSpec) -> Result<Vec<RepoAction>,
 /// Also applies policies, labels, and extra fields from the spec.
 pub fn run(workspace_id: &str, spec_path: &Path, dry_run: bool) -> Result<Value, WorkspaceError> {
     let spec = read_spec(spec_path)?;
-    let actions = plan(workspace_id, &spec)?;
+    let manifest = read_manifest(workspace_id)?;
+    let actions = plan_from_manifest(workspace_id, &manifest, &spec);
 
     if dry_run {
         return Ok(format_plan(&actions));
     }
 
-    validate_materialize_preflight(workspace_id, &spec, &actions)?;
+    validate_materialize_preflight(
+        &spec,
+        &actions,
+        manifest.policies.repo_hosts_allowlist.as_deref(),
+    )?;
 
     let mut results: Vec<Value> = Vec::new();
     let mut repo_updates: Vec<RepoManifestUpdate> = Vec::new();
@@ -151,8 +165,8 @@ pub fn run(workspace_id: &str, spec_path: &Path, dry_run: bool) -> Result<Value,
 
                 // Pin and checkout if we have a target SHA
                 if let Some(sha) = &target_sha {
+                    repo_update.state = Some(pin_checkout(&repo_spec.alias, &checkout_path, sha)?);
                     repo_update.pin_sha = Some(sha.clone());
-                    repo_update.state = pin_checkout(&repo_spec.alias, &checkout_path, sha);
                 }
 
                 results.push(json!({
@@ -163,8 +177,9 @@ pub fn run(workspace_id: &str, spec_path: &Path, dry_run: bool) -> Result<Value,
             }
             ActionKind::Pin { target_sha, .. } => {
                 let checkout_path = paths::repo_checkout_path(workspace_id, &repo_spec.alias);
+                repo_update.state =
+                    Some(pin_checkout(&repo_spec.alias, &checkout_path, target_sha)?);
                 repo_update.pin_sha = Some(target_sha.clone());
-                repo_update.state = pin_checkout(&repo_spec.alias, &checkout_path, target_sha);
 
                 results.push(json!({
                     "alias": repo_spec.alias,
@@ -176,8 +191,9 @@ pub fn run(workspace_id: &str, spec_path: &Path, dry_run: bool) -> Result<Value,
                 let checkout_path = paths::repo_checkout_path(workspace_id, &repo_spec.alias);
 
                 if let Some(resolved) = git::resolve_ref(&checkout_path, ref_name) {
+                    repo_update.state =
+                        Some(pin_checkout(&repo_spec.alias, &checkout_path, &resolved)?);
                     repo_update.pin_sha = Some(resolved.clone());
-                    repo_update.state = pin_checkout(&repo_spec.alias, &checkout_path, &resolved);
 
                     results.push(json!({
                         "alias": repo_spec.alias,
@@ -270,22 +286,22 @@ pub fn run(workspace_id: &str, spec_path: &Path, dry_run: bool) -> Result<Value,
 }
 
 /// After pinning, checkout the SHA and return the resulting git state.
-fn pin_checkout(alias: &str, checkout_path: &Path, sha: &str) -> Option<GitState> {
-    if let Err(e) = git::fetch_and_checkout(checkout_path, sha) {
-        eprintln!("warning: git checkout failed for {alias}: {e}");
-        return None;
+fn pin_checkout(alias: &str, checkout_path: &Path, sha: &str) -> Result<GitState, WorkspaceError> {
+    let checked_out = git::fetch_and_checkout(checkout_path, sha)?;
+    if !checked_out {
+        return Err(WorkspaceError::GitCheckoutFailed {
+            alias: alias.to_string(),
+            sha: sha.to_string(),
+        });
     }
-    Some(git::read_git_state(checkout_path))
+    Ok(git::read_git_state(checkout_path))
 }
 
 fn validate_materialize_preflight(
-    workspace_id: &str,
     spec: &WorkspaceSpec,
     actions: &[RepoAction],
+    allowlist: Option<&[String]>,
 ) -> Result<(), WorkspaceError> {
-    let manifest = read_manifest(workspace_id)?;
-    let allowlist = manifest.policies.repo_hosts_allowlist.as_deref();
-
     for (repo_spec, action) in spec.repos.iter().zip(actions) {
         if matches!(action.action, ActionKind::Add) {
             validate_repo_url(&repo_spec.url)?;

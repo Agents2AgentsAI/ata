@@ -26,6 +26,9 @@ fn run_for(codex_home: &Path) -> Result<Vec<WorkspaceSummary>, WorkspaceError> {
             Ok(d) => d,
             Err(_) => continue,
         };
+        // Parse as Value so malformed or forward-compatible manifests do not
+        // break `list`; best-effort summaries are preferable to failing the
+        // entire command on one bad workspace.
         let manifest: serde_json::Value = match serde_json::from_str(&data) {
             Ok(v) => v,
             Err(_) => continue,

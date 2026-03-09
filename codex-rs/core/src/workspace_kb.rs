@@ -142,16 +142,22 @@ fn resolve_workspace_id(
     session_id: Option<&str>,
     thread_id: Option<&str>,
 ) -> String {
-    codex_workspace::workspace_resolution::resolve_selected_workspace_for(
+    match codex_workspace::workspace_resolution::resolve_selected_workspace_for(
         codex_home,
         Some(cwd),
         None,
         session_id,
         thread_id,
-    )
-    .ok()
-    .flatten()
-    .unwrap_or_else(|| "global".to_string())
+    ) {
+        Ok(Some(workspace_id)) => workspace_id,
+        Ok(None) => "global".to_string(),
+        Err(err) => {
+            tracing::warn!(
+                "failed to resolve workspace for KB path, falling back to global workspace: {err}"
+            );
+            "global".to_string()
+        }
+    }
 }
 
 #[cfg(test)]
