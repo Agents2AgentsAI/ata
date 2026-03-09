@@ -919,6 +919,32 @@ impl Session {
         dedup_local_files_from_cache(input, &cache, provider_id, SystemTime::now());
     }
 
+    pub(crate) async fn prepare_session_file_inputs(
+        &self,
+        input: &mut Vec<UserInput>,
+        provider: &ModelProviderInfo,
+        config: &Config,
+        cwd: &Path,
+        sandbox_policy: &SandboxPolicy,
+    ) -> Result<Vec<String>, FileInputPreparationError> {
+        inject_local_pdf_paths_from_text_inputs(input, cwd, sandbox_policy);
+
+        let (provider_id, _) = file_capabilities_for_provider(provider, config.model.as_deref());
+        self.dedup_local_files_for_provider(input, &provider_id)
+            .await;
+
+        let outcome = resolve_and_prepare_file_inputs(
+            input,
+            provider,
+            config,
+            self.file_upload_http_client(),
+        )
+        .await?;
+        self.record_uploaded_files_and_paths(outcome.uploaded_files, input)
+            .await;
+        Ok(outcome.warnings)
+    }
+
     pub(crate) async fn record_uploaded_files_and_paths(
         &self,
         uploaded_files: Vec<codex_api::file_support::UploadedFile>,

@@ -318,7 +318,6 @@ use codex_utils_readiness::ReadinessFlag;
 pub(crate) use file_attachments::FileInputPreparationError;
 pub(crate) use file_attachments::UrlAttachmentInjectionError;
 pub(crate) use file_attachments::file_capabilities_for_provider;
-pub(crate) use file_attachments::inject_local_pdf_paths_from_text_inputs;
 use file_attachments::refresh_uploaded_file_references;
 pub(crate) use file_attachments::resolve_and_prepare_file_inputs;
 use url_file_recovery::UrlFileRecoveryState;
@@ -3539,25 +3538,19 @@ impl Session {
                 state.session_configuration.sandbox_policy.get().clone(),
             )
         };
-        inject_local_pdf_paths_from_text_inputs(&mut input, &cwd, &sandbox_policy);
-
-        let (provider_id, _) = file_capabilities_for_provider(&provider, config.model.as_deref());
-        self.dedup_local_files_for_provider(&mut input, &provider_id)
-            .await;
-
-        let outcome = resolve_and_prepare_file_inputs(
-            &mut input,
-            &provider,
-            config.as_ref(),
-            self.file_upload_http_client(),
-        )
-        .await
-        .map_err(|error| SteerInputError::InvalidFileInput(error.to_string()))?;
-        for warning in &outcome.warnings {
+        let warnings = self
+            .prepare_session_file_inputs(
+                &mut input,
+                &provider,
+                config.as_ref(),
+                &cwd,
+                &sandbox_policy,
+            )
+            .await
+            .map_err(|error| SteerInputError::InvalidFileInput(error.to_string()))?;
+        for warning in &warnings {
             tracing::warn!("{warning}");
         }
-        self.record_uploaded_files_and_paths(outcome.uploaded_files, &input)
-            .await;
 
         let mut active = self.active_turn.lock().await;
         let Some(active_turn) = active.as_mut() else {
@@ -5060,30 +5053,17 @@ pub(crate) async fn run_turn(
     if input.is_empty() {
         return None;
     }
-    inject_local_pdf_paths_from_text_inputs(
-        &mut input,
-        turn_context.cwd.as_path(),
-        turn_context.sandbox_policy.get(),
-    );
-
-    {
-        let (provider_id, _) = file_capabilities_for_provider(
+    let warnings = match sess
+        .prepare_session_file_inputs(
+            &mut input,
             &turn_context.provider,
-            turn_context.config.model.as_deref(),
-        );
-        sess.dedup_local_files_for_provider(&mut input, &provider_id)
-            .await;
-    }
-
-    let outcome = match resolve_and_prepare_file_inputs(
-        &mut input,
-        &turn_context.provider,
-        turn_context.config.as_ref(),
-        sess.file_upload_http_client(),
-    )
-    .await
+            turn_context.config.as_ref(),
+            turn_context.cwd.as_path(),
+            turn_context.sandbox_policy.get(),
+        )
+        .await
     {
-        Ok(outcome) => outcome,
+        Ok(warnings) => warnings,
         Err(error) => {
             let event = EventMsg::Error(ErrorEvent {
                 message: error.to_string(),
@@ -5093,15 +5073,13 @@ pub(crate) async fn run_turn(
             return None;
         }
     };
-    for warning in outcome.warnings {
+    for warning in warnings {
         sess.send_event(
             &turn_context,
             EventMsg::Warning(WarningEvent { message: warning }),
         )
         .await;
     }
-    sess.record_uploaded_files_and_paths(outcome.uploaded_files, &input)
-        .await;
 
     let model_info = turn_context.model_info.clone();
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
