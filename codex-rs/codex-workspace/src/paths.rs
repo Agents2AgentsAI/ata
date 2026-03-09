@@ -129,15 +129,15 @@ pub fn audit_lock_path(workspace_id: &str) -> PathBuf {
 
 fn normalized_scope_id(value: Option<&str>) -> Option<String> {
     let value = value.map(str::trim).filter(|value| !value.is_empty())?;
-    is_safe_scope_id(value).then_some(value.to_string())
+    is_safe_single_component(value).then_some(value.to_string())
 }
 
-fn is_safe_scope_id(scope_id: &str) -> bool {
-    if scope_id.contains('\\') {
+pub(crate) fn is_safe_single_component(value: &str) -> bool {
+    if value.contains('\\') {
         return false;
     }
 
-    let mut components = std::path::Path::new(scope_id).components();
+    let mut components = std::path::Path::new(value).components();
     matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
@@ -326,6 +326,14 @@ mod tests {
         assert_eq!(workspace_scope_id(Some("../escape"), None), None);
         assert_eq!(workspace_scope_id(Some("nested/path"), None), None);
         assert_eq!(workspace_scope_id(Some(r"nested\\path"), None), None);
+    }
+
+    #[test]
+    fn safe_single_component_rejects_nested_or_escaped_paths() {
+        assert!(is_safe_single_component("scope-1"));
+        assert!(!is_safe_single_component("nested/path"));
+        assert!(!is_safe_single_component("../escape"));
+        assert!(!is_safe_single_component(r"nested\\path"));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use crate::error::WorkspaceError;
 use crate::git;
 use crate::types::Policies;
+use crate::url_validation::validate_repo_url;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Map;
@@ -77,6 +78,7 @@ pub fn validate_spec(spec: &WorkspaceSpec) -> Result<(), WorkspaceError> {
                 repo.alias
             )));
         }
+        validate_repo_url(&repo.url).map_err(|err| WorkspaceError::InvalidSpec(err.to_string()))?;
         if repo.alias.is_empty() {
             return Err(WorkspaceError::InvalidSpec(
                 "repo alias must not be empty".to_string(),
@@ -237,6 +239,26 @@ mod tests {
             extra: Map::new(),
         };
         assert!(validate_spec(&spec).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_invalid_repo_url() {
+        let spec = WorkspaceSpec {
+            schema_version: 1,
+            name: "test".to_string(),
+            repos: vec![RepoSpec {
+                url: "http://github.com/a/b.git".to_string(),
+                alias: "repo-a".to_string(),
+                sha: None,
+                r#ref: None,
+                full: false,
+                extra: Map::new(),
+            }],
+            policies: None,
+            labels: Map::new(),
+            extra: Map::new(),
+        };
+        assert!(validate_spec(&spec).is_err());
     }
 
     #[test]

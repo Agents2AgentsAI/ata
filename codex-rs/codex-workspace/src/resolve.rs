@@ -147,12 +147,18 @@ pub fn resolve_at_spec(workspace_id: &str, spec: &str) -> Result<PathBuf, Worksp
         return safe_join(&root.join("cache"), suffix);
     }
 
-    // @artifacts/<id>/path...
+    // @artifacts[/<id>/path...]
+    if rest == "artifacts" {
+        return Ok(root.join("artifacts"));
+    }
     if let Some(suffix) = rest.strip_prefix("artifacts/") {
         return safe_join(&root.join("artifacts"), suffix);
     }
 
-    // @index/<id>/path...
+    // @index[/<id>/path...]
+    if rest == "index" {
+        return Ok(root.join("indexes"));
+    }
     if let Some(suffix) = rest.strip_prefix("index/") {
         return safe_join(&root.join("indexes"), suffix);
     }
@@ -196,6 +202,19 @@ mod tests {
                 .join("repos")
                 .join("notebook")
                 .join("docs")
+        );
+    }
+
+    #[test]
+    fn resolve_bare_artifacts_and_index_paths() {
+        let workspace_id = "workspace-1";
+        assert_eq!(
+            resolve_at_spec(workspace_id, "@artifacts").unwrap(),
+            workspace_root(workspace_id).join("artifacts")
+        );
+        assert_eq!(
+            resolve_at_spec(workspace_id, "@index").unwrap(),
+            workspace_root(workspace_id).join("indexes")
         );
     }
 

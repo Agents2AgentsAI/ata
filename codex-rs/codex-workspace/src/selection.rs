@@ -67,8 +67,28 @@ fn read_workspace_selection_id(path: &std::path::Path) -> Option<String> {
 
 /// Write the active workspace selection (session-aware).
 pub fn write_selection(workspace_id: &str) -> Result<(), WorkspaceError> {
-    prune_stale_selection_files()?;
-    let sp = paths::selection_path();
+    let codex_home = paths::codex_home();
+    let session_id = std::env::var("CODEX_SESSION_ID").ok();
+    let thread_id = std::env::var("CODEX_THREAD_ID").ok();
+    write_selection_for(
+        &codex_home,
+        workspace_id,
+        session_id.as_deref(),
+        thread_id.as_deref(),
+    )
+}
+
+pub fn write_selection_for(
+    codex_home: &Path,
+    workspace_id: &str,
+    session_id: Option<&str>,
+    thread_id: Option<&str>,
+) -> Result<(), WorkspaceError> {
+    cleanup_selection_files(codex_home, &|wid| {
+        !paths::manifest_path_for(codex_home, wid).is_file()
+    })?;
+    let scope_id = paths::workspace_scope_id(session_id, thread_id);
+    let sp = paths::selection_path_for(codex_home, scope_id.as_deref());
     if let Some(parent) = sp.parent() {
         std::fs::create_dir_all(parent)?;
     }

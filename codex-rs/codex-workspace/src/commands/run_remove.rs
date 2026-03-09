@@ -13,8 +13,12 @@ pub fn run(workspace_id: &str, run_id: &str) -> Result<(), WorkspaceError> {
     let run_id_owned = run_id.to_string();
     let run_id_for_closure = run_id_owned.clone();
 
-    with_locked_manifest(workspace_id, None, move |m| {
+    with_locked_manifest(workspace_id, None, |m| {
+        let before_len = m.runs.len();
         m.runs.retain(|r| r.id != run_id_for_closure);
+        if m.runs.len() == before_len {
+            return Err(WorkspaceError::EntryNotFound(run_id_owned.clone()));
+        }
         Ok(())
     })?;
 
