@@ -111,6 +111,12 @@ pub enum WorkspaceError {
     #[error("invalid run status '{0}': expected created, running, completed, failed, or cancelled")]
     InvalidRunStatus(String),
 
+    #[error("field path '{0}' is managed by the system and cannot be set")]
+    ProtectedFieldPath(String),
+
+    #[error("exhausted workspace id retries for '{name}' after {max_attempts} attempts")]
+    InitRetryLimitExceeded { name: String, max_attempts: u32 },
+
     #[error("collection '{0}' not found in manifest")]
     UnknownCollection(String),
 

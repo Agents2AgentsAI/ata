@@ -1,3 +1,4 @@
+use std::path::Component;
 use std::path::PathBuf;
 
 const MANIFEST_FILENAME: &str = "workspace.json";
@@ -105,10 +106,17 @@ pub fn audit_path(workspace_id: &str) -> PathBuf {
 }
 
 fn normalized_scope_id(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
+    let value = value.map(str::trim).filter(|value| !value.is_empty())?;
+    is_safe_scope_id(value).then_some(value.to_string())
+}
+
+fn is_safe_scope_id(scope_id: &str) -> bool {
+    if scope_id.contains('\\') {
+        return false;
+    }
+
+    let mut components = std::path::Path::new(scope_id).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
 pub(crate) fn workspace_scope_id(
@@ -292,6 +300,13 @@ mod tests {
             workspace_scope_id(Some("   "), Some("thread-2")),
             Some("thread-2".to_string())
         );
+    }
+
+    #[test]
+    fn workspace_scope_id_rejects_unsafe_values() {
+        assert_eq!(workspace_scope_id(Some("../escape"), None), None);
+        assert_eq!(workspace_scope_id(Some("nested/path"), None), None);
+        assert_eq!(workspace_scope_id(Some(r"nested\\path"), None), None);
     }
 
     #[test]

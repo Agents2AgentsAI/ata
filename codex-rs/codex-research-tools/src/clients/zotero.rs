@@ -1,6 +1,7 @@
 use chrono::Utc;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::error::ResearchError;
@@ -18,6 +19,7 @@ use crate::types::ZoteroGroup;
 use crate::types::ZoteroGroupsResult;
 use crate::types::ZoteroItem;
 use crate::types::ZoteroItemDetail;
+use crate::types::ZoteroLinkedItem;
 use crate::types::ZoteroNote;
 use crate::types::ZoteroNotesResult;
 use crate::types::ZoteroSearchResult;
@@ -689,6 +691,68 @@ fn compute_has_more(
     u32::try_from(page_len).unwrap_or(0) == limit
 }
 
+fn extract_linked_items(relations: &HashMap<String, Vec<String>>) -> Vec<ZoteroLinkedItem> {
+    let mut linked_items = relations
+        .iter()
+        .flat_map(|(relation, raw_uris)| {
+            raw_uris.iter().filter_map(move |raw_uri| {
+                let raw_uri = raw_uri.trim();
+                if raw_uri.is_empty() {
+                    return None;
+                }
+
+                let (item_key, canonical_id) = parse_related_item_target(raw_uri);
+                Some(ZoteroLinkedItem {
+                    relation: relation.clone(),
+                    raw_uri: raw_uri.to_string(),
+                    item_key,
+                    canonical_id,
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+
+    linked_items.sort_by(|left, right| {
+        left.relation
+            .cmp(&right.relation)
+            .then_with(|| left.raw_uri.cmp(&right.raw_uri))
+    });
+    linked_items
+}
+
+fn parse_related_item_target(raw_uri: &str) -> (Option<String>, Option<String>) {
+    let Some(url) = reqwest::Url::parse(raw_uri).ok() else {
+        return (None, None);
+    };
+    let Some(segments) = url.path_segments() else {
+        return (None, None);
+    };
+    let segments = segments.collect::<Vec<_>>();
+
+    let parsed = match segments.as_slice() {
+        ["users", user_id, "items", item_key] => Some(("user", *user_id, *item_key)),
+        ["groups", group_id, "items", item_key] => Some(("group", *group_id, *item_key)),
+        ["api", "users", user_id, "items", item_key] => Some(("user", *user_id, *item_key)),
+        ["api", "groups", group_id, "items", item_key] => Some(("group", *group_id, *item_key)),
+        _ => None,
+    };
+
+    let Some((library_type, library_id, item_key)) = parsed else {
+        return (None, None);
+    };
+    if item_key.trim().is_empty() {
+        return (None, None);
+    }
+
+    let canonical_id = match library_type {
+        "user" => format!("zotero:user/{library_id}/{item_key}"),
+        "group" => format!("zotero:group/{library_id}/{item_key}"),
+        _ => return (None, None),
+    };
+
+    (Some(item_key.to_string()), Some(canonical_id))
+}
+
 fn map_item_summary(item: ZoteroApiItem, api_url: &str, scope: &ZoteroLibraryScope) -> ZoteroItem {
     let authors = creator_display_names(&item.data.creators);
     let tags = item
@@ -698,6 +762,7 @@ fn map_item_summary(item: ZoteroApiItem, api_url: &str, scope: &ZoteroLibrarySco
         .map(|tag| tag.tag.trim().to_string())
         .filter(|tag| !tag.is_empty())
         .collect::<Vec<_>>();
+    let linked_items = extract_linked_items(&item.data.relations);
 
     ZoteroItem {
         key: item.key.clone(),
@@ -715,6 +780,7 @@ fn map_item_summary(item: ZoteroApiItem, api_url: &str, scope: &ZoteroLibrarySco
             .as_deref()
             .map(|text| truncate_chars(text, 200)),
         tags,
+        linked_items,
         source_meta: Some(SourceMeta {
             source: "zotero".to_string(),
             api_url: api_url.to_string(),
@@ -729,6 +795,7 @@ fn map_item_detail(
     api_url: &str,
     scope: &ZoteroLibraryScope,
 ) -> ZoteroItemDetail {
+    let linked_items = extract_linked_items(&item.data.relations);
     ZoteroItemDetail {
         key: item.key.clone(),
         title: item
@@ -749,6 +816,7 @@ fn map_item_detail(
             .map(|tag| tag.tag.trim().to_string())
             .filter(|tag| !tag.is_empty())
             .collect(),
+        linked_items,
         extra: item.data.extra,
         source_meta: Some(SourceMeta {
             source: "zotero".to_string(),
@@ -984,6 +1052,8 @@ struct ZoteroApiItemData {
     publication_title: Option<String>,
     #[serde(default)]
     tags: Vec<ZoteroApiTag>,
+    #[serde(default)]
+    relations: HashMap<String, Vec<String>>,
     extra: Option<String>,
     note: Option<String>,
     #[serde(rename = "parentItem")]

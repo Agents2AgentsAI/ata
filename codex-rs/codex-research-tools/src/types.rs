@@ -64,6 +64,14 @@ pub struct CitationResult {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroLinkedItem {
+    pub relation: String,
+    pub raw_uri: String,
+    pub item_key: Option<String>,
+    pub canonical_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroItem {
     pub key: String,
     pub title: String,
@@ -73,6 +81,7 @@ pub struct ZoteroItem {
     pub doi: Option<String>,
     pub abstract_snippet: Option<String>,
     pub tags: Vec<String>,
+    pub linked_items: Vec<ZoteroLinkedItem>,
     pub source_meta: Option<SourceMeta>,
 }
 
@@ -88,6 +97,7 @@ pub struct ZoteroItemDetail {
     pub publication: Option<String>,
     pub item_type: String,
     pub tags: Vec<String>,
+    pub linked_items: Vec<ZoteroLinkedItem>,
     pub extra: Option<String>,
     pub source_meta: Option<SourceMeta>,
     pub attachments: Option<Vec<ZoteroAttachment>>,

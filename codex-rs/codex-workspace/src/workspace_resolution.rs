@@ -2,6 +2,7 @@ use crate::error::WorkspaceError;
 use crate::paths;
 use crate::selection;
 use crate::types::new_manifest;
+use crate::workspace_id::validate_workspace_id;
 
 /// 4-tier workspace resolution: explicit > project pin > session > global.
 ///
@@ -12,6 +13,7 @@ pub fn resolve_workspace(explicit: Option<&str>) -> Result<String, WorkspaceErro
     if let Some(wid) = explicit
         && !wid.is_empty()
     {
+        validate_workspace_id(wid)?;
         return Ok(wid.to_string());
     }
 

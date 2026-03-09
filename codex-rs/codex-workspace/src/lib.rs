@@ -560,7 +560,9 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             let json =
                 commands::export_spec::run(&wid, output.as_deref().map(std::path::Path::new))?;
-            println!("{json}");
+            if output.is_none() {
+                println!("{json}");
+            }
             Ok(0)
         }
 
