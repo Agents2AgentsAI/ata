@@ -7,6 +7,7 @@ When using Zotero:
 1. **Search by keyword**: `zotero_search` matches titles, creators, and tags.
 2. **Scan collections only when named**: Only call `zotero_get_collections` if the user names a specific collection. Do NOT scan all collections speculatively. If a collection name is given, use `zotero_get_collection_items` directly.
 3. **Check all scopes**: Omit `library_type`/`library_id` to search across both personal and group libraries automatically. If the user mentions a specific group or library, pass those parameters explicitly.
+4. **Prefer linked relations over fuzzy matching**: `zotero_get_collection_items` and `zotero_get_item` expose linked Zotero item relations when present. When connecting records across collections or item types, inspect those linked items first instead of guessing from titles.
 
 When you need to read a paper deeply from Zotero:
 1. Call `zotero_get_item` with `include_attachments=true` and `include_fulltext_resolution=true` to resolve the canonical PDF source.

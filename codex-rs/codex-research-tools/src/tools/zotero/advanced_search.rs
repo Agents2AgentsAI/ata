@@ -982,6 +982,7 @@ mod tests {
             doi: None,
             abstract_snippet: None,
             tags: Vec::new(),
+            linked_items: Vec::new(),
             source_meta: None,
         }
     }

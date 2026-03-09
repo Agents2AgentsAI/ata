@@ -78,6 +78,9 @@ pub fn run(
     let git_state = git::read_git_state(&clone_dest);
     let repo_id = make_id("repo");
     let repo_key = git::derive_repo_key(url);
+    let alias_owned = alias.to_string();
+    let notes_dir = root.join("notes").join("repos").join(&alias_owned);
+    std::fs::create_dir_all(&notes_dir)?;
 
     let clone_record = if full {
         CloneRecord {
@@ -122,11 +125,6 @@ pub fn run(
         let _ = std::fs::remove_dir_all(&clone_dest);
         return Err(err);
     }
-    drop(lock);
-
-    let alias_owned = alias.to_string();
-    let notes_dir = root.join("notes").join("repos").join(&alias_owned);
-    std::fs::create_dir_all(notes_dir)?;
 
     write_audit(
         workspace_id,
@@ -134,6 +132,7 @@ pub fn run(
         vec![json!({"type": "repo", "id": &repo_id, "alias": &alias_owned})],
         None,
     )?;
+    drop(lock);
 
     Ok(json!({
         "repoId": repo_id,

@@ -181,7 +181,9 @@ const RECIPE_IMPORT: &str = r#"# Import workspace bundle
 NEW_WID=$(ata workspace init "Imported Project")
 NEW_ROOT=$(ata workspace resolve '@notes' --workspace "$NEW_WID" | sed 's|notes/workspace$||')
 tar -xzf "$BUNDLE_PATH" -C "$NEW_ROOT"
-ata workspace set-field --path id --value "\"$NEW_WID\"" --workspace "$NEW_WID"
+TMP_MANIFEST=$(mktemp)
+jq --arg wid "$NEW_WID" '.id = $wid' "$NEW_ROOT/workspace.json" > "$TMP_MANIFEST"
+mv "$TMP_MANIFEST" "$NEW_ROOT/workspace.json"
 echo "Imported as: $NEW_WID"
 "#;
 

@@ -6,12 +6,6 @@ use serde_json::json;
 
 /// Remove a repo: delete directory, remove from manifest, audit.
 pub fn run(workspace_id: &str, alias: &str) -> Result<(), WorkspaceError> {
-    let root = paths::workspace_root(workspace_id);
-    let repo_dir = root.join("repos").join(alias);
-    if repo_dir.is_dir() {
-        std::fs::remove_dir_all(&repo_dir)?;
-    }
-
     let alias_owned = alias.to_string();
     let removed_id = std::cell::RefCell::new(None);
     {
@@ -28,6 +22,12 @@ pub fn run(workspace_id: &str, alias: &str) -> Result<(), WorkspaceError> {
         })?;
     }
     let removed_id = removed_id.into_inner();
+
+    let root = paths::workspace_root(workspace_id);
+    let repo_dir = root.join("repos").join(alias);
+    if repo_dir.is_dir() {
+        std::fs::remove_dir_all(&repo_dir)?;
+    }
 
     // Audit
     let mut target = json!({"type": "repo", "alias": &alias_owned});

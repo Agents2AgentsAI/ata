@@ -318,7 +318,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 id: "zotero_get_item",
                 native_name: "zotero_get_item",
                 mcp_name: "zotero_get_item",
-                description: "Get full Zotero metadata for an item, with optional attachment and document-source enrichment.",
+                description: "Get full Zotero metadata for an item, including linked Zotero item relations when present, with optional attachment and document-source enrichment.",
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -455,7 +455,7 @@ pub fn all_tool_defs() -> Vec<ToolDef> {
                 id: "zotero_get_collection_items",
                 native_name: "zotero_get_collection_items",
                 mcp_name: "zotero_get_collection_items",
-                description: "List items in a Zotero collection by collection_key. Use after finding a relevant collection via zotero_get_collections.",
+                description: "List items in a Zotero collection by collection_key. Returned items include linked Zotero item relations when present, which helps connect related Zotero records across collections without relying only on title matching. Use after finding a relevant collection via zotero_get_collections.",
                 input_schema: json!({
                     "type": "object",
                     "properties": {

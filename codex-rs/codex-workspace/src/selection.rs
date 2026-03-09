@@ -2,6 +2,7 @@ use crate::error::WorkspaceError;
 use crate::manifest::atomic_write;
 use crate::paths;
 use crate::types::WorkspaceSelection;
+use crate::workspace_id::validate_workspace_id;
 use std::path::Path;
 
 /// Read a workspace ID from a selection file.
@@ -20,6 +21,9 @@ fn read_workspace_selection_file_with(
     workspace_exists: &dyn Fn(&str) -> bool,
 ) -> Option<String> {
     let wid = read_workspace_selection_id(path)?;
+    if validate_workspace_id(&wid).is_err() {
+        return None;
+    }
     if workspace_exists(&wid) {
         Some(wid)
     } else {
@@ -240,6 +244,16 @@ mod tests {
         write_selection_file(&global_path, "missing-ws");
 
         let result = read_session_workspace_from_paths_with(&scoped_path, &global_path, &|_| false);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn read_workspace_selection_file_rejects_invalid_workspace_ids() {
+        let temp = TempDir::new().expect("create temp dir");
+        let path = temp.path().join("workspace.json");
+        write_selection_file(&path, "../escape");
+
+        let result = read_workspace_selection_file_with(&path, &|_| true);
         assert_eq!(result, None);
     }
 

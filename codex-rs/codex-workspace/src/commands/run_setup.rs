@@ -112,14 +112,19 @@ pub fn run(
         },
         extra: Map::new(),
     };
+    let source_alias_owned = source_alias.to_string();
 
     let result = with_locked_manifest(workspace_id, Some(version), move |m| {
+        if !m.repos.iter().any(|repo| repo.alias == source_alias_owned) {
+            return Err(WorkspaceError::SourceRepoNotFound(source_alias_owned));
+        }
         m.runs.push(run_entry);
         Ok(())
     });
 
     match result {
-        Err(e @ WorkspaceError::VersionConflict { .. }) => {
+        Err(e @ WorkspaceError::VersionConflict { .. })
+        | Err(e @ WorkspaceError::SourceRepoNotFound(_)) => {
             let _ = std::fs::remove_dir_all(&run_root);
             return Err(e);
         }
