@@ -46,6 +46,9 @@ pub fn run(
 
     let root = paths::workspace_root(workspace_id);
     let clone_dest = root.join("repos").join(alias);
+    // Keep clone side effects, manifest mutation, notes creation, and audit ordering
+    // under one workspace lock. `with_locked_manifest` is not a good fit here because
+    // the external `git clone` must be ordered against the manifest snapshot we validate.
     let lock = FileLock::acquire(&paths::lock_path(workspace_id))?;
 
     let mut manifest = read_manifest(workspace_id)?;

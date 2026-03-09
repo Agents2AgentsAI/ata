@@ -10,6 +10,8 @@ use crate::manifest::with_locked_manifest;
 use crate::paths;
 use crate::spec::WorkspaceSpec;
 use crate::spec::read_spec;
+use crate::url_validation::check_host_allowlist;
+use crate::url_validation::validate_repo_url;
 use serde_json::Value;
 use serde_json::json;
 use std::path::Path;
@@ -116,6 +118,8 @@ pub fn run(workspace_id: &str, spec_path: &Path, dry_run: bool) -> Result<Value,
     if dry_run {
         return Ok(format_plan(&actions));
     }
+
+    validate_materialize_preflight(workspace_id, &spec, &actions)?;
 
     let mut results: Vec<Value> = Vec::new();
 
@@ -304,6 +308,24 @@ fn apply_repo_extra(
         }
         Ok(())
     })?;
+    Ok(())
+}
+
+fn validate_materialize_preflight(
+    workspace_id: &str,
+    spec: &WorkspaceSpec,
+    actions: &[RepoAction],
+) -> Result<(), WorkspaceError> {
+    let manifest = read_manifest(workspace_id)?;
+    let allowlist = manifest.policies.repo_hosts_allowlist.as_deref();
+
+    for (repo_spec, action) in spec.repos.iter().zip(actions) {
+        if matches!(action.action, ActionKind::Add) {
+            validate_repo_url(&repo_spec.url)?;
+            check_host_allowlist(&repo_spec.url, allowlist)?;
+        }
+    }
+
     Ok(())
 }
 

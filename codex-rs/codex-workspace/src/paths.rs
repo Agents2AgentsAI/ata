@@ -57,6 +57,11 @@ pub fn workspaces_root() -> PathBuf {
     codex_home().join("workspaces")
 }
 
+/// Root directory for all workspaces under a specific Codex home.
+pub fn workspaces_root_for(codex_home: &std::path::Path) -> PathBuf {
+    codex_home.join("workspaces")
+}
+
 /// Ensure the workspace root exists as a directory.
 pub fn ensure_workspaces_root() -> std::io::Result<PathBuf> {
     ensure_workspaces_root_for(&codex_home())
@@ -64,7 +69,7 @@ pub fn ensure_workspaces_root() -> std::io::Result<PathBuf> {
 
 /// Ensure `codex_home/workspaces` exists as a directory.
 pub fn ensure_workspaces_root_for(codex_home: &std::path::Path) -> std::io::Result<PathBuf> {
-    let root = codex_home.join("workspaces");
+    let root = workspaces_root_for(codex_home);
     if root.exists() && !root.is_dir() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::AlreadyExists,
@@ -85,9 +90,19 @@ pub fn workspace_root(workspace_id: &str) -> PathBuf {
     workspaces_root().join(workspace_id)
 }
 
+/// Root directory for a specific workspace under a specific Codex home.
+pub fn workspace_root_for(codex_home: &std::path::Path, workspace_id: &str) -> PathBuf {
+    workspaces_root_for(codex_home).join(workspace_id)
+}
+
 /// Path to the workspace manifest file.
 pub fn manifest_path(workspace_id: &str) -> PathBuf {
     workspace_root(workspace_id).join(MANIFEST_FILENAME)
+}
+
+/// Path to the workspace manifest file under a specific Codex home.
+pub fn manifest_path_for(codex_home: &std::path::Path, workspace_id: &str) -> PathBuf {
+    workspace_root_for(codex_home, workspace_id).join(MANIFEST_FILENAME)
 }
 
 /// Path to the workspace lock file.
@@ -105,6 +120,13 @@ pub fn audit_path(workspace_id: &str) -> PathBuf {
         .join("audit.ndjson")
 }
 
+/// Path to the audit append lock for a workspace.
+pub fn audit_lock_path(workspace_id: &str) -> PathBuf {
+    workspace_root(workspace_id)
+        .join("locks")
+        .join("audit.lock")
+}
+
 fn normalized_scope_id(value: Option<&str>) -> Option<String> {
     let value = value.map(str::trim).filter(|value| !value.is_empty())?;
     is_safe_scope_id(value).then_some(value.to_string())
@@ -119,18 +141,15 @@ fn is_safe_scope_id(scope_id: &str) -> bool {
     matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
-pub(crate) fn workspace_scope_id(
-    session_id: Option<&str>,
-    thread_id: Option<&str>,
-) -> Option<String> {
+pub fn workspace_scope_id(session_id: Option<&str>, thread_id: Option<&str>) -> Option<String> {
     normalized_scope_id(session_id).or_else(|| normalized_scope_id(thread_id))
 }
 
-pub(crate) fn global_selection_path_for(codex_home: &std::path::Path) -> PathBuf {
+pub fn global_selection_path_for(codex_home: &std::path::Path) -> PathBuf {
     codex_home.join(".workspace_selected")
 }
 
-pub(crate) fn selection_path_for(codex_home: &std::path::Path, scope_id: Option<&str>) -> PathBuf {
+pub fn selection_path_for(codex_home: &std::path::Path, scope_id: Option<&str>) -> PathBuf {
     if let Some(scope_id) = scope_id {
         return codex_home
             .join("sessions")

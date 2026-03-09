@@ -13,7 +13,16 @@ use std::path::Path;
 ///
 /// Returns `None` if file missing, malformed, or referenced workspace doesn't exist.
 pub fn read_workspace_selection_file(path: &std::path::Path) -> Option<String> {
-    read_workspace_selection_file_with(path, &|wid| paths::manifest_path(wid).is_file())
+    read_workspace_selection_file_for(&paths::codex_home(), path)
+}
+
+pub fn read_workspace_selection_file_for(
+    codex_home: &Path,
+    path: &std::path::Path,
+) -> Option<String> {
+    read_workspace_selection_file_with(path, &|wid| {
+        paths::manifest_path_for(codex_home, wid).is_file()
+    })
 }
 
 fn read_workspace_selection_file_with(
@@ -75,10 +84,23 @@ pub fn write_selection(workspace_id: &str) -> Result<(), WorkspaceError> {
 /// Read the session-scoped workspace selection.
 pub fn read_session_workspace() -> Option<String> {
     let _ = prune_stale_selection_files();
-    let scoped_path = paths::selection_path();
-    let global_path = paths::global_selection_path();
+    read_session_workspace_for(
+        &paths::codex_home(),
+        std::env::var("CODEX_SESSION_ID").ok().as_deref(),
+        std::env::var("CODEX_THREAD_ID").ok().as_deref(),
+    )
+}
+
+pub fn read_session_workspace_for(
+    codex_home: &Path,
+    session_id: Option<&str>,
+    thread_id: Option<&str>,
+) -> Option<String> {
+    let scope_id = paths::workspace_scope_id(session_id, thread_id);
+    let scoped_path = paths::selection_path_for(codex_home, scope_id.as_deref());
+    let global_path = paths::global_selection_path_for(codex_home);
     read_session_workspace_from_paths_with(&scoped_path, &global_path, &|wid| {
-        paths::manifest_path(wid).is_file()
+        paths::manifest_path_for(codex_home, wid).is_file()
     })
 }
 
@@ -146,13 +168,17 @@ fn cleanup_selection_path(
 ///
 /// Stops at `.git` boundary or filesystem root.
 pub fn discover_project_pin(cwd: &std::path::Path) -> Option<String> {
+    discover_project_pin_for(&paths::codex_home(), cwd)
+}
+
+pub fn discover_project_pin_for(codex_home: &Path, cwd: &std::path::Path) -> Option<String> {
     let mut current = match std::fs::canonicalize(cwd) {
         Ok(p) => p,
         Err(_) => cwd.to_path_buf(),
     };
     loop {
         let candidate = current.join(".codex").join("workspace.json");
-        if let Some(wid) = read_workspace_selection_file(&candidate) {
+        if let Some(wid) = read_workspace_selection_file_for(codex_home, &candidate) {
             return Some(wid);
         }
         // Stop at .git boundary

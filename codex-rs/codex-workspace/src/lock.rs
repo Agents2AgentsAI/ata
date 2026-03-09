@@ -97,12 +97,16 @@ impl FileLock {
                 Ok(mut file) => {
                     use std::io::Write;
                     let _ = writeln!(file, "pid={}", std::process::id());
+                    let _ = writeln!(file, "created_at={}", chrono::Utc::now().timestamp());
                     return Ok(Self {
                         file: Some(file),
                         path: lock_path.to_path_buf(),
                     });
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if try_reclaim_stale_lock(lock_path) {
+                        continue;
+                    }
                     if std::time::Instant::now() >= deadline {
                         return Err(WorkspaceError::LockTimeout {
                             path: lock_path.to_path_buf(),
@@ -131,4 +135,43 @@ impl Drop for FileLock {
         let _ = self.file.take();
         let _ = std::fs::remove_file(&self.path);
     }
+}
+
+#[cfg(not(unix))]
+fn try_reclaim_stale_lock(lock_path: &Path) -> bool {
+    let Ok(contents) = std::fs::read_to_string(lock_path) else {
+        return false;
+    };
+    let Some(pid) = contents.lines().find_map(parse_lock_pid) else {
+        return false;
+    };
+    if lock_owner_is_alive(pid) {
+        return false;
+    }
+    std::fs::remove_file(lock_path).is_ok()
+}
+
+#[cfg(not(unix))]
+fn parse_lock_pid(line: &str) -> Option<u32> {
+    line.strip_prefix("pid=")?.trim().parse().ok()
+}
+
+#[cfg(all(not(unix), windows))]
+fn lock_owner_is_alive(pid: u32) -> bool {
+    let filter = format!("PID eq {pid}");
+    std::process::Command::new("tasklist")
+        .args(["/FI", &filter, "/NH"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            !stdout.contains("No tasks are running")
+        })
+        .unwrap_or(true)
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn lock_owner_is_alive(_pid: u32) -> bool {
+    true
 }

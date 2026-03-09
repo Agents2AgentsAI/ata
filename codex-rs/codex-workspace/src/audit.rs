@@ -1,4 +1,5 @@
 use crate::error::WorkspaceError;
+use crate::lock::FileLock;
 use crate::paths;
 use crate::types::AuditActor;
 use crate::types::AuditEntry;
@@ -45,6 +46,7 @@ pub fn append_audit_entry(workspace_id: &str, entry: &AuditEntry) -> Result<(), 
     if let Some(parent) = ap.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    let _lock = FileLock::acquire(&paths::audit_lock_path(workspace_id))?;
     let line = serde_json::to_string(entry)? + "\n";
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
@@ -89,9 +91,11 @@ pub fn query_audit(
     });
 
     let mut results = Vec::new();
-    let data = std::fs::read_to_string(&ap)?;
+    let file = std::fs::File::open(&ap)?;
+    let reader = std::io::BufReader::new(file);
 
-    for line in data.lines() {
+    for line in std::io::BufRead::lines(reader) {
+        let line = line?;
         let line = line.trim();
         if line.is_empty() {
             continue;

@@ -53,19 +53,29 @@ pub fn safe_join(root: &Path, suffix: &str) -> Result<PathBuf, WorkspaceError> {
         return Ok(root.to_path_buf());
     }
     let joined = root.join(suffix);
-    // If root exists, verify with realpath
     if root.exists() {
-        let real_root = std::fs::canonicalize(root)
-            .unwrap_or_else(|_| root.to_path_buf())
-            .to_string_lossy()
-            .to_string();
-        let real_joined = std::fs::canonicalize(&joined)
-            .unwrap_or_else(|_| joined.clone())
-            .to_string_lossy()
-            .to_string();
-        let root_prefix = format!("{real_root}/");
-        if real_joined != real_root && !real_joined.starts_with(&root_prefix) {
-            return Err(WorkspaceError::PathEscape(suffix.to_string()));
+        let real_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        let mut current = root.to_path_buf();
+
+        for component in Path::new(suffix).components() {
+            match component {
+                std::path::Component::Normal(part) => {
+                    current.push(part);
+                    if current.exists() {
+                        let resolved =
+                            std::fs::canonicalize(&current).unwrap_or_else(|_| current.clone());
+                        if resolved != real_root && !resolved.starts_with(&real_root) {
+                            return Err(WorkspaceError::PathEscape(suffix.to_string()));
+                        }
+                    }
+                }
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_) => {
+                    return Err(WorkspaceError::PathEscape(suffix.to_string()));
+                }
+            }
         }
     }
     Ok(joined)
@@ -186,6 +196,20 @@ mod tests {
                 .join("repos")
                 .join("notebook")
                 .join("docs")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn safe_join_rejects_existing_symlink_escape() {
+        let root = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("escape")).unwrap();
+
+        let err = safe_join(root.path(), "escape/file.txt").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            WorkspaceError::PathEscape("escape/file.txt".to_string()).to_string()
         );
     }
 }

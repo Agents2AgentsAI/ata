@@ -19,10 +19,8 @@ pub fn run(workspace_id: &str, run_id: &str) -> Result<(), WorkspaceError> {
     })?;
 
     // Clean up worktree if applicable
-    if code_root.is_dir()
-        && let Some(repo_dir) = git::git_common_dir(&code_root)
-    {
-        git::worktree_remove(&repo_dir, &code_root);
+    if code_root.is_dir() {
+        git::worktree_remove(&code_root);
     }
 
     // Remove directory
