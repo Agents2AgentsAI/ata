@@ -977,14 +977,15 @@ async fn run_team_command(cli: TeamCli) -> anyhow::Result<()> {
         }
         Some(TeamSubcommand::Relay(args)) => {
             // Relay doesn't need DB/repo_path — start the server directly.
-            println!("Starting coordination relay server on port {}...", args.port);
-            codex_coordination_relay::run_server(
-                codex_coordination_relay::RelayServerConfig {
-                    port: args.port,
-                    secret: args.secret,
-                    max_messages: args.max_messages,
-                },
-            )
+            println!(
+                "Starting coordination relay server on port {}...",
+                args.port
+            );
+            codex_coordination_relay::run_server(codex_coordination_relay::RelayServerConfig {
+                port: args.port,
+                secret: args.secret,
+                max_messages: args.max_messages,
+            })
             .await?;
             return Ok(());
         }

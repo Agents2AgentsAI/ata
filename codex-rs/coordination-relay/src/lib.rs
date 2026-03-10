@@ -127,10 +127,7 @@ fn build_api_router(state: Arc<AppState>) -> Router {
             "/v1/projects/{project_id}/messages",
             post(post_message).get(list_messages),
         )
-        .route(
-            "/v1/projects/{project_id}/events",
-            get(events_stream),
-        )
+        .route("/v1/projects/{project_id}/events", get(events_stream))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth_layer,

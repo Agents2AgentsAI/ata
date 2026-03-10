@@ -646,7 +646,6 @@ fn create_team_post_tool() -> ToolSpec {
     })
 }
 
-
 fn create_collab_input_items_schema() -> JsonSchema {
     let properties = BTreeMap::from([
         (

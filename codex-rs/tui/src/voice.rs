@@ -627,6 +627,7 @@ impl RealtimeAudioPlayer {
     }
 
     /// Whether the player is currently paused.
+    #[allow(dead_code)]
     pub(crate) fn is_paused(&self) -> bool {
         self.paused.load(Ordering::SeqCst)
     }

@@ -709,6 +709,7 @@ pub(crate) struct App {
     _remote_control_handle: Option<crate::remote_control::RemoteControlHandle>,
 
     /// Whether the coordination watcher background task has been spawned.
+    #[allow(dead_code)]
     coordination_watcher_spawned: bool,
 }
 
@@ -1273,17 +1274,15 @@ impl App {
                     }
                 };
 
-                let relay = std::sync::Arc::new(
-                    codex_coordination::relay_client::RelayClient::new(
+                let relay =
+                    std::sync::Arc::new(codex_coordination::relay_client::RelayClient::new(
                         relay_url,
                         relay_secret,
                         project_id,
-                    ),
-                );
+                    ));
 
                 let cancel = tokio_util::sync::CancellationToken::new();
-                let watcher =
-                    CoordinationWatcher::start(relay, session_id, cancel);
+                let watcher = CoordinationWatcher::start(relay, session_id, cancel);
 
                 tracing::info!("coordination watcher: relay SSE connected");
 
@@ -2427,15 +2426,11 @@ impl App {
                 tui.frame_requester().schedule_frame();
 
                 // Submit the team message to the agent as context.
-                let text = format!(
-                    "[Team message from {agent_name}]: {message}"
-                );
+                let text = format!("[Team message from {agent_name}]: {message}");
                 let models_manager = self.server.get_models_manager();
-                let default_mode =
-                    crate::collaboration_modes::default_mode_mask(&models_manager);
+                let default_mode = crate::collaboration_modes::default_mode_mask(&models_manager);
                 if let Some(mode) = default_mode {
-                    self.chat_widget
-                        .submit_user_message_with_mode(text, mode);
+                    self.chat_widget.submit_user_message_with_mode(text, mode);
                 }
             }
             AppEvent::OpenAppLink {

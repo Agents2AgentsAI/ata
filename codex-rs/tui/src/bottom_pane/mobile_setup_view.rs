@@ -285,10 +285,10 @@ impl MobileSetupView {
         let Some(selected_idx) = self.state.selected_idx else {
             return;
         };
-        if let Some(item) = self.items.get_mut(selected_idx) {
-            if let MobileSetupItemKind::Port { value } = &mut item.kind {
-                *value = value.saturating_sub(1).max(1024);
-            }
+        if let Some(item) = self.items.get_mut(selected_idx)
+            && let MobileSetupItemKind::Port { value } = &mut item.kind
+        {
+            *value = value.saturating_sub(1).max(1024);
         }
     }
 
@@ -296,10 +296,10 @@ impl MobileSetupView {
         let Some(selected_idx) = self.state.selected_idx else {
             return;
         };
-        if let Some(item) = self.items.get_mut(selected_idx) {
-            if let MobileSetupItemKind::Port { value } = &mut item.kind {
-                *value = value.saturating_add(1).min(65535);
-            }
+        if let Some(item) = self.items.get_mut(selected_idx)
+            && let MobileSetupItemKind::Port { value } = &mut item.kind
+        {
+            *value = value.saturating_add(1);
         }
     }
 
@@ -661,15 +661,15 @@ fn build_qr_lines(port: u16, token: &str) -> Option<Vec<String>> {
     }
     let ip = crate::remote_control::local_lan_ip();
     let mut url = format!("ata://connect?host={ip}&port={port}&token={token}");
-    if let Ok(openai_key) = std::env::var("OPENAI_API_KEY") {
-        if !openai_key.is_empty() {
-            url.push_str(&format!("&openai_key={openai_key}"));
-        }
+    if let Ok(openai_key) = std::env::var("OPENAI_API_KEY")
+        && !openai_key.is_empty()
+    {
+        url.push_str(&format!("&openai_key={openai_key}"));
     }
-    if let Ok(elevenlabs_key) = std::env::var("ELEVENLABS_API_KEY") {
-        if !elevenlabs_key.is_empty() {
-            url.push_str(&format!("&elevenlabs_key={elevenlabs_key}"));
-        }
+    if let Ok(elevenlabs_key) = std::env::var("ELEVENLABS_API_KEY")
+        && !elevenlabs_key.is_empty()
+    {
+        url.push_str(&format!("&elevenlabs_key={elevenlabs_key}"));
     }
     let lines = crate::qr_render::render_qr_to_lines(&url);
     if lines.is_empty() { None } else { Some(lines) }

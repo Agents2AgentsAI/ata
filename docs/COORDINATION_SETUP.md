@@ -37,13 +37,13 @@ That's it. No relay URL, no server, no ports to configure.
 
 ## CLI Commands
 
-| Command | Description |
-|---------|-------------|
-| `ata team agents` | List active coordination agents in the current repo |
-| `ata team messages` | Show recent coordination messages |
-| `ata team messages <name>` | Filter messages by agent name prefix |
-| `ata team relay` | Start a standalone relay server (for cross-machine use) |
-| `ata team relay-logs` | Tail coordination-related logs from the TUI log file |
+| Command                    | Description                                             |
+| -------------------------- | ------------------------------------------------------- |
+| `ata team agents`          | List active coordination agents in the current repo     |
+| `ata team messages`        | Show recent coordination messages                       |
+| `ata team messages <name>` | Filter messages by agent name prefix                    |
+| `ata team relay`           | Start a standalone relay server (for cross-machine use) |
+| `ata team relay-logs`      | Tail coordination-related logs from the TUI log file    |
 
 ## Cross-Machine Setup
 

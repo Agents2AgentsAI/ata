@@ -1775,7 +1775,6 @@ name = "codex-coordination"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "chrono",
  "pretty_assertions",
  "reqwest",
  "serde",
@@ -1786,7 +1785,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -1802,7 +1800,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-stream",
  "tracing",
  "tracing-subscriber",
 ]

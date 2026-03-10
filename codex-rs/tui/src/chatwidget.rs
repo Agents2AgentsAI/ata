@@ -9472,9 +9472,9 @@ async fn build_team_lines(
         let filter_name = trimmed
             .strip_prefix("messages")
             .or_else(|| trimmed.strip_prefix("msgs"))
-            .map(|s| s.trim())
+            .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
+            .map(str::to_string);
 
         let messages = db.recent_messages(&repo_path).await?;
         let sessions = db.active_sessions(&repo_path).await?;
