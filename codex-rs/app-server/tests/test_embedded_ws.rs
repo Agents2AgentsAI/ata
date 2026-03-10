@@ -29,24 +29,19 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 /// Find a free port by binding to port 0.
-async fn free_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind to free port");
-    listener.local_addr().expect("local addr").port()
+async fn free_port() -> anyhow::Result<u16> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    Ok(listener.local_addr()?.port())
 }
 
 /// Start the embedded WebSocket server and return (port, shutdown_token).
-async fn start_server(token: &str) -> (u16, CancellationToken) {
-    let port = free_port().await;
+async fn start_server(token: &str) -> anyhow::Result<(u16, CancellationToken)> {
+    let port = free_port().await?;
     let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
     let shutdown = CancellationToken::new();
 
     // Build a minimal Config using the default builder.
-    let config = ConfigBuilder::default()
-        .build()
-        .await
-        .expect("build config");
+    let config = ConfigBuilder::default().build().await?;
 
     let auth_manager = Arc::new(AuthManager::new(
         config.codex_home.clone(),
@@ -90,13 +85,13 @@ async fn start_server(token: &str) -> (u16, CancellationToken) {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    (port, shutdown)
+    Ok((port, shutdown))
 }
 
 #[tokio::test]
-async fn test_valid_token_connects_and_initializes() {
+async fn test_valid_token_connects_and_initializes() -> anyhow::Result<()> {
     let token = "test-secret-token-12345";
-    let (port, shutdown) = start_server(token).await;
+    let (port, shutdown) = start_server(token).await?;
 
     // Connect with valid token.
     let url = format!("ws://127.0.0.1:{port}/?token={token}");
@@ -152,12 +147,13 @@ async fn test_valid_token_connects_and_initializes() {
     }
 
     shutdown.cancel();
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_invalid_token_rejected() {
+async fn test_invalid_token_rejected() -> anyhow::Result<()> {
     let token = "correct-token";
-    let (port, shutdown) = start_server(token).await;
+    let (port, shutdown) = start_server(token).await?;
 
     // Connect with wrong token.
     let url = format!("ws://127.0.0.1:{port}/?token=wrong-token");
@@ -184,12 +180,13 @@ async fn test_invalid_token_rejected() {
     }
 
     shutdown.cancel();
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_no_token_rejected() {
+async fn test_no_token_rejected() -> anyhow::Result<()> {
     let token = "my-secret";
-    let (port, shutdown) = start_server(token).await;
+    let (port, shutdown) = start_server(token).await?;
 
     // Connect without any token.
     let url = format!("ws://127.0.0.1:{port}/");
@@ -209,4 +206,5 @@ async fn test_no_token_rejected() {
     }
 
     shutdown.cancel();
+    Ok(())
 }
