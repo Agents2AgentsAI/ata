@@ -3402,7 +3402,7 @@ impl Renderable for DocumentReaderView {
                 let ta_y = bottom_y.saturating_sub(input_h);
                 // Place cursor on the last line of the wrapped text.
                 let line_count = self.textarea.desired_height(inner_w).max(1);
-                let cursor_y = ta_y + (line_count as u16).saturating_sub(1);
+                let cursor_y = ta_y + line_count.saturating_sub(1);
                 let text_len = self.textarea.text().lines().last().map_or(0, str::len);
                 Some((area.x + 2 + text_len as u16, cursor_y))
             }

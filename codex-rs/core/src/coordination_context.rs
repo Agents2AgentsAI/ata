@@ -165,6 +165,7 @@ impl Handle {
     }
 
     /// Developer instructions to inject into the initial context.
+    #[allow(dead_code)]
     pub fn developer_instructions(&self) -> Option<ResponseItem> {
         self.inner
             .as_ref()
@@ -409,9 +410,7 @@ impl CoordinationContext {
                         "    <peer id=\"{label}\" branch=\"{branch}\" latest=\"{summary}\" />"
                     ));
                 } else {
-                    lines.push(format!(
-                        "    <peer id=\"{label}\" branch=\"{branch}\" />"
-                    ));
+                    lines.push(format!("    <peer id=\"{label}\" branch=\"{branch}\" />"));
                 }
             }
             lines.push("  </peers>".to_string());

@@ -144,6 +144,7 @@ pub(crate) enum AppEvent {
 
     /// Push notification of new coordination messages from peer agents.
     /// Contains display lines for chat history + raw text for agent submission.
+    #[allow(dead_code)]
     CoordinationNotification {
         lines: Vec<ratatui::text::Line<'static>>,
         agent_name: String,

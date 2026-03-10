@@ -172,12 +172,6 @@ impl RelayClient {
 
     /// Subscribe to live coordination messages from the relay via SSE.
     ///
-    /// Spawns a background task that:
-    /// 1. Opens `GET /events?since={last_id}` as a streaming response
-    /// 2. Reads SSE `data:` frames and parses them into [`CoordinationMessage`]
-    /// 3. Sends parsed messages via a broadcast channel
-    /// 4. On disconnect, waits 5 seconds and reconnects with `since={last_id}`
-    /// 5. Respects the `CancellationToken` for clean shutdown
     /// Subscribe to live coordination messages from the relay via SSE.
     ///
     /// Spawns a background task that:
@@ -197,9 +191,7 @@ impl RelayClient {
 
         tokio::spawn(async move {
             // Use a client without the default 5s timeout for long-lived SSE.
-            let sse_client = reqwest::Client::builder()
-                .build()
-                .unwrap_or_default();
+            let sse_client = reqwest::Client::builder().build().unwrap_or_default();
             let mut last_id: i64 = 0;
 
             loop {

@@ -20,7 +20,7 @@ pub(crate) fn render_qr_to_lines(data: &str) -> Vec<String> {
     };
 
     let modules = code.to_colors();
-    let width = code.width() as usize;
+    let width = code.width();
 
     // Build a boolean grid with a 1-module quiet zone on each side.
     let padded_w = width + 2;
@@ -33,12 +33,11 @@ pub(crate) fn render_qr_to_lines(data: &str) -> Vec<String> {
     }
 
     // Render pairs of rows using half-block characters.
-    let mut lines = Vec::with_capacity((padded_h + 1) / 2);
+    let mut lines = Vec::with_capacity(padded_h.div_ceil(2));
     let mut y = 0;
     while y < padded_h {
         let mut line = String::with_capacity(padded_w);
-        for x in 0..padded_w {
-            let top = grid[y][x];
+        for (x, &top) in grid[y].iter().enumerate() {
             let bottom = if y + 1 < padded_h {
                 grid[y + 1][x]
             } else {
