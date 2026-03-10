@@ -191,7 +191,9 @@ fn copy_symlink(src: &std::path::Path, dst: &std::path::Path) -> Result<(), Work
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    #[cfg(unix)]
+    use super::copy_dir_recursive;
+    #[cfg(unix)]
     use tempfile::TempDir;
 
     #[cfg(unix)]

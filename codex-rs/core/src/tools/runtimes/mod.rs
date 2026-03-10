@@ -87,7 +87,7 @@ pub(crate) fn resolve_agent_ata_command(command: &[String]) -> (Vec<String>, boo
 
 /// Shared helper to construct a CommandSpec from a tokenized command line.
 /// Validates that at least a program is present.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn build_command_spec(
     command: &[String],
     cwd: &Path,

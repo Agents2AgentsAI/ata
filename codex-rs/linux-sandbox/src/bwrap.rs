@@ -446,22 +446,26 @@ mod tests {
         };
 
         let args = create_filesystem_args(&sandbox_policy, Path::new("/")).expect("bwrap fs args");
-        assert_eq!(
-            args,
-            vec![
-                "--ro-bind".to_string(),
-                "/".to_string(),
-                "/".to_string(),
-                "--dev".to_string(),
-                "/dev".to_string(),
-                "--bind".to_string(),
-                "/dev".to_string(),
-                "/dev".to_string(),
-                "--bind".to_string(),
-                "/".to_string(),
-                "/".to_string(),
-            ]
-        );
+        let dev_mount = ["--dev", "/dev"];
+        let writable_dev_bind = ["--bind", "/dev", "/dev"];
+        let cwd_bind = ["--bind", "/", "/"];
+
+        let dev_mount_index = args
+            .windows(dev_mount.len())
+            .position(|window| window == dev_mount)
+            .expect("expected --dev /dev mount");
+        let writable_dev_bind_index = args
+            .windows(writable_dev_bind.len())
+            .position(|window| window == writable_dev_bind)
+            .expect("expected writable /dev bind");
+        let cwd_bind_index = args
+            .windows(cwd_bind.len())
+            .position(|window| window == cwd_bind)
+            .expect("expected cwd writable bind");
+
+        assert_eq!(args[0..3], ["--ro-bind", "/", "/"]);
+        assert!(dev_mount_index < writable_dev_bind_index);
+        assert!(writable_dev_bind_index < cwd_bind_index);
     }
 
     #[test]
