@@ -23,8 +23,11 @@ pub fn run(workspace_id: &str, run_id: &str) -> Result<(), WorkspaceError> {
     })?;
 
     // Clean up worktree if applicable
-    if code_root.is_dir() {
-        git::worktree_remove(&code_root);
+    if code_root.is_dir() && !git::worktree_remove(&code_root) {
+        eprintln!(
+            "warning: failed to remove git worktree cleanly for run {run_id_owned}: {}",
+            code_root.display()
+        );
     }
 
     // Remove directory

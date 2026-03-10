@@ -3333,15 +3333,25 @@ mod tests {
     }
 
     #[test]
-    fn workspace_scope_id_prefers_session_id() {
-        let scope_id = workspace_scope_id(Some("session-123"), Some("thread-456"));
+    fn workspace_scope_id_prefers_trimmed_session_id() {
+        let scope_id = workspace_scope_id(Some(" session-123 "), Some("thread-456"));
         assert_eq!(scope_id, Some("session-123".to_string()));
     }
 
     #[test]
-    fn workspace_scope_id_falls_back_to_thread_id_on_invalid_session_id() {
-        let scope_id = workspace_scope_id(Some("../bad-session"), Some("thread-456"));
-        assert_eq!(scope_id, Some("thread-456".to_string()));
+    fn workspace_scope_id_uses_thread_id_when_session_missing_or_invalid() {
+        assert_eq!(
+            workspace_scope_id(None, Some(" thread-456 ")),
+            Some("thread-456".to_string())
+        );
+        assert_eq!(
+            workspace_scope_id(Some("   "), Some("thread-789")),
+            Some("thread-789".to_string())
+        );
+        assert_eq!(
+            workspace_scope_id(Some("../bad-session"), Some("thread-999")),
+            Some("thread-999".to_string())
+        );
     }
 
     #[test]
