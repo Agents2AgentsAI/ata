@@ -5,5 +5,5 @@ expression: terminal.backend()
 "                                                            "
 "› /mo                                                       "
 "                                                            "
-"                                                            "
-"  /model  choose what model and reasoning effort to use     "
+"  /model   choose what model and reasoning effort to use    "
+"  /mobile  start remote control server for mobile (ATA)     "
