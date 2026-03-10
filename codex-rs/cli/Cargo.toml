@@ -28,7 +28,7 @@ codex-cloud-tasks = { path = "../cloud-tasks" }
 codex-utils-cli = { workspace = true }
 codex-config = { workspace = true }
 codex-coordination = { workspace = true }
-codex-coordination-relay = { workspace = true }
+codex-coordination-relay = { workspace = true, optional = true }
 codex-core = { workspace = true }
 codex-exec = { workspace = true }
 codex-execpolicy = { workspace = true }
@@ -44,8 +44,6 @@ codex-tui = { workspace = true }
 codex-workspace = { workspace = true }
 libc = { workspace = true }
 owo-colors = { workspace = true }
-qrcode = { workspace = true }
-rand = { workspace = true }
 regex-lite = { workspace = true }
 serde_json = { workspace = true }
 supports-color = { workspace = true }
@@ -63,9 +61,13 @@ tracing = { workspace = true }
 [target.'cfg(target_os = "windows")'.dependencies]
 codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
 
+[target.'cfg(not(windows))'.dependencies]
+qrcode = { workspace = true }
+rand = { workspace = true }
+
 [features]
 data = ["codex-core/data"]
-relay = ["codex-core/relay", "codex-tui/relay"]
+relay = ["codex-core/relay", "codex-tui/relay", "dep:codex-coordination-relay"]
 
 [dev-dependencies]
 assert_cmd = { workspace = true }

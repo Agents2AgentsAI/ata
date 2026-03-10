@@ -40,6 +40,7 @@ mod app_cmd;
 #[cfg(target_os = "macos")]
 mod desktop_app;
 mod mcp_cmd;
+#[cfg(not(windows))]
 mod mobile_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
@@ -149,6 +150,7 @@ enum Subcommand {
     /// Inspect feature flags.
     Features(FeaturesCli),
 
+    #[cfg(not(windows))]
     /// Manage the mobile background server.
     Mobile(mobile_cmd::MobileCommand),
 
@@ -569,8 +571,10 @@ enum TeamSubcommand {
     Agents,
     /// Show recent coordination messages (optionally filtered by agent name).
     Messages(TeamMessagesArgs),
+    #[cfg(feature = "relay")]
     /// Start the coordination relay server for cross-machine agent awareness.
     Relay(TeamRelayArgs),
+    #[cfg(feature = "relay")]
     /// Tail relay-related logs from the TUI log file.
     RelayLogs(TeamRelayLogsArgs),
 }
@@ -581,6 +585,7 @@ struct TeamMessagesArgs {
     agent: Option<String>,
 }
 
+#[cfg(feature = "relay")]
 #[derive(Debug, Parser)]
 struct TeamRelayLogsArgs {
     /// Show last N lines before following (like tail -n).
@@ -588,6 +593,7 @@ struct TeamRelayLogsArgs {
     lines: usize,
 }
 
+#[cfg(feature = "relay")]
 #[derive(Debug, Parser)]
 struct TeamRelayArgs {
     /// Port to listen on.
@@ -898,6 +904,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 disable_feature_in_config(&interactive, &feature).await?;
             }
         },
+        #[cfg(not(windows))]
         Some(Subcommand::Mobile(cmd)) => {
             mobile_cmd::run_mobile_command(cmd)?;
         }
@@ -958,6 +965,7 @@ async fn run_team_command(cli: TeamCli) -> anyhow::Result<()> {
         .to_string();
 
     match cli.sub {
+        #[cfg(feature = "relay")]
         Some(TeamSubcommand::RelayLogs(args)) => {
             let log_file = codex_home.join("log").join("codex-tui.log");
             if !log_file.exists() {
@@ -986,6 +994,7 @@ async fn run_team_command(cli: TeamCli) -> anyhow::Result<()> {
             }
             return Ok(());
         }
+        #[cfg(feature = "relay")]
         Some(TeamSubcommand::Relay(args)) => {
             // Relay doesn't need DB/repo_path — start the server directly.
             println!(
