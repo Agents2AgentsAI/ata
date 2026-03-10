@@ -1624,6 +1624,8 @@ dependencies = [
  "codex-chatgpt",
  "codex-cloud-tasks",
  "codex-config",
+ "codex-coordination",
+ "codex-coordination-relay",
  "codex-core",
  "codex-exec",
  "codex-execpolicy",
@@ -1769,6 +1771,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-coordination"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "pretty_assertions",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "codex-coordination-relay"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "axum",
+ "chrono",
+ "clap",
+ "futures",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "codex-core"
 version = "0.0.0"
 dependencies = [
@@ -1792,6 +1831,7 @@ dependencies = [
  "codex-async-utils",
  "codex-client",
  "codex-config",
+ "codex-coordination",
  "codex-data-tools",
  "codex-execpolicy",
  "codex-file-search",
@@ -2594,6 +2634,8 @@ dependencies = [
  "codex-chatgpt",
  "codex-cli",
  "codex-cloud-requirements",
+ "codex-coordination",
+ "codex-coordination-relay",
  "codex-core",
  "codex-elevenlabs",
  "codex-feedback",

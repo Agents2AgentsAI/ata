@@ -191,6 +191,7 @@ mod code_intel;
 mod file_attachments;
 mod url_file_recovery;
 
+use crate::coordination_context;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
 use crate::file_watcher::FileWatcher;
@@ -1580,6 +1581,18 @@ impl Session {
                 (None, None)
             };
 
+        let coordination = if config.features.enabled(Feature::Coordination) {
+            coordination_context::Handle::init(
+                &config.codex_home,
+                &session_configuration.cwd,
+                &conversation_id.to_string(),
+                config.coordination.as_ref(),
+            )
+            .await
+        } else {
+            coordination_context::Handle::disabled()
+        };
+
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
             // instance. It will be replaced with one created via
@@ -1626,6 +1639,7 @@ impl Session {
             network_proxy,
             network_approval: Arc::clone(&network_approval),
             state_db: state_db_ctx.clone(),
+            coordination,
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,
@@ -3185,6 +3199,11 @@ impl Session {
                 build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
         {
             developer_sections.push(memory_prompt);
+        }
+        if let Some(coordination_instructions) =
+            self.services.coordination.developer_instructions_text()
+        {
+            developer_sections.push(coordination_instructions);
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         if let Some(collab_instructions) =
@@ -4807,6 +4826,11 @@ mod handlers {
             sess.send_event_raw(event).await;
         }
 
+        sess.services
+            .coordination
+            .shutdown(&sess.conversation_id.to_string())
+            .await;
+
         let event = Event {
             id: sub_id,
             msg: EventMsg::ShutdownComplete,
@@ -5241,6 +5265,12 @@ pub(crate) async fn run_turn(
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
     sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
         .await;
+
+    sess.services
+        .coordination
+        .update_description(&sess.conversation_id.to_string(), &input)
+        .await;
+
     // Track the previous-turn baseline from the regular user-turn path only so
     // standalone tasks (compact/shell/review/undo) cannot suppress future
     // model/realtime injections.
@@ -5271,6 +5301,7 @@ pub(crate) async fn run_turn(
     let mut context_window_url_file_recovery_attempted = false;
     let mut file_rejection_url_file_recovery_attempted = false;
     let mut file_error_soft_recovery_attempted = false;
+    let mut coord_tracker = coordination_context::CoordinationTracker::new();
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -5312,6 +5343,19 @@ pub(crate) async fn run_turn(
             });
             sess.send_event(&turn_context, event).await;
             break;
+        }
+
+        if let Some(item) = sess
+            .services
+            .coordination
+            .build_if_changed(
+                &mut coord_tracker,
+                &sess.conversation_id.to_string(),
+                &turn_context.cwd,
+            )
+            .await
+        {
+            sess.record_conversation_items(&turn_context, &[item]).await;
         }
 
         // Construct the input that we will send to the model.
@@ -8902,6 +8946,7 @@ mod tests {
             network_proxy: None,
             network_approval: Arc::clone(&network_approval),
             state_db: None,
+            coordination: coordination_context::Handle::disabled(),
             model_client: ModelClient::new(
                 Some(auth_manager.clone()),
                 conversation_id,
@@ -9284,6 +9329,7 @@ mod tests {
             network_proxy: None,
             network_approval: Arc::clone(&network_approval),
             state_db: None,
+            coordination: coordination_context::Handle::disabled(),
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,

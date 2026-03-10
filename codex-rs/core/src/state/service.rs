@@ -64,6 +64,8 @@ pub(crate) struct SessionServices {
     pub(crate) network_proxy: Option<StartedNetworkProxy>,
     pub(crate) network_approval: Arc<NetworkApprovalService>,
     pub(crate) state_db: Option<StateDbHandle>,
+    /// Cross-session coordination (no-op when feature is disabled).
+    pub(crate) coordination: crate::coordination_context::Handle,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
     /// Unified code intelligence state across root(s).

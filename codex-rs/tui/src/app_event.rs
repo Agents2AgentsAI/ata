@@ -139,6 +139,17 @@ pub(crate) enum AppEvent {
     /// Result of computing a `/diff` command.
     DiffResult(String),
 
+    /// Result of a `/team` command query.
+    TeamResult(Vec<ratatui::text::Line<'static>>),
+
+    /// Push notification of new coordination messages from peer agents.
+    /// Contains display lines for chat history + raw text for agent submission.
+    CoordinationNotification {
+        lines: Vec<ratatui::text::Line<'static>>,
+        agent_name: String,
+        message: String,
+    },
+
     /// Open the app link view in the bottom pane.
     OpenAppLink {
         app_id: String,

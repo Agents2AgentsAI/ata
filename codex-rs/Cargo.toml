@@ -16,6 +16,8 @@ members = [
     "cloud-tasks-client",
     "cli",
     "config",
+    "coordination",
+    "coordination-relay",
     "shell-command",
     "shell-escalation",
     "skills",
@@ -104,6 +106,8 @@ codex-cli = { path = "cli" }
 codex-client = { path = "codex-client" }
 codex-cloud-requirements = { path = "cloud-requirements" }
 codex-config = { path = "config" }
+codex-coordination = { path = "coordination" }
+codex-coordination-relay = { path = "coordination-relay" }
 codex-core = { path = "core" }
 codex-data-tools = { path = "codex-data-tools" }
 codex-elevenlabs = { path = "codex-elevenlabs" }
