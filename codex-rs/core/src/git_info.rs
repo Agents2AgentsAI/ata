@@ -43,6 +43,42 @@ pub fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Return the common git directory shared by all worktrees of a repository.
+///
+/// For a normal (non-worktree) checkout this returns the same path as
+/// `get_git_repo_root`. For worktrees created via `git worktree add`, all
+/// worktrees share the same `--git-common-dir`, so this function returns
+/// a stable identity suitable for coordination across worktrees.
+///
+/// Falls back to `get_git_repo_root` if the `git` binary is unavailable.
+pub async fn get_git_common_dir(cwd: &Path) -> Option<PathBuf> {
+    let output = timeout(
+        TokioDuration::from_secs(2),
+        Command::new("git")
+            .arg("rev-parse")
+            .arg("--git-common-dir")
+            .current_dir(cwd)
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+
+    if !output.status.success() {
+        return get_git_repo_root(cwd);
+    }
+
+    let common_dir = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let common_path = if Path::new(&common_dir).is_absolute() {
+        PathBuf::from(&common_dir)
+    } else {
+        cwd.join(&common_dir)
+    };
+
+    // Resolve to parent of .git dir to get repo root (e.g. /repo/.git -> /repo)
+    common_path.parent().map(Path::to_path_buf)
+}
+
 /// Timeout for git commands to prevent freezing on large repositories
 const GIT_COMMAND_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
 

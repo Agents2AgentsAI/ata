@@ -406,6 +406,10 @@ pub(crate) struct ChatComposer {
     windows_degraded_sandbox_active: bool,
     status_line_value: Option<Line<'static>>,
     status_line_enabled: bool,
+    voice_mode_available: bool,
+    scheduler_enabled: bool,
+    mobile_available: bool,
+    research_enabled: bool,
     /// Active reverse-search session (`Ctrl+R`).
     reverse_search: Option<super::reverse_search::ReverseSearch>,
     /// Text that was in the composer before reverse search was activated.
@@ -534,6 +538,10 @@ impl ChatComposer {
             windows_degraded_sandbox_active: false,
             status_line_value: None,
             status_line_enabled: false,
+            voice_mode_available: false,
+            scheduler_enabled: false,
+            mobile_available: false,
+            research_enabled: false,
             reverse_search: None,
             pre_search_text: None,
             history_path: None,
@@ -3197,6 +3205,10 @@ impl ChatComposer {
             context_window_used_tokens: self.context_window_used_tokens,
             status_line_value: self.status_line_value.clone(),
             status_line_enabled: self.status_line_enabled,
+            voice_mode_available: self.voice_mode_available,
+            scheduler_enabled: self.scheduler_enabled,
+            mobile_available: self.mobile_available,
+            research_enabled: self.research_enabled,
         }
     }
 
@@ -3727,6 +3739,19 @@ impl ChatComposer {
         }
         self.status_line_enabled = enabled;
         true
+    }
+
+    pub(crate) fn set_feature_state(
+        &mut self,
+        voice: bool,
+        scheduler: bool,
+        mobile: bool,
+        research: bool,
+    ) {
+        self.voice_mode_available = voice;
+        self.scheduler_enabled = scheduler;
+        self.mobile_available = mobile;
+        self.research_enabled = research;
     }
 }
 

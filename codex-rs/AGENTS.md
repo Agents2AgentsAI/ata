@@ -70,3 +70,42 @@ Be aware of these crates that take disproportionately long to compile, and avoid
 - `codex-execpolicy` — depends on `starlark` (a full interpreter).
 - `codex-otel` — pulls in the OpenTelemetry stack.
 - `codex-tui` — large crate with `ratatui`, `tree-sitter-highlight`, and 234 snapshot files.
+
+## 9. Local build performance (macOS)
+
+### Fast linker
+
+The `.cargo/config.toml` configures `ld64.lld` (from `brew install lld`) as the linker for `aarch64-apple-darwin`. This parallelizes the link step and is significantly faster than Apple's default linker. Install with:
+
+```sh
+brew install llvm lld
+```
+
+### Incremental cache bloat
+
+Cargo never garbage-collects stale incremental compilation caches in `target/debug/incremental/`. Each unique combination of rustflags, feature flags, and compiler version creates a new ~1GB cache directory. Over time this can grow to 100+ GB, causing severe I/O bottleneck (builds appear to hang at 2% CPU).
+
+**Symptoms:** Incremental rebuild takes minutes despite only touching one file; `target/debug/` is tens or hundreds of gigabytes.
+
+**Fix:** Periodically clean the incremental cache:
+
+```sh
+rm -rf target/debug/incremental   # or: cargo clean
+```
+
+Common triggers for cache fingerprint churn:
+- Switching between `--all-features` and no features
+- Toggling `sccache` on/off (do not use sccache with this workspace — `.cargo/config.toml` disables it)
+- Changing rustflags or environment variables
+
+### XProtect
+
+macOS scans every newly built executable via XProtect, adding latency to every build and test run. To bypass this:
+
+1. Run: `spctl developer-mode enable-terminal`
+2. Open **System Settings → Privacy & Security → Developer Tools** → toggle **Terminal** ON
+
+### Feature flags and `-p` usage
+
+- Use `cargo build -p codex-cli` — it pulls in `codex-core` and `codex-tui` transitively. No need to list all three.
+- Use `--features research-all` instead of `--all-features` when you need research crates. `--all-features` enables every optional feature across all transitive dependencies, bloating the build and creating additional cache fingerprints.

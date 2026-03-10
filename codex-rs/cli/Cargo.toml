@@ -27,6 +27,8 @@ codex-chatgpt = { workspace = true }
 codex-cloud-tasks = { path = "../cloud-tasks" }
 codex-utils-cli = { workspace = true }
 codex-config = { workspace = true }
+codex-coordination = { workspace = true }
+codex-coordination-relay = { workspace = true }
 codex-core = { workspace = true }
 codex-exec = { workspace = true }
 codex-execpolicy = { workspace = true }
@@ -41,6 +43,8 @@ codex-stdio-to-uds = { workspace = true }
 codex-tui = { workspace = true }
 libc = { workspace = true }
 owo-colors = { workspace = true }
+qrcode = { workspace = true }
+rand = { workspace = true }
 regex-lite = { workspace = true }
 serde_json = { workspace = true }
 supports-color = { workspace = true }
@@ -60,6 +64,7 @@ codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-
 
 [features]
 data = ["codex-core/data"]
+relay = ["codex-core/relay", "codex-tui/relay"]
 
 [dev-dependencies]
 assert_cmd = { workspace = true }

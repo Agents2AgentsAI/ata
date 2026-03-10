@@ -81,7 +81,9 @@ pub(crate) use voice_setup_view::VoiceSetupView;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;
+mod mobile_setup_view;
 mod prompt_args;
+pub(crate) use mobile_setup_view::MobileSetupView;
 mod research_tools_view;
 mod skill_popup;
 mod skills_toggle_view;
@@ -296,6 +298,17 @@ impl BottomPane {
 
     pub fn set_connectors_enabled(&mut self, enabled: bool) {
         self.composer.set_connectors_enabled(enabled);
+    }
+
+    pub fn set_feature_state(
+        &mut self,
+        voice: bool,
+        scheduler: bool,
+        mobile: bool,
+        research: bool,
+    ) {
+        self.composer
+            .set_feature_state(voice, scheduler, mobile, research);
     }
 
     #[cfg(target_os = "windows")]

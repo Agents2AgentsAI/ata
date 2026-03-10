@@ -484,13 +484,15 @@ fn convert_u16_to_i16_and_peak(input: &[u16], out: &mut Vec<i16>) -> u16 {
 // -------------------------
 
 pub(crate) struct RealtimeAudioPlayer {
-    _stream: cpal::Stream,
+    stream: cpal::Stream,
     queue: Arc<Mutex<VecDeque<i16>>>,
     output_sample_rate: u32,
     output_channels: u16,
     /// Number of samples consumed from the queue by the audio callback.
     /// Tracks actual playback position (not buffered position).
     samples_played: Arc<AtomicUsize>,
+    /// Whether audio output is currently paused.
+    paused: AtomicBool,
 }
 
 impl RealtimeAudioPlayer {
@@ -511,11 +513,12 @@ impl RealtimeAudioPlayer {
             .play()
             .map_err(|e| format!("failed to start output stream: {e}"))?;
         Ok(Self {
-            _stream: stream,
+            stream,
             queue,
             output_sample_rate,
             output_channels,
             samples_played,
+            paused: AtomicBool::new(false),
         })
     }
 
@@ -609,6 +612,24 @@ impl RealtimeAudioPlayer {
     /// Reset the playback position counter (call when starting a new voice turn).
     pub(crate) fn reset_playback_position(&self) {
         self.samples_played.store(0, Ordering::Relaxed);
+    }
+
+    /// Pause audio output. The queue retains its data; playback position freezes.
+    pub(crate) fn pause(&self) {
+        let _ = self.stream.pause();
+        self.paused.store(true, Ordering::SeqCst);
+    }
+
+    /// Resume audio output from where it was paused.
+    pub(crate) fn resume(&self) {
+        let _ = self.stream.play();
+        self.paused.store(false, Ordering::SeqCst);
+    }
+
+    /// Whether the player is currently paused.
+    #[allow(dead_code)]
+    pub(crate) fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
     }
 }
 

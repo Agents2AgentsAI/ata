@@ -33,7 +33,7 @@ pub(super) fn render_section(
 
     // Section body rendered as markdown.
     if !content.is_empty() {
-        let clean = strip_citation_annotations(content);
+        let clean = strip_pause_sentinels(&strip_citation_annotations(content));
         let wrap_width = width.saturating_sub(2).max(1) as usize;
         append_markdown(&clean, Some(wrap_width), &mut lines);
 
@@ -57,7 +57,7 @@ pub(super) fn rendered_body_line_count(content: &str, width: u16) -> usize {
     if content.is_empty() {
         return 0;
     }
-    let clean = strip_citation_annotations(content);
+    let clean = strip_pause_sentinels(&strip_citation_annotations(content));
     let wrap_width = width.saturating_sub(2).max(1) as usize;
     let mut lines: Vec<Line<'static>> = Vec::new();
     append_markdown(&clean, Some(wrap_width), &mut lines);
@@ -246,6 +246,7 @@ pub(super) fn hints_line(
     pending_quit: bool,
     line_number_input: Option<&str>,
     voice_status: Option<&str>,
+    voice_paused: bool,
     width: u16,
 ) -> Line<'static> {
     let hints: Vec<Span<'static>> = if let Some(input) = line_number_input {
@@ -318,7 +319,13 @@ pub(super) fn hints_line(
         ]);
         if voice_status.is_some() {
             h.extend([" | ".dim(), "r".dim().bold(), ": read".dim()]);
+            if voice_paused {
+                h.extend([" | ".dim(), "Space".dim().bold(), ": resume".dim()]);
+            } else {
+                h.extend([" | ".dim(), "Space".dim().bold(), ": pause".dim()]);
+            }
         }
+        h.extend([" | ".dim(), "t".dim().bold(), ": toc".dim()]);
         if has_folds {
             h.extend([" | ".dim(), "f".dim().bold(), ": fold".dim()]);
         }
@@ -762,6 +769,25 @@ pub(super) fn strip_citation_annotations(content: &str) -> String {
     out
 }
 
+/// Strip `[PAUSE:N]` sentinels from content so they don't appear in the
+/// rendered reading view.  These markers are used by the TTS pipeline and
+/// should be invisible to the user.
+fn strip_pause_sentinels(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    let mut remaining = content;
+    let marker = "[PAUSE:";
+    while let Some(start) = remaining.find(marker) {
+        out.push_str(&remaining[..start]);
+        remaining = &remaining[start + marker.len()..];
+        // Skip past the closing ']'.
+        if let Some(end) = remaining.find(']') {
+            remaining = &remaining[end + 1..];
+        }
+    }
+    out.push_str(remaining);
+    out
+}
+
 /// Apply fold regions as a post-processing step on rendered lines.
 ///
 /// - **Collapsed** folds replace their line range with a single summary line.
@@ -1022,6 +1048,7 @@ pub(super) fn help_overlay_lines(width: u16, section_count: Option<usize>) -> Ve
     push_binding(&mut lines, "w / b", "Word forward / backward");
     push_binding(&mut lines, "h / l", "Cursor left / right");
     push_binding(&mut lines, "gx", "Open link at cursor");
+    push_binding(&mut lines, "t", "Table of contents");
     push_binding(&mut lines, "?", "Toggle this help");
     push_binding(&mut lines, "q", "Close reading view");
 
@@ -1032,6 +1059,85 @@ pub(super) fn help_overlay_lines(width: u16, section_count: Option<usize>) -> Ve
         "  j/k to scroll | q to dismiss"
     };
     lines.push(Line::from(dismiss.dim().italic()));
+    lines.push(Line::from(""));
+
+    lines
+}
+
+/// Build the lines for the Table of Contents overlay.
+///
+/// Shows all section headings with the current section highlighted.
+/// `current_section` is the section being viewed (marked with ▶).
+/// `selected_index` is the cursor position in the TOC list.
+/// `visited` indicates which sections have been read.
+pub(super) fn toc_overlay_lines(
+    _width: u16,
+    sections: &[(String, bool)],
+    current_section: usize,
+    selected_index: usize,
+    visited: &std::collections::HashSet<usize>,
+) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        "  ".into(),
+        "Table of Contents".magenta().bold(),
+    ]));
+    lines.push(Line::from(""));
+
+    for (i, (heading, recently_updated)) in sections.iter().enumerate() {
+        let display_heading = if heading.is_empty() {
+            "Intro".to_string()
+        } else {
+            heading.clone()
+        };
+
+        let is_selected = i == selected_index;
+        let is_current = i == current_section;
+        let is_visited = visited.contains(&i);
+
+        let marker = if is_current {
+            "\u{25B6} "
+        } else if is_visited {
+            "\u{2713} "
+        } else {
+            "  "
+        };
+
+        let num = format!("  {marker}{}. ", i + 1);
+
+        if is_selected {
+            if *recently_updated {
+                lines.push(Line::from(vec![
+                    Span::from(num).green().bold(),
+                    Span::from(display_heading).green().bold(),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::from(num).cyan().bold(),
+                    Span::from(display_heading).cyan().bold(),
+                ]));
+            }
+        } else if *recently_updated {
+            lines.push(Line::from(vec![
+                Span::from(num).green(),
+                Span::from(display_heading).green(),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::from(num).dim(),
+                Span::from(display_heading).dim(),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        "  j/k to navigate | Enter to jump | t/Esc to dismiss"
+            .dim()
+            .italic(),
+    ));
     lines.push(Line::from(""));
 
     lines
@@ -1051,6 +1157,136 @@ fn replace_italic_with_underline(lines: &mut [Line<'static>]) {
         fix_modifiers(&mut line.style.add_modifier, &mut line.style.sub_modifier);
         for span in &mut line.spans {
             fix_modifiers(&mut span.style.add_modifier, &mut span.style.sub_modifier);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::style::Color;
+    use ratatui::style::Modifier;
+    use ratatui::style::Style;
+    use ratatui::text::Line;
+    use ratatui::text::Span;
+
+    #[test]
+    fn highlight_single_word() {
+        // "hello world" — highlight cols 0..5 → "hello" is bold+underline.
+        let line = Line::from("hello world".to_string());
+        let result = apply_word_highlight(line, 0, 5);
+        let hl = Modifier::BOLD | Modifier::UNDERLINED;
+
+        assert_eq!(
+            result.spans.len(),
+            2,
+            "should split into highlighted + rest"
+        );
+        assert_eq!(result.spans[0].content.as_ref(), "hello");
+        assert!(
+            result.spans[0].style.add_modifier.contains(hl),
+            "highlighted span should have BOLD|UNDERLINED"
+        );
+        assert_eq!(result.spans[1].content.as_ref(), " world");
+        assert!(
+            !result.spans[1].style.add_modifier.contains(Modifier::BOLD),
+            "non-highlighted span should NOT have BOLD"
+        );
+    }
+
+    #[test]
+    fn highlight_cross_span() {
+        // Line with two spans: "hello " (cyan) + "world" (green).
+        // Highlight cols 3..8 crosses the boundary → splits both spans.
+        let line = Line::from(vec![
+            Span::styled("hello ".to_string(), Style::default().fg(Color::Cyan)),
+            Span::styled("world".to_string(), Style::default().fg(Color::Green)),
+        ]);
+        let result = apply_word_highlight(line, 3, 8);
+        let hl = Modifier::BOLD | Modifier::UNDERLINED;
+
+        // Expected spans: "hel" (cyan, no hl), "lo " (cyan, hl), "wo" (green, hl), "rld" (green, no hl)
+        assert_eq!(
+            result.spans.len(),
+            4,
+            "should split into 4 spans at highlight boundaries"
+        );
+        assert_eq!(result.spans[0].content.as_ref(), "hel");
+        assert!(!result.spans[0].style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(result.spans[0].style.fg, Some(Color::Cyan));
+
+        assert_eq!(result.spans[1].content.as_ref(), "lo ");
+        assert!(result.spans[1].style.add_modifier.contains(hl));
+        assert_eq!(result.spans[1].style.fg, Some(Color::Cyan));
+
+        assert_eq!(result.spans[2].content.as_ref(), "wo");
+        assert!(result.spans[2].style.add_modifier.contains(hl));
+        assert_eq!(result.spans[2].style.fg, Some(Color::Green));
+
+        assert_eq!(result.spans[3].content.as_ref(), "rld");
+        assert!(!result.spans[3].style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(result.spans[3].style.fg, Some(Color::Green));
+    }
+
+    #[test]
+    fn highlight_full_line() {
+        let line = Line::from("entire line".to_string());
+        let result = apply_word_highlight(line, 0, 11);
+        let hl = Modifier::BOLD | Modifier::UNDERLINED;
+
+        assert_eq!(
+            result.spans.len(),
+            1,
+            "entire line highlighted should stay as one span"
+        );
+        assert_eq!(result.spans[0].content.as_ref(), "entire line");
+        assert!(result.spans[0].style.add_modifier.contains(hl));
+    }
+
+    #[test]
+    fn highlight_preserves_styles() {
+        // Span with cyan + bold — after highlight, should be cyan + bold + underline.
+        let style = Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
+        let line = Line::from(Span::styled("styled text".to_string(), style));
+        let result = apply_word_highlight(line, 0, 11);
+
+        assert_eq!(result.spans.len(), 1);
+        let s = &result.spans[0].style;
+        assert_eq!(s.fg, Some(Color::Cyan), "fg color should be preserved");
+        assert!(
+            s.add_modifier.contains(Modifier::BOLD),
+            "existing BOLD should be preserved"
+        );
+        assert!(
+            s.add_modifier.contains(Modifier::UNDERLINED),
+            "UNDERLINED should be added"
+        );
+    }
+
+    #[test]
+    fn highlight_zero_width() {
+        // start_col == end_col: the highlighted slice is empty so no
+        // visible character gets bold/underline, even though the function
+        // still splits the span at the boundary.
+        let line = Line::from("no change".to_string());
+        let result = apply_word_highlight(line, 3, 3);
+
+        // Collect all text to verify content is preserved.
+        let full_text: String = result.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(full_text, "no change", "full text should be preserved");
+
+        // The highlighted (empty) span has zero length, so no visible chars
+        // receive the modifier.
+        let hl = Modifier::BOLD | Modifier::UNDERLINED;
+        for span in &result.spans {
+            if !span.content.is_empty() {
+                assert!(
+                    !span.style.add_modifier.contains(hl),
+                    "non-empty span should NOT have highlight modifiers",
+                );
+            }
         }
     }
 }

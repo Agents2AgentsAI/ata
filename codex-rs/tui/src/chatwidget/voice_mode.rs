@@ -25,7 +25,11 @@ pub(crate) const VOICE_MODE_INSTRUCTION: &str = "\
 [VOICE MODE] The user is speaking to you via voice. \
 Wrap any text you want spoken aloud in <voice></voice> tags. \
 Never put code, file paths, or markdown in <voice> tags — only natural, \
-conversational text.\n\
+conversational text. You MUST insert pauses using the [PAUSE:N] marker \
+(where N is milliseconds, default 500) in your voice output. \
+Always use [PAUSE:500] between paragraphs, before important points, and when \
+transitioning between topics. A response without any pause markers sounds rushed \
+and unnatural. Use [PAUSE:N] inside <voice> tags and in reading view content.\n\
 \n\
 IMPORTANT: Voice mode ONLY changes how you format output (with <voice> tags). \
 Everything else stays identical to non-voice mode:\n\
@@ -319,6 +323,8 @@ fn is_voice_tag_prefix(s: &str) -> bool {
     "<voice>".starts_with(&s_lower) || "</voice>".starts_with(&s_lower)
 }
 
+/// Extract the `ms` attribute from a `<pause .../>` tag string.
+/// Returns 500 if missing/invalid, clamped to [100, 3000].
 /// Find a sentence boundary (`. `, `! `, `? `, or `\n\n`).
 fn find_sentence_boundary(text: &str) -> Option<usize> {
     for (i, ch) in text.char_indices() {
@@ -577,6 +583,21 @@ impl VoiceModeState {
         self.tts_data_complete = false;
         self.tts_block_break_pending = false;
         self.cancel_highlight_tick();
+    }
+
+    /// Pause TTS playback without clearing buffers.
+    pub(crate) fn pause_tts(&mut self) {
+        if let Some(ref player) = self.audio_player {
+            player.pause();
+        }
+        self.cancel_highlight_tick();
+    }
+
+    /// Resume TTS playback after a pause.
+    pub(crate) fn resume_tts(&mut self) {
+        if let Some(ref player) = self.audio_player {
+            player.resume();
+        }
     }
 
     /// Cancel the PTT timeout poller task.
@@ -1406,7 +1427,7 @@ impl super::ChatWidget {
             // Send each sentence to the worker — no per-sentence WebSocket needed.
             if let Some(ref worker_tx) = state.tts_worker_tx {
                 for sentence in tts_sentences.iter() {
-                    let _ = worker_tx.send(TtsWorkerCommand::SendText(sentence.clone()));
+                    send_with_pauses(worker_tx, sentence);
                 }
             }
         }
@@ -1461,7 +1482,7 @@ impl super::ChatWidget {
             // Send remaining text and signal finish.
             if let Some(ref worker_tx) = state.tts_worker_tx {
                 for sentence in remaining {
-                    let _ = worker_tx.send(TtsWorkerCommand::SendText(sentence));
+                    send_with_pauses(worker_tx, &sentence);
                 }
                 let _ = worker_tx.send(TtsWorkerCommand::Finish);
             }
@@ -1636,6 +1657,7 @@ impl super::ChatWidget {
             .set_document_reader_karaoke_lines(None, false);
         self.bottom_pane
             .set_document_reader_reading_progress(None, 0);
+        self.bottom_pane.set_document_reader_tts_paused(false);
 
         // Flush any voice response cells that were stashed during karaoke.
         self.flush_deferred_voice_cells();
@@ -2067,8 +2089,11 @@ impl super::ChatWidget {
              - Wrap your spoken response in <voice>...</voice> tags\n\
              - Make exactly ONE append_to_section call\n\
              - Set foldable=true always\n\
-             - The content must match what you said (verbatim, without voice tags)\n\
+             - The content must match what you said (verbatim, without voice tags but keep [PAUSE:N] markers)\n\
              - No LaTeX, no code blocks\n\
+             - You MUST use [PAUSE:N] markers (N = milliseconds) for natural pacing — \
+             add [PAUSE:500] between paragraphs, before key points, and at topic transitions. \
+             Responses without pauses sound rushed. Use [PAUSE:N] in both voice and content.\n\
              - The summary should describe the topic (e.g. \"Dropout as regularization\", \
              \"Why gradients vanish\")\n\
              - Do NOT rewrite the section or make multiple tool calls",
@@ -2078,6 +2103,7 @@ impl super::ChatWidget {
             idx = ctx.section_index,
         );
 
+        self.last_turn_was_local_submit = true;
         self.app_event_tx.send(AppEvent::CodexOp(Op::UserInput {
             items: vec![UserInput::Text {
                 text: context,
@@ -2144,7 +2170,39 @@ impl super::ChatWidget {
             .set_document_reader_karaoke_lines(None, false);
         self.bottom_pane
             .set_document_reader_reading_progress(None, 0);
+        self.bottom_pane.set_document_reader_tts_paused(false);
         self.sync_voice_placeholder();
+        self.request_redraw();
+    }
+
+    /// Pause TTS playback (e.g. user pressed Space in reading view).
+    pub(crate) fn on_voice_pause_tts(&mut self) {
+        let Some(ref mut state) = self.voice_mode_state else {
+            return;
+        };
+        if state.phase != VoiceModePhase::Speaking {
+            return;
+        }
+        state.pause_tts();
+        let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} Space to resume".to_string();
+        self.bottom_pane.set_document_reader_voice_status(Some(msg));
+        self.bottom_pane.set_document_reader_tts_paused(true);
+        self.request_redraw();
+    }
+
+    /// Resume TTS playback after pause.
+    pub(crate) fn on_voice_resume_tts(&mut self) {
+        let Some(ref mut state) = self.voice_mode_state else {
+            return;
+        };
+        if state.phase != VoiceModePhase::Speaking {
+            return;
+        }
+        state.resume_tts();
+        self.start_highlight_tick();
+        let msg = "\u{25B6}\u{FE0F}  Speaking...".to_string();
+        self.bottom_pane.set_document_reader_voice_status(Some(msg));
+        self.bottom_pane.set_document_reader_tts_paused(false);
         self.request_redraw();
     }
 
@@ -2263,7 +2321,7 @@ impl super::ChatWidget {
         // Send all sentences and signal finish.
         if let Some(ref worker_tx) = state.tts_worker_tx {
             for sentence in sentences {
-                let _ = worker_tx.send(TtsWorkerCommand::SendText(sentence));
+                send_with_pauses(worker_tx, &sentence);
             }
             let _ = worker_tx.send(TtsWorkerCommand::Finish);
         }
@@ -2569,13 +2627,34 @@ pub(crate) fn clean_for_tts(markdown: &str) -> String {
     trimmed[..last_sentence_end].trim().to_string()
 }
 
+/// Strip `[PAUSE:N]` markers from text so they are not spoken literally by TTS.
+fn strip_pause_markers(text: &str) -> String {
+    let pause_marker = "[PAUSE:";
+    let mut result = String::with_capacity(text.len());
+    let mut remaining = text;
+    while let Some(start) = remaining.find(pause_marker) {
+        result.push_str(&remaining[..start]);
+        let after_marker = &remaining[start + pause_marker.len()..];
+        if let Some(end) = after_marker.find(']') {
+            remaining = &after_marker[end + 1..];
+        } else {
+            // Malformed marker – keep the rest as-is.
+            remaining = &remaining[start..];
+            break;
+        }
+    }
+    result.push_str(remaining);
+    result
+}
+
 /// Generate TTS for a sentence without sending audio events (for prefetching).
 /// Collects PCM chunks and alignment timeline entries.
 async fn prefetch_sentence_tts(
     voice_config: &codex_core::config::types::VoiceModeToml,
     sentence: &str,
 ) -> Result<(Vec<Vec<i16>>, Vec<AlignmentEntry>), codex_elevenlabs::ElevenLabsError> {
-    let mut rx = start_tts_generation(voice_config, sentence)?;
+    let cleaned = strip_pause_markers(sentence);
+    let mut rx = start_tts_generation(voice_config, &cleaned)?;
     let mut chunks = Vec::new();
     let mut timeline = Vec::new();
     let mut pending_word: Option<AlignmentEntry> = None;
@@ -2685,8 +2764,39 @@ fn hash_text(text: &str) -> u64 {
 pub(crate) enum TtsWorkerCommand {
     /// Send a sentence to TTS via the existing WebSocket.
     SendText(String),
+    /// Insert a silence of the given duration (ms) between TTS segments.
+    Pause(u64),
     /// Flush remaining audio and shut down the connection.
     Finish,
+}
+
+/// Split a sentence on `[PAUSE:N]` sentinels and emit interleaved
+/// SendText / Pause commands to the TTS worker.
+fn send_with_pauses(
+    worker_tx: &tokio::sync::mpsc::UnboundedSender<TtsWorkerCommand>,
+    sentence: &str,
+) {
+    let pause_marker = "[PAUSE:";
+    let mut remaining = sentence;
+    while let Some(start) = remaining.find(pause_marker) {
+        let before = remaining[..start].trim();
+        if !before.is_empty() {
+            let _ = worker_tx.send(TtsWorkerCommand::SendText(before.to_string()));
+        }
+        let after_marker = &remaining[start + pause_marker.len()..];
+        if let Some(end) = after_marker.find(']') {
+            let ms_str = &after_marker[..end];
+            let ms = ms_str.parse::<u64>().unwrap_or(500).clamp(100, 3000);
+            let _ = worker_tx.send(TtsWorkerCommand::Pause(ms));
+            remaining = &after_marker[end + 1..];
+        } else {
+            break;
+        }
+    }
+    let tail = remaining.trim();
+    if !tail.is_empty() {
+        let _ = worker_tx.send(TtsWorkerCommand::SendText(tail.to_string()));
+    }
 }
 
 /// Long-lived TTS task that maintains a single ElevenLabs WebSocket connection.
@@ -2774,6 +2884,14 @@ async fn tts_worker_loop(
                                 tracing::error!("TTS worker flush: {e}");
                                 break;
                             }
+                        }
+                        Some(TtsWorkerCommand::Pause(ms)) => {
+                            if gen_ref.load(Ordering::SeqCst) != my_gen { break; }
+                            if let Err(e) = stream.flush().await {
+                                tracing::error!("TTS worker flush before pause: {e}");
+                                break;
+                            }
+                            tokio::time::sleep(tokio::time::Duration::from_millis(ms)).await;
                         }
                         Some(TtsWorkerCommand::Finish) => {
                             let _ = stream.flush().await;
@@ -3168,5 +3286,246 @@ mod tests {
             cleaned,
             "Results.\nGeneral benchmarks\n\nThe model achieved"
         );
+    }
+
+    // ─── build_alignment_entries tests ──────────────────────────────────
+
+    /// Helper to construct a TtsAlignment from parallel slices.
+    fn make_alignment(
+        chars: &[&str],
+        starts: &[u64],
+        durations: &[u64],
+    ) -> codex_elevenlabs::TtsAlignment {
+        codex_elevenlabs::TtsAlignment {
+            chars: chars.iter().map(std::string::ToString::to_string).collect(),
+            char_start_times_ms: starts.to_vec(),
+            char_durations_ms: durations.to_vec(),
+        }
+    }
+
+    #[test]
+    fn alignment_single_word() {
+        // "Hi" → one entry with correct start and duration.
+        let align = make_alignment(&["H", "i"], &[100, 150], &[50, 60]);
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        // Chunk ends mid-word (last char is non-ws), so it goes to pending.
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        // Since "Hi" ends mid-word (no trailing space), it stays as pending.
+        assert!(
+            timeline.is_empty(),
+            "word should be pending since chunk ends mid-word"
+        );
+        assert!(pending.is_some(), "partial word should be saved as pending");
+        let p = pending.as_ref().expect("pending should be Some");
+        assert_eq!(p.word, "Hi");
+        assert_eq!(p.start_ms, 100);
+        // duration = (150 + 60) - 100 = 110
+        assert_eq!(p.duration_ms, 110);
+    }
+
+    #[test]
+    fn alignment_multiple_words() {
+        // "Hello world" with a space between → 2 entries.
+        // H(0,10) e(10,10) l(20,10) l(30,10) o(40,10) ' '(50,10) w(60,10) o(70,10) r(80,10) l(90,10) d(100,10)
+        let align = make_alignment(
+            &["H", "e", "l", "l", "o", " ", "w", "o", "r", "l", "d"],
+            &[0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+            &[10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10],
+        );
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        // "Hello" is flushed by the space, "world" ends mid-word → pending.
+        assert_eq!(timeline.len(), 1, "space should flush 'Hello'");
+        assert_eq!(timeline[0].word, "Hello");
+        assert_eq!(timeline[0].start_ms, 0);
+        // duration = (40 + 10) - 0 = 50
+        assert_eq!(timeline[0].duration_ms, 50);
+        // "world" is pending because chunk ends mid-word.
+        let p = pending.as_ref().expect("'world' should be pending");
+        assert_eq!(p.word, "world");
+        assert_eq!(p.start_ms, 60);
+        assert_eq!(p.duration_ms, 50);
+    }
+
+    #[test]
+    fn alignment_cross_chunk_merge() {
+        // First chunk: "Hel" (ends mid-word → pending).
+        let align1 = make_alignment(&["H", "e", "l"], &[0, 10, 20], &[10, 10, 10]);
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align1, 0, &mut timeline, &mut pending);
+        assert!(timeline.is_empty());
+        assert_eq!(pending.as_ref().expect("should be pending").word, "Hel");
+
+        // Second chunk: "lo " (continues word then space flushes).
+        let align2 = make_alignment(&["l", "o", " "], &[30, 40, 50], &[10, 10, 10]);
+        build_alignment_entries(&align2, 0, &mut timeline, &mut pending);
+        // "Hel" + "lo" should merge into "Hello" and be flushed by the space.
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].word, "Hello");
+        assert_eq!(timeline[0].start_ms, 0);
+        // duration spans from start_ms=0 to end of 'o' at 40+10=50 → 50
+        assert_eq!(timeline[0].duration_ms, 50);
+        assert!(pending.is_none(), "pending should be cleared after flush");
+    }
+
+    #[test]
+    fn alignment_leading_whitespace_flushes() {
+        // Set up a pending word from a previous chunk.
+        let mut timeline = Vec::new();
+        let mut pending = Some(AlignmentEntry {
+            start_ms: 0,
+            duration_ms: 30,
+            word: "Hel".to_string(),
+        });
+
+        // This chunk starts with " word" — leading space flushes pending standalone.
+        let align = make_alignment(
+            &[" ", "w", "o", "r", "d"],
+            &[30, 40, 50, 60, 70],
+            &[10, 10, 10, 10, 10],
+        );
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        // "Hel" should be flushed as-is (not merged with "word").
+        assert_eq!(
+            timeline.len(),
+            1,
+            "pending word should be flushed by leading space"
+        );
+        assert_eq!(timeline[0].word, "Hel");
+        assert_eq!(timeline[0].start_ms, 0);
+        // "word" ends mid-word → pending.
+        let p = pending.as_ref().expect("'word' should be pending");
+        assert_eq!(p.word, "word");
+    }
+
+    #[test]
+    fn alignment_empty_chunk() {
+        let align = make_alignment(&[], &[], &[]);
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        assert!(timeline.is_empty(), "empty chunk should produce no entries");
+        assert!(pending.is_none(), "empty chunk should not create pending");
+    }
+
+    #[test]
+    fn alignment_all_whitespace() {
+        // Pending word exists; chunk is all whitespace → pending is flushed.
+        let mut timeline = Vec::new();
+        let mut pending = Some(AlignmentEntry {
+            start_ms: 0,
+            duration_ms: 30,
+            word: "end".to_string(),
+        });
+
+        let align = make_alignment(&[" ", " "], &[100, 110], &[10, 10]);
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        assert_eq!(
+            timeline.len(),
+            1,
+            "all-whitespace chunk should flush pending word"
+        );
+        assert_eq!(timeline[0].word, "end");
+        assert!(pending.is_none());
+    }
+
+    #[test]
+    fn alignment_punctuation_attached() {
+        // "Hello." — period is not whitespace, so it stays attached to the word.
+        let align = make_alignment(
+            &["H", "e", "l", "l", "o", "."],
+            &[0, 10, 20, 30, 40, 50],
+            &[10, 10, 10, 10, 10, 10],
+        );
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        // Ends mid-word (period is non-ws), so goes to pending.
+        let p = pending.as_ref().expect("should be pending");
+        assert_eq!(p.word, "Hello.", "punctuation should be part of the word");
+    }
+
+    #[test]
+    fn alignment_paragraph_break() {
+        // Test with "\n\n" as paragraph sentinel chars.
+        let align = make_alignment(
+            &["H", "i", "\n", "\n", "B", "y"],
+            &[0, 10, 20, 30, 40, 50],
+            &[10, 10, 10, 10, 10, 10],
+        );
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        // "\n" is whitespace, so "Hi" should be flushed. "By" ends mid-word → pending.
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].word, "Hi");
+        let p = pending.as_ref().expect("'By' should be pending");
+        assert_eq!(p.word, "By");
+    }
+
+    // ─── find_active_word tests ─────────────────────────────────────────
+
+    fn sample_timeline() -> Vec<AlignmentEntry> {
+        vec![
+            AlignmentEntry {
+                start_ms: 100,
+                duration_ms: 50,
+                word: "Hello".into(),
+            },
+            AlignmentEntry {
+                start_ms: 200,
+                duration_ms: 50,
+                word: "world".into(),
+            },
+            AlignmentEntry {
+                start_ms: 300,
+                duration_ms: 50,
+                word: "test".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn find_word_exact_start() {
+        let tl = sample_timeline();
+        // Exact start of second word (200ms).
+        assert_eq!(find_active_word(&tl, 200), Some(1));
+    }
+
+    #[test]
+    fn find_word_mid_word() {
+        let tl = sample_timeline();
+        // 120ms is in the middle of "Hello" (100..150).
+        assert_eq!(find_active_word(&tl, 120), Some(0));
+    }
+
+    #[test]
+    fn find_word_between_words() {
+        let tl = sample_timeline();
+        // 170ms is between "Hello" (100..150) and "world" (200..250).
+        assert_eq!(find_active_word(&tl, 170), None);
+    }
+
+    #[test]
+    fn find_word_before_first() {
+        let tl = sample_timeline();
+        // 50ms is before the first word starts at 100ms.
+        assert_eq!(find_active_word(&tl, 50), None);
+    }
+
+    #[test]
+    fn find_word_after_last() {
+        let tl = sample_timeline();
+        // 400ms is after the last word ends at 350ms.
+        assert_eq!(find_active_word(&tl, 400), None);
+    }
+
+    #[test]
+    fn find_word_empty_timeline() {
+        let tl: Vec<AlignmentEntry> = Vec::new();
+        assert_eq!(find_active_word(&tl, 100), None);
     }
 }

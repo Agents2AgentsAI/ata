@@ -110,6 +110,20 @@ pub struct Cli {
     #[arg(long = "no-alt-screen", default_value_t = false)]
     pub no_alt_screen: bool,
 
+    /// Enable the embedded WebSocket server for remote control from mobile
+    /// devices (ATA-Swift). Listens on 0.0.0.0 by default.
+    #[arg(long = "remote-control", default_value_t = false)]
+    pub remote_control: bool,
+
+    /// Port for the remote-control WebSocket server (default: 19285).
+    #[arg(long = "remote-control-port", default_value_t = 19285)]
+    pub remote_control_port: u16,
+
+    /// Authentication token for remote-control connections.
+    /// If omitted, a random 256-bit token is generated at startup.
+    #[arg(long = "remote-control-token")]
+    pub remote_control_token: Option<String>,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }
