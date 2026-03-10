@@ -2103,6 +2103,7 @@ impl super::ChatWidget {
             idx = ctx.section_index,
         );
 
+        self.last_turn_was_local_submit = true;
         self.app_event_tx.send(AppEvent::CodexOp(Op::UserInput {
             items: vec![UserInput::Text {
                 text: context,
@@ -2626,13 +2627,34 @@ pub(crate) fn clean_for_tts(markdown: &str) -> String {
     trimmed[..last_sentence_end].trim().to_string()
 }
 
+/// Strip `[PAUSE:N]` markers from text so they are not spoken literally by TTS.
+fn strip_pause_markers(text: &str) -> String {
+    let pause_marker = "[PAUSE:";
+    let mut result = String::with_capacity(text.len());
+    let mut remaining = text;
+    while let Some(start) = remaining.find(pause_marker) {
+        result.push_str(&remaining[..start]);
+        let after_marker = &remaining[start + pause_marker.len()..];
+        if let Some(end) = after_marker.find(']') {
+            remaining = &after_marker[end + 1..];
+        } else {
+            // Malformed marker – keep the rest as-is.
+            remaining = &remaining[start..];
+            break;
+        }
+    }
+    result.push_str(remaining);
+    result
+}
+
 /// Generate TTS for a sentence without sending audio events (for prefetching).
 /// Collects PCM chunks and alignment timeline entries.
 async fn prefetch_sentence_tts(
     voice_config: &codex_core::config::types::VoiceModeToml,
     sentence: &str,
 ) -> Result<(Vec<Vec<i16>>, Vec<AlignmentEntry>), codex_elevenlabs::ElevenLabsError> {
-    let mut rx = start_tts_generation(voice_config, sentence)?;
+    let cleaned = strip_pause_markers(sentence);
+    let mut rx = start_tts_generation(voice_config, &cleaned)?;
     let mut chunks = Vec::new();
     let mut timeline = Vec::new();
     let mut pending_word: Option<AlignmentEntry> = None;

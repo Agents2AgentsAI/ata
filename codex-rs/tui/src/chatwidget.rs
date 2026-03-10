@@ -3849,9 +3849,9 @@ impl ChatWidget {
                 self.on_voice_interrupt_tts();
                 return;
             }
-            // Space in reading view while TTS is speaking/paused: pause TTS
-            // first, then also start the PTT hold timer so that holding Space
-            // records STT after pausing. Tap = just pause; hold = pause + record.
+            // Space in reading view while TTS is speaking/paused: toggle
+            // pause/resume, then also start the PTT hold timer so that
+            // holding Space records STT. Tap = toggle; hold = pause + record.
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
             KeyEvent {
                 code: KeyCode::Char(' '),
@@ -3864,13 +3864,23 @@ impl ChatWidget {
             {
                 match kind {
                     KeyEventKind::Press => {
-                        // Pause TTS so the user's voice isn't recorded over speech.
+                        // Toggle TTS pause/resume so the user can tap Space to
+                        // pause and tap again to resume.
                         if self
                             .voice_mode_state
                             .as_ref()
                             .is_some_and(|s| s.phase == voice_mode::VoiceModePhase::Speaking)
                         {
-                            self.on_voice_pause_tts();
+                            let is_paused = self
+                                .voice_mode_state
+                                .as_ref()
+                                .and_then(|s| s.audio_player.as_ref())
+                                .is_some_and(super::voice::RealtimeAudioPlayer::is_paused);
+                            if is_paused {
+                                self.on_voice_resume_tts();
+                            } else {
+                                self.on_voice_pause_tts();
+                            }
                         }
                         // Also kick off the PTT hold timer — if the user keeps
                         // holding, recording will start after the threshold.
@@ -9583,6 +9593,34 @@ fn strip_system_instruction_prefix(
     // Voice mode instruction prefixes: strip the known constant if present,
     // otherwise fall back to stripping up to the last `\n\n` boundary.
     if message.starts_with("[VOICE MODE") {
+        // Reading view voice messages embed the user's question inside system
+        // instructions.  Extract just the question text by looking for the
+        // "They asked:\n" marker.
+        if message.starts_with("[VOICE MODE \u{2014} READING VIEW]") {
+            const MARKER: &str = "They asked:\n";
+            if let Some(start) = message.find(MARKER) {
+                let text_start = start + MARKER.len();
+                let text_end = message[text_start..]
+                    .find('\n')
+                    .map_or(message.len(), |p| text_start + p);
+                let stripped = message[text_start..text_end].to_string();
+                let adjusted = text_elements
+                    .into_iter()
+                    .filter_map(|el| {
+                        if el.byte_range.end <= text_start || el.byte_range.start >= text_end {
+                            return None;
+                        }
+                        Some(el.map_range(|r| codex_protocol::user_input::ByteRange {
+                            start: r.start.saturating_sub(text_start),
+                            end: r.end.min(text_end).saturating_sub(text_start),
+                        }))
+                    })
+                    .collect();
+                return (stripped, adjusted);
+            }
+            // If the marker is missing, fall through to the generic logic.
+        }
+
         #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
         let known_prefixes: &[&str] = &[
             crate::chatwidget::voice_mode::VOICE_MODE_INSTRUCTION,
