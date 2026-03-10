@@ -39,6 +39,7 @@ use crate::wrapping::adaptive_wrap_lines;
 use base64::Engine;
 use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
+use codex_core::features::FEATURES;
 use codex_core::mcp::McpManager;
 use codex_core::plugins::PluginsManager;
 use codex_core::web_search::web_search_detail;
@@ -1100,12 +1101,19 @@ pub(crate) fn new_session_info(
 
         parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
     } else {
+        let disabled_announcements: Vec<&str> = FEATURES
+            .iter()
+            .filter(|spec| spec.stage.experimental_announcement().is_some())
+            .filter(|spec| !config.features.enabled(spec.id))
+            .filter_map(|spec| spec.stage.experimental_announcement())
+            .collect();
         if config.show_tooltips
             && let Some(tooltips) = tooltip_override
                 .or_else(|| {
                     tooltips::get_tooltip(
                         auth_plan,
                         matches!(config.service_tier, Some(ServiceTier::Fast)),
+                        &disabled_announcements,
                     )
                 })
                 .map(TooltipHistoryCell::new)

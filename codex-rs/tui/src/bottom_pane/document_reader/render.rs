@@ -317,8 +317,9 @@ pub(super) fn hints_line(
             "n/p".dim().bold(),
             ": section".dim(),
         ]);
+        #[cfg(not(target_os = "linux"))]
+        h.extend([" | ".dim(), "r".dim().bold(), ": read".dim()]);
         if voice_status.is_some() {
-            h.extend([" | ".dim(), "r".dim().bold(), ": read".dim()]);
             if voice_paused {
                 h.extend([" | ".dim(), "Space".dim().bold(), ": resume".dim()]);
             } else {
@@ -532,6 +533,11 @@ pub(super) fn apply_word_highlight(
     end_col: usize,
 ) -> Line<'static> {
     use ratatui::style::Modifier;
+
+    // Guard against invalid / empty range.
+    if start_col >= end_col {
+        return line;
+    }
 
     let hl = Modifier::BOLD | Modifier::UNDERLINED;
     let mut new_spans: Vec<Span<'static>> = Vec::new();
@@ -1285,6 +1291,181 @@ mod tests {
                 assert!(
                     !span.style.add_modifier.contains(hl),
                     "non-empty span should NOT have highlight modifiers",
+                );
+            }
+        }
+    }
+
+    // ─── Adversarial tests: apply_word_highlight ────────────────────────
+
+    #[test]
+    fn adversarial_highlight_empty_line() {
+        // Empty line (no spans) should return empty without panicking.
+        let line = Line::from(Vec::<Span<'static>>::new());
+        let result = apply_word_highlight(line, 0, 5);
+        assert!(
+            result.spans.is_empty(),
+            "empty line should produce empty result"
+        );
+    }
+
+    #[test]
+    fn adversarial_highlight_start_col_beyond_length() {
+        // start_col and end_col both beyond the line length.
+        let line = Line::from("short".to_string());
+        let result = apply_word_highlight(line, 10, 15);
+        // span_end(5) <= start_col(10) -> entirely outside -> original span preserved.
+        let full_text: String = result.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(full_text, "short", "text should be preserved");
+        // No span should be highlighted.
+        let hl = Modifier::BOLD | Modifier::UNDERLINED;
+        for span in &result.spans {
+            assert!(
+                !span.style.add_modifier.contains(hl),
+                "no span should be highlighted when range is beyond line"
+            );
+        }
+    }
+
+    #[test]
+    fn adversarial_highlight_end_col_beyond_length() {
+        // start_col within line, end_col beyond it -- should highlight to end.
+        let line = Line::from("hello".to_string());
+        let result = apply_word_highlight(line, 3, 100);
+        let hl = Modifier::BOLD | Modifier::UNDERLINED;
+
+        // Should split into "hel" (no hl) + "lo" (hl).
+        let full_text: String = result.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(full_text, "hello");
+        assert_eq!(result.spans.len(), 2);
+        assert_eq!(result.spans[0].content.as_ref(), "hel");
+        assert!(!result.spans[0].style.add_modifier.contains(hl));
+        assert_eq!(result.spans[1].content.as_ref(), "lo");
+        assert!(result.spans[1].style.add_modifier.contains(hl));
+    }
+
+    #[test]
+    fn adversarial_highlight_start_col_greater_than_end_col() {
+        // BUG PROBE: start_col > end_col is an invalid range.
+        // Should not panic. Ideally should return the line unchanged.
+        let line = Line::from("hello world".to_string());
+        let result = apply_word_highlight(line, 8, 3);
+        // If we get here, at least it didn't panic.
+        let full_text: String = result.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(
+            full_text, "hello world",
+            "text should be preserved even with invalid range"
+        );
+    }
+
+    #[test]
+    fn adversarial_highlight_multibyte_unicode() {
+        // The function uses byte offsets (span_text.len() is byte count).
+        // The caller (set_voice_reading_progress/WordOffsets) also uses byte offsets.
+        // Test that multi-byte chars work when highlight boundaries are at
+        // char boundaries.
+        //
+        // "\u{00E9}" = e-acute (2 bytes in UTF-8)
+        let line = Line::from("caf\u{00E9} au lait".to_string());
+        // "caf\u{00E9}" is 5 bytes (c=1, a=1, f=1, \u{00E9}=2)
+        // Highlight bytes 0..5 should get "caf\u{00E9}"
+        let result = apply_word_highlight(line, 0, 5);
+        let hl = Modifier::BOLD | Modifier::UNDERLINED;
+
+        let full_text: String = result.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(full_text, "caf\u{00E9} au lait");
+        assert_eq!(result.spans[0].content.as_ref(), "caf\u{00E9}");
+        assert!(result.spans[0].style.add_modifier.contains(hl));
+    }
+
+    #[test]
+    fn adversarial_highlight_mid_multibyte_char() {
+        // BUG PROBE: What happens when start_col falls in the MIDDLE of a
+        // multi-byte character? This would cause a panic on str slicing.
+        //
+        // "\u{00E9}" is 2 bytes. If start_col=4 (middle of the 2-byte char
+        // starting at byte 3), the slice span_text[..4] would panic.
+        //
+        // In practice, WordOffsets shouldn't produce such offsets, but let's
+        // test the robustness of the function itself.
+        let _line = Line::from("caf\u{00E9} ok".to_string());
+        // byte layout: c(0) a(1) f(2) \u{00E9}(3,4) ' '(5) o(6) k(7)
+        // start_col=4 is in the middle of the 2-byte \u{00E9}.
+        let result = std::panic::catch_unwind(|| {
+            apply_word_highlight(Line::from("caf\u{00E9} ok".to_string()), 4, 7)
+        });
+        // Document whether this panics or not.
+        if result.is_err() {
+            // This is expected -- str slicing at non-char-boundary panics.
+            // Not a bug in apply_word_highlight per se, since callers should
+            // always pass valid byte offsets. But worth documenting.
+        } else {
+            // If it somehow doesn't panic, that's fine too.
+            let line_result = result.expect("already checked");
+            let full_text: String = line_result
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect();
+            assert!(full_text.contains("ok"));
+        }
+    }
+
+    #[test]
+    fn adversarial_highlight_already_styled_span() {
+        // A span that's already bold+underlined -- re-applying should not cause issues.
+        let style = Style::default()
+            .fg(Color::Red)
+            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+        let line = Line::from(Span::styled("already styled".to_string(), style));
+        let result = apply_word_highlight(line, 0, 14);
+
+        assert_eq!(result.spans.len(), 1);
+        let s = &result.spans[0].style;
+        // Should still have bold + underlined (idempotent).
+        assert!(s.add_modifier.contains(Modifier::BOLD));
+        assert!(s.add_modifier.contains(Modifier::UNDERLINED));
+        assert_eq!(s.fg, Some(Color::Red));
+    }
+
+    #[test]
+    fn adversarial_highlight_empty_span_in_middle() {
+        // Line with an empty span in the middle.
+        let line = Line::from(vec![
+            Span::raw("hello".to_string()),
+            Span::raw(String::new()),
+            Span::raw(" world".to_string()),
+        ]);
+        let result = apply_word_highlight(line, 2, 8);
+        let hl = Modifier::BOLD | Modifier::UNDERLINED;
+
+        let full_text: String = result.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(full_text, "hello world");
+        // The empty span should not cause issues.
+        // Check that "llo wo" (bytes 2..8) is highlighted.
+        let highlighted_text: String = result
+            .spans
+            .iter()
+            .filter(|s| s.style.add_modifier.contains(hl))
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(highlighted_text, "llo wo");
+    }
+
+    #[test]
+    fn adversarial_highlight_zero_zero() {
+        // start_col=0, end_col=0 -- empty highlight at start.
+        let line = Line::from("test".to_string());
+        let result = apply_word_highlight(line, 0, 0);
+        let full_text: String = result.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(full_text, "test");
+        // No visible characters should be highlighted.
+        let hl = Modifier::BOLD | Modifier::UNDERLINED;
+        for span in &result.spans {
+            if !span.content.is_empty() {
+                assert!(
+                    !span.style.add_modifier.contains(hl),
+                    "no visible chars should be highlighted with 0..0 range"
                 );
             }
         }

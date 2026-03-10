@@ -1,4 +1,80 @@
+use codex_protocol::models::ContentItem;
+
 use super::*;
+
+/// Convert stale file references in a `ResponseItem` to text placeholders so that
+/// resumed sessions do not send expired URLs or file-IDs to the API.
+///
+/// - `UrlFile` items become `InputText` with a note containing the original URL.
+/// - `InputFile` items that only have a `file_id` (no inline `file_data`) become
+///   `InputText` with a note. Items with inline `file_data` are left as-is.
+fn sanitize_stale_file_references(item: &ResponseItem) -> ResponseItem {
+    match item {
+        ResponseItem::Message {
+            id,
+            role,
+            content,
+            end_turn,
+            phase,
+        } => {
+            let sanitized_content: Vec<ContentItem> = content
+                .iter()
+                .map(|ci| match ci {
+                    ContentItem::UrlFile {
+                        url,
+                        filename,
+                        mime_type: _,
+                    } => {
+                        let name = filename.as_deref().unwrap_or("unknown");
+                        ContentItem::InputText {
+                            text: format!(
+                                "[Previously attached file: {name} ({url}) \
+                                 — file not available on session resume. \
+                                 You can use attach_url_files to re-fetch this URL if needed.]"
+                            ),
+                        }
+                    }
+                    ContentItem::InputFile {
+                        file_data,
+                        file_id,
+                        filename,
+                        mime_type: _,
+                    } => {
+                        // Keep inline file_data (base64) — it is self-contained and still valid.
+                        if file_data.is_some() {
+                            return ci.clone();
+                        }
+                        // file_id references are stale on resume.
+                        if file_id.is_some() {
+                            let name = filename.as_deref().unwrap_or("unknown");
+                            return ContentItem::InputText {
+                                text: format!(
+                                    "[Previously uploaded file: {name} \
+                                     — file reference expired on session resume.]"
+                                ),
+                            };
+                        }
+                        ci.clone()
+                    }
+                    other => other.clone(),
+                })
+                .collect();
+            ResponseItem::Message {
+                id: id.clone(),
+                role: role.clone(),
+                content: sanitized_content,
+                end_turn: *end_turn,
+                phase: phase.clone(),
+            }
+        }
+        other => other.clone(),
+    }
+}
+
+/// Apply [`sanitize_stale_file_references`] to every item in a history slice.
+fn sanitize_history(items: &[ResponseItem]) -> Vec<ResponseItem> {
+    items.iter().map(sanitize_stale_file_references).collect()
+}
 
 // Return value of `Session::reconstruct_history_from_rollout`, bundling the rebuilt history with
 // the resume/fork hydration metadata derived from the same replay.
@@ -230,7 +306,7 @@ impl Session {
         let mut history = ContextManager::new();
         let mut saw_legacy_compaction_without_replacement_history = false;
         if let Some(base_replacement_history) = base_replacement_history {
-            history.replace(base_replacement_history.to_vec());
+            history.replace(sanitize_history(base_replacement_history));
         }
         // Materialize exact history semantics from the replay-derived suffix. The eventual lazy
         // design should keep this same replay shape, but drive it from a resumable reverse source
@@ -238,16 +314,15 @@ impl Session {
         for item in rollout_suffix {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
-                    history.record_items(
-                        std::iter::once(response_item),
-                        turn_context.truncation_policy,
-                    );
+                    let sanitized = sanitize_stale_file_references(response_item);
+                    history
+                        .record_items(std::iter::once(&sanitized), turn_context.truncation_policy);
                 }
                 RolloutItem::Compacted(compacted) => {
                     if let Some(replacement_history) = &compacted.replacement_history {
                         // This should actually never happen, because the reverse loop above (to build rollout_suffix)
                         // should stop before any compaction that has Some replacement_history
-                        history.replace(replacement_history.clone());
+                        history.replace(sanitize_history(replacement_history));
                     } else {
                         saw_legacy_compaction_without_replacement_history = true;
                         // Legacy rollouts without `replacement_history` should rebuild the

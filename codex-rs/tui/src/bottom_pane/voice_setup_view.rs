@@ -88,6 +88,7 @@ const LANGUAGE_OPTIONS: &[(&str, &str)] = &[
 
 impl VoiceSetupView {
     pub(crate) fn new(
+        voice_enabled: bool,
         tts_enabled: bool,
         stt_enabled: bool,
         api_key: Option<String>,
@@ -112,6 +113,13 @@ impl VoiceSetupView {
             .unwrap_or(0); // default to "auto"
 
         let items = vec![
+            VoiceSetupItem {
+                name: "Voice Mode".to_string(),
+                description: "Full voice mode (STT + TTS)".to_string(),
+                kind: VoiceSetupItemKind::Toggle {
+                    enabled: voice_enabled,
+                },
+            },
             VoiceSetupItem {
                 name: "TTS".to_string(),
                 description: "Agent responses read aloud".to_string(),
@@ -608,6 +616,17 @@ impl BottomPaneView for VoiceSetupView {
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         // Extract toggle states.
+        let voice_enabled = self.items.iter().find_map(|i| {
+            if i.name == "Voice Mode" {
+                if let VoiceSetupItemKind::Toggle { enabled } = &i.kind {
+                    Some(*enabled)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
         let tts_enabled = self
             .items
             .iter()
@@ -643,6 +662,7 @@ impl BottomPaneView for VoiceSetupView {
         let speed = self.current_speed();
 
         self.app_event_tx.send(AppEvent::UpdateVoiceSettings {
+            voice_enabled,
             tts_enabled,
             stt_enabled,
             elevenlabs_api_key: api_key,

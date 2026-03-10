@@ -485,6 +485,9 @@ pub(crate) enum AppEvent {
     /// Apply TTS/STT toggle settings from the voice setup popup.
     #[cfg(not(target_os = "linux"))]
     UpdateVoiceSettings {
+        /// When `Some(true)`, turn on voice mode; `Some(false)`, turn it off.
+        /// `None` means don't change voice mode on/off state.
+        voice_enabled: Option<bool>,
         tts_enabled: bool,
         stt_enabled: bool,
         elevenlabs_api_key: Option<String>,
@@ -565,6 +568,9 @@ pub(crate) enum AppEvent {
         /// highlight the correct word in the full rendered content.
         /// `None` means full-section narration.
         selection_word_offset: Option<usize>,
+        /// When true, the user explicitly pressed `r` to narrate.  Allows
+        /// lazy-initializing a TTS-only voice state even if `/voice` is off.
+        manual: bool,
     },
 
     /// Pre-generate TTS audio for an adjacent section in the background.

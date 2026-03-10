@@ -411,7 +411,7 @@ impl DocumentReaderView {
         };
         // Auto-narrate the first section on open (if voice mode is active,
         // ChatWidget will pick it up; otherwise it's a no-op).
-        view.narrate_current_section_if_voice();
+        view.narrate_current_section_if_voice(false);
         view
     }
 
@@ -473,7 +473,7 @@ impl DocumentReaderView {
             // Fulfill deferred narration if this section was waiting for content.
             if self.pending_narration_section == Some(section_index) {
                 self.pending_narration_section = None;
-                self.narrate_current_section_if_voice();
+                self.narrate_current_section_if_voice(false);
             }
         }
     }
@@ -719,7 +719,7 @@ impl DocumentReaderView {
             self.visited_sections.insert(self.current_section);
             // Only auto-narrate on first visit (going forward).
             if first_visit {
-                self.narrate_current_section_if_voice();
+                self.narrate_current_section_if_voice(false);
             }
         } else {
             // Already at the last section — flash the indicator.
@@ -758,7 +758,7 @@ impl DocumentReaderView {
     /// Any collapsed folds in the current section are auto-expanded so the
     /// karaoke reading cursor can track through all visible content.
     #[cfg(not(target_os = "linux"))]
-    fn narrate_current_section_if_voice(&mut self) {
+    fn narrate_current_section_if_voice(&mut self, manual: bool) {
         // Auto-expand collapsed folds so karaoke can highlight fold content.
         if let Some(section) = self.sections.get_mut(self.current_section) {
             let mut expanded_any = false;
@@ -795,6 +795,7 @@ impl DocumentReaderView {
                 section_index: self.current_section,
                 text,
                 selection_word_offset: None,
+                manual,
             });
         }
         // Prefetch the next section in the background.
@@ -815,7 +816,7 @@ impl DocumentReaderView {
     }
 
     #[cfg(target_os = "linux")]
-    fn narrate_current_section_if_voice(&mut self) {}
+    fn narrate_current_section_if_voice(&mut self, _manual: bool) {}
 
     fn clear_updated_flag(&mut self) {
         if let Some(section) = self.sections.get_mut(self.current_section)
@@ -1106,7 +1107,7 @@ impl DocumentReaderView {
         // handlers so digit keys are captured instead of dismissing overlays.
         if let Some(ref mut input) = self.line_number_input {
             match key_event.code {
-                KeyCode::Char(c) if c.is_ascii_digit() => {
+                KeyCode::Char(c) if c.is_ascii_digit() || c.is_ascii_lowercase() => {
                     input.push(c);
                 }
                 KeyCode::Backspace => {
@@ -1117,6 +1118,11 @@ impl DocumentReaderView {
                     }
                 }
                 KeyCode::Enter => {
+                    if input == "q" {
+                        self.line_number_input = None;
+                        self.exit_reading_mode();
+                        return;
+                    }
                     if let Ok(n) = input.parse::<usize>() {
                         let target = n.saturating_sub(1); // 1-indexed → 0-indexed
                         if self.show_tutorial || self.show_help {
@@ -1571,6 +1577,7 @@ impl DocumentReaderView {
                                 section_index: self.current_section,
                                 text,
                                 selection_word_offset: Some(word_offset),
+                                manual: true,
                             });
                         }
                     }
@@ -1611,17 +1618,26 @@ impl DocumentReaderView {
             KeyCode::Char('r') => {
                 // Manually trigger narration of the current section.
                 self.interrupt_tts_if_needed();
-                self.narrate_current_section_if_voice();
+                self.narrate_current_section_if_voice(true);
             }
             #[cfg(not(target_os = "linux"))]
             KeyCode::Char(' ') => {
                 // Pause/resume TTS playback.
+                tracing::debug!(
+                    "[TTS-DBG] Space pressed: voice_status={:?}, voice_tts_paused={}",
+                    self.voice_status,
+                    self.voice_tts_paused
+                );
                 if self.voice_status.is_some() {
                     if self.voice_tts_paused {
+                        tracing::debug!("[TTS-DBG] Sending VoiceModeResumeTts");
                         self.app_event_tx.send(AppEvent::VoiceModeResumeTts);
                     } else {
+                        tracing::debug!("[TTS-DBG] Sending VoiceModePauseTts");
                         self.app_event_tx.send(AppEvent::VoiceModePauseTts);
                     }
+                } else {
+                    tracing::debug!("[TTS-DBG] Space ignored: voice_status is None");
                 }
             }
             KeyCode::Char('t') => {
@@ -3400,11 +3416,14 @@ impl Renderable for DocumentReaderView {
                 let input_h = self.input_height(inner_w);
                 let bottom_y = area.y + area.height - 1; // bottom border
                 let ta_y = bottom_y.saturating_sub(input_h);
-                // Place cursor on the last line of the wrapped text.
-                let line_count = self.textarea.desired_height(inner_w).max(1);
-                let cursor_y = ta_y + line_count.saturating_sub(1);
-                let text_len = self.textarea.text().lines().last().map_or(0, str::len);
-                Some((area.x + 2 + text_len as u16, cursor_y))
+                let ta_area = Rect {
+                    x: area.x + 2,
+                    y: ta_y,
+                    width: inner_w,
+                    height: input_h,
+                };
+                let state = *self.textarea_state.borrow();
+                self.textarea.cursor_pos_with_state(ta_area, state)
             }
             ReaderFocus::Search => {
                 // Cursor after "/" prefix + search text.
@@ -4588,6 +4607,788 @@ mod tests {
             assert!(
                 view.voice_reading_highlight.is_none(),
                 "out-of-range word_idx should produce None highlight"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 3: Navigation, key bindings, overlays, and lifecycle tests
+    // -----------------------------------------------------------------------
+
+    // Test 28: section_nav_n_p
+    #[test]
+    fn section_nav_n_p() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        assert_eq!(view.current_section, 0);
+        view.handle_content_key(key(KeyCode::Char('n')));
+        assert_eq!(view.current_section, 1, "n should advance to section 1");
+        view.handle_content_key(key(KeyCode::Char('p')));
+        assert_eq!(view.current_section, 0, "p should go back to section 0");
+    }
+
+    // Test 29: scroll_j_k
+    #[test]
+    fn scroll_j_k() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        assert_eq!(view.cursor_line, 0);
+
+        view.handle_content_key(key(KeyCode::Char('j')));
+        view.handle_content_key(key(KeyCode::Char('j')));
+        view.handle_content_key(key(KeyCode::Char('j')));
+        assert_eq!(view.cursor_line, 3, "j x3 should move cursor to line 3");
+
+        view.handle_content_key(key(KeyCode::Char('k')));
+        view.handle_content_key(key(KeyCode::Char('k')));
+        assert_eq!(
+            view.cursor_line, 1,
+            "k x2 should move cursor back to line 1"
+        );
+    }
+
+    // Test 30: half_page_scroll_ctrl_d_u
+    #[test]
+    fn half_page_scroll_ctrl_d_u() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Render to populate last_content_height.
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let before = view.cursor_line;
+        let ctrl_d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        view.handle_content_key(ctrl_d);
+        assert!(
+            view.cursor_line > before,
+            "Ctrl+d should move cursor forward: before={before}, after={}",
+            view.cursor_line
+        );
+
+        let after_d = view.cursor_line;
+        let ctrl_u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
+        view.handle_content_key(ctrl_u);
+        assert!(
+            view.cursor_line < after_d,
+            "Ctrl+u should move cursor backward: after_d={after_d}, after_u={}",
+            view.cursor_line
+        );
+    }
+
+    // Test 31: home_end_navigation (extended)
+    #[test]
+    fn home_end_navigation_extended() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Navigate to a middle section first.
+        view.handle_content_key(key(KeyCode::Char('n')));
+        assert_eq!(view.current_section, 1);
+
+        view.handle_content_key(key(KeyCode::End));
+        assert_eq!(
+            view.current_section,
+            view.sections.len() - 1,
+            "End should jump to the last section"
+        );
+
+        view.handle_content_key(key(KeyCode::Home));
+        assert_eq!(view.current_section, 0, "Home should jump to section 0");
+    }
+
+    // Test 32: cursor_h_l_w_b
+    #[test]
+    fn cursor_h_l_w_b() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Render to populate last_inner_width.
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        assert_eq!(view.cursor_col, 0);
+
+        // Press 'l' to move right.
+        view.handle_content_key(key(KeyCode::Char('l')));
+        assert_eq!(view.cursor_col, 1, "l should move cursor right by 1");
+
+        view.handle_content_key(key(KeyCode::Char('l')));
+        assert_eq!(view.cursor_col, 2, "l again should move cursor to col 2");
+
+        // Press 'h' to move left.
+        view.handle_content_key(key(KeyCode::Char('h')));
+        assert_eq!(view.cursor_col, 1, "h should move cursor left by 1");
+
+        // Press 'w' to move word forward.
+        let before_w = view.cursor_col;
+        let before_line = view.cursor_line;
+        view.handle_content_key(key(KeyCode::Char('w')));
+        let moved = view.cursor_col != before_w || view.cursor_line != before_line;
+        assert!(moved, "w should move cursor to a different position");
+
+        // Press 'b' to move word backward.
+        let before_b_col = view.cursor_col;
+        let before_b_line = view.cursor_line;
+        view.handle_content_key(key(KeyCode::Char('b')));
+        let moved_back = view.cursor_col != before_b_col || view.cursor_line != before_b_line;
+        assert!(moved_back, "b should move cursor backward");
+    }
+
+    // Test 33: visual_selection_v
+    #[test]
+    fn visual_selection_v() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Render to populate widths.
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        assert!(view.visual_select.is_none());
+
+        // Press 'v' to enter visual mode.
+        view.handle_content_key(key(KeyCode::Char('v')));
+        assert!(
+            view.visual_select.is_some(),
+            "v should enter visual selection mode"
+        );
+        let vs = view.visual_select.as_ref().expect("just checked");
+        assert_eq!(vs.mode, VisualMode::Char, "v should start char selection");
+        assert_eq!(vs.anchor_line, 0);
+        assert_eq!(vs.anchor_col, 0);
+
+        // Extend selection with 'l'.
+        view.handle_content_key(key(KeyCode::Char('l')));
+        view.handle_content_key(key(KeyCode::Char('l')));
+        view.handle_content_key(key(KeyCode::Char('l')));
+        assert!(
+            view.visual_select.is_some(),
+            "visual mode should still be active after cursor movement"
+        );
+        assert_eq!(
+            view.cursor_col, 3,
+            "cursor should have moved right in visual mode"
+        );
+
+        // Press Esc to exit visual mode.
+        view.handle_content_key(key(KeyCode::Esc));
+        assert!(
+            view.visual_select.is_none(),
+            "Esc should exit visual selection mode"
+        );
+    }
+
+    // Test 34: fold_toggle_f
+    #[test]
+    fn fold_toggle_f() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Test content does not have folds by default.
+        // Pressing 'f' should be a no-op but must not panic.
+        let folds_before = view.sections[view.current_section].folds.len();
+        view.handle_content_key(key(KeyCode::Char('f')));
+        let folds_after = view.sections[view.current_section].folds.len();
+        assert_eq!(
+            folds_before, folds_after,
+            "f on content without foldable regions should be no-op"
+        );
+    }
+
+    // Test 35: search_mode
+    #[test]
+    fn search_mode() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        assert_eq!(view.focus, ReaderFocus::Content);
+        assert!(view.search_state.is_none());
+
+        // Press '/' to enter search mode.
+        view.handle_content_key(key(KeyCode::Char('/')));
+        assert_eq!(
+            view.focus,
+            ReaderFocus::Search,
+            "/ should switch focus to Search"
+        );
+
+        // Type search text.
+        view.handle_search_key(key(KeyCode::Char('l')));
+        view.handle_search_key(key(KeyCode::Char('i')));
+        view.handle_search_key(key(KeyCode::Char('n')));
+        view.handle_search_key(key(KeyCode::Char('e')));
+        assert_eq!(
+            view.search_input, "line",
+            "search input should accumulate typed chars"
+        );
+        assert!(
+            view.search_state.is_some(),
+            "incremental search should populate search_state"
+        );
+
+        // Press Esc to exit search mode.
+        view.handle_search_key(key(KeyCode::Esc));
+        assert_eq!(
+            view.focus,
+            ReaderFocus::Content,
+            "Esc should return focus to Content"
+        );
+        assert!(view.search_state.is_none(), "Esc should clear search state");
+    }
+
+    // Test 36: toc_overlay_toggle
+    #[test]
+    fn toc_overlay_toggle() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        assert!(!view.show_toc);
+
+        // Press 't' to show TOC.
+        view.handle_content_key(key(KeyCode::Char('t')));
+        assert!(view.show_toc, "t should toggle TOC overlay on");
+        assert_eq!(
+            view.toc_selected_index, view.current_section,
+            "TOC should highlight the current section"
+        );
+
+        // Navigate within TOC with 'j'.
+        view.handle_content_key(key(KeyCode::Char('j')));
+        assert_eq!(
+            view.toc_selected_index, 1,
+            "j in TOC should move selection down"
+        );
+
+        // Dismiss with Esc.
+        view.handle_content_key(key(KeyCode::Esc));
+        assert!(!view.show_toc, "Esc should dismiss TOC overlay");
+    }
+
+    // Test 37: help_overlay_toggle
+    #[test]
+    fn help_overlay_toggle() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        assert!(!view.show_help);
+
+        // Press '?' to show help overlay.
+        view.handle_content_key(key(KeyCode::Char('?')));
+        assert!(view.show_help, "? should toggle help overlay on");
+
+        // Dismiss with Esc.
+        view.handle_content_key(key(KeyCode::Esc));
+        assert!(!view.show_help, "Esc should dismiss help overlay");
+    }
+
+    // Test 38: q_twice_exits
+    #[test]
+    fn q_twice_exits() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        assert!(!view.complete);
+        assert!(!view.pending_quit);
+
+        // First q sets confirmation state.
+        view.handle_content_key(key(KeyCode::Char('q')));
+        assert!(view.pending_quit, "first q should set pending_quit");
+        assert!(!view.complete, "first q should not complete");
+
+        // Second q exits.
+        view.handle_content_key(key(KeyCode::Char('q')));
+        assert!(view.complete, "second q should set complete");
+    }
+
+    // Test 39: tab_opens_composer
+    #[test]
+    fn tab_opens_composer() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        assert_eq!(view.focus, ReaderFocus::Content);
+        view.handle_content_key(key(KeyCode::Tab));
+        assert_eq!(
+            view.focus,
+            ReaderFocus::Composer,
+            "Tab should switch focus to Composer"
+        );
+    }
+
+    // Test 40: enter_submits_follow_up
+    #[test]
+    fn enter_submits_follow_up() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Drain any construction-time events.
+        while rx.try_recv().is_ok() {}
+
+        // Switch to composer and type text.
+        view.focus = ReaderFocus::Composer;
+        view.textarea.input(key(KeyCode::Char('t')));
+        view.textarea.input(key(KeyCode::Char('e')));
+        view.textarea.input(key(KeyCode::Char('s')));
+        view.textarea.input(key(KeyCode::Char('t')));
+
+        // Submit via Enter.
+        view.handle_composer_key(key(KeyCode::Enter));
+
+        // Verify a CodexOp(UserInput) was sent.
+        let mut found_op = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::CodexOp(Op::UserInput { items, .. }) = ev {
+                let text = match &items[0] {
+                    UserInput::Text { text, .. } => text.clone(),
+                    _ => String::new(),
+                };
+                assert!(
+                    text.contains("test"),
+                    "submitted text should contain 'test': {text}"
+                );
+                found_op = true;
+            }
+        }
+        assert!(found_op, "expected CodexOp(UserInput) event after Enter");
+    }
+
+    // Test 41: update_section_while_viewing
+    #[test]
+    fn update_section_while_viewing() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        assert_eq!(view.current_section, 0);
+        let original = view.sections[0].content.clone();
+
+        view.update_section(0, "Completely new intro content.".to_string());
+
+        assert_ne!(view.sections[0].content, original);
+        assert_eq!(view.sections[0].content, "Completely new intro content.");
+        assert!(
+            view.sections[0].recently_updated,
+            "recently_updated flag should be set after update"
+        );
+    }
+
+    // Test 42: append_section_increases_count
+    #[test]
+    fn append_section_increases_count() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        let original_count = view.sections.len();
+        assert_eq!(original_count, 4);
+
+        // Append to existing section 1 (extending content, not adding a new section).
+        view.append_to_section(1, "More methodology info.".to_string(), false, None);
+        assert_eq!(
+            view.sections.len(),
+            original_count,
+            "append_to_section should not change section count"
+        );
+        assert!(
+            view.sections[1].content.contains("More methodology info."),
+            "appended content should be present"
+        );
+    }
+
+    // Test 43: rapid_n_presses
+    #[test]
+    fn rapid_n_presses() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        for _ in 0..100 {
+            view.handle_content_key(key(KeyCode::Char('n')));
+        }
+        assert_eq!(
+            view.current_section,
+            view.sections.len() - 1,
+            "rapid n presses should clamp to last section"
+        );
+    }
+
+    // Test 44: resize_no_panic
+    #[test]
+    fn resize_no_panic() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let view = make_view(tx);
+
+        // Render at various sizes -- none should panic.
+        for (w, h) in [(80, 24), (40, 12), (120, 40), (20, 5), (200, 60)] {
+            let area = Rect::new(0, 0, w, h);
+            let mut buf = Buffer::empty(area);
+            view.render(area, &mut buf);
+        }
+    }
+
+    // Test 45: section_update_during_fold
+    #[test]
+    fn section_update_during_fold() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Manually add a fold region to section 1.
+        let content_len = view.sections[1].content.len();
+        if content_len > 5 {
+            view.sections[1].folds.push(FoldRegion {
+                start: 0,
+                end: content_len.min(10),
+                summary: "fold".to_string(),
+                collapsed: true,
+            });
+        }
+
+        // Update the section while a fold exists -- should not panic.
+        view.update_section(1, "Brand new content replacing old.".to_string());
+        assert_eq!(view.sections[1].content, "Brand new content replacing old.");
+    }
+
+    // Test 46: exit_during_voice_state
+    #[test]
+    fn exit_during_voice_state() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Set voice status to simulate active voice mode.
+        view.voice_status = Some("Speaking...".to_string());
+
+        // Press q twice to exit -- should not panic even with voice state active.
+        view.handle_content_key(key(KeyCode::Char('q')));
+        assert!(view.pending_quit);
+        view.handle_content_key(key(KeyCode::Char('q')));
+        assert!(
+            view.complete,
+            "should exit cleanly even with voice state set"
+        );
+    }
+
+    // Test: composer cursor X position wraps correctly on multi-line input.
+    // Regression test: the old code used str::len of the last logical line,
+    // which kept the cursor at the rightmost column instead of wrapping.
+    #[test]
+    fn composer_cursor_wraps_to_next_line() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        let area = Rect::new(0, 0, 40, 20);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        // Switch to composer.
+        view.focus = ReaderFocus::Composer;
+
+        // inner_w = 40 - 4 = 36 usable columns.
+
+        // Type a short string — cursor should be at end of text on line 1.
+        for ch in "hello".chars() {
+            view.textarea.input(key(KeyCode::Char(ch)));
+        }
+        view.render(area, &mut buf);
+        let pos_short = view.cursor_pos(area);
+        assert!(pos_short.is_some(), "cursor should be visible");
+        let (x1, _y1) = pos_short.unwrap_or_default();
+        assert_eq!(
+            x1,
+            area.x + 2 + 5,
+            "cursor X should be at col 5 (after 'hello')"
+        );
+
+        // Clear existing text.
+        for _ in 0..5 {
+            view.textarea.input(key(KeyCode::Backspace));
+        }
+
+        // Type 40 'a' chars — wraps at col 36, putting 4 chars on the second
+        // wrapped line. The cursor should be at X = area.x + 2 + 4, NOT at
+        // area.x + 2 + 40 (the old buggy behavior that used total byte length).
+        for _ in 0..40 {
+            view.textarea.input(key(KeyCode::Char('a')));
+        }
+        view.render(area, &mut buf);
+        let pos_wrapped = view.cursor_pos(area);
+        assert!(
+            pos_wrapped.is_some(),
+            "cursor should be visible after wrapping"
+        );
+        let (x2, _y2) = pos_wrapped.unwrap_or_default();
+
+        // The textarea grows upward so the absolute Y may stay the same, but
+        // the X must reflect the wrapped position on the second line.
+        let expected_x = area.x + 2 + (40 - 36);
+        assert_eq!(
+            x2, expected_x,
+            "cursor X should be at the wrapped position on line 2, not the total text length"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Space key pause/resume TTS tests
+    // -----------------------------------------------------------------------
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn space_sends_pause_when_voice_active() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Drain any events emitted during construction (e.g. narrate).
+        while rx.try_recv().is_ok() {}
+
+        // Simulate active TTS playback (not paused).
+        view.voice_status = Some("Speaking...".to_string());
+        view.voice_tts_paused = false;
+
+        // Press Space.
+        view.handle_content_key(key(KeyCode::Char(' ')));
+
+        // Verify VoiceModePauseTts event was emitted.
+        let mut found_pause = false;
+        while let Ok(ev) = rx.try_recv() {
+            if matches!(ev, AppEvent::VoiceModePauseTts) {
+                found_pause = true;
+            }
+        }
+        assert!(
+            found_pause,
+            "expected VoiceModePauseTts event when Space pressed during active voice"
+        );
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn space_sends_resume_when_paused() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Drain any events emitted during construction (e.g. narrate).
+        while rx.try_recv().is_ok() {}
+
+        // Simulate paused TTS playback.
+        view.voice_status = Some("Paused".to_string());
+        view.voice_tts_paused = true;
+
+        // Press Space.
+        view.handle_content_key(key(KeyCode::Char(' ')));
+
+        // Verify VoiceModeResumeTts event was emitted.
+        let mut found_resume = false;
+        while let Ok(ev) = rx.try_recv() {
+            if matches!(ev, AppEvent::VoiceModeResumeTts) {
+                found_resume = true;
+            }
+        }
+        assert!(
+            found_resume,
+            "expected VoiceModeResumeTts event when Space pressed while paused"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // `r` key narration trigger test
+    // -----------------------------------------------------------------------
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn r_key_triggers_narration() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Drain any events emitted during construction (e.g. auto-narrate).
+        while rx.try_recv().is_ok() {}
+
+        // Press 'r' to manually trigger narration.
+        view.handle_content_key(key(KeyCode::Char('r')));
+
+        // Verify VoiceModeNarrateSection event was emitted with manual=true.
+        let mut found_narrate = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::VoiceModeNarrateSection { manual, .. } = ev {
+                assert!(manual, "narration triggered by 'r' should have manual=true");
+                found_narrate = true;
+            }
+        }
+        assert!(
+            found_narrate,
+            "expected VoiceModeNarrateSection event after pressing 'r'"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Fold toggle with foldable content
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn fold_toggle_f_with_code_block() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+
+        // Create a view with content that has a manually-added fold region
+        // (folds are created by follow-up Q&A, not from code blocks).
+        let mut view = make_view(tx);
+
+        // Render to populate layout dimensions.
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        // Manually add a fold region covering a portion of section 0 content.
+        let content = &view.sections[0].content;
+        let fold_start = content
+            .find("Introduction paragraph line three.")
+            .unwrap_or(0);
+        let fold_end = content.len();
+        view.sections[0].folds.push(FoldRegion {
+            start: fold_start,
+            end: fold_end,
+            summary: "folded content".to_string(),
+            collapsed: false,
+        });
+        view.sections[0].invalidate_cache();
+
+        // Render the expanded state.
+        let mut buf_expanded = Buffer::empty(area);
+        view.render(area, &mut buf_expanded);
+        let snap_expanded = snapshot_buffer(&buf_expanded);
+
+        // Move cursor to a line within the fold region so 'f' targets it.
+        // The fold region starts at some rendered line; move cursor to it.
+        view.cursor_line = 3; // Should be within the fold range.
+        view.clamp_and_scroll();
+
+        // Press 'f' to toggle fold (should collapse).
+        view.handle_content_key(key(KeyCode::Char('f')));
+
+        // Check if a fold was collapsed.
+        let any_collapsed = view.sections[0].folds.iter().any(|f| f.collapsed);
+        assert!(
+            any_collapsed,
+            "pressing 'f' should collapse the fold under the cursor"
+        );
+
+        // Render after folding.
+        let mut buf_folded = Buffer::empty(area);
+        view.render(area, &mut buf_folded);
+        let snap_folded = snapshot_buffer(&buf_folded);
+
+        // The folded output should be different from the expanded output.
+        assert_ne!(
+            snap_expanded, snap_folded,
+            "rendered output should change after folding"
+        );
+
+        // Press 'f' again to unfold.
+        view.handle_content_key(key(KeyCode::Char('f')));
+
+        // Check that the fold is now expanded.
+        let all_expanded = view.sections[0].folds.iter().all(|f| !f.collapsed);
+        assert!(
+            all_expanded,
+            "pressing 'f' again should expand the fold back"
+        );
+
+        // Render after unfolding.
+        let mut buf_unfolded = Buffer::empty(area);
+        view.render(area, &mut buf_unfolded);
+        let snap_unfolded = snapshot_buffer(&buf_unfolded);
+
+        // The unfolded output should match the original expanded output.
+        assert_eq!(
+            snap_expanded, snap_unfolded,
+            "rendered output should return to original after unfolding"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Voice progress render verification
+    // -----------------------------------------------------------------------
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    mod voice_progress_render_tests {
+        use super::AppEvent;
+        use super::AppEventSender;
+        use super::Buffer;
+        use super::Rect;
+        use super::make_view;
+        use crate::bottom_pane::bottom_pane_view::BottomPaneView;
+        use crate::render::renderable::Renderable;
+        use ratatui::style::Modifier;
+        use tokio::sync::mpsc::unbounded_channel;
+
+        #[test]
+        fn voice_progress_renders_highlight_in_buffer() {
+            let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+            let tx = AppEventSender::new(tx_raw);
+            let mut view = make_view(tx);
+
+            // Render once to populate layout dimensions.
+            let area = Rect::new(0, 0, 80, 24);
+            let mut buf = Buffer::empty(area);
+            view.render(area, &mut buf);
+
+            // Set voice reading progress to highlight the first word (word_idx=0).
+            view.set_voice_reading_progress(Some(0), 0);
+
+            // The first word should be "Introduction".
+            let hl = view.voice_reading_highlight;
+            assert!(hl.is_some(), "word_idx=0 should produce a highlight");
+
+            // Render again with the highlight active.
+            let mut buf2 = Buffer::empty(area);
+            view.render(area, &mut buf2);
+
+            // Scan the buffer for an 'I' cell (start of "Introduction")
+            // that has BOLD+UNDERLINED modifiers applied.
+            let mut found_bold_underline = false;
+            for y in 0..area.height {
+                for x in 0..area.width {
+                    let cell = &buf2[(x, y)];
+                    let ch = cell.symbol().chars().next().unwrap_or(' ');
+                    if ch == 'I' {
+                        let mods = cell.style().add_modifier;
+                        if mods.contains(Modifier::BOLD) && mods.contains(Modifier::UNDERLINED) {
+                            found_bold_underline = true;
+                            break;
+                        }
+                    }
+                }
+                if found_bold_underline {
+                    break;
+                }
+            }
+            assert!(
+                found_bold_underline,
+                "highlighted word 'Introduction' should have BOLD+UNDERLINED style in the rendered buffer"
             );
         }
     }

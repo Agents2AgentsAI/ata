@@ -3449,6 +3449,7 @@ impl App {
             // ─── Voice mode events ───────────────────────────────────────
             #[cfg(not(target_os = "linux"))]
             AppEvent::UpdateVoiceSettings {
+                voice_enabled,
                 tts_enabled,
                 stt_enabled,
                 elevenlabs_api_key,
@@ -3496,8 +3497,16 @@ impl App {
                 // Update in-memory state.
                 self.chat_widget
                     .apply_voice_settings(tts_enabled, stt_enabled);
-                // If both off, deactivate voice mode entirely.
-                if !tts_enabled && !stt_enabled {
+
+                // Handle voice mode on/off toggle.
+                if let Some(enabled) = voice_enabled {
+                    if enabled && !self.chat_widget.is_voice_mode_active() {
+                        self.chat_widget.toggle_voice_mode();
+                    } else if !enabled && self.chat_widget.is_voice_mode_active() {
+                        self.chat_widget.deactivate_voice_mode_if_active();
+                    }
+                } else if !tts_enabled && !stt_enabled {
+                    // If both off and no explicit voice toggle, deactivate.
                     self.chat_widget.deactivate_voice_mode_if_active();
                 }
                 // If either on and Feature::VoiceMode not enabled, auto-enable it.
@@ -3587,12 +3596,14 @@ impl App {
                 section_index,
                 text,
                 selection_word_offset,
+                manual,
             } => {
                 self.chat_widget.on_voice_narrate_section(
                     document_id,
                     section_index,
                     text,
                     selection_word_offset,
+                    manual,
                 );
                 tui.frame_requester().schedule_frame();
             }
