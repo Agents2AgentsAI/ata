@@ -356,15 +356,14 @@ fn is_skills_path(path: &Path, roots: &HashSet<PathBuf>) -> bool {
 
 fn normalize_watch_path(path: &Path) -> PathBuf {
     dunce::canonicalize(path).unwrap_or_else(|_| {
-        path.parent()
-            .and_then(|parent| dunce::canonicalize(parent).ok())
-            .map_or_else(
-                || path.to_path_buf(),
-                |canonical_parent| {
-                    path.file_name()
-                        .map_or(canonical_parent.clone(), |name| canonical_parent.join(name))
-                },
-            )
+        path.ancestors()
+            .skip(1)
+            .find_map(|ancestor| {
+                let canonical_ancestor = dunce::canonicalize(ancestor).ok()?;
+                let suffix = path.strip_prefix(ancestor).ok()?;
+                Some(canonical_ancestor.join(suffix))
+            })
+            .unwrap_or_else(|| path.to_path_buf())
     })
 }
 
@@ -482,7 +481,7 @@ mod tests {
         std::fs::write(&alias_skill, "# demo").expect("write skill");
 
         let state = RwLock::new(WatchState {
-            skills_root_ref_counts: HashMap::from([(root.clone(), 1)]),
+            skills_root_ref_counts: HashMap::from([(root, 1)]),
         });
         let event = notify_event(
             EventKind::Modify(ModifyKind::Any),
@@ -581,13 +580,14 @@ mod tests {
         register_thread.join().expect("register join");
 
         let state = watcher.state.read().expect("state lock");
-        assert_eq!(state.skills_root_ref_counts.get(&root), Some(&1));
+        let normalized_root = normalize_watch_path(&root);
+        assert_eq!(state.skills_root_ref_counts.get(&normalized_root), Some(&1));
         drop(state);
 
         let inner = watcher.inner.as_ref().expect("watcher inner");
         let inner = inner.lock().expect("inner lock");
         assert_eq!(
-            inner.watched_paths.get(&root),
+            inner.watched_paths.get(&normalized_root),
             Some(&RecursiveMode::Recursive)
         );
     }
