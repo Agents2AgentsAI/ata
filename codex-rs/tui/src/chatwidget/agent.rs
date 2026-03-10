@@ -74,6 +74,7 @@ pub(crate) fn spawn_agent(
         });
 
         while let Ok(event) = thread.next_event().await {
+            tracing::debug!("[remote-debug] primary thread event: {:?}", event.msg);
             let is_shutdown_complete = matches!(event.msg, EventMsg::ShutdownComplete);
             app_event_tx_clone.send(AppEvent::CodexEvent(event));
             if is_shutdown_complete {

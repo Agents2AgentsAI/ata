@@ -446,26 +446,27 @@ mod tests {
         };
 
         let args = create_filesystem_args(&sandbox_policy, Path::new("/")).expect("bwrap fs args");
-        let dev_mount = ["--dev", "/dev"];
-        let writable_dev_bind = ["--bind", "/dev", "/dev"];
-        let cwd_bind = ["--bind", "/", "/"];
+        // The exact argument list varies by environment (e.g. codex-home
+        // directories like ~/.ata/knowledge-base may or may not exist), so
+        // assert the ordering invariant rather than the exact contents:
+        // --dev /dev must appear before --bind /dev /dev.
+        assert_eq!(&args[0..3], &["--ro-bind", "/", "/"]);
+        assert_eq!(&args[3..5], &["--dev", "/dev"]);
 
-        let dev_mount_index = args
-            .windows(dev_mount.len())
-            .position(|window| window == dev_mount)
-            .expect("expected --dev /dev mount");
-        let writable_dev_bind_index = args
-            .windows(writable_dev_bind.len())
-            .position(|window| window == writable_dev_bind)
-            .expect("expected writable /dev bind");
-        let cwd_bind_index = args
-            .windows(cwd_bind.len())
-            .position(|window| window == cwd_bind)
-            .expect("expected cwd writable bind");
+        let dev_bind_pos = args
+            .windows(3)
+            .position(|w| w == ["--bind", "/dev", "/dev"])
+            .expect("--bind /dev /dev must be present");
+        assert_eq!(dev_bind_pos, 5, "--bind /dev /dev should follow --dev /dev");
 
-        assert_eq!(args[0..3], ["--ro-bind", "/", "/"]);
-        assert!(dev_mount_index < writable_dev_bind_index);
-        assert!(writable_dev_bind_index < cwd_bind_index);
+        let cwd_bind_pos = args
+            .windows(3)
+            .position(|w| w == ["--bind", "/", "/"])
+            .expect("--bind / / must be present");
+        assert!(
+            cwd_bind_pos > dev_bind_pos,
+            "--bind / / should come after --bind /dev /dev"
+        );
     }
 
     #[test]
