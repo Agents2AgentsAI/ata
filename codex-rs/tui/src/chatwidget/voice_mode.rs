@@ -578,6 +578,10 @@ impl VoiceModeState {
         }
         if let Some(ref player) = self.audio_player {
             player.clear();
+            // Reset paused state so subsequent narrations are not silenced.
+            if player.is_paused() {
+                player.resume();
+            }
         }
         // Bump generation so any in-flight tasks discard their audio.
         self.tts_generation.fetch_add(1, Ordering::SeqCst);
@@ -621,7 +625,9 @@ impl VoiceModeState {
         if self.mock_audio_paused {
             return true;
         }
-        self.audio_player.as_ref().is_some_and(|p| p.is_paused())
+        self.audio_player
+            .as_ref()
+            .is_some_and(super::super::voice::RealtimeAudioPlayer::is_paused)
     }
 
     /// Returns true if the audio player has buffered samples.
@@ -1433,11 +1439,37 @@ impl super::ChatWidget {
     /// Called when agent streaming delta arrives — parse `<voice>` tags, send
     /// tagged content to TTS, and return filtered display text (tags stripped).
     ///
-    /// Returns `Some(display_text)` when voice mode is active (caller should use
-    /// this instead of the raw delta), or `None` when voice mode is inactive.
-    pub(crate) fn on_voice_mode_agent_delta(&mut self, delta: &str) -> Option<String> {
+    /// Always strips `<voice>` tags from display text. Only sends to TTS when
+    /// voice mode is active and `from_replay` is false.
+    ///
+    /// Returns `Some(display_text)` when tags were (or could be) present, or
+    /// `None` when voice mode was never initialized and no tags are in the
+    /// delta.
+    pub(crate) fn on_voice_mode_agent_delta(
+        &mut self,
+        delta: &str,
+        from_replay: bool,
+    ) -> Option<String> {
+        // Capture config before taking a mutable borrow on voice_mode_state.
         let vc = self.effective_voice_config();
-        let state = self.voice_mode_state.as_mut()?;
+        let state = match self.voice_mode_state.as_mut() {
+            Some(s) => s,
+            None => {
+                // Voice mode was never initialized. Still strip any `<voice>`
+                // tags that may be present in replayed/historical content.
+                if delta.contains('<') {
+                    let stripped = delta
+                        .replace("<voice>", "")
+                        .replace("</voice>", "")
+                        .replace("<Voice>", "")
+                        .replace("</Voice>", "");
+                    if stripped != delta {
+                        return Some(stripped);
+                    }
+                }
+                return None;
+            }
+        };
         if !state.is_active() {
             // Voice mode was previously on but is now off.  The agent may
             // still emit <voice> tags from earlier instructions in the
@@ -1448,8 +1480,13 @@ impl super::ChatWidget {
         }
 
         // Always parse tags for display (strip <voice> markers), even if TTS
-        // is suppressed due to barge-in.
+        // is suppressed due to barge-in or replay.
         let result = state.voice_tag_parser.push(delta);
+
+        // During replay we strip tags for clean display but never send to TTS.
+        if from_replay {
+            return Some(result.display_text);
+        }
 
         let block_closed = result.voice_block_closed;
 
@@ -1490,9 +1527,7 @@ impl super::ChatWidget {
                 return Some(result.display_text);
             }
 
-            if state.phase != VoiceModePhase::Speaking {
-                state.phase = VoiceModePhase::Speaking;
-            }
+            state.transition_phase_on_chunk();
 
             // Ensure TTS worker is running (one persistent WebSocket per voice turn).
             if state.tts_worker_tx.is_none() {
@@ -1574,9 +1609,7 @@ impl super::ChatWidget {
             }
             state.tts_worker_tx = None;
 
-            if state.phase != VoiceModePhase::Speaking {
-                state.phase = VoiceModePhase::Speaking;
-            }
+            state.transition_phase_on_chunk();
         } else {
             // TTS suppressed (barge-in) or output mode is text-only.
             state.voice_tag_parser.clear();
@@ -1675,8 +1708,11 @@ impl super::ChatWidget {
         let has_audio = state
             .audio_player
             .as_ref()
-            .is_some_and(|p| p.has_buffered_audio());
-        let is_paused = state.audio_player.as_ref().is_some_and(|p| p.is_paused());
+            .is_some_and(super::super::voice::RealtimeAudioPlayer::has_buffered_audio);
+        let is_paused = state
+            .audio_player
+            .as_ref()
+            .is_some_and(super::super::voice::RealtimeAudioPlayer::is_paused);
         tracing::debug!(
             "[TTS-DBG] on_voice_tts_finished: phase={:?}, has_audio={has_audio}, is_paused={is_paused}",
             state.phase,
@@ -1772,6 +1808,12 @@ impl super::ChatWidget {
         self.flush_deferred_voice_cells();
 
         self.sync_voice_placeholder();
+        // For tts_only mode, sync_voice_placeholder skips setting
+        // the reading view status; explicitly clear it so the `s` hint
+        // disappears when playback finishes.
+        if self.voice_mode_state.as_ref().is_some_and(|s| s.tts_only) {
+            self.bottom_pane.set_document_reader_voice_status(None);
+        }
         self.request_redraw();
     }
 
@@ -2308,7 +2350,7 @@ impl super::ChatWidget {
         }
         state.pause_tts();
         tracing::debug!("[TTS-DBG] on_voice_pause_tts: paused successfully");
-        let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} Space to resume".to_string();
+        let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} s to resume".to_string();
         self.bottom_pane.set_document_reader_voice_status(Some(msg));
         self.bottom_pane.set_document_reader_tts_paused(true);
         self.request_redraw();
@@ -2457,6 +2499,12 @@ impl super::ChatWidget {
             self.start_highlight_tick();
             self.app_event_tx.send(AppEvent::VoiceModeTtsFinished);
             self.sync_voice_placeholder();
+            // Ensure the reading view shows "Speaking..." so the `s` key
+            // hint and handler are active (sync_voice_placeholder skips
+            // tts_only mode).
+            self.bottom_pane.set_document_reader_voice_status(Some(
+                "\u{25B6}\u{FE0F}  Speaking...".to_string(),
+            ));
             return;
         }
 
@@ -2511,6 +2559,11 @@ impl super::ChatWidget {
         state.tts_worker_tx = None;
 
         self.sync_voice_placeholder();
+        // Ensure the reading view shows "Speaking..." so the `s` key
+        // hint and handler are active (sync_voice_placeholder skips
+        // tts_only mode).
+        self.bottom_pane
+            .set_document_reader_voice_status(Some("\u{25B6}\u{FE0F}  Speaking...".to_string()));
     }
 
     /// Handle a prefetch request: generate TTS in background, cache result.
@@ -4264,7 +4317,7 @@ mod tests {
     #[test]
     fn resume_with_drained_buffer_does_not_enter_speaking() {
         // Scenario: user paused, audio buffer drained while paused,
-        // user presses Space to resume → should NOT pretend to speak.
+        // user presses 's' to resume → should NOT pretend to speak.
         let vc = VoiceModeToml::default();
         let mut state = VoiceModeState::new(&vc);
 
@@ -4378,7 +4431,7 @@ mod tests {
         //   2. User pauses (audio buffered)
         //   3. finalize_voice_turn runs (due to race) → clears tts_data_complete,
         //      phase=Idle, narrating_section=None, audio drained
-        //   4. User presses Space to resume
+        //   4. User presses 's' to resume
         //   5. State: phase=Idle, has_audio=false, tts_data_complete=false,
         //      narrating_section=None
         //   6. can_resume_playback MUST return false — nothing left to play.

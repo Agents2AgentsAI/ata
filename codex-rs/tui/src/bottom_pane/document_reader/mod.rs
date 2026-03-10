@@ -1269,8 +1269,13 @@ impl DocumentReaderView {
             return;
         }
 
-        // Cancel pending quit confirmation on any key except q/y.
-        if self.pending_quit && !matches!(key_event.code, KeyCode::Char('q') | KeyCode::Char('y')) {
+        // Cancel pending quit confirmation on any key except q/y/Esc.
+        if self.pending_quit
+            && !matches!(
+                key_event.code,
+                KeyCode::Char('q') | KeyCode::Char('y') | KeyCode::Esc
+            )
+        {
             self.pending_quit = false;
             return;
         }
@@ -1621,23 +1626,19 @@ impl DocumentReaderView {
                 self.narrate_current_section_if_voice(true);
             }
             #[cfg(not(target_os = "linux"))]
-            KeyCode::Char(' ') => {
+            KeyCode::Char('s') if self.voice_status.is_some() => {
                 // Pause/resume TTS playback.
                 tracing::debug!(
-                    "[TTS-DBG] Space pressed: voice_status={:?}, voice_tts_paused={}",
+                    "[TTS-DBG] 's' pressed: voice_status={:?}, voice_tts_paused={}",
                     self.voice_status,
                     self.voice_tts_paused
                 );
-                if self.voice_status.is_some() {
-                    if self.voice_tts_paused {
-                        tracing::debug!("[TTS-DBG] Sending VoiceModeResumeTts");
-                        self.app_event_tx.send(AppEvent::VoiceModeResumeTts);
-                    } else {
-                        tracing::debug!("[TTS-DBG] Sending VoiceModePauseTts");
-                        self.app_event_tx.send(AppEvent::VoiceModePauseTts);
-                    }
+                if self.voice_tts_paused {
+                    tracing::debug!("[TTS-DBG] Sending VoiceModeResumeTts");
+                    self.app_event_tx.send(AppEvent::VoiceModeResumeTts);
                 } else {
-                    tracing::debug!("[TTS-DBG] Space ignored: voice_status is None");
+                    tracing::debug!("[TTS-DBG] Sending VoiceModePauseTts");
+                    self.app_event_tx.send(AppEvent::VoiceModePauseTts);
                 }
             }
             KeyCode::Char('t') => {
@@ -1684,6 +1685,11 @@ impl DocumentReaderView {
             KeyCode::Esc => {
                 if has_search {
                     self.clear_search();
+                } else if self.pending_quit {
+                    self.pending_quit = false;
+                    self.exit_reading_mode();
+                } else {
+                    self.pending_quit = true;
                 }
             }
             KeyCode::Char('f') => {
@@ -2580,8 +2586,8 @@ impl BottomPaneView for DocumentReaderView {
     }
 
     fn prefer_esc_to_handle_key_event(&self) -> bool {
-        // Esc should never close the reading view — only `q` does that.
-        // In content focus: Esc clears search or cancels visual select (no-op otherwise).
+        // In content focus: Esc clears search, cancels visual select, or
+        // triggers the double-press quit flow (same as `q`).
         // In composer/search focus: Esc returns to content focus.
         true
     }
@@ -4917,6 +4923,77 @@ mod tests {
         assert!(view.complete, "second q should set complete");
     }
 
+    #[test]
+    fn esc_twice_exits() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        assert!(!view.complete);
+        assert!(!view.pending_quit);
+
+        // First Esc sets confirmation state (no search/overlay to dismiss).
+        view.handle_content_key(key(KeyCode::Esc));
+        assert!(view.pending_quit, "first Esc should set pending_quit");
+        assert!(!view.complete, "first Esc should not complete");
+
+        // Second Esc exits.
+        view.handle_content_key(key(KeyCode::Esc));
+        assert!(view.complete, "second Esc should set complete");
+    }
+
+    #[test]
+    fn esc_clears_search_before_quit() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Activate search so there is something to dismiss.
+        view.handle_content_key(key(KeyCode::Char('/')));
+        view.handle_search_key(key(KeyCode::Char('a')));
+        view.handle_search_key(key(KeyCode::Enter));
+        assert!(view.search_state.is_some(), "search should be active");
+
+        // First Esc clears search instead of entering quit flow.
+        view.handle_content_key(key(KeyCode::Esc));
+        assert!(view.search_state.is_none(), "Esc should clear search");
+        assert!(
+            !view.pending_quit,
+            "Esc should not set pending_quit when search was active"
+        );
+        assert!(!view.complete);
+    }
+
+    #[test]
+    fn esc_then_q_exits() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // First Esc sets pending quit.
+        view.handle_content_key(key(KeyCode::Esc));
+        assert!(view.pending_quit);
+
+        // q confirms the exit.
+        view.handle_content_key(key(KeyCode::Char('q')));
+        assert!(view.complete, "q after Esc should exit");
+    }
+
+    #[test]
+    fn q_then_esc_exits() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // First q sets pending quit.
+        view.handle_content_key(key(KeyCode::Char('q')));
+        assert!(view.pending_quit);
+
+        // Esc confirms the exit.
+        view.handle_content_key(key(KeyCode::Esc));
+        assert!(view.complete, "Esc after q should exit");
+    }
+
     // Test 39: tab_opens_composer
     #[test]
     fn tab_opens_composer() {
@@ -5150,12 +5227,12 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Space key pause/resume TTS tests
+    // 's' key pause/resume TTS tests
     // -----------------------------------------------------------------------
 
     #[cfg(not(target_os = "linux"))]
     #[test]
-    fn space_sends_pause_when_voice_active() {
+    fn s_key_sends_pause_when_voice_active() {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
@@ -5167,8 +5244,8 @@ mod tests {
         view.voice_status = Some("Speaking...".to_string());
         view.voice_tts_paused = false;
 
-        // Press Space.
-        view.handle_content_key(key(KeyCode::Char(' ')));
+        // Press 's'.
+        view.handle_content_key(key(KeyCode::Char('s')));
 
         // Verify VoiceModePauseTts event was emitted.
         let mut found_pause = false;
@@ -5179,13 +5256,13 @@ mod tests {
         }
         assert!(
             found_pause,
-            "expected VoiceModePauseTts event when Space pressed during active voice"
+            "expected VoiceModePauseTts event when 's' pressed during active voice"
         );
     }
 
     #[cfg(not(target_os = "linux"))]
     #[test]
-    fn space_sends_resume_when_paused() {
+    fn s_key_sends_resume_when_paused() {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
@@ -5197,8 +5274,8 @@ mod tests {
         view.voice_status = Some("Paused".to_string());
         view.voice_tts_paused = true;
 
-        // Press Space.
-        view.handle_content_key(key(KeyCode::Char(' ')));
+        // Press 's'.
+        view.handle_content_key(key(KeyCode::Char('s')));
 
         // Verify VoiceModeResumeTts event was emitted.
         let mut found_resume = false;
@@ -5209,7 +5286,7 @@ mod tests {
         }
         assert!(
             found_resume,
-            "expected VoiceModeResumeTts event when Space pressed while paused"
+            "expected VoiceModeResumeTts event when 's' pressed while paused"
         );
     }
 
