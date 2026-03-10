@@ -703,6 +703,10 @@ pub(crate) struct App {
     /// Persisted here so the state survives `ChatWidget` recreation during
     /// agent/thread switches (the `BottomPane` is recreated from scratch).
     thread_closed_document_ids: HashMap<ThreadId, HashSet<String>>,
+
+    /// Keeps the embedded remote-control WebSocket server alive for the
+    /// lifetime of the App. Dropped (and shut down) when the TUI exits.
+    _remote_control_handle: Option<crate::remote_control::RemoteControlHandle>,
 }
 
 #[derive(Default)]
@@ -1577,6 +1581,7 @@ impl App {
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
         should_prompt_windows_sandbox_nux_at_startup: bool,
+        remote_control_settings: Option<crate::remote_control::RemoteControlSettings>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -1597,6 +1602,23 @@ impl App {
                     .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
             },
         ));
+
+        // Spawn embedded remote-control WebSocket server if requested.
+        let remote_control_handle = match &remote_control_settings {
+            Some(settings) if settings.enabled => {
+                let handle = crate::remote_control::spawn_remote_control_server(
+                    settings,
+                    Arc::clone(&thread_manager),
+                    &config,
+                    cli_kv_overrides.clone(),
+                    feedback.clone(),
+                );
+                tracing::info!("{}", handle.connection_info());
+                Some(handle)
+            }
+            _ => None,
+        };
+
         let mut model = thread_manager
             .get_models_manager()
             .get_default_model(&config.model, RefreshStrategy::Offline)
@@ -1806,7 +1828,16 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             thread_closed_document_ids: HashMap::new(),
+            _remote_control_handle: remote_control_handle,
         };
+
+        if let Some(handle) = &app._remote_control_handle {
+            app.chat_widget.set_remote_control_state(
+                true,
+                handle.bind_addr.port(),
+                Some(handle.auth_token.clone()),
+            );
+        }
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -3405,6 +3436,16 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModePauseTts => {
+                self.chat_widget.on_voice_pause_tts();
+                tui.frame_requester().schedule_frame();
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeResumeTts => {
+                self.chat_widget.on_voice_resume_tts();
+                tui.frame_requester().schedule_frame();
+            }
+            #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModeNarrateSection {
                 document_id,
                 section_index,
@@ -3447,6 +3488,41 @@ impl App {
                             .add_error_message(format!("Failed to save status line items: {err}"));
                     }
                 }
+            }
+            AppEvent::StartMobileServer { port, token } => {
+                let settings = crate::remote_control::RemoteControlSettings {
+                    enabled: true,
+                    port,
+                    token,
+                };
+                let handle = crate::remote_control::spawn_remote_control_server(
+                    &settings,
+                    Arc::clone(&self.server),
+                    &self.config,
+                    self.cli_kv_overrides.clone(),
+                    self.feedback.clone(),
+                );
+                let info = handle.connection_info();
+                let port = handle.bind_addr.port();
+                let token = Some(handle.auth_token.clone());
+                self._remote_control_handle = Some(handle);
+                self.chat_widget.set_remote_control_state(true, port, token);
+                self.chat_widget.add_info_message(info, None);
+            }
+            AppEvent::StopMobileServer => {
+                self._remote_control_handle = None;
+                self.chat_widget
+                    .set_remote_control_state(false, 19285, None);
+                self.chat_widget
+                    .add_info_message("Remote control server stopped.".into(), None);
+            }
+            AppEvent::StartMobileDaemon { port } => {
+                let msg = crate::mobile_daemon::start_daemon(port);
+                self.chat_widget.add_info_message(msg, None);
+            }
+            AppEvent::StopMobileDaemon => {
+                let msg = crate::mobile_daemon::stop_daemon();
+                self.chat_widget.add_info_message(msg, None);
             }
             AppEvent::StatusLineBranchUpdated { cwd, branch } => {
                 self.chat_widget.set_status_line_branch(cwd, branch);

@@ -34,6 +34,7 @@ pub enum SlashCommand {
     Collab,
     Agent,
     Jobs,
+    Mobile,
     // Undo,
     Diff,
     Copy,
@@ -105,6 +106,7 @@ impl SlashCommand {
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
             SlashCommand::Jobs => "view scheduled jobs and daemon status",
+            SlashCommand::Mobile => "start remote control server for mobile (ATA)",
             SlashCommand::Approvals => "choose what Codex is allowed to do",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
@@ -171,6 +173,7 @@ impl SlashCommand {
             | SlashCommand::Status
             | SlashCommand::DebugConfig
             | SlashCommand::Jobs
+            | SlashCommand::Mobile
             | SlashCommand::Ps
             | SlashCommand::Clean
             | SlashCommand::Mcp

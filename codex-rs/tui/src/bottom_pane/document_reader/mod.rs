@@ -304,10 +304,18 @@ pub(crate) struct DocumentReaderView {
     /// once content arrives.
     pending_narration_section: Option<usize>,
 
+    /// Whether TTS is currently paused (for pause/resume toggle).
+    voice_tts_paused: bool,
+
     /// When true, the "end of document" separator is rendered in a
     /// highlighted style.  Set when the user presses `n` at the last
     /// section; cleared on the next keypress.
     end_of_doc_flash: bool,
+
+    /// When `true`, render a full-screen TOC overlay listing all sections.
+    show_toc: bool,
+    /// Currently highlighted section index in the TOC overlay.
+    toc_selected_index: usize,
 }
 
 impl DocumentReaderView {
@@ -396,7 +404,10 @@ impl DocumentReaderView {
             voice_karaoke_append: false,
             voice_reading_highlight: None,
             pending_narration_section: None,
+            voice_tts_paused: false,
             end_of_doc_flash: false,
+            show_toc: false,
+            toc_selected_index: 0,
         };
         // Auto-narrate the first section on open (if voice mode is active,
         // ChatWidget will pick it up; otherwise it's a no-op).
@@ -1138,6 +1149,46 @@ impl DocumentReaderView {
             return;
         }
 
+        // TOC overlay: navigate with j/k, jump with Enter, dismiss with t/Esc/q.
+        if self.show_toc {
+            match key_event.code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if self.toc_selected_index + 1 < self.sections.len() {
+                        self.toc_selected_index += 1;
+                    }
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.toc_selected_index = self.toc_selected_index.saturating_sub(1);
+                }
+                KeyCode::Char('G') => {
+                    self.toc_selected_index = self.sections.len().saturating_sub(1);
+                }
+                KeyCode::Char('g') => {
+                    self.toc_selected_index = 0;
+                }
+                KeyCode::Enter => {
+                    let target = self.toc_selected_index;
+                    self.show_toc = false;
+                    if target != self.current_section && target < self.sections.len() {
+                        self.interrupt_tts_if_needed();
+                        self.clear_updated_flag();
+                        self.current_section = target;
+                        self.scroll_offset.set(0);
+                        self.cursor_line = 0;
+                        self.cursor_col = 0;
+                        self.voice_karaoke_lines = None;
+                        self.voice_reading_highlight = None;
+                        self.visited_sections.insert(self.current_section);
+                    }
+                }
+                KeyCode::Char('t') | KeyCode::Esc | KeyCode::Char('q') => {
+                    self.show_toc = false;
+                }
+                _ => {}
+            }
+            return;
+        }
+
         // Tutorial / help overlay: navigate with vim keys, dismiss with others.
         if self.show_tutorial || self.show_help {
             let scroll_cell = if self.show_tutorial {
@@ -1562,6 +1613,24 @@ impl DocumentReaderView {
                 self.interrupt_tts_if_needed();
                 self.narrate_current_section_if_voice();
             }
+            #[cfg(not(target_os = "linux"))]
+            KeyCode::Char(' ') => {
+                // Pause/resume TTS playback.
+                if self.voice_status.is_some() {
+                    if self.voice_tts_paused {
+                        self.app_event_tx.send(AppEvent::VoiceModeResumeTts);
+                    } else {
+                        self.app_event_tx.send(AppEvent::VoiceModePauseTts);
+                    }
+                }
+            }
+            KeyCode::Char('t') => {
+                // Toggle Table of Contents overlay.
+                self.show_toc = !self.show_toc;
+                if self.show_toc {
+                    self.toc_selected_index = self.current_section;
+                }
+            }
             KeyCode::Char('v') => {
                 self.visual_select = Some(VisualSelect {
                     mode: VisualMode::Char,
@@ -1617,6 +1686,7 @@ impl DocumentReaderView {
                 self.line_number_input = Some(String::new());
             }
             KeyCode::Char('?') => {
+                self.show_toc = false;
                 self.show_help = true;
                 self.help_scroll.set(0);
             }
@@ -2383,6 +2453,11 @@ impl BottomPaneView for DocumentReaderView {
     }
 
     #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    fn set_voice_tts_paused(&mut self, paused: bool) {
+        self.voice_tts_paused = paused;
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn set_pending_voice_question(&mut self, section: usize, question: String) {
         self.pending_sections
             .insert(section, (question, Instant::now()));
@@ -2713,12 +2788,28 @@ impl Renderable for DocumentReaderView {
         // === Content area (fills remaining space between top and bottom fixed rows) ===
         let show_line_nums = self.line_number_input.is_some();
         let mut has_more_below = false;
-        if content_height > 0 && (self.show_tutorial || self.show_help) {
-            // Render tutorial or help overlay (unified content) with scroll.
+        if content_height > 0 && (self.show_tutorial || self.show_help || self.show_toc) {
+            // Render tutorial, help, or TOC overlay with scroll.
             let (overlay_lines, scroll_cell) = if self.show_tutorial {
                 (
                     render::help_overlay_lines(w, Some(self.sections.len())),
                     &self.tutorial_scroll,
+                )
+            } else if self.show_toc {
+                let section_data: Vec<(String, bool)> = self
+                    .sections
+                    .iter()
+                    .map(|s| (s.heading.clone(), s.recently_updated))
+                    .collect();
+                (
+                    render::toc_overlay_lines(
+                        w,
+                        &section_data,
+                        self.current_section,
+                        self.toc_selected_index,
+                        &self.visited_sections,
+                    ),
+                    &self.help_scroll,
                 )
             } else {
                 (render::help_overlay_lines(w, None), &self.help_scroll)
@@ -3247,6 +3338,7 @@ impl Renderable for DocumentReaderView {
             self.pending_quit,
             self.line_number_input.as_deref(),
             self.voice_status.as_deref(), // used for showing "r: read" hint
+            self.voice_tts_paused,
             w,
         );
         Paragraph::new(hints).render(
@@ -3304,11 +3396,15 @@ impl Renderable for DocumentReaderView {
         match self.focus {
             ReaderFocus::Composer => {
                 // Cursor is inside the textarea area, which is inset 2 chars from card edge.
-                let input_h = self.input_height(area.width.saturating_sub(4));
+                let inner_w = area.width.saturating_sub(4);
+                let input_h = self.input_height(inner_w);
                 let bottom_y = area.y + area.height - 1; // bottom border
                 let ta_y = bottom_y.saturating_sub(input_h);
+                // Place cursor on the last line of the wrapped text.
+                let line_count = self.textarea.desired_height(inner_w).max(1);
+                let cursor_y = ta_y + (line_count as u16).saturating_sub(1);
                 let text_len = self.textarea.text().lines().last().map_or(0, str::len);
-                Some((area.x + 2 + text_len as u16, ta_y))
+                Some((area.x + 2 + text_len as u16, cursor_y))
             }
             ReaderFocus::Search => {
                 // Cursor after "/" prefix + search text.

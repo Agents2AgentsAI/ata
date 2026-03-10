@@ -33,7 +33,7 @@ pub(super) fn render_section(
 
     // Section body rendered as markdown.
     if !content.is_empty() {
-        let clean = strip_citation_annotations(content);
+        let clean = strip_pause_sentinels(&strip_citation_annotations(content));
         let wrap_width = width.saturating_sub(2).max(1) as usize;
         append_markdown(&clean, Some(wrap_width), &mut lines);
 
@@ -57,7 +57,7 @@ pub(super) fn rendered_body_line_count(content: &str, width: u16) -> usize {
     if content.is_empty() {
         return 0;
     }
-    let clean = strip_citation_annotations(content);
+    let clean = strip_pause_sentinels(&strip_citation_annotations(content));
     let wrap_width = width.saturating_sub(2).max(1) as usize;
     let mut lines: Vec<Line<'static>> = Vec::new();
     append_markdown(&clean, Some(wrap_width), &mut lines);
@@ -246,6 +246,7 @@ pub(super) fn hints_line(
     pending_quit: bool,
     line_number_input: Option<&str>,
     voice_status: Option<&str>,
+    voice_paused: bool,
     width: u16,
 ) -> Line<'static> {
     let hints: Vec<Span<'static>> = if let Some(input) = line_number_input {
@@ -318,7 +319,13 @@ pub(super) fn hints_line(
         ]);
         if voice_status.is_some() {
             h.extend([" | ".dim(), "r".dim().bold(), ": read".dim()]);
+            if voice_paused {
+                h.extend([" | ".dim(), "Space".dim().bold(), ": resume".dim()]);
+            } else {
+                h.extend([" | ".dim(), "Space".dim().bold(), ": pause".dim()]);
+            }
         }
+        h.extend([" | ".dim(), "t".dim().bold(), ": toc".dim()]);
         if has_folds {
             h.extend([" | ".dim(), "f".dim().bold(), ": fold".dim()]);
         }
@@ -762,6 +769,25 @@ pub(super) fn strip_citation_annotations(content: &str) -> String {
     out
 }
 
+/// Strip `[PAUSE:N]` sentinels from content so they don't appear in the
+/// rendered reading view.  These markers are used by the TTS pipeline and
+/// should be invisible to the user.
+fn strip_pause_sentinels(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    let mut remaining = content;
+    let marker = "[PAUSE:";
+    while let Some(start) = remaining.find(marker) {
+        out.push_str(&remaining[..start]);
+        remaining = &remaining[start + marker.len()..];
+        // Skip past the closing ']'.
+        if let Some(end) = remaining.find(']') {
+            remaining = &remaining[end + 1..];
+        }
+    }
+    out.push_str(remaining);
+    out
+}
+
 /// Apply fold regions as a post-processing step on rendered lines.
 ///
 /// - **Collapsed** folds replace their line range with a single summary line.
@@ -1022,6 +1048,7 @@ pub(super) fn help_overlay_lines(width: u16, section_count: Option<usize>) -> Ve
     push_binding(&mut lines, "w / b", "Word forward / backward");
     push_binding(&mut lines, "h / l", "Cursor left / right");
     push_binding(&mut lines, "gx", "Open link at cursor");
+    push_binding(&mut lines, "t", "Table of contents");
     push_binding(&mut lines, "?", "Toggle this help");
     push_binding(&mut lines, "q", "Close reading view");
 
@@ -1032,6 +1059,85 @@ pub(super) fn help_overlay_lines(width: u16, section_count: Option<usize>) -> Ve
         "  j/k to scroll | q to dismiss"
     };
     lines.push(Line::from(dismiss.dim().italic()));
+    lines.push(Line::from(""));
+
+    lines
+}
+
+/// Build the lines for the Table of Contents overlay.
+///
+/// Shows all section headings with the current section highlighted.
+/// `current_section` is the section being viewed (marked with ▶).
+/// `selected_index` is the cursor position in the TOC list.
+/// `visited` indicates which sections have been read.
+pub(super) fn toc_overlay_lines(
+    _width: u16,
+    sections: &[(String, bool)],
+    current_section: usize,
+    selected_index: usize,
+    visited: &std::collections::HashSet<usize>,
+) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        "  ".into(),
+        "Table of Contents".magenta().bold(),
+    ]));
+    lines.push(Line::from(""));
+
+    for (i, (heading, recently_updated)) in sections.iter().enumerate() {
+        let display_heading = if heading.is_empty() {
+            "Intro".to_string()
+        } else {
+            heading.clone()
+        };
+
+        let is_selected = i == selected_index;
+        let is_current = i == current_section;
+        let is_visited = visited.contains(&i);
+
+        let marker = if is_current {
+            "\u{25B6} "
+        } else if is_visited {
+            "\u{2713} "
+        } else {
+            "  "
+        };
+
+        let num = format!("  {marker}{}. ", i + 1);
+
+        if is_selected {
+            if *recently_updated {
+                lines.push(Line::from(vec![
+                    Span::from(num).green().bold(),
+                    Span::from(display_heading).green().bold(),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::from(num).cyan().bold(),
+                    Span::from(display_heading).cyan().bold(),
+                ]));
+            }
+        } else if *recently_updated {
+            lines.push(Line::from(vec![
+                Span::from(num).green(),
+                Span::from(display_heading).green(),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::from(num).dim(),
+                Span::from(display_heading).dim(),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        "  j/k to navigate | Enter to jump | t/Esc to dismiss"
+            .dim()
+            .italic(),
+    ));
     lines.push(Line::from(""));
 
     lines

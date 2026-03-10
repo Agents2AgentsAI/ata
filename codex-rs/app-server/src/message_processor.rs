@@ -566,4 +566,12 @@ impl MessageProcessor {
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
     }
+
+    /// Replace the internal [`ThreadManager`] with an externally-owned one.
+    /// Used by the embedded remote-control WebSocket server so the TUI and
+    /// remote clients share the same set of threads.
+    pub(crate) fn set_thread_manager(&mut self, thread_manager: Arc<ThreadManager>) {
+        self.codex_message_processor
+            .set_thread_manager(thread_manager);
+    }
 }

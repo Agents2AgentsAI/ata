@@ -41,6 +41,8 @@ codex-stdio-to-uds = { workspace = true }
 codex-tui = { workspace = true }
 libc = { workspace = true }
 owo-colors = { workspace = true }
+qrcode = { workspace = true }
+rand = { workspace = true }
 regex-lite = { workspace = true }
 serde_json = { workspace = true }
 supports-color = { workspace = true }

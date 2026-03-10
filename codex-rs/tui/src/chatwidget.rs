@@ -593,6 +593,9 @@ pub(crate) struct ChatWidget {
     /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
     /// can update the status header without accidentally clearing the spinner for an active turn.
     agent_turn_running: bool,
+    /// Set to true when the TUI submits a user message locally; reset on TurnStarted.
+    /// Used to distinguish local vs remote user messages for rendering.
+    last_turn_was_local_submit: bool,
     /// Tracks per-server MCP startup state while startup is in progress.
     ///
     /// The map is `Some(_)` from the first `McpStartupUpdate` until `McpStartupComplete`, and the
@@ -648,6 +651,13 @@ pub(crate) struct ChatWidget {
     /// We require the second press to match this key so `Ctrl+C` followed by
     /// `Ctrl+D` (or vice versa) doesn't quit accidentally.
     quit_shortcut_key: Option<KeyBinding>,
+    /// Whether the embedded remote-control WebSocket server is currently running.
+    remote_control_running: bool,
+    /// Port the remote-control server is bound to (persisted so `/mobile` can
+    /// reopen with the correct value).
+    remote_control_port: u16,
+    /// Auth token for the running remote-control server, if any.
+    remote_control_token: Option<String>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
     // Snapshot of token usage to restore after review mode exits.
@@ -3200,6 +3210,7 @@ impl ChatWidget {
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
+            last_turn_was_local_submit: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_prefetch_in_flight: false,
@@ -3223,6 +3234,9 @@ impl ChatWidget {
             pending_notification: None,
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
+            remote_control_running: false,
+            remote_control_port: 19285,
+            remote_control_token: None,
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
@@ -3294,6 +3308,20 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
+
+        {
+            let voice_available = cfg!(all(not(target_os = "linux"), feature = "voice-input"))
+                && widget.config.features.enabled(Feature::VoiceMode);
+            let scheduler_enabled = widget.config.features.enabled(Feature::Scheduler);
+            let mobile_available = true;
+            let research_enabled = widget.config.features.enabled(Feature::Research);
+            widget.bottom_pane.set_feature_state(
+                voice_available,
+                scheduler_enabled,
+                mobile_available,
+                research_enabled,
+            );
+        }
 
         // Auto-enable voice mode if persisted in config.
         #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
@@ -3417,6 +3445,7 @@ impl ChatWidget {
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
+            last_turn_was_local_submit: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_prefetch_in_flight: false,
@@ -3444,6 +3473,9 @@ impl ChatWidget {
             pending_notification: None,
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
+            remote_control_running: false,
+            remote_control_port: 19285,
+            remote_control_token: None,
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
@@ -3501,6 +3533,20 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
+
+        {
+            let voice_available = cfg!(all(not(target_os = "linux"), feature = "voice-input"))
+                && widget.config.features.enabled(Feature::VoiceMode);
+            let scheduler_enabled = widget.config.features.enabled(Feature::Scheduler);
+            let mobile_available = true;
+            let research_enabled = widget.config.features.enabled(Feature::Research);
+            widget.bottom_pane.set_feature_state(
+                voice_available,
+                scheduler_enabled,
+                mobile_available,
+                research_enabled,
+            );
+        }
 
         widget
     }
@@ -3604,6 +3650,7 @@ impl ChatWidget {
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
+            last_turn_was_local_submit: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_prefetch_in_flight: false,
@@ -3627,6 +3674,9 @@ impl ChatWidget {
             pending_notification: None,
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
+            remote_control_running: false,
+            remote_control_port: 19285,
+            remote_control_token: None,
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
@@ -3697,6 +3747,20 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
+
+        {
+            let voice_available = cfg!(all(not(target_os = "linux"), feature = "voice-input"))
+                && widget.config.features.enabled(Feature::VoiceMode);
+            let scheduler_enabled = widget.config.features.enabled(Feature::Scheduler);
+            let mobile_available = true;
+            let research_enabled = widget.config.features.enabled(Feature::Research);
+            widget.bottom_pane.set_feature_state(
+                voice_available,
+                scheduler_enabled,
+                mobile_available,
+                research_enabled,
+            );
+        }
 
         // Auto-enable voice mode if persisted in config (mirrors logic in `new()`).
         #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
@@ -3783,6 +3847,43 @@ impl ChatWidget {
                 ..
             } if self.is_voice_speaking() => {
                 self.on_voice_interrupt_tts();
+                return;
+            }
+            // Space in reading view while TTS is speaking/paused: pause TTS
+            // first, then also start the PTT hold timer so that holding Space
+            // records STT after pausing. Tap = just pause; hold = pause + record.
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            KeyEvent {
+                code: KeyCode::Char(' '),
+                kind,
+                modifiers,
+                ..
+            } if modifiers.is_empty()
+                && self.is_document_reader_active()
+                && self.is_voice_speaking() =>
+            {
+                match kind {
+                    KeyEventKind::Press => {
+                        // Pause TTS so the user's voice isn't recorded over speech.
+                        if self
+                            .voice_mode_state
+                            .as_ref()
+                            .is_some_and(|s| s.phase == voice_mode::VoiceModePhase::Speaking)
+                        {
+                            self.on_voice_pause_tts();
+                        }
+                        // Also kick off the PTT hold timer — if the user keeps
+                        // holding, recording will start after the threshold.
+                        self.on_ptt_press();
+                    }
+                    KeyEventKind::Release => {
+                        if let Some(ref mut s) = self.voice_mode_state {
+                            s.key_release_supported = true;
+                        }
+                        self.on_ptt_release();
+                    }
+                    KeyEventKind::Repeat => self.on_ptt_repeat(),
+                }
                 return;
             }
             // Space: push-to-talk (PTT) when voice mode is active and STT is enabled.
@@ -4308,6 +4409,9 @@ impl ChatWidget {
             SlashCommand::Jobs => {
                 self.add_jobs_output();
             }
+            SlashCommand::Mobile => {
+                self.open_mobile_setup();
+            }
             SlashCommand::Apps => {
                 self.add_connectors_output();
             }
@@ -4599,6 +4703,7 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        self.last_turn_was_local_submit = true;
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
@@ -5084,7 +5189,10 @@ impl ChatWidget {
             }
             EventMsg::TurnComplete(TurnCompleteEvent {
                 last_agent_message, ..
-            }) => self.on_task_complete(last_agent_message, from_replay),
+            }) => {
+                self.last_turn_was_local_submit = false;
+                self.on_task_complete(last_agent_message, from_replay);
+            }
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
@@ -5185,7 +5293,16 @@ impl ChatWidget {
                 }
             }
             EventMsg::UserMessage(ev) => {
-                if from_replay || self.should_render_realtime_user_message_event(&ev) {
+                // Render if: replaying, realtime voice mode dedup, OR the message
+                // was not submitted locally (i.e., came from a remote client).
+                // Local submissions render the user message directly in
+                // submit_user_message(), so the event is redundant. Remote
+                // messages only arrive via this event path.
+                let likely_remote = !self.last_turn_was_local_submit;
+                if from_replay
+                    || self.should_render_realtime_user_message_event(&ev)
+                    || likely_remote
+                {
                     self.on_user_message_event(ev);
                 }
             }
@@ -8156,6 +8273,40 @@ impl ChatWidget {
             message,
             Some("Tip: ask me to create, modify, or run a scheduled job.".to_string()),
         );
+    }
+
+    fn open_mobile_setup(&mut self) {
+        if !self.remote_control_running {
+            // Auto-start the server so the user sees a QR code immediately.
+            let port = self.remote_control_port;
+            let token = crate::remote_control::generate_auth_token();
+            self.app_event_tx
+                .send(crate::app_event::AppEvent::StartMobileServer {
+                    port,
+                    token: Some(token.clone()),
+                });
+            // Optimistically update state so the view has the token for the QR.
+            self.remote_control_running = true;
+            self.remote_control_token = Some(token);
+        }
+        let view = crate::bottom_pane::MobileSetupView::new(
+            self.remote_control_port,
+            self.remote_control_token.clone(),
+            self.remote_control_running,
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn set_remote_control_state(
+        &mut self,
+        running: bool,
+        port: u16,
+        token: Option<String>,
+    ) {
+        self.remote_control_running = running;
+        self.remote_control_port = port;
+        self.remote_control_token = token;
     }
 
     pub(crate) fn add_connectors_output(&mut self) {
