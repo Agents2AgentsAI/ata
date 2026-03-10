@@ -3287,4 +3287,245 @@ mod tests {
             "Results.\nGeneral benchmarks\n\nThe model achieved"
         );
     }
+
+    // ─── build_alignment_entries tests ──────────────────────────────────
+
+    /// Helper to construct a TtsAlignment from parallel slices.
+    fn make_alignment(
+        chars: &[&str],
+        starts: &[u64],
+        durations: &[u64],
+    ) -> codex_elevenlabs::TtsAlignment {
+        codex_elevenlabs::TtsAlignment {
+            chars: chars.iter().map(|c| c.to_string()).collect(),
+            char_start_times_ms: starts.to_vec(),
+            char_durations_ms: durations.to_vec(),
+        }
+    }
+
+    #[test]
+    fn alignment_single_word() {
+        // "Hi" → one entry with correct start and duration.
+        let align = make_alignment(&["H", "i"], &[100, 150], &[50, 60]);
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        // Chunk ends mid-word (last char is non-ws), so it goes to pending.
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        // Since "Hi" ends mid-word (no trailing space), it stays as pending.
+        assert!(
+            timeline.is_empty(),
+            "word should be pending since chunk ends mid-word"
+        );
+        assert!(pending.is_some(), "partial word should be saved as pending");
+        let p = pending.as_ref().expect("pending should be Some");
+        assert_eq!(p.word, "Hi");
+        assert_eq!(p.start_ms, 100);
+        // duration = (150 + 60) - 100 = 110
+        assert_eq!(p.duration_ms, 110);
+    }
+
+    #[test]
+    fn alignment_multiple_words() {
+        // "Hello world" with a space between → 2 entries.
+        // H(0,10) e(10,10) l(20,10) l(30,10) o(40,10) ' '(50,10) w(60,10) o(70,10) r(80,10) l(90,10) d(100,10)
+        let align = make_alignment(
+            &["H", "e", "l", "l", "o", " ", "w", "o", "r", "l", "d"],
+            &[0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+            &[10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10],
+        );
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        // "Hello" is flushed by the space, "world" ends mid-word → pending.
+        assert_eq!(timeline.len(), 1, "space should flush 'Hello'");
+        assert_eq!(timeline[0].word, "Hello");
+        assert_eq!(timeline[0].start_ms, 0);
+        // duration = (40 + 10) - 0 = 50
+        assert_eq!(timeline[0].duration_ms, 50);
+        // "world" is pending because chunk ends mid-word.
+        let p = pending.as_ref().expect("'world' should be pending");
+        assert_eq!(p.word, "world");
+        assert_eq!(p.start_ms, 60);
+        assert_eq!(p.duration_ms, 50);
+    }
+
+    #[test]
+    fn alignment_cross_chunk_merge() {
+        // First chunk: "Hel" (ends mid-word → pending).
+        let align1 = make_alignment(&["H", "e", "l"], &[0, 10, 20], &[10, 10, 10]);
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align1, 0, &mut timeline, &mut pending);
+        assert!(timeline.is_empty());
+        assert_eq!(pending.as_ref().expect("should be pending").word, "Hel");
+
+        // Second chunk: "lo " (continues word then space flushes).
+        let align2 = make_alignment(&["l", "o", " "], &[30, 40, 50], &[10, 10, 10]);
+        build_alignment_entries(&align2, 0, &mut timeline, &mut pending);
+        // "Hel" + "lo" should merge into "Hello" and be flushed by the space.
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].word, "Hello");
+        assert_eq!(timeline[0].start_ms, 0);
+        // duration spans from start_ms=0 to end of 'o' at 40+10=50 → 50
+        assert_eq!(timeline[0].duration_ms, 50);
+        assert!(pending.is_none(), "pending should be cleared after flush");
+    }
+
+    #[test]
+    fn alignment_leading_whitespace_flushes() {
+        // Set up a pending word from a previous chunk.
+        let mut timeline = Vec::new();
+        let mut pending = Some(AlignmentEntry {
+            start_ms: 0,
+            duration_ms: 30,
+            word: "Hel".to_string(),
+        });
+
+        // This chunk starts with " word" — leading space flushes pending standalone.
+        let align = make_alignment(
+            &[" ", "w", "o", "r", "d"],
+            &[30, 40, 50, 60, 70],
+            &[10, 10, 10, 10, 10],
+        );
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        // "Hel" should be flushed as-is (not merged with "word").
+        assert_eq!(
+            timeline.len(),
+            1,
+            "pending word should be flushed by leading space"
+        );
+        assert_eq!(timeline[0].word, "Hel");
+        assert_eq!(timeline[0].start_ms, 0);
+        // "word" ends mid-word → pending.
+        let p = pending.as_ref().expect("'word' should be pending");
+        assert_eq!(p.word, "word");
+    }
+
+    #[test]
+    fn alignment_empty_chunk() {
+        let align = make_alignment(&[], &[], &[]);
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        assert!(timeline.is_empty(), "empty chunk should produce no entries");
+        assert!(pending.is_none(), "empty chunk should not create pending");
+    }
+
+    #[test]
+    fn alignment_all_whitespace() {
+        // Pending word exists; chunk is all whitespace → pending is flushed.
+        let mut timeline = Vec::new();
+        let mut pending = Some(AlignmentEntry {
+            start_ms: 0,
+            duration_ms: 30,
+            word: "end".to_string(),
+        });
+
+        let align = make_alignment(&[" ", " "], &[100, 110], &[10, 10]);
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        assert_eq!(
+            timeline.len(),
+            1,
+            "all-whitespace chunk should flush pending word"
+        );
+        assert_eq!(timeline[0].word, "end");
+        assert!(pending.is_none());
+    }
+
+    #[test]
+    fn alignment_punctuation_attached() {
+        // "Hello." — period is not whitespace, so it stays attached to the word.
+        let align = make_alignment(
+            &["H", "e", "l", "l", "o", "."],
+            &[0, 10, 20, 30, 40, 50],
+            &[10, 10, 10, 10, 10, 10],
+        );
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        // Ends mid-word (period is non-ws), so goes to pending.
+        let p = pending.as_ref().expect("should be pending");
+        assert_eq!(p.word, "Hello.", "punctuation should be part of the word");
+    }
+
+    #[test]
+    fn alignment_paragraph_break() {
+        // Test with "\n\n" as paragraph sentinel chars.
+        let align = make_alignment(
+            &["H", "i", "\n", "\n", "B", "y"],
+            &[0, 10, 20, 30, 40, 50],
+            &[10, 10, 10, 10, 10, 10],
+        );
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        // "\n" is whitespace, so "Hi" should be flushed. "By" ends mid-word → pending.
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].word, "Hi");
+        let p = pending.as_ref().expect("'By' should be pending");
+        assert_eq!(p.word, "By");
+    }
+
+    // ─── find_active_word tests ─────────────────────────────────────────
+
+    fn sample_timeline() -> Vec<AlignmentEntry> {
+        vec![
+            AlignmentEntry {
+                start_ms: 100,
+                duration_ms: 50,
+                word: "Hello".into(),
+            },
+            AlignmentEntry {
+                start_ms: 200,
+                duration_ms: 50,
+                word: "world".into(),
+            },
+            AlignmentEntry {
+                start_ms: 300,
+                duration_ms: 50,
+                word: "test".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn find_word_exact_start() {
+        let tl = sample_timeline();
+        // Exact start of second word (200ms).
+        assert_eq!(find_active_word(&tl, 200), Some(1));
+    }
+
+    #[test]
+    fn find_word_mid_word() {
+        let tl = sample_timeline();
+        // 120ms is in the middle of "Hello" (100..150).
+        assert_eq!(find_active_word(&tl, 120), Some(0));
+    }
+
+    #[test]
+    fn find_word_between_words() {
+        let tl = sample_timeline();
+        // 170ms is between "Hello" (100..150) and "world" (200..250).
+        assert_eq!(find_active_word(&tl, 170), None);
+    }
+
+    #[test]
+    fn find_word_before_first() {
+        let tl = sample_timeline();
+        // 50ms is before the first word starts at 100ms.
+        assert_eq!(find_active_word(&tl, 50), None);
+    }
+
+    #[test]
+    fn find_word_after_last() {
+        let tl = sample_timeline();
+        // 400ms is after the last word ends at 350ms.
+        assert_eq!(find_active_word(&tl, 400), None);
+    }
+
+    #[test]
+    fn find_word_empty_timeline() {
+        let tl: Vec<AlignmentEntry> = Vec::new();
+        assert_eq!(find_active_word(&tl, 100), None);
+    }
 }

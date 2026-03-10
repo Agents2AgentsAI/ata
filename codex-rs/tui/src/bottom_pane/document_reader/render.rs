@@ -1160,3 +1160,123 @@ fn replace_italic_with_underline(lines: &mut [Line<'static>]) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::text::{Line, Span};
+
+    #[test]
+    fn highlight_single_word() {
+        // "hello world" — highlight cols 0..5 → "hello" is bold+underline.
+        let line = Line::from("hello world".to_string());
+        let result = apply_word_highlight(line, 0, 5);
+        let hl = Modifier::BOLD | Modifier::UNDERLINED;
+
+        assert_eq!(
+            result.spans.len(),
+            2,
+            "should split into highlighted + rest"
+        );
+        assert_eq!(result.spans[0].content.as_ref(), "hello");
+        assert!(
+            result.spans[0].style.add_modifier.contains(hl),
+            "highlighted span should have BOLD|UNDERLINED"
+        );
+        assert_eq!(result.spans[1].content.as_ref(), " world");
+        assert!(
+            !result.spans[1].style.add_modifier.contains(Modifier::BOLD),
+            "non-highlighted span should NOT have BOLD"
+        );
+    }
+
+    #[test]
+    fn highlight_cross_span() {
+        // Line with two spans: "hello " (cyan) + "world" (green).
+        // Highlight cols 3..8 crosses the boundary → splits both spans.
+        let line = Line::from(vec![
+            Span::styled("hello ".to_string(), Style::default().fg(Color::Cyan)),
+            Span::styled("world".to_string(), Style::default().fg(Color::Green)),
+        ]);
+        let result = apply_word_highlight(line, 3, 8);
+        let hl = Modifier::BOLD | Modifier::UNDERLINED;
+
+        // Expected spans: "hel" (cyan, no hl), "lo " (cyan, hl), "wo" (green, hl), "rld" (green, no hl)
+        assert_eq!(
+            result.spans.len(),
+            4,
+            "should split into 4 spans at highlight boundaries"
+        );
+        assert_eq!(result.spans[0].content.as_ref(), "hel");
+        assert!(!result.spans[0].style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(result.spans[0].style.fg, Some(Color::Cyan));
+
+        assert_eq!(result.spans[1].content.as_ref(), "lo ");
+        assert!(result.spans[1].style.add_modifier.contains(hl));
+        assert_eq!(result.spans[1].style.fg, Some(Color::Cyan));
+
+        assert_eq!(result.spans[2].content.as_ref(), "wo");
+        assert!(result.spans[2].style.add_modifier.contains(hl));
+        assert_eq!(result.spans[2].style.fg, Some(Color::Green));
+
+        assert_eq!(result.spans[3].content.as_ref(), "rld");
+        assert!(!result.spans[3].style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(result.spans[3].style.fg, Some(Color::Green));
+    }
+
+    #[test]
+    fn highlight_full_line() {
+        let line = Line::from("entire line".to_string());
+        let result = apply_word_highlight(line, 0, 11);
+        let hl = Modifier::BOLD | Modifier::UNDERLINED;
+
+        assert_eq!(
+            result.spans.len(),
+            1,
+            "entire line highlighted should stay as one span"
+        );
+        assert_eq!(result.spans[0].content.as_ref(), "entire line");
+        assert!(result.spans[0].style.add_modifier.contains(hl));
+    }
+
+    #[test]
+    fn highlight_preserves_styles() {
+        // Span with cyan + bold — after highlight, should be cyan + bold + underline.
+        let style = Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
+        let line = Line::from(Span::styled("styled text".to_string(), style));
+        let result = apply_word_highlight(line, 0, 11);
+
+        assert_eq!(result.spans.len(), 1);
+        let s = &result.spans[0].style;
+        assert_eq!(s.fg, Some(Color::Cyan), "fg color should be preserved");
+        assert!(
+            s.add_modifier.contains(Modifier::BOLD),
+            "existing BOLD should be preserved"
+        );
+        assert!(
+            s.add_modifier.contains(Modifier::UNDERLINED),
+            "UNDERLINED should be added"
+        );
+    }
+
+    #[test]
+    fn highlight_zero_width() {
+        // start_col == end_col → no changes.
+        let line = Line::from("no change".to_string());
+        let result = apply_word_highlight(line, 3, 3);
+
+        assert_eq!(
+            result.spans.len(),
+            1,
+            "zero-width highlight should not split spans"
+        );
+        assert_eq!(result.spans[0].content.as_ref(), "no change");
+        assert!(
+            !result.spans[0].style.add_modifier.contains(Modifier::BOLD),
+            "zero-width highlight should not add modifiers"
+        );
+    }
+}
