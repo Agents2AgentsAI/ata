@@ -4458,4 +4458,131 @@ mod tests {
             "should show thinking when viewing a pending section"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Voice reading progress tests
+    // -----------------------------------------------------------------------
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    mod voice_progress_tests {
+        use super::{key, make_view, AppEvent, AppEventSender, Buffer, Rect};
+        use crate::bottom_pane::bottom_pane_view::BottomPaneView;
+        use crate::render::renderable::Renderable;
+        use crossterm::event::KeyCode;
+        use tokio::sync::mpsc::unbounded_channel;
+
+        /// Render the view once so that `last_inner_width` and other layout
+        /// cells are populated from the render pass.
+        fn render_view(view: &DocumentReaderView) {
+            let area = Rect::new(0, 0, 80, 24);
+            let mut buf = Buffer::empty(area);
+            view.render(area, &mut buf);
+        }
+
+        #[test]
+        fn voice_progress_first_word() {
+            let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+            let tx = AppEventSender::new(tx_raw);
+            let mut view = make_view(tx);
+            // Section 0 has no heading, so rendered lines start with content.
+            render_view(&view);
+
+            view.set_voice_reading_progress(Some(0), 0);
+            let hl = view.voice_reading_highlight;
+            assert!(hl.is_some(), "word_idx=0 should produce a highlight");
+            let (line_idx, start_col, end_col) = hl.expect("checked above");
+            // The first word on the first content line should be "Introduction".
+            assert_eq!(line_idx, 0, "first word should be on line 0");
+            assert_eq!(start_col, 0, "first word should start at col 0");
+            assert_eq!(
+                end_col,
+                "Introduction".len(),
+                "first word should be 'Introduction'"
+            );
+        }
+
+        #[test]
+        fn voice_progress_heading_offset() {
+            let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+            let tx = AppEventSender::new(tx_raw);
+            let mut view = make_view(tx);
+            // Navigate to section 1 (Methodology) which has a heading.
+            view.handle_content_key(key(KeyCode::Char('n')));
+            assert_eq!(view.current_section, 1);
+            render_view(&view);
+
+            // The heading "Methodology" is 1 word in the rendered lines.
+            // With heading_words_to_skip=1, word_idx=1 means the first
+            // TTS content word. adj = 1 - 1 = 0, which matches
+            // "Methodology" (the first rendered word). That's the heading.
+            // word_idx=2 → adj=1 → second rendered word, which should be
+            // the first content word.
+            //
+            // Actually: heading_words_to_skip causes adj = wi - skip.
+            // Walk ALL rendered lines counting words. adj=0 → first word = "Methodology".
+            // adj=1 → second word = "Method" (first content word after blank line).
+            view.set_voice_reading_progress(Some(1), 0);
+            let hl_no_skip = view.voice_reading_highlight;
+            assert!(
+                hl_no_skip.is_some(),
+                "word_idx=1 with skip=0 should find a word"
+            );
+
+            // With heading_words_to_skip=1, word_idx=0 → adj = 0-1 underflows → None.
+            view.set_voice_reading_progress(Some(0), 1);
+            assert!(
+                view.voice_reading_highlight.is_none(),
+                "word_idx=0 with skip=1 should underflow to None"
+            );
+
+            // word_idx=1, skip=1 → adj=0 → first rendered word = "Methodology".
+            view.set_voice_reading_progress(Some(1), 1);
+            let hl_skip = view.voice_reading_highlight;
+            assert!(
+                hl_skip.is_some(),
+                "word_idx=1 with skip=1 should map to first rendered word"
+            );
+        }
+
+        #[test]
+        fn voice_progress_wrapped_line() {
+            let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+            let tx = AppEventSender::new(tx_raw);
+            let mut view = make_view(tx);
+            render_view(&view);
+
+            // Section 0 content starts with "Introduction paragraph line one."
+            // At width=80 with inner_width ~76, this fits on one line.
+            // The second paragraph line "Introduction paragraph line two."
+            // goes to a second rendered line. Words on that line are at higher indices.
+            // Count words in first content line: "Introduction paragraph line one." = 4 words.
+            // Word index 4 should be the first word on line 1 = "Introduction" (second line).
+            view.set_voice_reading_progress(Some(4), 0);
+            let hl = view.voice_reading_highlight;
+            assert!(
+                hl.is_some(),
+                "word_idx=4 should find a word on a subsequent line"
+            );
+            let (line_idx, _, _) = hl.expect("checked above");
+            assert!(
+                line_idx > 0,
+                "word on second paragraph line should be on a rendered line > 0, got {line_idx}"
+            );
+        }
+
+        #[test]
+        fn voice_progress_out_of_range() {
+            let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+            let tx = AppEventSender::new(tx_raw);
+            let mut view = make_view(tx);
+            render_view(&view);
+
+            // A very large word index far beyond the total words.
+            view.set_voice_reading_progress(Some(99999), 0);
+            assert!(
+                view.voice_reading_highlight.is_none(),
+                "out-of-range word_idx should produce None highlight"
+            );
+        }
+    }
 }
