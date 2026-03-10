@@ -67,6 +67,14 @@ mod ascii_animation;
 mod audio_device;
 mod bottom_pane;
 mod chatwidget;
+
+// Re-export for integration tests.
+#[doc(hidden)]
+pub use chatwidget::voice_mode::AlignmentEntry;
+#[doc(hidden)]
+pub use chatwidget::voice_mode::build_alignment_entries;
+#[doc(hidden)]
+pub use chatwidget::voice_mode::find_active_word;
 mod cli;
 mod clipboard_paste;
 mod clipboard_text;

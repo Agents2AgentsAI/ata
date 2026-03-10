@@ -362,13 +362,13 @@ pub(crate) struct TtsCacheEntry {
 /// A word-level entry in the alignment timeline.
 /// Maps an absolute playback time range to a word in the TTS output.
 #[derive(Debug, Clone)]
-pub(crate) struct AlignmentEntry {
+pub struct AlignmentEntry {
     /// Absolute start time in ms from beginning of playback.
-    pub(crate) start_ms: u64,
+    pub start_ms: u64,
     /// Duration in ms.
-    pub(crate) duration_ms: u64,
+    pub duration_ms: u64,
     /// The word text (for rendering the highlight).
-    pub(crate) word: String,
+    pub word: String,
 }
 
 pub(crate) struct VoiceModeState {
@@ -479,6 +479,15 @@ pub(crate) struct VoiceModeState {
     /// sentences are about to be sent to TTS.  Used to insert paragraph
     /// break sentinels in the alignment timeline between voice blocks.
     pub(crate) tts_block_break_pending: bool,
+    /// When true, this state was lazily created for on-demand TTS only,
+    /// not full voice mode (no STT, no "Hold Space" prompt).
+    pub(crate) tts_only: bool,
+    /// Test-only: simulate paused audio player without real hardware.
+    #[cfg(test)]
+    pub(crate) mock_audio_paused: bool,
+    /// Test-only: simulate audio buffer state without real hardware.
+    #[cfg(test)]
+    pub(crate) mock_has_audio: Option<bool>,
 }
 
 impl VoiceModeState {
@@ -525,6 +534,11 @@ impl VoiceModeState {
             tts_pending_word: None,
             tts_data_complete: false,
             tts_block_break_pending: false,
+            tts_only: false,
+            #[cfg(test)]
+            mock_audio_paused: false,
+            #[cfg(test)]
+            mock_has_audio: None,
         }
     }
 
@@ -598,6 +612,65 @@ impl VoiceModeState {
         if let Some(ref player) = self.audio_player {
             player.resume();
         }
+    }
+
+    /// Returns true if the audio player is currently paused.
+    /// In test builds, checks `mock_audio_paused` first.
+    pub(crate) fn is_audio_paused(&self) -> bool {
+        #[cfg(test)]
+        if self.mock_audio_paused {
+            return true;
+        }
+        self.audio_player.as_ref().is_some_and(|p| p.is_paused())
+    }
+
+    /// Returns true if the audio player has buffered samples.
+    pub(crate) fn has_buffered_audio(&self) -> bool {
+        #[cfg(test)]
+        if let Some(has) = self.mock_has_audio {
+            return has;
+        }
+        self.audio_player
+            .as_ref()
+            .is_some_and(super::super::voice::RealtimeAudioPlayer::has_buffered_audio)
+    }
+
+    /// Process phase transition when an audio chunk arrives.
+    /// Does NOT transition to Speaking if audio is paused, because TTS chunks
+    /// may still stream from the network while the user has paused playback.
+    pub(crate) fn transition_phase_on_chunk(&mut self) {
+        if self.phase != VoiceModePhase::Speaking && !self.is_audio_paused() {
+            self.phase = VoiceModePhase::Speaking;
+        }
+    }
+
+    /// Returns true if voice turn finalization should be blocked.
+    pub(crate) fn should_block_finalization(&self) -> bool {
+        self.is_audio_paused()
+    }
+
+    /// Returns true if resuming TTS would actually play audio.
+    /// False when the voice turn was already finalized (nothing to resume).
+    pub(crate) fn can_resume_playback(&self) -> bool {
+        // If audio is buffered, resume will play it.
+        if self.has_buffered_audio() {
+            return true;
+        }
+        // If TTS data is still streaming AND there's an active narration,
+        // more audio chunks may arrive — resume is valid.
+        if !self.tts_data_complete {
+            return self.narrating_section.is_some();
+        }
+        // TTS data is complete and buffer is empty — nothing to play.
+        false
+    }
+
+    /// Returns true if the highlight tick should finalize the voice turn.
+    pub(crate) fn should_finalize_on_tick(&self) -> bool {
+        self.phase == VoiceModePhase::Speaking
+            && self.tts_data_complete
+            && !self.is_audio_paused()
+            && !self.has_buffered_audio()
     }
 
     /// Cancel the PTT timeout poller task.
@@ -692,7 +765,9 @@ impl super::ChatWidget {
     /// Also syncs the voice status indicator in the reading view (if active).
     fn sync_voice_placeholder(&mut self) {
         let (label, phase, stt_enabled) = match &self.voice_mode_state {
-            Some(s) if s.phase.is_active() => (s.phase.status_label(), s.phase, s.stt_enabled),
+            Some(s) if s.phase.is_active() && !s.tts_only => {
+                (s.phase.status_label(), s.phase, s.stt_enabled)
+            }
             _ => return,
         };
         // When Idle and STT is disabled, show a different placeholder since
@@ -744,6 +819,15 @@ impl super::ChatWidget {
             self.app_event_tx.send(AppEvent::UpdateFeatureFlags {
                 updates: vec![(codex_core::features::Feature::VoiceMode, true)],
             });
+        }
+
+        // If a tts_only state exists, tear it down so we can create a fresh
+        // full voice mode state below.
+        if self.voice_mode_state.as_ref().is_some_and(|s| s.tts_only) {
+            if let Some(ref mut state) = self.voice_mode_state {
+                state.reset();
+            }
+            self.voice_mode_state = None;
         }
 
         if let Some(ref mut state) = self.voice_mode_state
@@ -930,7 +1014,9 @@ impl super::ChatWidget {
             .cached_elevenlabs_speed
             .or_else(|| voice_config.elevenlabs.as_ref().and_then(|e| e.speed));
 
+        let voice_enabled = self.is_voice_mode_active();
         let view = crate::bottom_pane::VoiceSetupView::new(
+            voice_enabled,
             tts_enabled,
             stt_enabled,
             api_key,
@@ -1512,9 +1598,7 @@ impl super::ChatWidget {
         let Some(ref mut state) = self.voice_mode_state else {
             return;
         };
-        if state.phase != VoiceModePhase::Speaking {
-            state.phase = VoiceModePhase::Speaking;
-        }
+        state.transition_phase_on_chunk();
 
         // Compute chunk duration from PCM length (24kHz mono).
         let chunk_duration_ms = (pcm.len() as u64) * 1000 / 24000;
@@ -1585,15 +1669,34 @@ impl super::ChatWidget {
 
     pub(crate) fn on_voice_tts_finished(&mut self) {
         let Some(ref mut state) = self.voice_mode_state else {
+            tracing::debug!("[TTS-DBG] on_voice_tts_finished: voice_mode_state is None");
             return;
         };
+        let has_audio = state
+            .audio_player
+            .as_ref()
+            .is_some_and(|p| p.has_buffered_audio());
+        let is_paused = state.audio_player.as_ref().is_some_and(|p| p.is_paused());
+        tracing::debug!(
+            "[TTS-DBG] on_voice_tts_finished: phase={:?}, has_audio={has_audio}, is_paused={is_paused}",
+            state.phase,
+        );
         if state.phase != VoiceModePhase::Speaking {
+            tracing::debug!("[TTS-DBG] on_voice_tts_finished: SKIPPED (phase != Speaking)");
             return;
         }
 
         // Flush any pending partial word so the last word gets highlighted.
         if let Some(pw) = state.tts_pending_word.take() {
             state.tts_alignment_timeline.push(pw);
+        }
+
+        // Defer finalization while audio is paused — the highlight tick
+        // restarted on resume will finalize once audio drains.
+        if is_paused {
+            tracing::debug!("[TTS-DBG] on_voice_tts_finished: DEFERRED (audio is paused)");
+            state.tts_data_complete = true;
+            return;
         }
 
         // If the highlight tick is running and the audio player still has
@@ -1615,9 +1718,15 @@ impl super::ChatWidget {
     /// `on_voice_tts_finished` or deferred from `on_voice_highlight_tick`
     /// once the audio player's buffer has drained.
     fn finalize_voice_turn(&mut self) {
+        tracing::debug!("[TTS-DBG] finalize_voice_turn called");
         let Some(ref mut state) = self.voice_mode_state else {
             return;
         };
+        // Never finalize while audio is paused — the user may resume.
+        if state.should_block_finalization() {
+            tracing::debug!("[TTS-DBG] finalize_voice_turn: BLOCKED (audio is paused)");
+            return;
+        }
 
         // Store collected narration chunks + alignment in cache.
         state.narrating_cleaned_text = None;
@@ -1702,15 +1811,14 @@ impl super::ChatWidget {
     /// Called on each highlight tick — update the highlighted word based on playback position.
     pub(crate) fn on_voice_highlight_tick(&mut self) {
         // Check if we should finalize — TTS data complete and audio drained.
-        let should_finalize = self.voice_mode_state.as_ref().is_some_and(|s| {
-            s.phase == VoiceModePhase::Speaking
-                && s.tts_data_complete
-                && !s
-                    .audio_player
-                    .as_ref()
-                    .is_some_and(super::super::voice::RealtimeAudioPlayer::has_buffered_audio)
-        });
+        let should_finalize = self
+            .voice_mode_state
+            .as_ref()
+            .is_some_and(VoiceModeState::should_finalize_on_tick);
         if should_finalize {
+            tracing::debug!(
+                "[TTS-DBG] highlight_tick: should_finalize=true, calling finalize_voice_turn"
+            );
             self.finalize_voice_turn();
             return;
         }
@@ -2141,7 +2249,7 @@ impl super::ChatWidget {
     pub(crate) fn is_voice_mode_active(&self) -> bool {
         self.voice_mode_state
             .as_ref()
-            .is_some_and(VoiceModeState::is_active)
+            .is_some_and(|s| s.is_active() && !s.tts_only)
     }
 
     pub(crate) fn is_voice_speaking(&self) -> bool {
@@ -2178,12 +2286,28 @@ impl super::ChatWidget {
     /// Pause TTS playback (e.g. user pressed Space in reading view).
     pub(crate) fn on_voice_pause_tts(&mut self) {
         let Some(ref mut state) = self.voice_mode_state else {
+            tracing::debug!("[TTS-DBG] on_voice_pause_tts: voice_mode_state is None");
             return;
         };
-        if state.phase != VoiceModePhase::Speaking {
+        tracing::debug!(
+            "[TTS-DBG] on_voice_pause_tts: phase={:?}, has_audio={}, is_paused={}",
+            state.phase,
+            state.has_buffered_audio(),
+            state.is_audio_paused(),
+        );
+        // Allow pausing when Speaking OR when Idle but audio is still playing.
+        let has_audio = state.has_buffered_audio();
+        if state.phase != VoiceModePhase::Speaking
+            && !(state.phase == VoiceModePhase::Idle && has_audio)
+        {
+            tracing::debug!(
+                "[TTS-DBG] on_voice_pause_tts: SKIPPED (phase={:?}, has_audio={has_audio})",
+                state.phase
+            );
             return;
         }
         state.pause_tts();
+        tracing::debug!("[TTS-DBG] on_voice_pause_tts: paused successfully");
         let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} Space to resume".to_string();
         self.bottom_pane.set_document_reader_voice_status(Some(msg));
         self.bottom_pane.set_document_reader_tts_paused(true);
@@ -2193,10 +2317,46 @@ impl super::ChatWidget {
     /// Resume TTS playback after pause.
     pub(crate) fn on_voice_resume_tts(&mut self) {
         let Some(ref mut state) = self.voice_mode_state else {
+            tracing::debug!("[TTS-DBG] on_voice_resume_tts: voice_mode_state is None");
             return;
         };
-        if state.phase != VoiceModePhase::Speaking {
+        tracing::debug!(
+            "[TTS-DBG] on_voice_resume_tts: phase={:?}, has_audio={}, is_paused={}, tts_data_complete={}",
+            state.phase,
+            state.has_buffered_audio(),
+            state.is_audio_paused(),
+            state.tts_data_complete,
+        );
+        // Allow resume when Speaking OR when Idle but audio is still paused
+        // (finalize_voice_turn may have already run while audio was paused).
+        let is_paused = state.is_audio_paused();
+        if state.phase != VoiceModePhase::Speaking
+            && !(state.phase == VoiceModePhase::Idle && is_paused)
+        {
+            tracing::debug!(
+                "[TTS-DBG] on_voice_resume_tts: SKIPPED (phase={:?}, is_paused={is_paused})",
+                state.phase
+            );
             return;
+        }
+        // If the audio buffer drained while paused (race or natural finish),
+        // don't pretend to resume — there's nothing to play.
+        if !state.can_resume_playback() {
+            tracing::debug!(
+                "[TTS-DBG] on_voice_resume_tts: NO AUDIO to resume (tts_data_complete={}, has_audio={})",
+                state.tts_data_complete,
+                state.has_buffered_audio(),
+            );
+            // Unpause the player so it doesn't block future narration.
+            state.resume_tts();
+            self.bottom_pane.set_document_reader_tts_paused(false);
+            self.finalize_voice_turn();
+            return;
+        }
+        // If we're resuming from Idle (post-finalization), restore Speaking phase
+        // so the highlight tick and subsequent logic work correctly.
+        if state.phase == VoiceModePhase::Idle {
+            state.phase = VoiceModePhase::Speaking;
         }
         state.resume_tts();
         self.start_highlight_tick();
@@ -2204,6 +2364,7 @@ impl super::ChatWidget {
         self.bottom_pane.set_document_reader_voice_status(Some(msg));
         self.bottom_pane.set_document_reader_tts_paused(false);
         self.request_redraw();
+        tracing::debug!("[TTS-DBG] on_voice_resume_tts: resumed successfully");
     }
 
     /// Auto-narrate a reading view section via TTS.
@@ -2216,13 +2377,35 @@ impl super::ChatWidget {
         section_index: usize,
         raw_text: String,
         selection_word_offset: Option<usize>,
+        manual: bool,
     ) {
+        // Lazily initialize a TTS-only state when voice mode is off but
+        // the user manually pressed `r` to narrate.
+        if self.voice_mode_state.is_none() && manual {
+            if !has_elevenlabs_api_key(&self.config) {
+                return;
+            }
+            let vc = self.effective_voice_config();
+            let mut state = VoiceModeState::new(&vc);
+            state.tts_only = true;
+            state.phase = VoiceModePhase::Idle;
+            match crate::voice::RealtimeAudioPlayer::start(&self.config) {
+                Ok(player) => state.audio_player = Some(player),
+                Err(e) => {
+                    tracing::warn!("Failed to start audio player for TTS: {e}");
+                    return;
+                }
+            }
+            self.voice_mode_state = Some(state);
+        }
+
         // Phase 1: check preconditions and interrupt (borrows state mutably).
         {
             let Some(ref mut state) = self.voice_mode_state else {
                 return;
             };
-            if !state.should_tts() {
+            // Skip should_tts() for tts_only mode — we know we want TTS.
+            if !state.tts_only && !state.should_tts() {
                 return;
             }
             // Skip TTS silently if no API key — the user was already warned
@@ -2544,6 +2727,12 @@ pub(crate) fn clean_for_tts(markdown: &str) -> String {
                     break;
                 }
                 link_text.push(c);
+            }
+            if link_text.starts_with("PAUSE:") {
+                out.push('[');
+                out.push_str(&link_text);
+                out.push(']');
+                continue;
             }
             if chars.peek() == Some(&'(') {
                 chars.next();
@@ -2941,7 +3130,7 @@ async fn tts_worker_loop(
 /// Words that span chunk boundaries are handled via `pending_word`: if the
 /// chunk ends mid-word the partial entry is stored there, and on the next
 /// call the continuation is merged in.
-fn build_alignment_entries(
+pub fn build_alignment_entries(
     align: &codex_elevenlabs::TtsAlignment,
     _cumulative_ms: u64,
     timeline: &mut Vec<AlignmentEntry>,
@@ -2971,7 +3160,7 @@ fn build_alignment_entries(
         let abs_start = align.char_start_times_ms[start_idx];
         let last_start = align.char_start_times_ms[end_idx];
         let last_dur = align.char_durations_ms[end_idx];
-        let abs_end = last_start + last_dur;
+        let abs_end = last_start.saturating_add(last_dur);
         let word: String = chars.iter().copied().collect();
         chars.clear();
 
@@ -3034,7 +3223,7 @@ fn build_alignment_entries(
     // Final partial word: might span into the next chunk.
     // Check if the chunk ended mid-word (last char was not whitespace).
     if let Some(ws) = word_start_idx {
-        let last_char = align.chars.last().map(String::as_str).unwrap_or("");
+        let last_char = align.chars[n - 1].as_str();
         let ends_mid_word = !last_char.trim().is_empty();
 
         if ends_mid_word {
@@ -3042,7 +3231,7 @@ fn build_alignment_entries(
             let abs_start = align.char_start_times_ms[ws];
             let last_start = align.char_start_times_ms[word_end_idx];
             let last_dur = align.char_durations_ms[word_end_idx];
-            let abs_end = last_start + last_dur;
+            let abs_end = last_start.saturating_add(last_dur);
             let word: String = word_chars.iter().copied().collect();
 
             // Merge with existing pending if this is the first (and only) word.
@@ -3078,7 +3267,7 @@ fn build_alignment_entries(
 
 /// Find the alignment entry active at the given playback position.
 /// Returns `Some(idx)` — the index into the timeline — if a word is active.
-fn find_active_word(timeline: &[AlignmentEntry], pos_ms: u64) -> Option<usize> {
+pub fn find_active_word(timeline: &[AlignmentEntry], pos_ms: u64) -> Option<usize> {
     if timeline.is_empty() {
         return None;
     }
@@ -3092,7 +3281,7 @@ fn find_active_word(timeline: &[AlignmentEntry], pos_ms: u64) -> Option<usize> {
 
     let entry = &timeline[idx];
     // Check that we're within this word's duration.
-    if pos_ms <= entry.start_ms + entry.duration_ms {
+    if pos_ms <= entry.start_ms.saturating_add(entry.duration_ms) {
         Some(idx)
     } else {
         None // In the gap between words.
@@ -3261,12 +3450,10 @@ mod tests {
     fn clean_for_tts_strips_horizontal_rules() {
         let text = "Before\n\n---\n\nAfter";
         let cleaned = clean_for_tts(text);
-        // The --- line is removed, leaving an extra blank line that the
-        // newline collapser already capped at 2. The result has the
-        // surrounding paragraph breaks preserved.
-        assert!(!cleaned.contains("---"));
-        assert!(cleaned.contains("Before"));
-        assert!(cleaned.contains("After"));
+        // The --- line is removed. The newline collapser runs before the HR
+        // filter, so the two surrounding blank lines survive, producing three
+        // consecutive newlines in the output.
+        assert_eq!(cleaned, "Before\n\n\nAfter");
     }
 
     #[test]
@@ -3527,5 +3714,689 @@ mod tests {
     fn find_word_empty_timeline() {
         let tl: Vec<AlignmentEntry> = Vec::new();
         assert_eq!(find_active_word(&tl, 100), None);
+    }
+
+    // ─── Adversarial tests: build_alignment_entries ─────────────────────
+
+    #[test]
+    fn adversarial_alignment_emoji_chars() {
+        // ElevenLabs might send emoji as individual chars.
+        // Emoji are multi-byte but should still be grouped into words correctly.
+        let align = make_alignment(
+            &["\u{1F44B}", " ", "H", "i"],
+            &[0, 50, 100, 150],
+            &[50, 50, 50, 50],
+        );
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        // "\u{1F44B}" is flushed by the space, "Hi" ends mid-word -> pending.
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].word, "\u{1F44B}");
+        assert_eq!(timeline[0].start_ms, 0);
+        assert_eq!(timeline[0].duration_ms, 50);
+        let p = pending.as_ref().expect("'Hi' should be pending");
+        assert_eq!(p.word, "Hi");
+    }
+
+    #[test]
+    fn adversarial_alignment_cjk_chars() {
+        // CJK characters are single code points but multi-byte.
+        // They should be treated as non-whitespace and grouped into words.
+        let align = make_alignment(
+            &["\u{4F60}", "\u{597D}", " ", "w"],
+            &[0, 50, 100, 150],
+            &[50, 50, 50, 50],
+        );
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        // "\u{4F60}\u{597D}" (你好) flushed by space, "w" pending.
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].word, "\u{4F60}\u{597D}");
+        let p = pending.as_ref().expect("'w' should be pending");
+        assert_eq!(p.word, "w");
+    }
+
+    #[test]
+    fn adversarial_alignment_zero_width_joiner() {
+        // Zero-width joiner (U+200D) is not whitespace but is "invisible".
+        // It should be treated as part of a word (not a word boundary).
+        let align = make_alignment(
+            &["\u{1F468}", "\u{200D}", "\u{1F469}", " ", "x"],
+            &[0, 20, 40, 60, 80],
+            &[20, 20, 20, 20, 20],
+        );
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        // The ZWJ sequence should stay together as one "word".
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].word, "\u{1F468}\u{200D}\u{1F469}");
+        let p = pending.as_ref().expect("'x' should be pending");
+        assert_eq!(p.word, "x");
+    }
+
+    #[test]
+    fn adversarial_alignment_mismatched_lengths_chars_longer() {
+        // BUG PROBE: chars array is longer than timing arrays.
+        // n = min(2, 2, 2) = 2, but chars has 3 elements.
+        // The code checks align.chars.last() which is " " (the 3rd element),
+        // even though we only processed indices 0..2. This causes a word
+        // that should be pending (ends mid-word at index 1) to be flushed
+        // incorrectly because the code sees the unprocessed trailing space.
+        let align = make_alignment(
+            &["H", "i", " "], // 3 chars
+            &[0, 50],         // 2 starts
+            &[50, 50],        // 2 durations
+        );
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        // We only process "H" and "i" (n=2). Since the last PROCESSED char
+        // is "i" (non-whitespace), the word should be pending.
+        // BUG: The code checks align.chars.last() which is " ", so it
+        // incorrectly thinks the chunk ends with whitespace and flushes.
+        //
+        // Expected: "Hi" is pending (last processed char is non-ws).
+        // Actual (buggy): "Hi" is flushed to timeline.
+        //
+        // This test documents the bug. If pending is None, the bug is confirmed.
+        assert!(
+            pending.is_some(),
+            "BUG: 'Hi' should be pending since only 2 chars were processed and last processed char is 'i' (non-ws), \
+             but align.chars.last() incorrectly looks at unprocessed trailing space"
+        );
+        assert_eq!(pending.as_ref().expect("should be pending").word, "Hi");
+    }
+
+    #[test]
+    fn adversarial_alignment_mismatched_lengths_times_longer() {
+        // Times arrays are longer than chars — should only process min(len).
+        let align = make_alignment(
+            &["H", "i"],        // 2 chars
+            &[0, 50, 100, 150], // 4 starts
+            &[50, 50, 50, 50],  // 4 durations
+        );
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        // n=2, only "H" and "i" processed. Last char is "i" (non-ws) -> pending.
+        let p = pending.as_ref().expect("'Hi' should be pending");
+        assert_eq!(p.word, "Hi");
+        assert_eq!(p.start_ms, 0);
+        assert_eq!(p.duration_ms, 100); // (50 + 50) - 0
+    }
+
+    #[test]
+    fn adversarial_alignment_single_whitespace_char() {
+        // Single whitespace char with no pending — should produce nothing.
+        let align = make_alignment(&[" "], &[100], &[10]);
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        assert!(
+            timeline.is_empty(),
+            "single space should produce no entries"
+        );
+        assert!(pending.is_none());
+    }
+
+    #[test]
+    fn adversarial_alignment_single_whitespace_with_pending() {
+        // Single whitespace char WITH a pending word — should flush the pending.
+        let mut timeline = Vec::new();
+        let mut pending = Some(AlignmentEntry {
+            start_ms: 0,
+            duration_ms: 30,
+            word: "Hi".to_string(),
+        });
+        let align = make_alignment(&[" "], &[100], &[10]);
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        assert_eq!(timeline.len(), 1, "pending should be flushed by whitespace");
+        assert_eq!(timeline[0].word, "Hi");
+        assert!(pending.is_none());
+    }
+
+    #[test]
+    fn adversarial_alignment_chars_nonempty_times_empty() {
+        // Chars has entries but times arrays are empty. n = min(2, 0, 0) = 0.
+        let align = make_alignment(&["H", "i"], &[], &[]);
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        assert!(
+            timeline.is_empty(),
+            "no timing data means nothing should be produced"
+        );
+        assert!(pending.is_none());
+    }
+
+    #[test]
+    fn adversarial_alignment_same_start_times() {
+        // Two consecutive chars with the SAME start_ms.
+        // This could happen with very fast speech or timing quantization.
+        let align = make_alignment(
+            &["H", "i", " ", "Y", "o"],
+            &[100, 100, 200, 300, 300],
+            &[0, 100, 100, 0, 100],
+        );
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        // "Hi" should be flushed by space.
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].word, "Hi");
+        assert_eq!(timeline[0].start_ms, 100);
+        // duration = (100 + 100) - 100 = 100
+        assert_eq!(timeline[0].duration_ms, 100);
+        // "Yo" should be pending.
+        let p = pending.as_ref().expect("'Yo' should be pending");
+        assert_eq!(p.word, "Yo");
+    }
+
+    #[test]
+    fn adversarial_alignment_zero_duration() {
+        // All chars have zero duration — word duration degenerates.
+        let align = make_alignment(&["H", "i", " "], &[100, 200, 300], &[0, 0, 0]);
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].word, "Hi");
+        // duration = (200 + 0) - 100 = 100 (comes from timestamps, not durations per se)
+        assert_eq!(timeline[0].start_ms, 100);
+        assert_eq!(timeline[0].duration_ms, 100);
+    }
+
+    #[test]
+    fn adversarial_alignment_non_monotonic_timestamps() {
+        // Non-monotonic timestamps within a chunk (out of order).
+        // This shouldn't happen in practice, but if it does, we should not panic.
+        let align = make_alignment(
+            &["H", "i", " ", "B", "y"],
+            &[200, 100, 50, 300, 250],
+            &[10, 10, 10, 10, 10],
+        );
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        // Should not panic even with non-monotonic timestamps.
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        // "Hi" flushed by space. start_ms = char_start_times[0] = 200
+        // duration = (100 + 10) - 200 = 0 (saturating_sub since 110 < 200)
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].word, "Hi");
+        assert_eq!(timeline[0].start_ms, 200);
+        assert_eq!(timeline[0].duration_ms, 0);
+    }
+
+    #[test]
+    fn adversarial_alignment_large_timestamps_near_max() {
+        // Very large timestamps near u64::MAX.
+        // Line 3045: abs_end = last_start + last_dur — could overflow!
+        let align = make_alignment(
+            &["H", "i", " "],
+            &[u64::MAX - 100, u64::MAX - 50, u64::MAX - 10],
+            &[100, 100, 100],
+        );
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        // This might panic with overflow in debug mode.
+        // Line 3045: abs_end = (u64::MAX - 50) + 100 = u64::MAX + 50 → OVERFLOW!
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        // If we get here, at least it didn't panic.
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].word, "Hi");
+    }
+
+    #[test]
+    fn adversarial_alignment_three_chunk_word_span() {
+        // A word spans THREE chunks: "Hel" + "lo" + " world"
+        let align1 = make_alignment(&["H", "e", "l"], &[0, 10, 20], &[10, 10, 10]);
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align1, 0, &mut timeline, &mut pending);
+        assert!(timeline.is_empty());
+        assert_eq!(pending.as_ref().expect("").word, "Hel");
+
+        let align2 = make_alignment(&["l", "o"], &[30, 40], &[10, 10]);
+        build_alignment_entries(&align2, 0, &mut timeline, &mut pending);
+        assert!(timeline.is_empty());
+        assert_eq!(pending.as_ref().expect("").word, "Hello");
+
+        let align3 = make_alignment(
+            &[" ", "w", "o", "r", "l", "d", " "],
+            &[50, 60, 70, 80, 90, 100, 110],
+            &[10, 10, 10, 10, 10, 10, 10],
+        );
+        build_alignment_entries(&align3, 0, &mut timeline, &mut pending);
+        // Both "Hello" and "world" should be flushed.
+        assert_eq!(timeline.len(), 2);
+        assert_eq!(timeline[0].word, "Hello");
+        assert_eq!(timeline[0].start_ms, 0);
+        assert_eq!(timeline[0].duration_ms, 50); // (40+10) - 0 = 50
+        assert_eq!(timeline[1].word, "world");
+        assert!(pending.is_none());
+    }
+
+    #[test]
+    fn adversarial_alignment_pending_word_never_flushed() {
+        // A pending word from the last chunk is never flushed because
+        // no subsequent call happens. The caller is responsible for
+        // flushing pending when TTS is complete, but let's verify the
+        // pending entry is correct and accessible.
+        let align = make_alignment(&["H", "i"], &[0, 50], &[50, 50]);
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        assert!(timeline.is_empty());
+        let p = pending.as_ref().expect("should be pending");
+        assert_eq!(p.word, "Hi");
+        assert_eq!(p.start_ms, 0);
+        assert_eq!(p.duration_ms, 100);
+        // The pending word is accessible and has correct data.
+        // The caller should flush this when the stream ends.
+    }
+
+    #[test]
+    fn adversarial_alignment_trailing_whitespace_after_word() {
+        // "Hi " — trailing space should flush the word immediately.
+        let align = make_alignment(&["H", "i", " "], &[0, 50, 100], &[50, 50, 50]);
+        let mut timeline = Vec::new();
+        let mut pending = None;
+        build_alignment_entries(&align, 0, &mut timeline, &mut pending);
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].word, "Hi");
+        assert!(
+            pending.is_none(),
+            "word should be flushed by trailing space"
+        );
+    }
+
+    // ─── Adversarial tests: find_active_word ────────────────────────────
+
+    #[test]
+    fn adversarial_find_word_duplicate_start_ms() {
+        // Two entries with the same start_ms.
+        // binary_search_by_key with Ok(i) returns an arbitrary matching index.
+        let tl = vec![
+            AlignmentEntry {
+                start_ms: 100,
+                duration_ms: 50,
+                word: "first".into(),
+            },
+            AlignmentEntry {
+                start_ms: 100,
+                duration_ms: 80,
+                word: "second".into(),
+            },
+        ];
+        // binary_search finds some entry with start_ms=100.
+        let result = find_active_word(&tl, 100);
+        // Should return Some — doesn't matter which one, as long as it doesn't panic.
+        assert!(
+            result.is_some(),
+            "should find an entry when pos matches duplicated start_ms"
+        );
+    }
+
+    #[test]
+    fn adversarial_find_word_overlapping_entries() {
+        // Overlapping time ranges: entry0 ends at 200, entry1 starts at 150.
+        let tl = vec![
+            AlignmentEntry {
+                start_ms: 100,
+                duration_ms: 100, // ends at 200
+                word: "first".into(),
+            },
+            AlignmentEntry {
+                start_ms: 150,
+                duration_ms: 100, // ends at 250
+                word: "second".into(),
+            },
+        ];
+        // At 175ms: binary search finds entry at index 1 (start_ms=150 <= 175).
+        // It checks 175 <= 150 + 100 = 250 → true. Returns Some(1).
+        // But entry 0 also covers 175ms. This is an ambiguity in the data,
+        // not necessarily a bug — just documenting behavior.
+        let result = find_active_word(&tl, 175);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn adversarial_find_word_duration_overflow() {
+        // start_ms + duration_ms overflows u64.
+        let tl = vec![AlignmentEntry {
+            start_ms: u64::MAX - 10,
+            duration_ms: 100, // start_ms + duration_ms overflows!
+            word: "overflow".into(),
+        }];
+        // Line 3095: pos_ms <= entry.start_ms + entry.duration_ms
+        // This will overflow: (u64::MAX - 10) + 100 wraps in release mode,
+        // and panics in debug mode.
+        let result = find_active_word(&tl, u64::MAX);
+        // If we get here without panicking, the function handled the overflow.
+        // With wrapping: (u64::MAX - 10) + 100 = 89 (wrapped). u64::MAX <= 89 is false.
+        // So it returns None, even though logically the word should be active.
+        // This is a bug (overflow), but at least check it doesn't panic.
+        let _ = result; // Don't assert specific value — just confirm no panic.
+    }
+
+    #[test]
+    fn adversarial_find_word_max_duration() {
+        // Single entry with start_ms=0, duration=u64::MAX.
+        // Should cover every possible pos_ms value.
+        let tl = vec![AlignmentEntry {
+            start_ms: 0,
+            duration_ms: u64::MAX,
+            word: "everything".into(),
+        }];
+        // 0 + u64::MAX = u64::MAX, and pos_ms <= u64::MAX is always true.
+        assert_eq!(find_active_word(&tl, 0), Some(0));
+        assert_eq!(find_active_word(&tl, 1000), Some(0));
+        assert_eq!(find_active_word(&tl, u64::MAX), Some(0));
+    }
+
+    #[test]
+    fn adversarial_find_word_exact_end_boundary() {
+        // pos_ms exactly at start_ms + duration_ms.
+        // The check is pos_ms <= start_ms + duration_ms (inclusive).
+        let tl = vec![AlignmentEntry {
+            start_ms: 100,
+            duration_ms: 50,
+            word: "boundary".into(),
+        }];
+        assert_eq!(
+            find_active_word(&tl, 150),
+            Some(0),
+            "pos at exact end should be inclusive"
+        );
+        assert_eq!(
+            find_active_word(&tl, 151),
+            None,
+            "pos past end should return None"
+        );
+    }
+
+    #[test]
+    fn adversarial_find_word_zero_duration() {
+        // Entry with zero duration — only active at exact start_ms.
+        let tl = vec![AlignmentEntry {
+            start_ms: 100,
+            duration_ms: 0,
+            word: "instant".into(),
+        }];
+        assert_eq!(
+            find_active_word(&tl, 100),
+            Some(0),
+            "exact match should work"
+        );
+        assert_eq!(find_active_word(&tl, 101), None, "past zero-duration word");
+    }
+
+    #[test]
+    fn adversarial_find_word_single_entry_pos_zero() {
+        // Entry starts at 0, pos_ms is 0.
+        let tl = vec![AlignmentEntry {
+            start_ms: 0,
+            duration_ms: 100,
+            word: "first".into(),
+        }];
+        assert_eq!(find_active_word(&tl, 0), Some(0));
+    }
+
+    // ─── Pause / resume state machine tests ─────────────────────────────
+
+    #[test]
+    fn tts_chunk_during_pause_does_not_transition_phase() {
+        // Regression: on_voice_tts_audio_chunk unconditionally set phase to
+        // Speaking on every incoming TTS chunk, even when audio was paused.
+        // This caused the "Paused" footer status to be overwritten.
+        let vc = VoiceModeToml::default();
+        let mut state = VoiceModeState::new(&vc);
+        state.phase = VoiceModePhase::Speaking;
+
+        // Simulate pause
+        state.mock_audio_paused = true;
+
+        // Simulate what finalize_voice_turn does: phase → Idle
+        state.phase = VoiceModePhase::Idle;
+
+        // Incoming TTS chunk should NOT override phase to Speaking
+        state.transition_phase_on_chunk();
+
+        assert_eq!(
+            state.phase,
+            VoiceModePhase::Idle,
+            "Phase must remain Idle when audio is paused — TTS chunks from the \
+             network should not override the paused state"
+        );
+    }
+
+    #[test]
+    fn tts_chunk_transitions_to_speaking_when_not_paused() {
+        let vc = VoiceModeToml::default();
+        let mut state = VoiceModeState::new(&vc);
+        state.phase = VoiceModePhase::Idle;
+
+        state.transition_phase_on_chunk();
+
+        assert_eq!(
+            state.phase,
+            VoiceModePhase::Speaking,
+            "Phase should transition to Speaking when not paused"
+        );
+    }
+
+    #[test]
+    fn tts_chunk_noop_when_already_speaking() {
+        let vc = VoiceModeToml::default();
+        let mut state = VoiceModeState::new(&vc);
+        state.phase = VoiceModePhase::Speaking;
+
+        state.transition_phase_on_chunk();
+
+        assert_eq!(state.phase, VoiceModePhase::Speaking);
+    }
+
+    #[test]
+    fn finalize_blocked_when_audio_paused() {
+        let vc = VoiceModeToml::default();
+        let mut state = VoiceModeState::new(&vc);
+        state.mock_audio_paused = true;
+
+        assert!(
+            state.should_block_finalization(),
+            "Finalization must be blocked while audio is paused"
+        );
+    }
+
+    #[test]
+    fn finalize_allowed_when_audio_not_paused() {
+        let vc = VoiceModeToml::default();
+        let state = VoiceModeState::new(&vc);
+
+        assert!(
+            !state.should_block_finalization(),
+            "Finalization should proceed when audio is not paused"
+        );
+    }
+
+    #[test]
+    fn should_finalize_on_tick_blocked_when_paused() {
+        let vc = VoiceModeToml::default();
+        let mut state = VoiceModeState::new(&vc);
+        state.phase = VoiceModePhase::Speaking;
+        state.tts_data_complete = true;
+        state.mock_audio_paused = true;
+
+        assert!(
+            !state.should_finalize_on_tick(),
+            "Highlight tick must NOT finalize while audio is paused"
+        );
+    }
+
+    #[test]
+    fn should_finalize_on_tick_when_data_complete_and_drained() {
+        let vc = VoiceModeToml::default();
+        let mut state = VoiceModeState::new(&vc);
+        state.phase = VoiceModePhase::Speaking;
+        state.tts_data_complete = true;
+        // mock_audio_paused defaults to false, no audio player means no buffered audio
+
+        assert!(
+            state.should_finalize_on_tick(),
+            "Should finalize when TTS data is complete and no audio remains"
+        );
+    }
+
+    // ─── Pause / resume integration-style state machine tests ───────────
+    //
+    // These model the real event sequence observed in production logs:
+    //   1. TTS finishes streaming → tts_data_complete = true
+    //   2. User pauses while audio is buffered
+    //   3. Audio buffer drains (race / natural finish)
+    //   4. User tries to resume → has_audio = false
+    //
+    // The previous tests checked individual predicates; these test the
+    // full state machine through the same sequence as the real code path.
+
+    #[test]
+    fn resume_with_drained_buffer_does_not_enter_speaking() {
+        // Scenario: user paused, audio buffer drained while paused,
+        // user presses Space to resume → should NOT pretend to speak.
+        let vc = VoiceModeToml::default();
+        let mut state = VoiceModeState::new(&vc);
+
+        // Phase 1: Speaking, TTS data complete, audio buffered
+        state.phase = VoiceModePhase::Speaking;
+        state.tts_data_complete = true;
+        state.mock_has_audio = Some(true);
+
+        // Phase 2: User pauses
+        state.mock_audio_paused = true;
+        state.pause_tts(); // would call player.pause() + cancel tick
+
+        // Phase 3: Audio buffer drains (race condition on ARM)
+        state.mock_has_audio = Some(false);
+
+        // Phase 4: can_resume_playback should say NO
+        assert!(
+            !state.can_resume_playback(),
+            "can_resume_playback must return false when tts_data_complete \
+             and audio buffer is empty — nothing left to play"
+        );
+
+        // Finalization should still be blocked while paused
+        assert!(state.should_block_finalization());
+
+        // Tick should NOT finalize while paused
+        assert!(!state.should_finalize_on_tick());
+    }
+
+    #[test]
+    fn resume_with_buffered_audio_succeeds() {
+        // Scenario: user paused, buffer preserved, resume should work.
+        let vc = VoiceModeToml::default();
+        let mut state = VoiceModeState::new(&vc);
+
+        state.phase = VoiceModePhase::Speaking;
+        state.tts_data_complete = true;
+        state.mock_has_audio = Some(true);
+
+        // User pauses
+        state.mock_audio_paused = true;
+        state.pause_tts();
+
+        // Buffer preserved (no drain race)
+        assert!(
+            state.can_resume_playback(),
+            "can_resume_playback must return true when audio is still buffered"
+        );
+    }
+
+    #[test]
+    fn pause_blocks_finalization_then_resume_without_audio_allows_it() {
+        // Full lifecycle: speaking → pause → buffer drains → resume →
+        // finalization should be allowed after unpause.
+        let vc = VoiceModeToml::default();
+        let mut state = VoiceModeState::new(&vc);
+
+        // Speaking with audio
+        state.phase = VoiceModePhase::Speaking;
+        state.tts_data_complete = true;
+        state.mock_has_audio = Some(true);
+
+        // Pause
+        state.mock_audio_paused = true;
+        assert!(state.should_block_finalization());
+        assert!(!state.should_finalize_on_tick());
+
+        // Buffer drains
+        state.mock_has_audio = Some(false);
+        assert!(!state.should_finalize_on_tick()); // still blocked by pause
+
+        // Resume (unpause)
+        state.mock_audio_paused = false;
+        state.resume_tts();
+
+        // Now finalization should be allowed (data complete, no audio, not paused)
+        assert!(!state.should_block_finalization());
+        assert!(
+            state.should_finalize_on_tick(),
+            "After resume with empty buffer, tick should finalize the voice turn"
+        );
+    }
+
+    #[test]
+    fn tts_data_incomplete_prevents_finalization_even_when_buffer_empty() {
+        // TTS is still streaming data — don't finalize even if buffer is empty.
+        let vc = VoiceModeToml::default();
+        let mut state = VoiceModeState::new(&vc);
+
+        state.phase = VoiceModePhase::Speaking;
+        state.tts_data_complete = false;
+        state.mock_has_audio = Some(false);
+        // Simulate active narration (worker is still sending chunks).
+        state.narrating_section = Some(("doc".into(), 0, 0));
+
+        assert!(
+            !state.should_finalize_on_tick(),
+            "Should not finalize while TTS data is still streaming"
+        );
+        assert!(
+            state.can_resume_playback(),
+            "Resume should be allowed when TTS data is still streaming \
+             and narration is active"
+        );
+    }
+
+    #[test]
+    fn resume_after_finalization_does_not_resume() {
+        // Exact production scenario from logs:
+        //   1. TTS finishes → tts_data_complete = true
+        //   2. User pauses (audio buffered)
+        //   3. finalize_voice_turn runs (due to race) → clears tts_data_complete,
+        //      phase=Idle, narrating_section=None, audio drained
+        //   4. User presses Space to resume
+        //   5. State: phase=Idle, has_audio=false, tts_data_complete=false,
+        //      narrating_section=None
+        //   6. can_resume_playback MUST return false — nothing left to play.
+        let vc = VoiceModeToml::default();
+        let mut state = VoiceModeState::new(&vc);
+
+        // After finalize_voice_turn: everything cleared
+        state.phase = VoiceModePhase::Idle;
+        state.tts_data_complete = false; // cleared by finalization
+        state.mock_has_audio = Some(false); // drained
+        state.mock_audio_paused = true; // player still paused
+        state.narrating_section = None; // cleared by finalization
+
+        assert!(
+            !state.can_resume_playback(),
+            "can_resume_playback must return false after finalization — \
+             tts_data_complete=false, has_audio=false, narrating_section=None \
+             means the voice turn was already cleaned up"
+        );
     }
 }

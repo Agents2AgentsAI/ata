@@ -491,8 +491,9 @@ pub(crate) struct RealtimeAudioPlayer {
     /// Number of samples consumed from the queue by the audio callback.
     /// Tracks actual playback position (not buffered position).
     samples_played: Arc<AtomicUsize>,
-    /// Whether audio output is currently paused.
-    paused: AtomicBool,
+    /// Whether audio output is currently paused.  Shared with the audio
+    /// callback so it outputs silence instead of draining the queue.
+    paused: Arc<AtomicBool>,
 }
 
 impl RealtimeAudioPlayer {
@@ -503,11 +504,13 @@ impl RealtimeAudioPlayer {
         let output_channels = config.channels();
         let queue = Arc::new(Mutex::new(VecDeque::new()));
         let samples_played = Arc::new(AtomicUsize::new(0));
+        let paused = Arc::new(AtomicBool::new(false));
         let stream = build_output_stream(
             &device,
             &config,
             Arc::clone(&queue),
             Arc::clone(&samples_played),
+            Arc::clone(&paused),
         )?;
         stream
             .play()
@@ -518,7 +521,7 @@ impl RealtimeAudioPlayer {
             output_sample_rate,
             output_channels,
             samples_played,
-            paused: AtomicBool::new(false),
+            paused,
         })
     }
 
@@ -616,18 +619,21 @@ impl RealtimeAudioPlayer {
 
     /// Pause audio output. The queue retains its data; playback position freezes.
     pub(crate) fn pause(&self) {
-        let _ = self.stream.pause();
+        // Set the flag FIRST so any in-flight audio callbacks see it
+        // and output silence instead of draining the queue.
         self.paused.store(true, Ordering::SeqCst);
+        let _ = self.stream.pause();
     }
 
     /// Resume audio output from where it was paused.
     pub(crate) fn resume(&self) {
-        let _ = self.stream.play();
+        // Clear the flag FIRST so callbacks can drain the queue
+        // as soon as the stream restarts.
         self.paused.store(false, Ordering::SeqCst);
+        let _ = self.stream.play();
     }
 
     /// Whether the player is currently paused.
-    #[allow(dead_code)]
     pub(crate) fn is_paused(&self) -> bool {
         self.paused.load(Ordering::SeqCst)
     }
@@ -638,15 +644,17 @@ fn build_output_stream(
     config: &cpal::SupportedStreamConfig,
     queue: Arc<Mutex<VecDeque<i16>>>,
     samples_played: Arc<AtomicUsize>,
+    paused: Arc<AtomicBool>,
 ) -> Result<cpal::Stream, String> {
     let config_any: cpal::StreamConfig = config.clone().into();
     match config.sample_format() {
         cpal::SampleFormat::F32 => {
             let sp = Arc::clone(&samples_played);
+            let p = Arc::clone(&paused);
             device
                 .build_output_stream(
                     &config_any,
-                    move |output: &mut [f32], _| fill_output_f32(output, &queue, &sp),
+                    move |output: &mut [f32], _| fill_output_f32(output, &queue, &sp, &p),
                     move |err| error!("audio output error: {err}"),
                     None,
                 )
@@ -654,10 +662,11 @@ fn build_output_stream(
         }
         cpal::SampleFormat::I16 => {
             let sp = Arc::clone(&samples_played);
+            let p = Arc::clone(&paused);
             device
                 .build_output_stream(
                     &config_any,
-                    move |output: &mut [i16], _| fill_output_i16(output, &queue, &sp),
+                    move |output: &mut [i16], _| fill_output_i16(output, &queue, &sp, &p),
                     move |err| error!("audio output error: {err}"),
                     None,
                 )
@@ -665,10 +674,11 @@ fn build_output_stream(
         }
         cpal::SampleFormat::U16 => {
             let sp = Arc::clone(&samples_played);
+            let p = Arc::clone(&paused);
             device
                 .build_output_stream(
                     &config_any,
-                    move |output: &mut [u16], _| fill_output_u16(output, &queue, &sp),
+                    move |output: &mut [u16], _| fill_output_u16(output, &queue, &sp, &p),
                     move |err| error!("audio output error: {err}"),
                     None,
                 )
@@ -682,7 +692,12 @@ fn fill_output_i16(
     output: &mut [i16],
     queue: &Arc<Mutex<VecDeque<i16>>>,
     samples_played: &Arc<AtomicUsize>,
+    paused: &AtomicBool,
 ) {
+    if paused.load(Ordering::Acquire) {
+        output.fill(0);
+        return;
+    }
     if let Ok(mut guard) = queue.lock() {
         let mut consumed = 0usize;
         for sample in output {
@@ -705,7 +720,12 @@ fn fill_output_f32(
     output: &mut [f32],
     queue: &Arc<Mutex<VecDeque<i16>>>,
     samples_played: &Arc<AtomicUsize>,
+    paused: &AtomicBool,
 ) {
+    if paused.load(Ordering::Acquire) {
+        output.fill(0.0);
+        return;
+    }
     if let Ok(mut guard) = queue.lock() {
         let mut consumed = 0usize;
         for sample in output {
@@ -728,7 +748,12 @@ fn fill_output_u16(
     output: &mut [u16],
     queue: &Arc<Mutex<VecDeque<i16>>>,
     samples_played: &Arc<AtomicUsize>,
+    paused: &AtomicBool,
 ) {
+    if paused.load(Ordering::Acquire) {
+        output.fill(32768);
+        return;
+    }
     if let Ok(mut guard) = queue.lock() {
         let mut consumed = 0usize;
         for sample in output {

@@ -227,8 +227,16 @@ pub static PRESENT_DOCUMENT_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
                        'Figure Pointers' or 'How to view figures' that tell the user to look \
                        at specific figures. Instead, describe what each important figure shows \
                        inline in the narrative (e.g. 'The architecture diagram shows three \
-                       stages connected by…'). After calling this tool, end your response \
-                       and wait for user interaction. To re-display a previously presented \
+                       stages connected by…'). \
+                       CRITICAL — SILENCE AFTER PRESENTING: The reading view IS your \
+                       response. After calling this tool, do NOT output any additional text \
+                       in the chat — no summary, no recap, no 'here is what I found', no \
+                       restatement of the content. The user already sees the full document \
+                       in the reading view. Any text you add after this tool call will \
+                       appear as redundant duplication. The ONLY exception is a short \
+                       follow-up question to the user (e.g. 'Would you like me to go \
+                       deeper on any section?'). If you have no question, output nothing. \
+                       To re-display a previously presented \
                        document (with all section updates intact), pass only the document_id."
             .to_string(),
         strict: false,
@@ -273,7 +281,10 @@ pub static UPDATE_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
                        Content style: write straight prose that continues the section\u{2019}s \
                        voice. Do NOT prefix with bold/italic topic lines like \
                        '**On the efficiency gains:**' or '*Regarding caching:*' \u{2014} \
-                       just write the content directly."
+                       just write the content directly. \
+                       SILENCE AFTER UPDATING: The reading view already shows the updated \
+                       content. Do not repeat or summarize the changes in the chat. Only \
+                       add text if you have a follow-up question for the user."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -334,7 +345,10 @@ pub static APPEND_TO_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     ToolSpec::Function(ResponsesApiTool {
         name: "append_to_section".to_string(),
         description: "Append content to the end of a section in a document currently being read. \
-                       Use this when adding information to a section without rewriting it entirely."
+                       Use this when adding information to a section without rewriting it entirely. \
+                       SILENCE AFTER APPENDING: The reading view already shows the appended \
+                       content. Do not repeat or summarize what you added in the chat. Only \
+                       add text if you have a follow-up question for the user."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -402,7 +416,10 @@ pub static PATCH_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         name: "patch_document_section".to_string(),
         description: "Find and replace specific text within a section of a document currently \
                        being read. Use this for targeted edits like fixing a sentence or updating \
-                       a specific paragraph without rewriting the entire section."
+                       a specific paragraph without rewriting the entire section. \
+                       SILENCE AFTER PATCHING: The reading view already shows the patched \
+                       content. Do not repeat or summarize the changes in the chat. Only \
+                       add text if you have a follow-up question for the user."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
