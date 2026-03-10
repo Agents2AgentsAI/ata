@@ -9849,3 +9849,59 @@ async fn review_queues_user_messages_snapshot() {
     .unwrap();
     assert_snapshot!(term.backend().vt100().screen().contents());
 }
+
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[tokio::test]
+async fn space_in_reading_view_triggers_ptt_not_pause() {
+    use crate::chatwidget::voice_mode::VoiceModePhase;
+    use crate::chatwidget::voice_mode::VoiceModeState;
+    use codex_core::config::types::VoiceModeToml;
+    use codex_protocol::document_reader::PresentDocumentEvent;
+
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // Activate reading view.
+    chat.bottom_pane.show_document_reader(
+        PresentDocumentEvent {
+            call_id: "call-1".into(),
+            turn_id: "turn-1".into(),
+            document_id: "test-doc".into(),
+            title: "Test".into(),
+            content: "## Section\n\nHello world".into(),
+        },
+        false,
+    );
+    assert!(
+        chat.is_document_reader_active(),
+        "reading view must be active"
+    );
+
+    // Set up voice mode state: Speaking (not paused).
+    let vc = VoiceModeToml::default();
+    let mut state = VoiceModeState::new(&vc);
+    state.phase = VoiceModePhase::Speaking;
+    state.mock_audio_paused = false;
+    state.tts_data_complete = true;
+    state.mock_has_audio = Some(true);
+    chat.voice_mode_state = Some(state);
+
+    // Verify precondition.
+    assert!(chat.is_voice_speaking(), "should report voice speaking");
+
+    // Press Space — should trigger PTT (barge-in), not pause/resume.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+
+    // Drain events and make sure no VoiceModePauseTts was emitted
+    // (pause/resume is now handled by 's' in the document reader).
+    let mut saw_pause = false;
+    while let Ok(event) = rx.try_recv() {
+        if matches!(event, AppEvent::VoiceModePauseTts) {
+            saw_pause = true;
+        }
+    }
+    assert!(
+        !saw_pause,
+        "Space in reading view must not emit VoiceModePauseTts — \
+         pause/resume is handled by 's' in the document reader"
+    );
+}
