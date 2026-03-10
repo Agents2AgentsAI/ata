@@ -65,6 +65,7 @@ impl ApplyPatchRuntime {
             expiration: req.timeout_ms.into(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
+            workspace_kb_root: None,
             sandbox_permissions: SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: None,

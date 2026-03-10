@@ -661,6 +661,7 @@ pub async fn run_main_with_transport(
                                 {
                                     break;
                                 }
+                                processor.connection_opened(connection_id).await;
                                 connections.insert(
                                     connection_id,
                                     ConnectionState::new(

@@ -739,7 +739,7 @@
       "additionalProperties": false,
       "properties": {
         "kb_path": {
-          "description": "Path to the knowledge base directory. Defaults to `<codex_home>/knowledge-base`.",
+          "description": "Path to the knowledge base directory. Defaults to `<codex_home>/workspaces/<active-workspace>/knowledge-base`.",
           "type": "string"
         }
       },

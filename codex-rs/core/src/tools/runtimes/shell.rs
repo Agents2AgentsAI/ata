@@ -17,8 +17,10 @@ use crate::sandboxing::execute_env;
 use crate::shell::ShellType;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
-use crate::tools::runtimes::build_command_spec;
+use crate::tools::runtimes::CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR;
+use crate::tools::runtimes::build_command_spec_from_resolved_command;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
+use crate::tools::runtimes::resolve_agent_ata_command;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -34,6 +36,7 @@ use crate::tools::sandboxing::with_cached_approval;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -45,6 +48,7 @@ pub struct ShellRequest {
     pub timeout_ms: Option<u64>,
     pub env: HashMap<String, String>,
     pub explicit_env_overrides: HashMap<String, String>,
+    pub workspace_kb_root: Option<AbsolutePathBuf>,
     pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
@@ -201,8 +205,9 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
         let session_shell = ctx.session.user_shell();
+        let (base_command, rewrote_ata) = resolve_agent_ata_command(&req.command);
         let command = maybe_wrap_shell_lc_with_snapshot(
-            &req.command,
+            &base_command,
             session_shell.as_ref(),
             &req.cwd,
             &req.explicit_env_overrides,
@@ -226,15 +231,24 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             }
         }
 
-        let spec = build_command_spec(
+        let mut env = req.env.clone();
+        if rewrote_ata {
+            env.insert(
+                CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR.to_string(),
+                "1".to_string(),
+            );
+        }
+
+        let mut spec = build_command_spec_from_resolved_command(
             &command,
             &req.cwd,
-            &req.env,
+            &env,
             req.timeout_ms.into(),
             req.sandbox_permissions,
             req.additional_permissions.clone(),
             req.justification.clone(),
         )?;
+        spec.workspace_kb_root = req.workspace_kb_root.clone();
         let env = attempt
             .env_for(spec, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;

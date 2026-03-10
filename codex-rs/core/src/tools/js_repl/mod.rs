@@ -840,6 +840,7 @@ impl JsReplManager {
             ],
             cwd: turn.cwd.clone(),
             env,
+            workspace_kb_root: None,
             expiration: ExecExpiration::DefaultTimeout,
             sandbox_permissions: SandboxPermissions::UseDefault,
             additional_permissions: None,

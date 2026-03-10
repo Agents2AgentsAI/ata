@@ -347,9 +347,6 @@ impl MessageProcessor {
 
                     session.initialized = true;
                     outbound_initialized.store(true, Ordering::Release);
-                    self.codex_message_processor
-                        .connection_initialized(connection_id)
-                        .await;
                     return;
                 }
             }
@@ -465,6 +462,12 @@ impl MessageProcessor {
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
         self.codex_message_processor.thread_created_receiver()
+    }
+
+    pub(crate) async fn connection_opened(&self, connection_id: ConnectionId) {
+        self.codex_message_processor
+            .connection_opened(connection_id)
+            .await;
     }
 
     pub(crate) async fn send_initialize_notifications(&self) {

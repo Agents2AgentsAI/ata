@@ -3,10 +3,13 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
+use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
+use crate::exec_env::CODEX_SESSION_ID_ENV_VAR;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::features::Feature;
@@ -32,6 +35,8 @@ use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::spec::ShellCommandBackendConfig;
+use crate::workspace_kb::CODEX_KB_PATH_ENV_VAR;
+use crate::workspace_kb::resolve_kb_env;
 use codex_protocol::models::PermissionProfile;
 
 pub struct ShellHandler;
@@ -59,17 +64,46 @@ struct RunExecLikeArgs {
     shell_runtime_backend: ShellRuntimeBackend,
 }
 
+fn inject_kb_path_env(
+    env: &mut HashMap<String, String>,
+    turn_context: &TurnContext,
+    cwd: &Path,
+    thread_id: &str,
+) {
+    let kb_env = resolve_kb_env(
+        turn_context.config.codex_home.as_path(),
+        cwd,
+        turn_context
+            .config
+            .kb
+            .as_ref()
+            .and_then(|kb| kb.kb_path.as_deref()),
+        turn_context
+            .shell_environment_policy
+            .r#set
+            .get(CODEX_SESSION_ID_ENV_VAR)
+            .map(String::as_str),
+        Some(thread_id),
+    );
+    env.insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_env.kb_path);
+}
+
 impl ShellHandler {
     fn to_exec_params(
         params: &ShellToolCallParams,
         turn_context: &TurnContext,
         thread_id: ThreadId,
     ) -> ExecParams {
+        let cwd = turn_context.resolve_path(params.workdir.clone());
+        let mut env = create_env(&turn_context.shell_environment_policy, Some(thread_id));
+        let thread_id = thread_id.to_string();
+        inject_kb_path_env(&mut env, turn_context, cwd.as_path(), thread_id.as_str());
+
         ExecParams {
             command: params.command.clone(),
-            cwd: turn_context.resolve_path(params.workdir.clone()),
+            cwd,
             expiration: params.timeout_ms.into(),
-            env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
+            env,
             network: turn_context.network.clone(),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
@@ -114,12 +148,16 @@ impl ShellCommandHandler {
         let shell = session.user_shell();
         let use_login_shell = Self::resolve_use_login_shell(params.login, allow_login_shell)?;
         let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
+        let cwd = turn_context.resolve_path(params.workdir.clone());
+        let mut env = create_env(&turn_context.shell_environment_policy, Some(thread_id));
+        let thread_id = thread_id.to_string();
+        inject_kb_path_env(&mut env, turn_context, cwd.as_path(), thread_id.as_str());
 
         Ok(ExecParams {
             command,
-            cwd: turn_context.resolve_path(params.workdir.clone()),
+            cwd,
             expiration: params.timeout_ms.into(),
-            env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
+            env,
             network: turn_context.network.clone(),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
@@ -319,6 +357,10 @@ impl ShellHandler {
         } = args;
 
         let mut exec_params = exec_params;
+        let workspace_kb_root = exec_params
+            .env
+            .get(CODEX_KB_PATH_ENV_VAR)
+            .and_then(|kb_path| crate::workspace_kb::kb_writable_root(Path::new(kb_path)));
         let dependency_env = session.dependency_env().await;
         if !dependency_env.is_empty() {
             exec_params.env.extend(dependency_env.clone());
@@ -329,6 +371,13 @@ impl ShellHandler {
             if let Some(value) = exec_params.env.get(key) {
                 explicit_env_overrides.insert(key.clone(), value.clone());
             }
+        }
+        if let Some(kb_root) = workspace_kb_root.as_ref() {
+            let kb_path = kb_root.as_path().display().to_string();
+            exec_params
+                .env
+                .insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_path.clone());
+            explicit_env_overrides.insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_path);
         }
 
         let request_permission_enabled = session.features().enabled(Feature::RequestPermissions);
@@ -400,6 +449,7 @@ impl ShellHandler {
             timeout_ms: exec_params.expiration.timeout_ms(),
             env: exec_params.env.clone(),
             explicit_env_overrides,
+            workspace_kb_root,
             network: exec_params.network.clone(),
             sandbox_permissions: exec_params.sandbox_permissions,
             additional_permissions: normalized_additional_permissions,
@@ -450,6 +500,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::codex::make_session_and_context;
+    use crate::exec_env::CODEX_SESSION_ID_ENV_VAR;
     use crate::exec_env::create_env;
     use crate::is_safe_command::is_known_safe_command;
     use crate::powershell::try_find_powershell_executable_blocking;
@@ -459,6 +510,8 @@ mod tests {
     use crate::shell::ShellType;
     use crate::shell_snapshot::ShellSnapshot;
     use crate::tools::handlers::ShellCommandHandler;
+    use crate::workspace_kb::CODEX_KB_PATH_ENV_VAR;
+    use crate::workspace_kb::resolve_kb_path;
     use tokio::sync::watch;
 
     /// The logic for is_known_safe_command() has heuristics for known shells,
@@ -521,9 +574,29 @@ mod tests {
 
         let expected_command = session.user_shell().derive_exec_args(&command, true);
         let expected_cwd = turn_context.resolve_path(workdir.clone());
-        let expected_env = create_env(
+        let mut expected_env = create_env(
             &turn_context.shell_environment_policy,
             Some(session.conversation_id),
+        );
+        let thread_id = session.conversation_id.to_string();
+        let expected_kb_path = resolve_kb_path(
+            turn_context.config.codex_home.as_path(),
+            expected_cwd.as_path(),
+            turn_context
+                .config
+                .kb
+                .as_ref()
+                .and_then(|kb| kb.kb_path.as_deref()),
+            turn_context
+                .shell_environment_policy
+                .r#set
+                .get(CODEX_SESSION_ID_ENV_VAR)
+                .map(String::as_str),
+            Some(thread_id.as_str()),
+        );
+        expected_env.insert(
+            CODEX_KB_PATH_ENV_VAR.to_string(),
+            expected_kb_path.to_string_lossy().to_string(),
         );
 
         let params = ShellCommandToolCallParams {

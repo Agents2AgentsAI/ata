@@ -28,7 +28,7 @@ You are an **orchestrator**. Your only job is to spawn subagents, wait for their
 
 **Single paper (KB enabled) — exactly 6 tool calls:**
 
-1. `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` — quick KB check
+1. `exec_command: rg "PAPER_ID" ${CODEX_KB_PATH}/cards/` — quick KB check
 2. `spawn_agent` with `agent_type: "synthesizer"` and prompt: `$paper-synthesizer\n\nPaper: [URL]`
 3. `wait` for the subagent — it returns a staging file path
 4. `exec_command: cat [staging file path]` — read the subagent's output
@@ -44,7 +44,7 @@ Then 2 more calls for KB persistence. That's it.
 3. `exec_command: cat [staging file path]` — read output
 4. `present_reading_view` + `update_document_section` × N — present result
 
-After presenting, clean up: `exec_command: for f in $HOME/.ata/staging/paper-*.md; do unlink "$f"; done`
+After presenting, clean up: `exec_command: for f in ${CODEX_KB_PATH}/staging/paper-*.md; do unlink "$f"; done`
 
 ## Pre-Synthesis
 
@@ -69,16 +69,16 @@ Always use `agent_type: "synthesizer"`. That's the complete prompt — the subag
 
 ## KB Check (skip when KB is disabled)
 
-**Single paper:** `exec_command: rg "PAPER_ID" ~/.ata/knowledge-base/cards/` — one call. If a card already exists, present it directly via `present_reading_view`. Otherwise, spawn the subagent.
+**Single paper:** `exec_command: rg "PAPER_ID" ${CODEX_KB_PATH}/cards/` — one call. If a card already exists, present it directly via `present_reading_view`. Otherwise, spawn the subagent.
 
-**Multi-paper:** `exec_command: rg "ID1\|ID2\|ID3" ~/.ata/knowledge-base/cards/` — one call for all. Skip papers that already have cards.
+**Multi-paper:** `exec_command: rg "ID1\|ID2\|ID3" ${CODEX_KB_PATH}/cards/` — one call for all. Skip papers that already have cards.
 
 ## Multi-Paper Path
 
 1. Gather all URLs/IDs. Use `paper_search` only for papers with just a title.
 2. KB check in one call (skip if KB disabled).
 3. Spawn subagents in batches of 8 (system limit ~20 threads). One `wait` call per batch.
-4. Read all staging files: `exec_command: cat ~/.ata/staging/paper-*.md`
+4. Read all staging files: `exec_command: cat ${CODEX_KB_PATH}/staging/paper-*.md`
 5. Present via `present_reading_view`.
 6. KB persistence (skip if KB disabled): spawn a fire-and-forget `$kb` subagent with all card contents embedded in the prompt.
 
@@ -126,7 +126,7 @@ Write follow-up content as straight prose — no labels like "(expanded)" or bol
 **Single paper:** Write the card directly via `exec_command` with a heredoc after presenting:
 
 ```
-exec_command: cat <<'CARD_EOF' > ~/.ata/knowledge-base/cards/paper-[slug].md
+exec_command: cat <<'CARD_EOF' > ${CODEX_KB_PATH}/cards/paper-[slug].md
 ---
 id: paper-[slug]
 title: "[title]"

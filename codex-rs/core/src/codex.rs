@@ -26,6 +26,7 @@ use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
 use crate::connectors;
+use crate::exec_env::CODEX_SESSION_ID_ENV_VAR;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::FEATURES;
 use crate::features::Feature;
@@ -1081,7 +1082,10 @@ impl Session {
     }
 
     /// Don't expand the number of mutated arguments on config. We are in the process of getting rid of it.
-    pub(crate) fn build_per_turn_config(session_configuration: &SessionConfiguration) -> Config {
+    pub(crate) fn build_per_turn_config(
+        session_configuration: &SessionConfiguration,
+        session_scope_id: &str,
+    ) -> Config {
         // todo(aibrahim): store this state somewhere else so we don't need to mut config
         let config = session_configuration.original_config_do_not_use.clone();
         let mut per_turn_config = (*config).clone();
@@ -1110,6 +1114,20 @@ impl Session {
             .features_override
             .clone()
             .unwrap_or_else(|| config.features.clone());
+        let existing_scope_id = per_turn_config
+            .permissions
+            .shell_environment_policy
+            .r#set
+            .get(CODEX_SESSION_ID_ENV_VAR)
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let scope_id = existing_scope_id.unwrap_or(session_scope_id).to_string();
+        per_turn_config
+            .permissions
+            .shell_environment_policy
+            .r#set
+            .insert(CODEX_SESSION_ID_ENV_VAR.to_string(), scope_id);
         per_turn_config
     }
 
@@ -2209,7 +2227,9 @@ impl Session {
         final_output_json_schema: Option<Option<Value>>,
         sandbox_policy_changed: bool,
     ) -> Arc<TurnContext> {
-        let per_turn_config = Self::build_per_turn_config(&session_configuration);
+        let session_scope_id = self.conversation_id.to_string();
+        let per_turn_config =
+            Self::build_per_turn_config(&session_configuration, session_scope_id.as_str());
         self.services
             .mcp_connection_manager
             .read()

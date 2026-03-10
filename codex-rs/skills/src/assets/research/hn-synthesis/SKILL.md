@@ -56,7 +56,7 @@ The main agent orchestrates but does not call `hn_search` or `hn_get_thread` dir
 > Topic context: [brief context from discovery results]
 
 4. **Wait ONCE per batch** — pass all subagent IDs from the current batch in a single `wait` call. Do NOT call `wait` per subagent or poll in a loop. One `wait` call returns all results for that batch. After each batch completes, spawn the next batch.
-5. **Read all staging files** via `exec_command` (e.g., `cat ~/.ata/knowledge-base/staging/hn-*.md`).
+5. **Read all staging files** via `exec_command` (e.g., `cat ${CODEX_KB_PATH}/staging/hn-*.md`).
 6. **Present** a unified summary to the user immediately (see Presentation). Do NOT write to KB before presenting.
 7. If multiple threads were analyzed, include the cross-thread synthesis sections (see Phase 4) in the reading view.
 8. **Spawn a KB subagent (skip if KB is disabled)** — fire-and-forget, do NOT call `wait` — to persist the card in the background:
@@ -66,17 +66,17 @@ The main agent orchestrates but does not call `hn_search` or `hn_get_thread` dir
 > Process staged HN synthesis. You MUST complete ALL 4 steps below — do not stop after writing the card.
 > Card ID: [e.g. hn-ml-ai-agents-2026-02-20]
 > Tags: [relevant tags]
-> Staging files: [list all ~/.ata/knowledge-base/staging/hn-<thread_id>.md files]
+> Staging files: [list all ${CODEX_KB_PATH}/staging/hn-<thread_id>.md files]
 > User signals: [1-2 sentences about what the user asked for and any interests/preferences revealed, e.g. "User asked about community sentiment on AI agents. Interested in practical deployment experiences and tool recommendations."]
 >
-> Step 1. Read all staging files. Combine the thread analyses into a single KB card using the HN card body structure (Overview, Threads Analyzed table, Community Sentiment, Key Arguments, Practitioner Reports, Resources Surfaced, Alternative Approaches, Open Questions, Connections). Add frontmatter with source_type: hackernews, refs, tags, capsule. Write to ~/.ata/knowledge-base/cards/. Update index.json.
+> Step 1. Read all staging files. Combine the thread analyses into a single KB card using the HN card body structure (Overview, Threads Analyzed table, Community Sentiment, Key Arguments, Practitioner Reports, Resources Surfaced, Alternative Approaches, Open Questions, Connections). Add frontmatter with source_type: hackernews, refs, tags, capsule. Write to ${CODEX_KB_PATH}/cards/. Update index.json.
 > Step 2. Append to research-journal.md (prepend newest first): "## [date] — HN Synthesis: [topic]\n- Card: `[card-id]` | Threads: [count]"
 > Step 3. Update research-context.md with any new interests or preferences from the user signals. Read the file first (create if missing with sections: Project, Priorities, Not Interested In, Key Decisions Made). Merge — don't overwrite existing content.
 > Step 4. Delete staging files.
 >
 > Confirm completion of each step before moving to the next.
 
-**If KB is disabled:** Skip step 8. After presenting, delete staging files with `exec_command: for f in $HOME/.ata/knowledge-base/staging/hn-*.md; do unlink "$f"; done` so they don't accumulate. No card, journal, or context persistence happens. **Use `unlink`, not `rm -f`** — the sandbox blocks `rm` but allows `unlink`.
+**If KB is disabled:** Skip step 8. After presenting, delete staging files with `exec_command: for f in ${CODEX_KB_PATH}/staging/hn-*.md; do unlink "$f"; done` so they don't accumulate. No card, journal, or context persistence happens. **Use `unlink`, not `rm -f`** — the sandbox blocks `rm` but allows `unlink`.
 
 ### Pre-Synthesis Check (Optional)
 
@@ -98,7 +98,7 @@ Extract the item ID and skip discovery — spawn a single `$hn-synthesizer` suba
 
 KB writes happen in the **background** via a fire-and-forget `$kb` subagent, AFTER the reading view is presented. The main agent never writes KB cards directly.
 
-**How it works:** Each hn-synthesizer subagent writes its thread analysis to `~/.ata/knowledge-base/staging/hn-<thread_id>.md` (with YAML frontmatter containing thread metadata) and returns only the file path. The main agent reads all staging files for presentation. After the reading view is presented, it spawns a `$kb` subagent with the card ID, tags, and list of staging file paths. The KB subagent reads from disk, combines the analyses, and handles all KB operations.
+**How it works:** Each hn-synthesizer subagent writes its thread analysis to `${CODEX_KB_PATH}/staging/hn-<thread_id>.md` (with YAML frontmatter containing thread metadata) and returns only the file path. The main agent reads all staging files for presentation. After the reading view is presented, it spawns a `$kb` subagent with the card ID, tags, and list of staging file paths. The KB subagent reads from disk, combines the analyses, and handles all KB operations.
 
 ### Card ID Convention
 

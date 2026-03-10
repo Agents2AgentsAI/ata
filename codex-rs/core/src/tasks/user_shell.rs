@@ -15,6 +15,7 @@ use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::StreamOutput;
 use crate::exec::execute_exec_request;
+use crate::exec_env::CODEX_SESSION_ID_ENV_VAR;
 use crate::exec_env::create_env;
 use crate::parse_command::parse_command;
 use crate::protocol::EventMsg;
@@ -30,6 +31,8 @@ use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::user_shell_command::user_shell_command_record_item;
+use crate::workspace_kb::CODEX_KB_PATH_ENV_VAR;
+use crate::workspace_kb::resolve_kb_env;
 
 use super::SessionTask;
 use super::SessionTaskContext;
@@ -122,13 +125,36 @@ pub(crate) async fn execute_user_shell_command(
     // We do not source rc files or otherwise reformat the script.
     let use_login_shell = true;
     let session_shell = session.user_shell();
+    let thread_id = session.conversation_id.to_string();
+    let kb_env = resolve_kb_env(
+        turn_context.config.codex_home.as_path(),
+        turn_context.cwd.as_path(),
+        turn_context
+            .config
+            .kb
+            .as_ref()
+            .and_then(|kb| kb.kb_path.as_deref()),
+        turn_context
+            .shell_environment_policy
+            .r#set
+            .get(CODEX_SESSION_ID_ENV_VAR)
+            .map(String::as_str),
+        Some(thread_id.as_str()),
+    );
+    let mut explicit_env_overrides = turn_context.shell_environment_policy.r#set.clone();
+    explicit_env_overrides.insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_env.kb_path.clone());
     let display_command = session_shell.derive_exec_args(&command, use_login_shell);
     let exec_command = maybe_wrap_shell_lc_with_snapshot(
         &display_command,
         session_shell.as_ref(),
         turn_context.cwd.as_path(),
-        &turn_context.shell_environment_policy.r#set,
+        &explicit_env_overrides,
     );
+    let mut env = create_env(
+        &turn_context.shell_environment_policy,
+        Some(session.conversation_id),
+    );
+    env.insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_env.kb_path);
 
     let call_id = Uuid::new_v4().to_string();
     let raw_command = command;
@@ -155,10 +181,7 @@ pub(crate) async fn execute_user_shell_command(
     let exec_env = ExecRequest {
         command: exec_command.clone(),
         cwd: cwd.clone(),
-        env: create_env(
-            &turn_context.shell_environment_policy,
-            Some(session.conversation_id),
-        ),
+        env,
         network: turn_context.network.clone(),
         // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
         // should use that instead of an "arbitrarily large" timeout here.

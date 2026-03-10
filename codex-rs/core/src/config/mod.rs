@@ -1288,7 +1288,8 @@ pub struct DataToolsToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct KbToml {
-    /// Path to the knowledge base directory. Defaults to `<codex_home>/knowledge-base`.
+    /// Path to the knowledge base directory. Defaults to
+    /// `<codex_home>/workspaces/<active-workspace>/knowledge-base`.
     pub kb_path: Option<String>,
 }
 
