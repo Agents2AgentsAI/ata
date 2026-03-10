@@ -189,6 +189,8 @@ pub enum Feature {
     Lsp,
     /// Enable tree-sitter structural code intelligence integration.
     TreeSitter,
+    /// Enable cross-session agent coordination channel.
+    Coordination,
 }
 
 impl Feature {
@@ -933,6 +935,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Background job scheduler for cron/event triggers",
             announcement: "Scheduler is now enabled.",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Coordination,
+        key: "coordination",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
 ];

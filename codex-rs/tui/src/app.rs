@@ -707,6 +707,9 @@ pub(crate) struct App {
     /// Keeps the embedded remote-control WebSocket server alive for the
     /// lifetime of the App. Dropped (and shut down) when the TUI exits.
     _remote_control_handle: Option<crate::remote_control::RemoteControlHandle>,
+
+    /// Whether the coordination watcher background task has been spawned.
+    coordination_watcher_spawned: bool,
 }
 
 #[derive(Default)]
@@ -1191,6 +1194,9 @@ impl App {
             self.activate_thread_channel(thread_id).await;
             self.enqueue_thread_event(thread_id, event).await?;
 
+            // Spawn coordination watcher now that we have a session_id.
+            self.spawn_coordination_watcher(thread_id);
+
             let pending = std::mem::take(&mut self.pending_primary_events);
             for pending_event in pending {
                 self.enqueue_thread_event(thread_id, pending_event).await?;
@@ -1199,6 +1205,117 @@ impl App {
             self.pending_primary_events.push_back(event);
         }
         Ok(())
+    }
+
+    /// Spawn a background task that watches for new coordination messages from
+    /// peer agents and forwards them as [`AppEvent::CoordinationNotification`].
+    fn spawn_coordination_watcher(&mut self, thread_id: ThreadId) {
+        // Relay-only push: requires the relay feature.
+        #[cfg(not(feature = "relay"))]
+        {
+            let _ = thread_id;
+        }
+
+        #[cfg(feature = "relay")]
+        {
+            if self.coordination_watcher_spawned {
+                return;
+            }
+            self.coordination_watcher_spawned = true;
+
+            let cwd = self.config.cwd.clone();
+            let session_id = thread_id.to_string();
+            let app_event_tx = self.app_event_tx.clone();
+
+            // Default to localhost:7800 if no explicit relay_url is configured.
+            let relay_url = self
+                .config
+                .coordination
+                .as_ref()
+                .and_then(|c| c.relay_url.clone())
+                .unwrap_or_else(|| "http://127.0.0.1:7800".to_string());
+            let relay_secret = self
+                .config
+                .coordination
+                .as_ref()
+                .and_then(|c| c.relay_secret.clone());
+
+            // Parse the port from the relay URL for auto-start.
+            let relay_port = url::Url::parse(&relay_url)
+                .ok()
+                .and_then(|u| u.port())
+                .unwrap_or(7800);
+
+            tokio::spawn(async move {
+                use codex_coordination::CoordinationWatcher;
+                use ratatui::style::Stylize;
+                use ratatui::text::Line;
+                use ratatui::text::Span;
+
+                // Auto-start the relay server if the port is free.
+                codex_coordination_relay::try_start_background(
+                    codex_coordination_relay::RelayServerConfig {
+                        port: relay_port,
+                        secret: relay_secret.clone(),
+                        max_messages: 100,
+                    },
+                )
+                .await;
+
+                // Compute project ID from git remote.
+                let project_id = match codex_coordination::compute_project_id(&cwd).await {
+                    Some(id) => id,
+                    None => {
+                        tracing::warn!(
+                            "coordination watcher: no git remote — cannot compute project ID"
+                        );
+                        return;
+                    }
+                };
+
+                let relay = std::sync::Arc::new(
+                    codex_coordination::relay_client::RelayClient::new(
+                        relay_url,
+                        relay_secret,
+                        project_id,
+                    ),
+                );
+
+                let cancel = tokio_util::sync::CancellationToken::new();
+                let watcher =
+                    CoordinationWatcher::start(relay, session_id, cancel);
+
+                tracing::info!("coordination watcher: relay SSE connected");
+
+                let mut rx = watcher.subscribe();
+                loop {
+                    match rx.recv().await {
+                        Ok(msg) => {
+                            let name = codex_coordination::agent_name(&msg.session_id);
+                            let lines = vec![
+                                Line::from(vec![
+                                    Span::from("  [Team message] ").dim(),
+                                    Span::from(name.clone()).bold(),
+                                ]),
+                                Line::from(vec![
+                                    Span::from("    "),
+                                    Span::from(msg.message.clone()),
+                                ]),
+                            ];
+                            app_event_tx.send(AppEvent::CoordinationNotification {
+                                lines,
+                                agent_name: name,
+                                message: msg.message,
+                            });
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!("coordination watcher lagged by {n} messages");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+        }
     }
 
     async fn open_agent_picker(&mut self) {
@@ -1829,6 +1946,7 @@ impl App {
             pending_primary_events: VecDeque::new(),
             thread_closed_document_ids: HashMap::new(),
             _remote_control_handle: remote_control_handle,
+            coordination_watcher_spawned: false,
         };
 
         if let Some(handle) = &app._remote_control_handle {
@@ -2296,6 +2414,29 @@ impl App {
                     "D I F F".to_string(),
                 ));
                 tui.frame_requester().schedule_frame();
+            }
+            AppEvent::TeamResult(lines) => {
+                self.chat_widget.add_plain_history_lines(lines);
+            }
+            AppEvent::CoordinationNotification {
+                lines,
+                agent_name,
+                message,
+            } => {
+                self.chat_widget.add_plain_history_lines(lines);
+                tui.frame_requester().schedule_frame();
+
+                // Submit the team message to the agent as context.
+                let text = format!(
+                    "[Team message from {agent_name}]: {message}"
+                );
+                let models_manager = self.server.get_models_manager();
+                let default_mode =
+                    crate::collaboration_modes::default_mode_mask(&models_manager);
+                if let Some(mode) = default_mode {
+                    self.chat_widget
+                        .submit_user_message_with_mode(text, mode);
+                }
             }
             AppEvent::OpenAppLink {
                 app_id,
@@ -5607,6 +5748,7 @@ mod tests {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             thread_closed_document_ids: HashMap::new(),
+            coordination_watcher_spawned: false,
         }
     }
 
@@ -5668,6 +5810,7 @@ mod tests {
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
                 thread_closed_document_ids: HashMap::new(),
+                coordination_watcher_spawned: false,
             },
             rx,
             op_rx,

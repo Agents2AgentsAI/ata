@@ -19,6 +19,7 @@ vt100-tests = []
 # Gate verbose debug logging inside the TUI implementation.
 debug-logs = []
 voice-input = ["dep:cpal", "dep:hound"]
+relay = ["codex-coordination/relay", "dep:codex-coordination-relay"]
 
 [lints]
 workspace = true
@@ -35,6 +36,8 @@ codex-arg0 = { workspace = true }
 codex-backend-client = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-cloud-requirements = { workspace = true }
+codex-coordination = { workspace = true }
+codex-coordination-relay = { workspace = true, optional = true }
 codex-core = { workspace = true }
 codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
