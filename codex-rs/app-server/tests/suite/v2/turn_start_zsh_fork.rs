@@ -443,6 +443,24 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
         );
         return Ok(());
     }
+    if cfg!(target_os = "macos") {
+        let Ok(output) = std::process::Command::new("/usr/bin/sandbox-exec")
+            .args(["-p", "(version 1) (allow default)", "/usr/bin/true"])
+            .output()
+        else {
+            eprintln!(
+                "skipping zsh fork subcommand decline test: unable to run /usr/bin/sandbox-exec probe"
+            );
+            return Ok(());
+        };
+        if !output.status.success() {
+            eprintln!(
+                "skipping zsh fork subcommand decline test: /usr/bin/sandbox-exec probe failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Ok(());
+        }
+    }
     eprintln!("using zsh path for zsh-fork test: {}", zsh_path.display());
     let first_file = workspace.join("first.txt");
     let second_file = workspace.join("second.txt");
