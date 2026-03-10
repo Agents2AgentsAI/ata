@@ -166,20 +166,20 @@ fn is_daemon_running() -> Option<u32> {
 }
 
 fn find_app_server_binary() -> Option<PathBuf> {
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(dir) = current_exe.parent() {
-            let candidate = dir.join("codex-app-server");
-            if candidate.exists() {
-                return Some(candidate);
-            }
+    if let Ok(current_exe) = std::env::current_exe()
+        && let Some(dir) = current_exe.parent()
+    {
+        let candidate = dir.join("codex-app-server");
+        if candidate.exists() {
+            return Some(candidate);
         }
     }
-    if let Ok(output) = Command::new("which").arg("codex-app-server").output() {
-        if output.status.success() {
-            let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path_str.is_empty() {
-                return Some(PathBuf::from(path_str));
-            }
+    if let Ok(output) = Command::new("which").arg("codex-app-server").output()
+        && output.status.success()
+    {
+        let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path_str.is_empty() {
+            return Some(PathBuf::from(path_str));
         }
     }
     None
