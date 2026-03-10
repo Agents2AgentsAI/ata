@@ -17,10 +17,10 @@ Patent search requires EPO API credentials. Paper search and other research tool
 
 Set the following environment variables:
 
-| Variable | Required | Description |
-| -------- | -------- | ----------- |
-| `EPO_CONSUMER_KEY` | Yes | Your EPO OAuth2 consumer key |
-| `EPO_CONSUMER_SECRET` | Yes | Your EPO OAuth2 consumer secret |
+| Variable              | Required | Description                     |
+| --------------------- | -------- | ------------------------------- |
+| `EPO_CONSUMER_KEY`    | Yes      | Your EPO OAuth2 consumer key    |
+| `EPO_CONSUMER_SECRET` | Yes      | Your EPO OAuth2 consumer secret |
 
 ```shell
 export EPO_CONSUMER_KEY="your-consumer-key"
@@ -31,10 +31,10 @@ Both variables must be set for patent tools to be enabled. Ata handles OAuth2 to
 
 ## Tools Available To Agents
 
-| Tool | Description |
-| ---- | ----------- |
+| Tool            | Description                                                             |
+| --------------- | ----------------------------------------------------------------------- |
 | `patent_search` | Search patents by keyword, inventor, assignee, CPC code, and date range |
-| `patent_get` | Get full patent details including claims text |
+| `patent_get`    | Get full patent details including claims text                           |
 
 ## Usage with Ata
 
