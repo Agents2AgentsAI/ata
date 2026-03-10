@@ -47,20 +47,12 @@ fn validate_mutable_path(path: &str) -> Result<(), WorkspaceError> {
 /// Set a value at a dotted path within a JSON Value.
 fn set_nested_value(root: &mut Value, path: &str, value: Value) -> Result<(), WorkspaceError> {
     let parts: Vec<&str> = path.split('.').collect();
-    if parts.is_empty() {
+    let Some((last, parents)) = parts.split_last() else {
         return Err(WorkspaceError::InvalidFieldPath(path.to_string()));
-    }
+    };
 
     let mut current = root;
-    for (i, part) in parts.iter().enumerate() {
-        if i == parts.len() - 1 {
-            // Set the value
-            if let Some(obj) = current.as_object_mut() {
-                obj.insert((*part).to_string(), value);
-                return Ok(());
-            }
-            return Err(WorkspaceError::InvalidFieldPath(path.to_string()));
-        }
+    for part in parents {
         // Navigate deeper
         if let Some(obj) = current.as_object_mut() {
             current = obj
@@ -69,6 +61,10 @@ fn set_nested_value(root: &mut Value, path: &str, value: Value) -> Result<(), Wo
         } else {
             return Err(WorkspaceError::InvalidFieldPath(path.to_string()));
         }
+    }
+    if let Some(obj) = current.as_object_mut() {
+        obj.insert((*last).to_string(), value);
+        return Ok(());
     }
     Err(WorkspaceError::InvalidFieldPath(path.to_string()))
 }

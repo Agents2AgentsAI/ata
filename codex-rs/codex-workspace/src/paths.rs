@@ -2,6 +2,8 @@ use std::path::Component;
 use std::path::PathBuf;
 
 const MANIFEST_FILENAME: &str = "workspace.json";
+pub const CODEX_SESSION_ID_ENV_VAR: &str = "CODEX_SESSION_ID";
+pub const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
 
 /// Get the codex home directory (`$CODEX_HOME` or `~/.ata`).
 ///
@@ -64,10 +66,10 @@ impl SessionContext {
     pub fn from_env() -> Self {
         Self {
             codex_home: codex_home(),
-            session_id: std::env::var("CODEX_SESSION_ID")
+            session_id: std::env::var(CODEX_SESSION_ID_ENV_VAR)
                 .ok()
                 .filter(|value| !value.is_empty()),
-            thread_id: std::env::var("CODEX_THREAD_ID")
+            thread_id: std::env::var(CODEX_THREAD_ID_ENV_VAR)
                 .ok()
                 .filter(|value| !value.is_empty()),
             cwd: std::env::current_dir().ok(),
@@ -361,6 +363,10 @@ mod tests {
             workspace_scope_id(Some("   "), Some("thread-2")),
             Some("thread-2".to_string())
         );
+        assert_eq!(
+            workspace_scope_id(Some("../escape"), Some("thread-3")),
+            Some("thread-3".to_string())
+        );
     }
 
     #[test]
@@ -368,6 +374,8 @@ mod tests {
         assert_eq!(workspace_scope_id(Some("../escape"), None), None);
         assert_eq!(workspace_scope_id(Some("nested/path"), None), None);
         assert_eq!(workspace_scope_id(Some(r"nested\\path"), None), None);
+        assert_eq!(workspace_scope_id(Some("."), None), None);
+        assert_eq!(workspace_scope_id(Some(".."), None), None);
     }
 
     #[test]

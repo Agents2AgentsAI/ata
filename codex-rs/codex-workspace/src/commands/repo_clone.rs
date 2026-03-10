@@ -121,7 +121,14 @@ pub fn run(
             &url_owned,
             manifest.policies.repo_hosts_allowlist.as_deref(),
         )?;
-        if manifest.policies.default_clone != clone_policy_for_manifest {
+        let live_clone_policy = &manifest.policies.default_clone;
+        if live_clone_policy.depth != clone_policy_for_manifest.depth
+            || live_clone_policy.single_branch != clone_policy_for_manifest.single_branch
+            || live_clone_policy.no_tags != clone_policy_for_manifest.no_tags
+            || live_clone_policy.filter != clone_policy_for_manifest.filter
+            || live_clone_policy.submodules != clone_policy_for_manifest.submodules
+            || live_clone_policy.lfs != clone_policy_for_manifest.lfs
+        {
             return Err(WorkspaceError::VersionConflict {
                 expected: manifest_version,
                 actual: manifest.manifest_version,
