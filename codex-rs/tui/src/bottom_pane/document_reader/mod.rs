@@ -4465,7 +4465,13 @@ mod tests {
 
     #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     mod voice_progress_tests {
-        use super::{key, make_view, AppEvent, AppEventSender, Buffer, Rect};
+        use super::super::DocumentReaderView;
+        use super::AppEvent;
+        use super::AppEventSender;
+        use super::Buffer;
+        use super::Rect;
+        use super::key;
+        use super::make_view;
         use crate::bottom_pane::bottom_pane_view::BottomPaneView;
         use crate::render::renderable::Renderable;
         use crossterm::event::KeyCode;
