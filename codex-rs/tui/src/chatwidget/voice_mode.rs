@@ -3297,7 +3297,7 @@ mod tests {
         durations: &[u64],
     ) -> codex_elevenlabs::TtsAlignment {
         codex_elevenlabs::TtsAlignment {
-            chars: chars.iter().map(|c| c.to_string()).collect(),
+            chars: chars.iter().map(std::string::ToString::to_string).collect(),
             char_start_times_ms: starts.to_vec(),
             char_durations_ms: durations.to_vec(),
         }
