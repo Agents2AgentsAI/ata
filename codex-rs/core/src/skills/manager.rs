@@ -77,6 +77,7 @@ impl SkillsManager {
         skill_roots(
             &config.config_layer_stack,
             &config.cwd,
+            &config.codex_home,
             loaded_plugins.effective_skill_roots(),
         )
     }
@@ -142,6 +143,7 @@ impl SkillsManager {
         let mut roots = skill_roots(
             &config_layer_stack,
             cwd,
+            &self.codex_home,
             loaded_plugins.effective_skill_roots(),
         );
         roots.extend(

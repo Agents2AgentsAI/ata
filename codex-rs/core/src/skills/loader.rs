@@ -194,11 +194,13 @@ where
 pub(crate) fn skill_roots(
     config_layer_stack: &ConfigLayerStack,
     cwd: &Path,
+    codex_home: &Path,
     plugin_skill_roots: Vec<PathBuf>,
 ) -> Vec<SkillRoot> {
     skill_roots_with_home_dir(
         config_layer_stack,
         cwd,
+        codex_home,
         home_dir().as_deref(),
         plugin_skill_roots,
     )
@@ -207,10 +209,11 @@ pub(crate) fn skill_roots(
 fn skill_roots_with_home_dir(
     config_layer_stack: &ConfigLayerStack,
     cwd: &Path,
+    codex_home: &Path,
     home_dir: Option<&Path>,
     plugin_skill_roots: Vec<PathBuf>,
 ) -> Vec<SkillRoot> {
-    let mut roots = skill_roots_from_layer_stack_inner(config_layer_stack, home_dir);
+    let mut roots = skill_roots_from_layer_stack_inner(config_layer_stack, codex_home, home_dir);
     roots.extend(plugin_skill_roots.into_iter().map(|path| SkillRoot {
         path,
         scope: SkillScope::User,
@@ -222,9 +225,13 @@ fn skill_roots_with_home_dir(
 
 fn skill_roots_from_layer_stack_inner(
     config_layer_stack: &ConfigLayerStack,
+    codex_home: &Path,
     home_dir: Option<&Path>,
 ) -> Vec<SkillRoot> {
-    let mut roots = Vec::new();
+    let mut repo_roots = Vec::new();
+    let mut user_and_system_roots = Vec::new();
+    let mut admin_roots = Vec::new();
+    let mut saw_user_layer = false;
 
     for layer in
         config_layer_stack.get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst, true)
@@ -235,52 +242,20 @@ fn skill_roots_from_layer_stack_inner(
 
         match &layer.name {
             ConfigLayerSource::Project { .. } => {
-                roots.push(SkillRoot {
+                repo_roots.push(SkillRoot {
                     path: config_folder.as_path().join(SKILLS_DIR_NAME),
                     scope: SkillScope::Repo,
                 });
             }
             ConfigLayerSource::User { .. } => {
-                // Deprecated user skills location (`$CODEX_HOME/skills`), kept for backward
-                // compatibility.
-                roots.push(SkillRoot {
-                    path: config_folder.as_path().join(SKILLS_DIR_NAME),
-                    scope: SkillScope::User,
-                });
-
-                // `$HOME/.agents/skills` (user-installed skills).
-                if let Some(home_dir) = home_dir {
-                    roots.push(SkillRoot {
-                        path: home_dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME),
-                        scope: SkillScope::User,
-                    });
-                }
-
-                // Embedded system skills are cached under `$CODEX_HOME/skills/.system` and are a
-                // special case (not a config layer).
-                roots.push(SkillRoot {
-                    path: system_cache_root_dir(config_folder.as_path()),
-                    scope: SkillScope::System,
-                });
-
-                // Research skills are cached under `$CODEX_HOME/skills/.system-research`.
-                // Installation is best-effort at startup. If the directory does not
-                // exist on disk, `discover_skills_under_root` returns immediately.
-                roots.push(SkillRoot {
-                    path: research_cache_root_dir(config_folder.as_path()),
-                    scope: SkillScope::System,
-                });
-
-                // Workspace skills are cached under `$CODEX_HOME/skills/.system-workspace`.
-                roots.push(SkillRoot {
-                    path: workspace_cache_root_dir(config_folder.as_path()),
-                    scope: SkillScope::System,
-                });
+                saw_user_layer = true;
+                user_and_system_roots
+                    .extend(default_user_skill_roots(config_folder.as_path(), home_dir));
             }
             ConfigLayerSource::System { .. } => {
                 // The system config layer lives under `/etc/codex/` on Unix, so treat
                 // `/etc/codex/skills` as admin-scoped skills.
-                roots.push(SkillRoot {
+                admin_roots.push(SkillRoot {
                     path: config_folder.as_path().join(SKILLS_DIR_NAME),
                     scope: SkillScope::Admin,
                 });
@@ -292,6 +267,40 @@ fn skill_roots_from_layer_stack_inner(
         }
     }
 
+    if !saw_user_layer {
+        user_and_system_roots.extend(default_user_skill_roots(codex_home, home_dir));
+    }
+
+    repo_roots.extend(user_and_system_roots);
+    repo_roots.extend(admin_roots);
+    repo_roots
+}
+
+fn default_user_skill_roots(codex_home: &Path, home_dir: Option<&Path>) -> Vec<SkillRoot> {
+    let mut roots = vec![SkillRoot {
+        path: codex_home.join(SKILLS_DIR_NAME),
+        scope: SkillScope::User,
+    }];
+    if let Some(home_dir) = home_dir {
+        roots.push(SkillRoot {
+            path: home_dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME),
+            scope: SkillScope::User,
+        });
+    }
+    roots.extend([
+        SkillRoot {
+            path: system_cache_root_dir(codex_home),
+            scope: SkillScope::System,
+        },
+        SkillRoot {
+            path: research_cache_root_dir(codex_home),
+            scope: SkillScope::System,
+        },
+        SkillRoot {
+            path: workspace_cache_root_dir(codex_home),
+            scope: SkillScope::System,
+        },
+    ]);
     roots
 }
 
@@ -863,9 +872,16 @@ fn extract_frontmatter(contents: &str) -> Option<String> {
 #[cfg(test)]
 pub(crate) fn skill_roots_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
+    codex_home: &Path,
     home_dir: Option<&Path>,
 ) -> Vec<SkillRoot> {
-    skill_roots_with_home_dir(config_layer_stack, Path::new("."), home_dir, Vec::new())
+    skill_roots_with_home_dir(
+        config_layer_stack,
+        Path::new("."),
+        codex_home,
+        home_dir,
+        Vec::new(),
+    )
 }
 
 #[cfg(test)]
@@ -937,6 +953,7 @@ mod tests {
         super::load_skills_from_roots(super::skill_roots_with_home_dir(
             &config.config_layer_stack,
             &config.cwd,
+            &config.codex_home,
             None,
             Vec::new(),
         ))
@@ -983,7 +1000,7 @@ mod tests {
             ConfigRequirementsToml::default(),
         )?;
 
-        let got = skill_roots_from_layer_stack(&stack, Some(&home_folder))
+        let got = skill_roots_from_layer_stack(&stack, &user_folder, Some(&home_folder))
             .into_iter()
             .map(|root| (root.scope, root.path))
             .collect::<Vec<_>>();
@@ -1007,6 +1024,61 @@ mod tests {
                 (
                     SkillScope::System,
                     user_folder.join("skills").join(".system-workspace")
+                ),
+                (SkillScope::Admin, system_folder.join("skills")),
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn skill_roots_from_layer_stack_includes_default_user_roots_without_user_config_layer()
+    -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+
+        let system_folder = tmp.path().join("etc/codex");
+        let home_folder = tmp.path().join("home");
+        let codex_home = tmp.path().join("codex-home");
+        fs::create_dir_all(&system_folder)?;
+        fs::create_dir_all(&home_folder)?;
+        fs::create_dir_all(&codex_home)?;
+
+        let system_file = AbsolutePathBuf::from_absolute_path(system_folder.join("config.toml"))?;
+        let layers = vec![ConfigLayerEntry::new(
+            ConfigLayerSource::System { file: system_file },
+            TomlValue::Table(toml::map::Map::new()),
+        )];
+        let stack = ConfigLayerStack::new(
+            layers,
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )?;
+
+        let got = skill_roots_from_layer_stack(&stack, &codex_home, Some(&home_folder))
+            .into_iter()
+            .map(|root| (root.scope, root.path))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            got,
+            vec![
+                (SkillScope::User, codex_home.join("skills")),
+                (
+                    SkillScope::User,
+                    home_folder.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME)
+                ),
+                (
+                    SkillScope::System,
+                    codex_home.join("skills").join(".system")
+                ),
+                (
+                    SkillScope::System,
+                    codex_home.join("skills").join(".system-research")
+                ),
+                (
+                    SkillScope::System,
+                    codex_home.join("skills").join(".system-workspace")
                 ),
                 (SkillScope::Admin, system_folder.join("skills")),
             ]
@@ -1049,7 +1121,7 @@ mod tests {
             ConfigRequirementsToml::default(),
         )?;
 
-        let got = skill_roots_from_layer_stack(&stack, Some(&home_folder))
+        let got = skill_roots_from_layer_stack(&stack, &user_folder, Some(&home_folder))
             .into_iter()
             .map(|root| (root.scope, root.path))
             .collect::<Vec<_>>();
@@ -1107,8 +1179,11 @@ mod tests {
             "from home agents",
         );
 
-        let outcome =
-            load_skills_from_roots(skill_roots_from_layer_stack(&stack, Some(&home_folder)));
+        let outcome = load_skills_from_roots(skill_roots_from_layer_stack(
+            &stack,
+            &user_folder,
+            Some(&home_folder),
+        ));
         assert!(
             outcome.errors.is_empty(),
             "unexpected errors: {:?}",
@@ -2712,11 +2787,15 @@ permissions:
         let codex_home = tempfile::tempdir().expect("tempdir");
         let cfg = make_config(&codex_home).await;
 
-        let scopes: Vec<SkillScope> =
-            super::skill_roots(&cfg.config_layer_stack, &cfg.cwd, Vec::new())
-                .into_iter()
-                .map(|root| root.scope)
-                .collect();
+        let scopes: Vec<SkillScope> = super::skill_roots(
+            &cfg.config_layer_stack,
+            &cfg.cwd,
+            &cfg.codex_home,
+            Vec::new(),
+        )
+        .into_iter()
+        .map(|root| root.scope)
+        .collect();
         let mut expected = vec![
             SkillScope::User,
             SkillScope::System,

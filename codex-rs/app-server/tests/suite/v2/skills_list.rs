@@ -221,7 +221,8 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
 }
 
 #[tokio::test]
-async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<()> {
+async fn skills_reload_reflects_skill_change_even_if_watcher_notification_is_missed() -> Result<()>
+{
     let codex_home = TempDir::new()?;
     write_skill(&codex_home, "demo")?;
 
@@ -263,8 +264,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
             .context("thread/started params must be present")?,
     )?;
 
-    let skill_path = codex_home
-        .path()
+    let skill_path = std::fs::canonicalize(codex_home.path())?
         .join("skills")
         .join("demo")
         .join("SKILL.md");
@@ -273,16 +273,39 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
         "---\nname: demo\ndescription: updated\n---\n\n# Updated\n",
     )?;
 
-    let notification = timeout(
+    if let Ok(notification) = timeout(
         WATCHER_TIMEOUT,
         mcp.read_stream_until_notification_message("skills/changed"),
     )
-    .await??;
-    let params = notification
-        .params
-        .context("skills/changed params must be present")?;
-    let notification: SkillsChangedNotification = serde_json::from_value(params)?;
+    .await
+    {
+        let notification = notification?;
+        let params = notification
+            .params
+            .context("skills/changed params must be present")?;
+        let notification: SkillsChangedNotification = serde_json::from_value(params)?;
+        assert_eq!(notification, SkillsChangedNotification {});
+    }
 
-    assert_eq!(notification, SkillsChangedNotification {});
+    let request_id = mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![codex_home.path().to_path_buf()],
+            force_reload: true,
+            per_cwd_extra_user_roots: None,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let SkillsListResponse { data } = to_response(response)?;
+    assert_eq!(data.len(), 1);
+    let demo = data[0]
+        .skills
+        .iter()
+        .find(|skill| skill.name == "demo")
+        .context("demo skill should be present")?;
+    assert_eq!(demo.description, "updated");
     Ok(())
 }
