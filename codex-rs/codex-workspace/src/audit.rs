@@ -37,8 +37,9 @@ pub fn build_audit_entry(
 
 /// Append an audit entry to the workspace audit log (NDJSON).
 ///
-/// Lock ordering matters: callers that already hold `workspace.lock` must do
-/// so before this function acquires `audit.lock`.
+/// This only serializes concurrent audit appends. Current callers invoke it
+/// after workspace mutations complete, but future code that holds
+/// `workspace.lock` while auditing must acquire that lock before `audit.lock`.
 pub fn append_audit_entry(workspace_id: &str, entry: &AuditEntry) -> Result<(), WorkspaceError> {
     let ap = paths::audit_path(workspace_id);
     if let Some(parent) = ap.parent() {

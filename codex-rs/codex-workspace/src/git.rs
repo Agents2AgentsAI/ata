@@ -166,18 +166,12 @@ pub fn fetch_and_checkout(repo_dir: &Path, sha: &str) -> Result<bool, std::io::E
 
 /// Derive repo_key from URL (strip scheme, trailing .git, keep last 2 path segments).
 pub fn derive_repo_key(url: &str) -> String {
-    let mut key = url.trim_end_matches('/').to_string();
-    if key.ends_with(".git") {
-        key.truncate(key.len() - 4);
-    }
-    if let Some((_scheme, rest)) = key.split_once("://") {
-        key = rest.to_string();
-    }
+    let key = crate::paths::trimmed_repo_url(url);
     let parts: Vec<&str> = key.split('/').collect();
     if parts.len() >= 2 {
         parts[parts.len() - 2..].join("/")
     } else {
-        key
+        key.to_string()
     }
 }
 

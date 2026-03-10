@@ -246,20 +246,15 @@ pub fn mirror_cache_path(url: &str) -> PathBuf {
         .join(digest)
 }
 
+pub(crate) fn trimmed_repo_url(url: &str) -> &str {
+    let url = url.trim_end_matches('/');
+    let url = url.strip_suffix(".git").unwrap_or(url);
+    url.split_once("://").map_or(url, |(_, rest)| rest)
+}
+
 /// Normalize a repo URL to a stable cache key.
 fn normalize_repo_key(url: &str) -> String {
-    let mut key = if let Some((_scheme, rest)) = url.split_once("://") {
-        rest.to_string()
-    } else {
-        url.to_string()
-    };
-    key = key.to_lowercase();
-    if key.ends_with(".git") {
-        key.truncate(key.len() - 4);
-    }
-    let trimmed_len = key.trim_end_matches('/').len();
-    key.truncate(trimmed_len);
-    key
+    trimmed_repo_url(url).to_lowercase()
 }
 
 /// Directories created when initializing a new workspace.

@@ -32,7 +32,8 @@ pub fn run(
     let root = paths::workspace_root(workspace_id);
     let repo_path = paths::repo_checkout_path(workspace_id, source_alias);
 
-    // 2. Create run structure
+    // 2. Create and materialize the run before registration. If registration
+    // later fails, the cleanup path below removes this directory tree.
     let run_id = make_id("run");
     let run_root = root.join("runs").join(&run_id);
     for sub in ["logs", "outputs", "tmp", "env"] {
