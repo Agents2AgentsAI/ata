@@ -35,8 +35,19 @@ pub fn validate_path_suffix(suffix: &str) -> Result<(), WorkspaceError> {
     if suffix.is_empty() {
         return Ok(());
     }
-    if Path::new(suffix).is_absolute() {
+    let path = Path::new(suffix);
+    if path.is_absolute() || path.has_root() {
         return Err(WorkspaceError::AbsolutePathSuffix(suffix.to_string()));
+    }
+    for component in path.components() {
+        match component {
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return Err(WorkspaceError::AbsolutePathSuffix(suffix.to_string()));
+            }
+            std::path::Component::CurDir
+            | std::path::Component::ParentDir
+            | std::path::Component::Normal(_) => {}
+        }
     }
     for component in suffix.replace('\\', "/").split('/') {
         if component == ".." {
@@ -183,6 +194,8 @@ mod tests {
         assert!(validate_path_suffix("foo/bar").is_ok());
         assert!(validate_path_suffix("/absolute").is_err());
         assert!(validate_path_suffix("foo/../bar").is_err());
+        #[cfg(windows)]
+        assert!(validate_path_suffix("C:\\absolute").is_err());
     }
 
     #[test]
