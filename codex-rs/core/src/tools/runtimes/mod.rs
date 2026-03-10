@@ -19,6 +19,8 @@ pub mod apply_patch;
 pub mod shell;
 pub mod unified_exec;
 
+pub(crate) const CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR: &str = "CODEX_SKIP_ARG0_PATH_HELPER";
+
 #[derive(Debug, Clone)]
 pub(crate) struct ExecveSessionApproval {
     /// If this execve session approval is associated with a skill script, this
@@ -27,9 +29,96 @@ pub(crate) struct ExecveSessionApproval {
     pub skill: Option<SkillMetadata>,
 }
 
+fn is_ata_program(program: &str) -> bool {
+    let name = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(program);
+    name.eq_ignore_ascii_case("ata") || name.eq_ignore_ascii_case("ata.exe")
+}
+
+fn command_with_current_exe(args: &[String]) -> Option<Vec<String>> {
+    let current_exe = std::env::current_exe().ok()?;
+    Some(
+        std::iter::once(current_exe.to_string_lossy().to_string())
+            .chain(args.iter().cloned())
+            .collect(),
+    )
+}
+
+fn command_with_ata_shell_wrapper(command: &[String]) -> Option<Vec<String>> {
+    let (_, script) = crate::bash::extract_bash_command(command)?;
+    let current_exe = std::env::current_exe().ok()?;
+    let current_exe = shell_single_quote(current_exe.to_string_lossy().as_ref());
+    let rewritten_script = format!("ata() {{ '{current_exe}' \"$@\"; }}\n\n{script}");
+    let mut rewritten = command.to_vec();
+    rewritten[2] = rewritten_script;
+    Some(rewritten)
+}
+
+/// Resolve model-invoked `ata` commands to the current executable so agent
+/// shell commands always target the same binary as the running session.
+pub(crate) fn resolve_agent_ata_command(command: &[String]) -> (Vec<String>, bool) {
+    if let Some((program, args)) = command.split_first()
+        && is_ata_program(program)
+        && let Some(updated) = command_with_current_exe(args)
+    {
+        return (updated, true);
+    }
+
+    if let Some(commands) = crate::bash::parse_shell_lc_plain_commands(command)
+        && let [single] = commands.as_slice()
+        && let Some((program, args)) = single.split_first()
+        && is_ata_program(program)
+        && let Some(updated) = command_with_current_exe(args)
+    {
+        return (updated, true);
+    }
+
+    if let Some(command_names) = crate::bash::parse_shell_lc_command_names(command)
+        && command_names.iter().any(|name| is_ata_program(name))
+        && let Some(updated) = command_with_ata_shell_wrapper(command)
+    {
+        return (updated, true);
+    }
+
+    (command.to_vec(), false)
+}
+
 /// Shared helper to construct a CommandSpec from a tokenized command line.
 /// Validates that at least a program is present.
+#[cfg(all(test, unix))]
 pub(crate) fn build_command_spec(
+    command: &[String],
+    cwd: &Path,
+    env: &HashMap<String, String>,
+    expiration: ExecExpiration,
+    sandbox_permissions: SandboxPermissions,
+    additional_permissions: Option<PermissionProfile>,
+    justification: Option<String>,
+) -> Result<CommandSpec, ToolError> {
+    let (command, skip_path_helper) = resolve_agent_ata_command(command);
+    let mut env = env.clone();
+    if skip_path_helper {
+        env.insert(
+            CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR.to_string(),
+            "1".to_string(),
+        );
+    }
+    build_command_spec_from_resolved_command(
+        &command,
+        cwd,
+        &env,
+        expiration,
+        sandbox_permissions,
+        additional_permissions,
+        justification,
+    )
+}
+
+/// Shared helper for callers that have already resolved `ata` commands and
+/// applied any accompanying env changes.
+pub(crate) fn build_command_spec_from_resolved_command(
     command: &[String],
     cwd: &Path,
     env: &HashMap<String, String>,
@@ -46,6 +135,7 @@ pub(crate) fn build_command_spec(
         args: args.to_vec(),
         cwd: cwd.to_path_buf(),
         env: env.clone(),
+        workspace_kb_root: None,
         expiration,
         sandbox_permissions,
         additional_permissions,
@@ -179,8 +269,10 @@ fn shell_single_quote(input: &str) -> String {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::exec::ExecExpiration;
     use crate::shell::ShellType;
     use crate::shell_snapshot::ShellSnapshot;
+    use codex_protocol::models::SandboxPermissions;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use std::process::Command;
@@ -609,5 +701,197 @@ mod tests {
             .expect("run rewritten command");
         assert!(output.status.success(), "command failed: {output:?}");
         assert_eq!(String::from_utf8_lossy(&output.stdout), "unset");
+    }
+
+    #[test]
+    fn build_command_spec_rewrites_direct_ata_to_current_exe() {
+        let command = vec![
+            "ata".to_string(),
+            "workspace".to_string(),
+            "list".to_string(),
+        ];
+        let spec = build_command_spec(
+            &command,
+            Path::new("."),
+            &HashMap::new(),
+            ExecExpiration::DefaultTimeout,
+            SandboxPermissions::default(),
+            None,
+            None,
+        )
+        .expect("command spec");
+
+        assert_eq!(
+            spec.program,
+            std::env::current_exe()
+                .expect("current exe")
+                .to_string_lossy()
+                .to_string()
+        );
+        assert_eq!(spec.args, vec!["workspace", "list"]);
+        assert_eq!(
+            spec.env.get(CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR),
+            Some(&"1".to_string())
+        );
+    }
+
+    #[test]
+    fn build_command_spec_rewrites_shell_wrapped_single_ata_command() {
+        let command = vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "ata workspace list".to_string(),
+        ];
+        let spec = build_command_spec(
+            &command,
+            Path::new("."),
+            &HashMap::new(),
+            ExecExpiration::DefaultTimeout,
+            SandboxPermissions::default(),
+            None,
+            None,
+        )
+        .expect("command spec");
+
+        assert_eq!(
+            spec.program,
+            std::env::current_exe()
+                .expect("current exe")
+                .to_string_lossy()
+                .to_string()
+        );
+        assert_eq!(spec.args, vec!["workspace", "list"]);
+        assert_eq!(
+            spec.env.get(CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR),
+            Some(&"1".to_string())
+        );
+    }
+
+    #[test]
+    fn build_command_spec_keeps_non_ata_shell_command() {
+        let command = vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "echo hello".to_string(),
+        ];
+        let spec = build_command_spec(
+            &command,
+            Path::new("."),
+            &HashMap::new(),
+            ExecExpiration::DefaultTimeout,
+            SandboxPermissions::default(),
+            None,
+            None,
+        )
+        .expect("command spec");
+
+        assert_eq!(spec.program, "/bin/bash");
+        assert_eq!(spec.args, vec!["-lc", "echo hello"]);
+        assert!(
+            !spec.env.contains_key(CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR),
+            "non-ata command must not set path-helper skip env var"
+        );
+    }
+
+    #[test]
+    fn build_command_spec_rewrites_multi_command_shell_sequence() {
+        let command = vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "ata workspace list && echo done".to_string(),
+        ];
+        let spec = build_command_spec(
+            &command,
+            Path::new("."),
+            &HashMap::new(),
+            ExecExpiration::DefaultTimeout,
+            SandboxPermissions::default(),
+            None,
+            None,
+        )
+        .expect("command spec");
+
+        assert_eq!(spec.program, "/bin/bash");
+        assert_eq!(spec.args[0], "-lc");
+        let current_exe = std::env::current_exe()
+            .expect("current exe")
+            .to_string_lossy()
+            .to_string();
+        assert!(spec.args[1].contains(&format!(
+            "ata() {{ '{}' \"$@\"; }}",
+            shell_single_quote(&current_exe)
+        )));
+        assert!(spec.args[1].contains("ata workspace list && echo done"));
+        assert_eq!(
+            spec.env.get(CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR),
+            Some(&"1".to_string())
+        );
+    }
+
+    #[test]
+    fn build_command_spec_rewrites_loop_shell_script_with_ata() {
+        let command = vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "for repo in a b; do ata workspace list --workspace \"$repo\"; done".to_string(),
+        ];
+        let spec = build_command_spec(
+            &command,
+            Path::new("."),
+            &HashMap::new(),
+            ExecExpiration::DefaultTimeout,
+            SandboxPermissions::default(),
+            None,
+            None,
+        )
+        .expect("command spec");
+
+        assert_eq!(spec.program, "/bin/bash");
+        assert_eq!(spec.args[0], "-lc");
+        assert!(
+            spec.args[1]
+                .contains("for repo in a b; do ata workspace list --workspace \"$repo\"; done")
+        );
+        assert_eq!(
+            spec.env.get(CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR),
+            Some(&"1".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_agent_ata_command_before_snapshot_wrap_preserves_current_exe() {
+        let dir = tempdir().expect("create temp dir");
+        let snapshot_path = dir.path().join("snapshot.sh");
+        std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
+        let session_shell = shell_with_snapshot(
+            ShellType::Bash,
+            "/bin/bash",
+            snapshot_path,
+            dir.path().to_path_buf(),
+        );
+        let command = vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "ata workspace list".to_string(),
+        ];
+
+        let (resolved, rewrote_ata) = resolve_agent_ata_command(&command);
+        assert!(rewrote_ata);
+
+        let wrapped = maybe_wrap_shell_lc_with_snapshot(
+            &resolved,
+            &session_shell,
+            dir.path(),
+            &HashMap::new(),
+        );
+
+        assert_eq!(
+            wrapped[0],
+            std::env::current_exe()
+                .expect("current exe")
+                .to_string_lossy()
+                .to_string()
+        );
+        assert_eq!(wrapped[1..], ["workspace", "list"]);
     }
 }

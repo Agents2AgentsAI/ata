@@ -76,6 +76,7 @@ Use sub-agents when available. Each sub-agent should write one artifact to \
             "- Discover accessible Zotero groups via `{list_groups}`.\n\
 - Search items via `{search}`, AND scan collection names via `{collections}` for topic matches.\n\
 - When a collection matches the topic, retrieve its items via `{collection_items}` — this catches papers keyword search misses.\n\
+- When Zotero items expose linked relations, use those linked item keys/IDs to connect related records across collections or item types before falling back to title matching.\n\
 - Use `{advanced_search}` for precise metadata filters and `{search_notes}` when evidence likely lives in notes/annotations.\n\
 - For papers you need to read deeply, call `{get_item}` with `include_attachments=true` and `include_fulltext_resolution=true`.\n\
 - If `document_resolution.preferred_url` is present, fetch it with `attach_url_files` and treat that attached document as the primary source.\n\

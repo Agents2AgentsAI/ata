@@ -59,7 +59,10 @@ async fn zotero_search_and_get_item_use_user_scope() {
                     "date": "2023-06-01",
                     "DOI": "10.1000/x",
                     "abstractNote": "A long abstract.",
-                    "tags": [{"tag": "vision"}, {"tag": "diffusion"}]
+                    "tags": [{"tag": "vision"}, {"tag": "diffusion"}],
+                    "relations": {
+                        "dc:relation": ["http://zotero.org/users/123/items/PAPER1"]
+                    }
                 }
             }
         ])))
@@ -78,7 +81,10 @@ async fn zotero_search_and_get_item_use_user_scope() {
                 "DOI": "10.1000/x",
                 "abstractNote": "A long abstract.",
                 "publicationTitle": "NeurIPS",
-                "tags": [{"tag": "vision"}, {"tag": "diffusion"}]
+                "tags": [{"tag": "vision"}, {"tag": "diffusion"}],
+                "relations": {
+                    "dc:relation": ["http://zotero.org/users/123/items/PAPER1"]
+                }
             }
         })))
         .mount(&server)
@@ -102,6 +108,11 @@ async fn zotero_search_and_get_item_use_user_scope() {
     assert_eq!(search.items.len(), 1);
     assert_eq!(search.items[0].key, "ITEM1");
     assert_eq!(search.items[0].tags, vec!["vision", "diffusion"]);
+    assert_eq!(search.items[0].linked_items.len(), 1);
+    assert_eq!(
+        search.items[0].linked_items[0].canonical_id,
+        Some("zotero:user/123/PAPER1".to_string())
+    );
 
     let item = toolkit
         .zotero_get_item(ZoteroItemParams {
@@ -118,6 +129,8 @@ async fn zotero_search_and_get_item_use_user_scope() {
     assert_eq!(item.key, "ITEM1");
     assert_eq!(item.publication, Some("NeurIPS".to_string()));
     assert_eq!(item.tags, vec!["vision", "diffusion"]);
+    assert_eq!(item.linked_items.len(), 1);
+    assert_eq!(item.linked_items[0].item_key, Some("PAPER1".to_string()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -495,6 +508,7 @@ fn fallback_apa_citation_handles_missing_author_and_year() {
         publication: None,
         item_type: "journalArticle".to_string(),
         tags: Vec::new(),
+        linked_items: Vec::new(),
         extra: None,
         source_meta: None,
         attachments: None,
@@ -1619,7 +1633,10 @@ async fn zotero_collections_support_group_scope_override() {
                 "data": {
                     "itemType": "journalArticle",
                     "title": "Group Item",
-                    "creators": []
+                    "creators": [],
+                    "relations": {
+                        "dc:relation": ["http://zotero.org/groups/999/items/PAPER2"]
+                    }
                 }
             }
         ])))
@@ -1656,6 +1673,11 @@ async fn zotero_collections_support_group_scope_override() {
 
     assert_eq!(items.items.len(), 1);
     assert_eq!(items.items[0].key, "ITEM1");
+    assert_eq!(items.items[0].linked_items.len(), 1);
+    assert_eq!(
+        items.items[0].linked_items[0].canonical_id,
+        Some("zotero:group/999/PAPER2".to_string())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3370,6 +3392,7 @@ fn sample_item_with_source(url: Option<&str>, extra: Option<&str>) -> ZoteroItem
         publication: None,
         item_type: "journalArticle".to_string(),
         tags: Vec::new(),
+        linked_items: Vec::new(),
         extra: extra.map(ToString::to_string),
         source_meta: None,
         attachments: None,

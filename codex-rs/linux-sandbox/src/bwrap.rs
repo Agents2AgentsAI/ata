@@ -446,7 +446,6 @@ mod tests {
         };
 
         let args = create_filesystem_args(&sandbox_policy, Path::new("/")).expect("bwrap fs args");
-
         // The exact argument list varies by environment (e.g. codex-home
         // directories like ~/.ata/knowledge-base may or may not exist), so
         // assert the ordering invariant rather than the exact contents:

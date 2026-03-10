@@ -227,6 +227,7 @@ impl FileWatcher {
     }
 
     fn register_skills_root(&self, root: PathBuf) {
+        let root = normalize_watch_path(&root);
         let mut state = self
             .state
             .write()
@@ -249,12 +250,13 @@ impl FileWatcher {
         let mut inner_guard: Option<std::sync::MutexGuard<'_, FileWatcherInner>> = None;
 
         for root in roots {
+            let root = normalize_watch_path(root);
             let mut should_unwatch = false;
-            if let Some(count) = state.skills_root_ref_counts.get_mut(root) {
+            if let Some(count) = state.skills_root_ref_counts.get_mut(&root) {
                 if *count > 1 {
                     *count -= 1;
                 } else {
-                    state.skills_root_ref_counts.remove(root);
+                    state.skills_root_ref_counts.remove(&root);
                     should_unwatch = true;
                 }
             }
@@ -275,10 +277,10 @@ impl FileWatcher {
             let Some(guard) = inner_guard.as_mut() else {
                 continue;
             };
-            if guard.watched_paths.remove(root).is_none() {
+            if guard.watched_paths.remove(&root).is_none() {
                 continue;
             }
-            if let Err(err) = guard.watcher.unwatch(root) {
+            if let Err(err) = guard.watcher.unwatch(&root) {
                 warn!("failed to unwatch {}: {err}", root.display());
             }
         }
@@ -324,14 +326,14 @@ fn classify_event(event: &Event, state: &RwLock<WatchState>) -> Vec<PathBuf> {
         Ok(state) => state
             .skills_root_ref_counts
             .keys()
-            .cloned()
+            .map(|root| normalize_watch_path(root))
             .collect::<HashSet<_>>(),
         Err(err) => {
             let state = err.into_inner();
             state
                 .skills_root_ref_counts
                 .keys()
-                .cloned()
+                .map(|root| normalize_watch_path(root))
                 .collect::<HashSet<_>>()
         }
     };
@@ -346,7 +348,23 @@ fn classify_event(event: &Event, state: &RwLock<WatchState>) -> Vec<PathBuf> {
 }
 
 fn is_skills_path(path: &Path, roots: &HashSet<PathBuf>) -> bool {
-    roots.iter().any(|root| path.starts_with(root))
+    let normalized_path = normalize_watch_path(path);
+    roots
+        .iter()
+        .any(|root| path.starts_with(root) || normalized_path.starts_with(root))
+}
+
+fn normalize_watch_path(path: &Path) -> PathBuf {
+    dunce::canonicalize(path).unwrap_or_else(|_| {
+        path.ancestors()
+            .skip(1)
+            .find_map(|ancestor| {
+                let canonical_ancestor = dunce::canonicalize(ancestor).ok()?;
+                let suffix = path.strip_prefix(ancestor).ok()?;
+                Some(canonical_ancestor.join(suffix))
+            })
+            .unwrap_or_else(|| path.to_path_buf())
+    })
 }
 
 #[cfg(test)]
@@ -359,6 +377,8 @@ mod tests {
     use notify::event::ModifyKind;
     use notify::event::RemoveKind;
     use pretty_assertions::assert_eq;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use tokio::time::timeout;
 
     fn path(name: &str) -> PathBuf {
@@ -449,6 +469,29 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn classify_event_matches_paths_through_symlinked_roots() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let root = temp_dir.path().join("skills");
+        std::fs::create_dir_all(root.join("demo")).expect("create skills root");
+        let alias_root = temp_dir.path().join("alias-skills");
+        symlink(&root, &alias_root).expect("create alias root");
+        let alias_skill = alias_root.join("demo/SKILL.md");
+        std::fs::write(&alias_skill, "# demo").expect("write skill");
+
+        let state = RwLock::new(WatchState {
+            skills_root_ref_counts: HashMap::from([(root, 1)]),
+        });
+        let event = notify_event(
+            EventKind::Modify(ModifyKind::Any),
+            vec![alias_skill.clone()],
+        );
+
+        let classified = classify_event(&event, &state);
+        assert_eq!(classified, vec![alias_skill]);
+    }
+
     #[test]
     fn classify_event_ignores_non_mutating_event_kinds() {
         let root = path("/tmp/skills");
@@ -537,13 +580,14 @@ mod tests {
         register_thread.join().expect("register join");
 
         let state = watcher.state.read().expect("state lock");
-        assert_eq!(state.skills_root_ref_counts.get(&root), Some(&1));
+        let normalized_root = normalize_watch_path(&root);
+        assert_eq!(state.skills_root_ref_counts.get(&normalized_root), Some(&1));
         drop(state);
 
         let inner = watcher.inner.as_ref().expect("watcher inner");
         let inner = inner.lock().expect("inner lock");
         assert_eq!(
-            inner.watched_paths.get(&root),
+            inner.watched_paths.get(&normalized_root),
             Some(&RecursiveMode::Recursive)
         );
     }

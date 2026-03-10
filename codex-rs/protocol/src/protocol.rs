@@ -900,30 +900,42 @@ impl SandboxPolicy {
                     }
                 }
 
-                // Include the knowledge-base directory under codex home
-                // (e.g. ~/.ata/knowledge-base) so that sandboxed commands
-                // can write KB assets. Only the knowledge-base subtree is
-                // made writable, not the entire codex home.
                 if let Ok(codex_home) = codex_utils_home_dir::find_codex_home() {
-                    // Grant write access to the KB directory if the codex
-                    // home exists. We don't require the knowledge-base
-                    // subdir itself to exist — sandboxed commands can create
-                    // it via `mkdir -p` on first use.
                     if codex_home.is_dir() {
-                        let kb_dir = codex_home.join("knowledge-base");
-                        // Ensure the knowledge-base directory exists so it is
-                        // available from the very first session.
-                        let _ = std::fs::create_dir_all(&kb_dir);
-                        match AbsolutePathBuf::from_absolute_path(&kb_dir) {
-                            Ok(kb_path) => {
-                                if !roots.iter().any(|r| r == &kb_path) {
-                                    roots.push(kb_path);
+                        // Allow workspace operations to read/write workspace
+                        // manifests and repo/run paths under CODEX_HOME.
+                        let workspaces_dir = codex_home.join("workspaces");
+                        let _ = std::fs::create_dir_all(&workspaces_dir);
+                        match AbsolutePathBuf::from_absolute_path(&workspaces_dir) {
+                            Ok(workspaces_path) => {
+                                if !roots.iter().any(|r| r == &workspaces_path) {
+                                    roots.push(workspaces_path);
                                 }
                             }
                             Err(e) => {
                                 error!(
-                                    "Ignoring KB dir {:?} for sandbox writable root: {e}",
-                                    kb_dir,
+                                    "Ignoring workspaces dir {workspaces_dir:?} for sandbox writable root: {e}",
+                                );
+                            }
+                        }
+                    }
+
+                    // Allow writing the session-scoped workspace selection
+                    // file under CODEX_HOME/sessions/<scope-id>/workspace.json
+                    // so `ata workspace select` can persist state inside the
+                    // sandbox writable roots.
+                    if let Some(scope_id) = workspace_scope_id_from_env() {
+                        let session_dir = codex_home.join("sessions").join(&scope_id);
+                        let _ = std::fs::create_dir_all(&session_dir);
+                        match AbsolutePathBuf::from_absolute_path(&session_dir) {
+                            Ok(session_path) => {
+                                if !roots.iter().any(|r| r == &session_path) {
+                                    roots.push(session_path);
+                                }
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Ignoring session scope dir {session_dir:?} for sandbox writable root: {e}",
                                 );
                             }
                         }
@@ -1001,6 +1013,40 @@ impl SandboxPolicy {
             }
         }
     }
+}
+
+const CODEX_SESSION_ID_ENV_VAR: &str = "CODEX_SESSION_ID";
+const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
+
+fn workspace_scope_id_from_env() -> Option<String> {
+    let session_id = std::env::var(CODEX_SESSION_ID_ENV_VAR).ok();
+    let thread_id = std::env::var(CODEX_THREAD_ID_ENV_VAR).ok();
+    workspace_scope_id(session_id.as_deref(), thread_id.as_deref())
+}
+
+fn workspace_scope_id(session_id: Option<&str>, thread_id: Option<&str>) -> Option<String> {
+    for (source, candidate) in [
+        (CODEX_SESSION_ID_ENV_VAR, session_id),
+        (CODEX_THREAD_ID_ENV_VAR, thread_id),
+    ] {
+        let Some(scope_id) = candidate.map(str::trim).filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        if is_safe_scope_id(scope_id) {
+            return Some(scope_id.to_string());
+        }
+        error!("Ignoring unsafe {source} value for sandbox writable root: {scope_id:?}",);
+    }
+    None
+}
+
+fn is_safe_scope_id(scope_id: &str) -> bool {
+    if scope_id.contains('\\') {
+        return false;
+    }
+    let mut components = Path::new(scope_id).components();
+    matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none()
 }
 
 fn is_git_pointer_file(path: &AbsolutePathBuf) -> bool {
@@ -3284,6 +3330,37 @@ mod tests {
             }
             .rejects_mcp_elicitations()
         );
+    }
+
+    #[test]
+    fn workspace_scope_id_prefers_trimmed_session_id() {
+        let scope_id = workspace_scope_id(Some(" session-123 "), Some("thread-456"));
+        assert_eq!(scope_id, Some("session-123".to_string()));
+    }
+
+    #[test]
+    fn workspace_scope_id_uses_thread_id_when_session_missing_or_invalid() {
+        assert_eq!(
+            workspace_scope_id(None, Some(" thread-456 ")),
+            Some("thread-456".to_string())
+        );
+        assert_eq!(
+            workspace_scope_id(Some("   "), Some("thread-789")),
+            Some("thread-789".to_string())
+        );
+        assert_eq!(
+            workspace_scope_id(Some("../bad-session"), Some("thread-999")),
+            Some("thread-999".to_string())
+        );
+    }
+
+    #[test]
+    fn workspace_scope_id_rejects_unsafe_values() {
+        assert_eq!(workspace_scope_id(Some(""), Some("..")), None);
+        assert_eq!(workspace_scope_id(Some("foo/bar"), None), None);
+        assert_eq!(workspace_scope_id(Some(r"foo\bar"), None), None);
+        assert_eq!(workspace_scope_id(Some("."), None), None);
+        assert_eq!(workspace_scope_id(Some(".."), None), None);
     }
 
     #[test]

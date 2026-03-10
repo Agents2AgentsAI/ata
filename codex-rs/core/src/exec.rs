@@ -204,6 +204,7 @@ pub async fn process_exec_tool_call(
         args: args.to_vec(),
         cwd,
         env,
+        workspace_kb_root: None,
         expiration,
         sandbox_permissions,
         additional_permissions: None,

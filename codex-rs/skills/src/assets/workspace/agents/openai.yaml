@@ -1,0 +1,11 @@
+interface:
+  display_name: "Workspace"
+  short_description: "Multi-repo workspace management"
+
+policy:
+  allow_implicit_invocation: true
+
+permissions:
+  file_system:
+    write:
+      - "../.."

@@ -132,6 +132,8 @@ impl Default for ThreadEntry {
 
 #[derive(Default)]
 struct ThreadStateManagerInner {
+    // Transport-open connections. Request handlers already enforce initialization
+    // separately, but listener attachment must not resurrect closed connections.
     live_connections: HashSet<ConnectionId>,
     threads: HashMap<ThreadId, ThreadEntry>,
     thread_ids_by_connection: HashMap<ConnectionId, HashSet<ThreadId>>,
@@ -147,7 +149,7 @@ impl ThreadStateManager {
         Self::default()
     }
 
-    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
+    pub(crate) async fn connection_opened(&self, connection_id: ConnectionId) {
         self.state
             .lock()
             .await
