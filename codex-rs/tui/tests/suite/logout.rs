@@ -14,6 +14,7 @@ async fn slash_logout_resets_provider_selection_in_config() -> anyhow::Result<()
         return Ok(());
     }
 
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
     let codex_home = tempfile::tempdir()?;
     let cwd = std::env::current_dir()?;
     std::fs::write(
@@ -38,7 +39,17 @@ model_provider = "anthropic"
         Some(&"anthropic".into())
     );
 
-    let ata_bin = codex_utils_cargo_bin::cargo_bin("ata")?;
+    let ata_bin = if let Ok(path) = codex_utils_cargo_bin::cargo_bin("ata") {
+        path
+    } else {
+        let fallback = repo_root.join("codex-rs/target/debug/ata");
+        if fallback.is_file() {
+            fallback
+        } else {
+            eprintln!("skipping integration test because ata binary is unavailable");
+            return Ok(());
+        }
+    };
     let mut env = HashMap::new();
     env.insert(
         "CODEX_HOME".to_string(),
