@@ -69,6 +69,11 @@ pub(crate) struct FooterProps {
     pub(crate) context_window_used_tokens: Option<i64>,
     pub(crate) status_line_value: Option<Line<'static>>,
     pub(crate) status_line_enabled: bool,
+    // Feature availability flags for the shortcut overlay.
+    pub(crate) voice_mode_available: bool,
+    pub(crate) scheduler_enabled: bool,
+    pub(crate) mobile_available: bool,
+    pub(crate) research_enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -598,6 +603,10 @@ fn footer_from_props_lines(
                 esc_backtrack_hint: props.esc_backtrack_hint,
                 is_wsl: props.is_wsl,
                 collaboration_modes_enabled: props.collaboration_modes_enabled,
+                voice_mode_available: props.voice_mode_available,
+                scheduler_enabled: props.scheduler_enabled,
+                mobile_available: props.mobile_available,
+                research_enabled: props.research_enabled,
             };
             shortcut_overlay_lines(state)
         }
@@ -663,6 +672,10 @@ struct ShortcutsState {
     esc_backtrack_hint: bool,
     is_wsl: bool,
     collaboration_modes_enabled: bool,
+    voice_mode_available: bool,
+    scheduler_enabled: bool,
+    mobile_available: bool,
+    research_enabled: bool,
 }
 
 fn quit_shortcut_reminder_line(key: KeyBinding) -> Line<'static> {
@@ -732,7 +745,43 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     ordered.push(Line::from(""));
     ordered.push(show_transcript);
 
-    build_columns(ordered)
+    let mut result = build_columns(ordered);
+
+    // Feature commands section
+    let mut feature_cmds: Vec<Line<'static>> = Vec::new();
+    if state.research_enabled {
+        feature_cmds.push(Line::from(vec![
+            "/research".cyan(),
+            " toggle research tools".into(),
+        ]));
+    }
+    if state.voice_mode_available {
+        feature_cmds.push(Line::from(vec![
+            "/voice".cyan(),
+            " toggle voice mode".into(),
+        ]));
+    }
+    if state.scheduler_enabled {
+        feature_cmds.push(Line::from(vec![
+            "/jobs".cyan(),
+            " view scheduled jobs".into(),
+        ]));
+    }
+    if state.mobile_available {
+        feature_cmds.push(Line::from(vec![
+            "/mobile".cyan(),
+            " remote control via phone".into(),
+        ]));
+    }
+    feature_cmds.push(Line::from(vec!["/diff".cyan(), " show git changes".into()]));
+
+    if !feature_cmds.is_empty() {
+        result.push(Line::from(""));
+        result.push(Line::from("Feature commands:").dim());
+        result.extend(build_columns(feature_cmds));
+    }
+
+    result
 }
 
 fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
@@ -1213,6 +1262,10 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                voice_mode_available: false,
+                scheduler_enabled: false,
+                mobile_available: false,
+                research_enabled: false,
             },
         );
 
@@ -1230,6 +1283,10 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                voice_mode_available: false,
+                scheduler_enabled: false,
+                mobile_available: false,
+                research_enabled: false,
             },
         );
 
@@ -1247,6 +1304,10 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                voice_mode_available: false,
+                scheduler_enabled: false,
+                mobile_available: false,
+                research_enabled: false,
             },
         );
 
@@ -1264,6 +1325,10 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                voice_mode_available: false,
+                scheduler_enabled: false,
+                mobile_available: false,
+                research_enabled: false,
             },
         );
 
@@ -1281,6 +1346,10 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                voice_mode_available: false,
+                scheduler_enabled: false,
+                mobile_available: false,
+                research_enabled: false,
             },
         );
 
@@ -1298,6 +1367,10 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                voice_mode_available: false,
+                scheduler_enabled: false,
+                mobile_available: false,
+                research_enabled: false,
             },
         );
 
@@ -1315,6 +1388,10 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                voice_mode_available: false,
+                scheduler_enabled: false,
+                mobile_available: false,
+                research_enabled: false,
             },
         );
 
@@ -1332,6 +1409,10 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                voice_mode_available: false,
+                scheduler_enabled: false,
+                mobile_available: false,
+                research_enabled: false,
             },
         );
 
@@ -1349,6 +1430,10 @@ mod tests {
                 context_window_used_tokens: Some(123_456),
                 status_line_value: None,
                 status_line_enabled: false,
+                voice_mode_available: false,
+                scheduler_enabled: false,
+                mobile_available: false,
+                research_enabled: false,
             },
         );
 
@@ -1366,6 +1451,10 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                voice_mode_available: false,
+                scheduler_enabled: false,
+                mobile_available: false,
+                research_enabled: false,
             },
         );
 
@@ -1381,6 +1470,10 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
+            voice_mode_available: false,
+            scheduler_enabled: false,
+            mobile_available: false,
+            research_enabled: false,
         };
 
         snapshot_footer_with_mode_indicator(
@@ -1409,6 +1502,10 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
+            voice_mode_available: false,
+            scheduler_enabled: false,
+            mobile_available: false,
+            research_enabled: false,
         };
 
         snapshot_footer_with_mode_indicator(
@@ -1430,6 +1527,10 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
+            voice_mode_available: false,
+            scheduler_enabled: false,
+            mobile_available: false,
+            research_enabled: false,
         };
 
         snapshot_footer("footer_status_line_overrides_shortcuts", props);
@@ -1446,6 +1547,10 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
+            voice_mode_available: false,
+            scheduler_enabled: false,
+            mobile_available: false,
+            research_enabled: false,
         };
 
         snapshot_footer("footer_status_line_yields_to_queue_hint", props);
@@ -1462,6 +1567,10 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
+            voice_mode_available: false,
+            scheduler_enabled: false,
+            mobile_available: false,
+            research_enabled: false,
         };
 
         snapshot_footer("footer_status_line_overrides_draft_idle", props);
@@ -1478,6 +1587,10 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: None, // command timed out / empty
             status_line_enabled: true,
+            voice_mode_available: false,
+            scheduler_enabled: false,
+            mobile_available: false,
+            research_enabled: false,
         };
 
         snapshot_footer_with_mode_indicator(
@@ -1499,6 +1612,10 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
+            voice_mode_available: false,
+            scheduler_enabled: false,
+            mobile_available: false,
+            research_enabled: false,
         };
 
         snapshot_footer_with_mode_indicator(
@@ -1520,6 +1637,10 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: None,
             status_line_enabled: true,
+            voice_mode_available: false,
+            scheduler_enabled: false,
+            mobile_available: false,
+            research_enabled: false,
         };
 
         // has status line and no collaboration mode
@@ -1544,6 +1665,10 @@ mod tests {
                 "Status line content that should truncate before the mode indicator".to_string(),
             )),
             status_line_enabled: true,
+            voice_mode_available: false,
+            scheduler_enabled: false,
+            mobile_available: false,
+            research_enabled: false,
         };
 
         snapshot_footer_with_mode_indicator(
@@ -1571,6 +1696,10 @@ mod tests {
                     .to_string(),
             )),
             status_line_enabled: true,
+            voice_mode_available: false,
+            scheduler_enabled: false,
+            mobile_available: false,
+            research_enabled: false,
         };
 
         let screen =
@@ -1620,6 +1749,10 @@ mod tests {
                 esc_backtrack_hint: false,
                 is_wsl,
                 collaboration_modes_enabled: false,
+                voice_mode_available: false,
+                scheduler_enabled: false,
+                mobile_available: false,
+                research_enabled: false,
             })
             .expect("shortcut binding")
             .key;

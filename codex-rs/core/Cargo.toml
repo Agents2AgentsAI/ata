@@ -33,6 +33,7 @@ codex-apply-patch = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-client = { workspace = true }
 codex-config = { workspace = true }
+codex-coordination = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-skills = { workspace = true }
 codex-execpolicy = { workspace = true }
@@ -131,6 +132,7 @@ data = ["dep:codex-data-tools"]
 lsp = ["dep:codex-lsp-client"]
 treesitter = ["dep:codex-treesitter"]
 code-intel = ["lsp", "treesitter"]
+relay = ["codex-coordination/relay"]
 research = []
 test-support = []
 

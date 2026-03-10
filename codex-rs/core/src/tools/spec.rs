@@ -616,6 +616,36 @@ Examples of valid command strings:
     })
 }
 
+fn create_team_post_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "message".to_string(),
+        JsonSchema::String {
+            description: Some("The message to post to the coordination channel.".to_string()),
+        },
+    );
+    properties.insert(
+        "message_type".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Category: intent, progress, conflict, or info (default: info).".to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "team_post".to_string(),
+        description: "Post a natural-language message to the agent coordination channel. Other agents working on the same repo will see it. Use to announce intent, flag conflicts, or share progress."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["message".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_collab_input_items_schema() -> JsonSchema {
     let properties = BTreeMap::from([
         (
@@ -1442,6 +1472,14 @@ pub(crate) fn build_specs_with_toolkits(
             builder.push_spec(create_report_agent_job_result_tool());
             builder.register_handler("report_agent_job_result", agent_jobs_handler);
         }
+    }
+
+    // Coordination tool.
+    if config.features.enabled(Feature::Coordination) {
+        use crate::tools::handlers::team_post::TeamPostHandler;
+        let team_post_handler = Arc::new(TeamPostHandler::new());
+        builder.push_spec(create_team_post_tool());
+        builder.register_handler("team_post", team_post_handler);
     }
 
     let mut suppressed_mcp_research_tool_names: BTreeSet<String> = BTreeSet::new();

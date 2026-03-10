@@ -339,6 +339,9 @@
             "connectors": {
               "type": "boolean"
             },
+            "coordination": {
+              "type": "boolean"
+            },
             "data": {
               "type": "boolean"
             },
@@ -591,6 +594,20 @@
             }
           ],
           "description": "Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution."
+        }
+      },
+      "type": "object"
+    },
+    "CoordinationToml": {
+      "description": "Agent coordination channel settings.",
+      "properties": {
+        "relay_secret": {
+          "description": "Shared secret for authenticating with the relay server.",
+          "type": "string"
+        },
+        "relay_url": {
+          "description": "URL for a remote relay server (Phase 2 — not yet implemented).",
+          "type": "string"
         }
       },
       "type": "object"
@@ -2018,6 +2035,15 @@
       "description": "Compact prompt used for history compaction.",
       "type": "string"
     },
+    "coordination": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/CoordinationToml"
+        }
+      ],
+      "default": null,
+      "description": "Agent coordination channel settings."
+    },
     "data": {
       "allOf": [
         {
@@ -2087,6 +2113,9 @@
           "type": "boolean"
         },
         "connectors": {
+          "type": "boolean"
+        },
+        "coordination": {
           "type": "boolean"
         },
         "data": {

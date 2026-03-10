@@ -1,0 +1,27 @@
+[package]
+name = "codex-coordination"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+relay = ["dep:reqwest", "dep:sha2"]
+
+[dependencies]
+anyhow = { workspace = true }
+reqwest = { workspace = true, features = ["json"], optional = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true, optional = true }
+sqlx = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time", "macros", "process"] }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

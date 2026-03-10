@@ -508,6 +508,9 @@ pub struct Config {
     /// Optional KB settings from `[kb]`.
     pub kb: Option<KbToml>,
 
+    /// Agent coordination channel settings from `[coordination]`.
+    pub coordination: Option<CoordinationToml>,
+
     /// When `true`, suppress warnings about unstable (under development) features.
     pub suppress_unstable_features_warning: bool,
 
@@ -1082,6 +1085,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub plugins: HashMap<String, PluginConfig>,
 
+    /// Agent coordination channel settings.
+    #[serde(default)]
+    pub coordination: Option<CoordinationToml>,
+
     /// Centralized feature flags (new). Prefer this over individual toggles.
     #[serde(default)]
     // Injects known feature keys into the schema and forbids unknown keys.
@@ -1284,6 +1291,15 @@ pub struct KbToml {
     /// Path to the knowledge base directory. Defaults to
     /// `<codex_home>/workspaces/<active-workspace>/knowledge-base`.
     pub kb_path: Option<String>,
+}
+
+/// Agent coordination channel settings.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+pub struct CoordinationToml {
+    /// URL for a remote relay server (Phase 2 — not yet implemented).
+    pub relay_url: Option<String>,
+    /// Shared secret for authenticating with the relay server.
+    pub relay_secret: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -2044,6 +2060,7 @@ impl Config {
             research: cfg.research,
             data: cfg.data,
             kb: cfg.kb,
+            coordination: cfg.coordination,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
                 .unwrap_or(false),
