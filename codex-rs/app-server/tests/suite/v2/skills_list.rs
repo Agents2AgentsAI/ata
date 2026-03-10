@@ -11,6 +11,7 @@ use codex_app_server_protocol::SkillsListExtraRootsForCwd;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartedNotification;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -251,6 +252,16 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
         mcp.read_stream_until_response_message(RequestId::Integer(thread_start_request_id)),
     )
     .await??;
+    let started_notification = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/started"),
+    )
+    .await??;
+    let _: ThreadStartedNotification = serde_json::from_value(
+        started_notification
+            .params
+            .context("thread/started params must be present")?,
+    )?;
 
     let skill_path = codex_home
         .path()

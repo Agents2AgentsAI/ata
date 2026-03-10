@@ -1776,7 +1776,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         features_override: None,
         inherited_shell_snapshot: None,
     };
-    let per_turn_config = Session::build_per_turn_config(&session_configuration);
+    let per_turn_config = Session::build_per_turn_config(&session_configuration, "test-session");
     let model_info = ModelsManager::construct_model_info_offline_for_tests(
         session_configuration.collaboration_mode.model(),
         &per_turn_config,
@@ -2154,7 +2154,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         features_override: None,
         inherited_shell_snapshot: None,
     };
-    let per_turn_config = Session::build_per_turn_config(&session_configuration);
+    let per_turn_config = Session::build_per_turn_config(&session_configuration, "test-session");
     let model_info = ModelsManager::construct_model_info_offline_for_tests(
         session_configuration.collaboration_mode.model(),
         &per_turn_config,
