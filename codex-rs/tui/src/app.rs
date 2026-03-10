@@ -5743,6 +5743,7 @@ mod tests {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             thread_closed_document_ids: HashMap::new(),
+            _remote_control_handle: None,
             coordination_watcher_spawned: false,
         }
     }
@@ -5805,6 +5806,7 @@ mod tests {
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
                 thread_closed_document_ids: HashMap::new(),
+                _remote_control_handle: None,
                 coordination_watcher_spawned: false,
             },
             rx,
