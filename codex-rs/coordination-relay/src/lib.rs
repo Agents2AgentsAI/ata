@@ -288,11 +288,11 @@ async fn heartbeat(
 ) -> StatusCode {
     let now = chrono::Utc::now().timestamp();
     let mut projects = state.projects.write().await;
-    if let Some(project) = projects.get_mut(&project_id) {
-        if let Some(session) = project.sessions.get_mut(&session_id) {
-            session.last_heartbeat = now;
-            return StatusCode::OK;
-        }
+    if let Some(project) = projects.get_mut(&project_id)
+        && let Some(session) = project.sessions.get_mut(&session_id)
+    {
+        session.last_heartbeat = now;
+        return StatusCode::OK;
     }
     StatusCode::NOT_FOUND
 }
@@ -303,11 +303,11 @@ async fn update_description(
     axum::Json(body): axum::Json<DescriptionBody>,
 ) -> StatusCode {
     let mut projects = state.projects.write().await;
-    if let Some(project) = projects.get_mut(&project_id) {
-        if let Some(session) = project.sessions.get_mut(&session_id) {
-            session.description = Some(body.description);
-            return StatusCode::OK;
-        }
+    if let Some(project) = projects.get_mut(&project_id)
+        && let Some(session) = project.sessions.get_mut(&session_id)
+    {
+        session.description = Some(body.description);
+        return StatusCode::OK;
     }
     StatusCode::NOT_FOUND
 }
@@ -490,8 +490,9 @@ async fn prune_loop(state: Arc<AppState>) {
 }
 
 async fn shutdown_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("failed to install Ctrl+C handler");
+    let Ok(()) = tokio::signal::ctrl_c().await else {
+        tracing::error!("failed to install Ctrl+C handler");
+        return;
+    };
     tracing::info!("shutting down relay server");
 }

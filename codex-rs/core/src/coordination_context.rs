@@ -85,23 +85,20 @@ impl Handle {
         // The TUI auto-starts a relay server on this port, so this enables
         // local agent coordination with zero configuration.
         #[cfg(feature = "relay")]
-        let relay = {
-            let relay_opt = match compute_project_id(cwd).await {
-                Some(project_id) => {
-                    let url = coordination_config
-                        .and_then(|c| c.relay_url.clone())
-                        .unwrap_or_else(|| "http://127.0.0.1:7800".to_string());
-                    let secret = coordination_config.and_then(|c| c.relay_secret.clone());
-                    let relay = Arc::new(RelayClient::new(url, secret, project_id));
-                    // Best-effort register.
-                    let _ = relay
-                        .register_session(session_id, branch.as_deref(), None)
-                        .await;
-                    Some(relay)
-                }
-                None => None,
-            };
-            relay_opt
+        let relay = match compute_project_id(cwd).await {
+            Some(project_id) => {
+                let url = coordination_config
+                    .and_then(|c| c.relay_url.clone())
+                    .unwrap_or_else(|| "http://127.0.0.1:7800".to_string());
+                let secret = coordination_config.and_then(|c| c.relay_secret.clone());
+                let relay = Arc::new(RelayClient::new(url, secret, project_id));
+                // Best-effort register.
+                let _ = relay
+                    .register_session(session_id, branch.as_deref(), None)
+                    .await;
+                Some(relay)
+            }
+            None => None,
         };
 
         // Local heartbeat loop — cancelled via the stored token.
