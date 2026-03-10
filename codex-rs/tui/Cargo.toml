@@ -19,6 +19,7 @@ vt100-tests = []
 # Gate verbose debug logging inside the TUI implementation.
 debug-logs = []
 voice-input = ["dep:cpal", "dep:hound"]
+relay = ["codex-coordination/relay", "dep:codex-coordination-relay"]
 
 [lints]
 workspace = true
@@ -29,11 +30,14 @@ base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
 codex-ansi-escape = { workspace = true }
+codex-app-server = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-backend-client = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-cloud-requirements = { workspace = true }
+codex-coordination = { workspace = true }
+codex-coordination-relay = { workspace = true, optional = true }
 codex-core = { workspace = true }
 codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
@@ -59,9 +63,12 @@ dirs = { workspace = true }
 dunce = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png", "gif", "webp"] }
 itertools = { workspace = true }
+gethostname = { workspace = true }
 lazy_static = { workspace = true }
+mdns-sd = { workspace = true }
 pathdiff = { workspace = true }
 pulldown-cmark = { workspace = true }
+qrcode = "0.14"
 rand = { workspace = true }
 ratatui = { workspace = true, features = [
     "scrolling-regions",

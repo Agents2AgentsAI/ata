@@ -61,6 +61,7 @@ mod bespoke_event_handling;
 mod codex_message_processor;
 mod config_api;
 mod dynamic_tools;
+mod embedded;
 mod error_code;
 mod external_agent_config_api;
 mod filters;
@@ -73,6 +74,8 @@ mod thread_state;
 mod thread_status;
 mod transport;
 
+pub use crate::embedded::EmbeddedWebSocketConfig;
+pub use crate::embedded::run_embedded_websocket;
 pub use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 pub use crate::error_code::INVALID_PARAMS_ERROR_CODE;
 pub use crate::transport::AppServerTransport;

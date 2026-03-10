@@ -19,6 +19,25 @@ impl MarkdownStreamCollector {
         }
     }
 
+    /// Strip `[PAUSE:N]` sentinels so they don't appear in rendered history.
+    fn strip_pause_sentinels(content: &str) -> String {
+        let marker = "[PAUSE:";
+        if !content.contains(marker) {
+            return content.to_string();
+        }
+        let mut out = String::with_capacity(content.len());
+        let mut remaining = content;
+        while let Some(start) = remaining.find(marker) {
+            out.push_str(&remaining[..start]);
+            remaining = &remaining[start + marker.len()..];
+            if let Some(end) = remaining.find(']') {
+                remaining = &remaining[end + 1..];
+            }
+        }
+        out.push_str(remaining);
+        out
+    }
+
     pub fn clear(&mut self) {
         self.buffer.clear();
         self.committed_line_count = 0;
@@ -40,6 +59,7 @@ impl MarkdownStreamCollector {
         } else {
             return Vec::new();
         };
+        let source = Self::strip_pause_sentinels(&source);
         let mut rendered: Vec<Line<'static>> = Vec::new();
         markdown::append_markdown(&source, self.width, &mut rendered);
         let mut complete_line_count = rendered.len();
@@ -81,6 +101,7 @@ impl MarkdownStreamCollector {
         );
         tracing::trace!("markdown finalize (raw source):\n---\n{source}\n---");
 
+        let source = Self::strip_pause_sentinels(&source);
         let mut rendered: Vec<Line<'static>> = Vec::new();
         markdown::append_markdown(&source, self.width, &mut rendered);
 

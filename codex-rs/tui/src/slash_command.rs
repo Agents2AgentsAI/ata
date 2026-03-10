@@ -34,6 +34,7 @@ pub enum SlashCommand {
     Collab,
     Agent,
     Jobs,
+    Mobile,
     // Undo,
     Diff,
     Copy,
@@ -50,6 +51,7 @@ pub enum SlashCommand {
     Feedback,
     Rollout,
     Ps,
+    Team,
     Clean,
     Clear,
     Personality,
@@ -91,6 +93,7 @@ impl SlashCommand {
             SlashCommand::Statusline => "configure which items appear in the status line",
             SlashCommand::Theme => "choose a syntax highlighting theme",
             SlashCommand::Ps => "list background terminals",
+            SlashCommand::Team => "list coordination agents and messages",
             SlashCommand::Clean => "stop all background terminals",
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
@@ -105,6 +108,7 @@ impl SlashCommand {
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
             SlashCommand::Jobs => "view scheduled jobs and daemon status",
+            SlashCommand::Mobile => "start remote control server for mobile (ATA)",
             SlashCommand::Approvals => "choose what Codex is allowed to do",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
@@ -136,6 +140,7 @@ impl SlashCommand {
                 | SlashCommand::Plan
                 | SlashCommand::Fast
                 | SlashCommand::SandboxReadRoot
+                | SlashCommand::Team
         )
     }
 
@@ -171,6 +176,7 @@ impl SlashCommand {
             | SlashCommand::Status
             | SlashCommand::DebugConfig
             | SlashCommand::Jobs
+            | SlashCommand::Mobile
             | SlashCommand::Ps
             | SlashCommand::Clean
             | SlashCommand::Mcp
@@ -186,6 +192,7 @@ impl SlashCommand {
             SlashCommand::VoiceSetup => true,
             SlashCommand::Collab => true,
             SlashCommand::Agent | SlashCommand::MultiAgents => true,
+            SlashCommand::Team => true,
             SlashCommand::Statusline => false,
             SlashCommand::Theme => false,
         }

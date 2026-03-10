@@ -16,3 +16,6 @@ expression: terminal.backend()
 "  ctrl + g to edit in external editor        esc again to edit previous message                     "
 "  ctrl + c to exit                                                                                  "
 "  ctrl + t to view transcript                                                                       "
+"                                                                                                    "
+"  Feature commands:                                                                                 "
+"  /diff show git changes                                                                            "

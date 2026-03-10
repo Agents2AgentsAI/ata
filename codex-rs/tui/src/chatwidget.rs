@@ -593,6 +593,9 @@ pub(crate) struct ChatWidget {
     /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
     /// can update the status header without accidentally clearing the spinner for an active turn.
     agent_turn_running: bool,
+    /// Set to true when the TUI submits a user message locally; reset on TurnStarted.
+    /// Used to distinguish local vs remote user messages for rendering.
+    last_turn_was_local_submit: bool,
     /// Tracks per-server MCP startup state while startup is in progress.
     ///
     /// The map is `Some(_)` from the first `McpStartupUpdate` until `McpStartupComplete`, and the
@@ -648,6 +651,13 @@ pub(crate) struct ChatWidget {
     /// We require the second press to match this key so `Ctrl+C` followed by
     /// `Ctrl+D` (or vice versa) doesn't quit accidentally.
     quit_shortcut_key: Option<KeyBinding>,
+    /// Whether the embedded remote-control WebSocket server is currently running.
+    remote_control_running: bool,
+    /// Port the remote-control server is bound to (persisted so `/mobile` can
+    /// reopen with the correct value).
+    remote_control_port: u16,
+    /// Auth token for the running remote-control server, if any.
+    remote_control_token: Option<String>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
     // Snapshot of token usage to restore after review mode exits.
@@ -3200,6 +3210,7 @@ impl ChatWidget {
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
+            last_turn_was_local_submit: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_prefetch_in_flight: false,
@@ -3223,6 +3234,9 @@ impl ChatWidget {
             pending_notification: None,
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
+            remote_control_running: false,
+            remote_control_port: 19285,
+            remote_control_token: None,
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
@@ -3294,6 +3308,20 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
+
+        {
+            let voice_available = cfg!(all(not(target_os = "linux"), feature = "voice-input"))
+                && widget.config.features.enabled(Feature::VoiceMode);
+            let scheduler_enabled = widget.config.features.enabled(Feature::Scheduler);
+            let mobile_available = true;
+            let research_enabled = widget.config.features.enabled(Feature::Research);
+            widget.bottom_pane.set_feature_state(
+                voice_available,
+                scheduler_enabled,
+                mobile_available,
+                research_enabled,
+            );
+        }
 
         // Auto-enable voice mode if persisted in config.
         #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
@@ -3417,6 +3445,7 @@ impl ChatWidget {
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
+            last_turn_was_local_submit: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_prefetch_in_flight: false,
@@ -3444,6 +3473,9 @@ impl ChatWidget {
             pending_notification: None,
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
+            remote_control_running: false,
+            remote_control_port: 19285,
+            remote_control_token: None,
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
@@ -3501,6 +3533,20 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
+
+        {
+            let voice_available = cfg!(all(not(target_os = "linux"), feature = "voice-input"))
+                && widget.config.features.enabled(Feature::VoiceMode);
+            let scheduler_enabled = widget.config.features.enabled(Feature::Scheduler);
+            let mobile_available = true;
+            let research_enabled = widget.config.features.enabled(Feature::Research);
+            widget.bottom_pane.set_feature_state(
+                voice_available,
+                scheduler_enabled,
+                mobile_available,
+                research_enabled,
+            );
+        }
 
         widget
     }
@@ -3604,6 +3650,7 @@ impl ChatWidget {
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
+            last_turn_was_local_submit: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_prefetch_in_flight: false,
@@ -3627,6 +3674,9 @@ impl ChatWidget {
             pending_notification: None,
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
+            remote_control_running: false,
+            remote_control_port: 19285,
+            remote_control_token: None,
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
@@ -3697,6 +3747,20 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
+
+        {
+            let voice_available = cfg!(all(not(target_os = "linux"), feature = "voice-input"))
+                && widget.config.features.enabled(Feature::VoiceMode);
+            let scheduler_enabled = widget.config.features.enabled(Feature::Scheduler);
+            let mobile_available = true;
+            let research_enabled = widget.config.features.enabled(Feature::Research);
+            widget.bottom_pane.set_feature_state(
+                voice_available,
+                scheduler_enabled,
+                mobile_available,
+                research_enabled,
+            );
+        }
 
         // Auto-enable voice mode if persisted in config (mirrors logic in `new()`).
         #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
@@ -3783,6 +3847,53 @@ impl ChatWidget {
                 ..
             } if self.is_voice_speaking() => {
                 self.on_voice_interrupt_tts();
+                return;
+            }
+            // Space in reading view while TTS is speaking/paused: toggle
+            // pause/resume, then also start the PTT hold timer so that
+            // holding Space records STT. Tap = toggle; hold = pause + record.
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            KeyEvent {
+                code: KeyCode::Char(' '),
+                kind,
+                modifiers,
+                ..
+            } if modifiers.is_empty()
+                && self.is_document_reader_active()
+                && self.is_voice_speaking() =>
+            {
+                match kind {
+                    KeyEventKind::Press => {
+                        // Toggle TTS pause/resume so the user can tap Space to
+                        // pause and tap again to resume.
+                        if self
+                            .voice_mode_state
+                            .as_ref()
+                            .is_some_and(|s| s.phase == voice_mode::VoiceModePhase::Speaking)
+                        {
+                            let is_paused = self
+                                .voice_mode_state
+                                .as_ref()
+                                .and_then(|s| s.audio_player.as_ref())
+                                .is_some_and(super::voice::RealtimeAudioPlayer::is_paused);
+                            if is_paused {
+                                self.on_voice_resume_tts();
+                            } else {
+                                self.on_voice_pause_tts();
+                            }
+                        }
+                        // Also kick off the PTT hold timer — if the user keeps
+                        // holding, recording will start after the threshold.
+                        self.on_ptt_press();
+                    }
+                    KeyEventKind::Release => {
+                        if let Some(ref mut s) = self.voice_mode_state {
+                            s.key_release_supported = true;
+                        }
+                        self.on_ptt_release();
+                    }
+                    KeyEventKind::Repeat => self.on_ptt_repeat(),
+                }
                 return;
             }
             // Space: push-to-talk (PTT) when voice mode is active and STT is enabled.
@@ -4293,6 +4404,9 @@ impl ChatWidget {
             SlashCommand::Ps => {
                 self.add_ps_output();
             }
+            SlashCommand::Team => {
+                self.add_team_output(String::new());
+            }
             SlashCommand::Clean => {
                 self.clean_background_terminals();
             }
@@ -4307,6 +4421,9 @@ impl ChatWidget {
             }
             SlashCommand::Jobs => {
                 self.add_jobs_output();
+            }
+            SlashCommand::Mobile => {
+                self.open_mobile_setup();
             }
             SlashCommand::Apps => {
                 self.add_connectors_output();
@@ -4471,6 +4588,10 @@ impl ChatWidget {
                 });
                 self.bottom_pane.drain_pending_submission_state();
             }
+            SlashCommand::Team => {
+                self.add_team_output(trimmed.to_string());
+                self.bottom_pane.drain_pending_submission_state();
+            }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) =
                     self.bottom_pane.prepare_inline_args_submission(false)
@@ -4599,6 +4720,7 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        self.last_turn_was_local_submit = true;
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
@@ -5084,7 +5206,10 @@ impl ChatWidget {
             }
             EventMsg::TurnComplete(TurnCompleteEvent {
                 last_agent_message, ..
-            }) => self.on_task_complete(last_agent_message, from_replay),
+            }) => {
+                self.last_turn_was_local_submit = false;
+                self.on_task_complete(last_agent_message, from_replay);
+            }
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
@@ -5185,7 +5310,16 @@ impl ChatWidget {
                 }
             }
             EventMsg::UserMessage(ev) => {
-                if from_replay || self.should_render_realtime_user_message_event(&ev) {
+                // Render if: replaying, realtime voice mode dedup, OR the message
+                // was not submitted locally (i.e., came from a remote client).
+                // Local submissions render the user message directly in
+                // submit_user_message(), so the event is redundant. Remote
+                // messages only arrive via this event path.
+                let likely_remote = !self.last_turn_was_local_submit;
+                if from_replay
+                    || self.should_render_realtime_user_message_event(&ev)
+                    || likely_remote
+                {
                     self.on_user_message_event(ev);
                 }
             }
@@ -5765,6 +5899,23 @@ impl ChatWidget {
             })
             .collect();
         self.add_to_history(history_cell::new_unified_exec_processes_output(processes));
+    }
+
+    fn add_team_output(&mut self, args: String) {
+        let codex_home = self.config.codex_home.clone();
+        let cwd = self.config.cwd.clone();
+        let tx = self.app_event_tx.clone();
+        let my_session_id = self.thread_id.map(|t| t.to_string());
+        tokio::spawn(async move {
+            let lines =
+                match build_team_lines(&codex_home, &cwd, &args, my_session_id.as_deref()).await {
+                    Ok(lines) => lines,
+                    Err(e) => vec![Line::from(
+                        format!("Failed to query coordination: {e}").red(),
+                    )],
+                };
+            tx.send(AppEvent::TeamResult(lines));
+        });
     }
 
     fn clean_background_terminals(&mut self) {
@@ -8158,6 +8309,40 @@ impl ChatWidget {
         );
     }
 
+    fn open_mobile_setup(&mut self) {
+        if !self.remote_control_running {
+            // Auto-start the server so the user sees a QR code immediately.
+            let port = self.remote_control_port;
+            let token = crate::remote_control::generate_auth_token();
+            self.app_event_tx
+                .send(crate::app_event::AppEvent::StartMobileServer {
+                    port,
+                    token: Some(token.clone()),
+                });
+            // Optimistically update state so the view has the token for the QR.
+            self.remote_control_running = true;
+            self.remote_control_token = Some(token);
+        }
+        let view = crate::bottom_pane::MobileSetupView::new(
+            self.remote_control_port,
+            self.remote_control_token.clone(),
+            self.remote_control_running,
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn set_remote_control_state(
+        &mut self,
+        running: bool,
+        port: u16,
+        token: Option<String>,
+    ) {
+        self.remote_control_running = running;
+        self.remote_control_port = port;
+        self.remote_control_token = token;
+    }
+
     pub(crate) fn add_connectors_output(&mut self) {
         if !self.connectors_enabled() {
             self.add_info_message(
@@ -9253,6 +9438,148 @@ pub(crate) fn show_review_commit_picker_with_entries(
     });
 }
 
+// ---------------------------------------------------------------------------
+// /team command — coordination visibility
+// ---------------------------------------------------------------------------
+
+/// Derive a stable, human-readable name from a session ID.
+///
+/// Uses 3 bytes from the UUID to index into adjective x color x animal word
+/// lists (64 x 64 x 64 = 262,144 combinations), producing names like
+/// "swift-amber-falcon". The name is deterministic: the same session_id
+/// always yields the same name.
+fn coordination_agent_name(session_id: &str) -> String {
+    codex_coordination::agent_name(session_id)
+}
+
+async fn build_team_lines(
+    codex_home: &std::path::Path,
+    cwd: &std::path::Path,
+    args: &str,
+    my_session_id: Option<&str>,
+) -> anyhow::Result<Vec<Line<'static>>> {
+    use codex_coordination::CoordinationDb;
+    use ratatui::style::Modifier;
+    use ratatui::style::Style;
+    use ratatui::text::Span;
+
+    let db = CoordinationDb::open(codex_home).await?;
+    let repo_path = codex_core::git_info::get_git_common_dir(cwd)
+        .await
+        .or_else(|| codex_core::git_info::get_git_repo_root(cwd))
+        .unwrap_or_else(|| cwd.to_path_buf())
+        .to_string_lossy()
+        .to_string();
+
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let dim = Style::default().add_modifier(Modifier::DIM);
+
+    let trimmed = args.trim();
+    let show_messages = trimmed.starts_with("messages") || trimmed.starts_with("msgs");
+
+    if show_messages {
+        // Parse optional agent filter: `/team messages <name>`
+        let filter_name = trimmed
+            .strip_prefix("messages")
+            .or_else(|| trimmed.strip_prefix("msgs"))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+
+        let messages = db.recent_messages(&repo_path).await?;
+        let sessions = db.active_sessions(&repo_path).await?;
+
+        // Build session_id → agent name map.
+        let name_map: std::collections::HashMap<String, String> = sessions
+            .iter()
+            .map(|s| (s.session_id.clone(), coordination_agent_name(&s.session_id)))
+            .collect();
+
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from(Span::styled("Coordination Messages", bold)));
+        lines.push(Line::default());
+
+        let filtered: Vec<_> = messages
+            .iter()
+            .filter(|m| {
+                if let Some(ref filter) = filter_name {
+                    let agent = name_map
+                        .get(&m.session_id)
+                        .cloned()
+                        .unwrap_or_else(|| coordination_agent_name(&m.session_id));
+                    agent.starts_with(filter.as_str())
+                } else {
+                    true
+                }
+            })
+            .collect();
+
+        if filtered.is_empty() {
+            let msg = if filter_name.is_some() {
+                "  No messages found for that agent."
+            } else {
+                "  No recent messages."
+            };
+            lines.push(Line::from(Span::styled(msg, dim)));
+        } else {
+            for m in filtered {
+                let agent = name_map
+                    .get(&m.session_id)
+                    .cloned()
+                    .unwrap_or_else(|| coordination_agent_name(&m.session_id));
+                let is_you = my_session_id == Some(m.session_id.as_str());
+                let label = if is_you {
+                    format!("(you) {agent}")
+                } else {
+                    agent
+                };
+                lines.push(Line::from(vec![
+                    Span::raw("  ["),
+                    Span::styled(label, bold),
+                    Span::raw("] "),
+                    Span::styled(format!("{}: ", m.message_type), dim),
+                    Span::raw(m.message.clone()),
+                ]));
+            }
+        }
+        Ok(lines)
+    } else {
+        // Agents mode (default, or explicit `/team agents`).
+        let sessions = db.active_sessions(&repo_path).await?;
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from(Span::styled("Coordination Agents", bold)));
+        lines.push(Line::default());
+
+        if sessions.is_empty() {
+            lines.push(Line::from(Span::styled("  No active agents.", dim)));
+        } else {
+            for s in &sessions {
+                let name = coordination_agent_name(&s.session_id);
+                let is_you = my_session_id == Some(s.session_id.as_str());
+                let branch = s.branch.as_deref().unwrap_or("—");
+                let desc = s.description.as_deref().unwrap_or("");
+
+                let name_display = if is_you {
+                    format!("(you) {name}")
+                } else {
+                    name
+                };
+
+                let mut spans = vec![
+                    Span::raw("  "),
+                    Span::styled(format!("{name_display:<34}"), bold),
+                    Span::raw(format!(" {branch:<20}")),
+                ];
+                if !desc.is_empty() {
+                    spans.push(Span::styled(format!(" \"{desc}\""), dim));
+                }
+                lines.push(Line::from(spans));
+            }
+        }
+        Ok(lines)
+    }
+}
+
 /// Strip system instruction prefixes that were injected for the model but
 /// should not be visible to the user in chat history.
 ///
@@ -9266,6 +9593,34 @@ fn strip_system_instruction_prefix(
     // Voice mode instruction prefixes: strip the known constant if present,
     // otherwise fall back to stripping up to the last `\n\n` boundary.
     if message.starts_with("[VOICE MODE") {
+        // Reading view voice messages embed the user's question inside system
+        // instructions.  Extract just the question text by looking for the
+        // "They asked:\n" marker.
+        if message.starts_with("[VOICE MODE \u{2014} READING VIEW]") {
+            const MARKER: &str = "They asked:\n";
+            if let Some(start) = message.find(MARKER) {
+                let text_start = start + MARKER.len();
+                let text_end = message[text_start..]
+                    .find('\n')
+                    .map_or(message.len(), |p| text_start + p);
+                let stripped = message[text_start..text_end].to_string();
+                let adjusted = text_elements
+                    .into_iter()
+                    .filter_map(|el| {
+                        if el.byte_range.end <= text_start || el.byte_range.start >= text_end {
+                            return None;
+                        }
+                        Some(el.map_range(|r| codex_protocol::user_input::ByteRange {
+                            start: r.start.saturating_sub(text_start),
+                            end: r.end.min(text_end).saturating_sub(text_start),
+                        }))
+                    })
+                    .collect();
+                return (stripped, adjusted);
+            }
+            // If the marker is missing, fall through to the generic logic.
+        }
+
         #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
         let known_prefixes: &[&str] = &[
             crate::chatwidget::voice_mode::VOICE_MODE_INSTRUCTION,
