@@ -152,6 +152,15 @@ impl BottomPane {
         }
     }
 
+    /// Update the TTS paused state in the active document reader.
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    pub(crate) fn set_document_reader_tts_paused(&mut self, paused: bool) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.set_voice_tts_paused(paused);
+            self.request_redraw();
+        }
+    }
+
     /// Mark a section as pending a voice question answer (same inline
     /// indicator as text questions).
     #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]

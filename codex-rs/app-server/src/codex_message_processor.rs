@@ -3409,6 +3409,15 @@ impl CodexMessageProcessor {
             )
             .await;
 
+            // Register the connection subscription synchronously, before
+            // enqueueing the resume-response command on the listener task.
+            // This closes a race where events arriving between now and the
+            // moment the listener processes SendThreadResumeResponse would
+            // be silently dropped because no subscriber was registered yet.
+            self.thread_state_manager
+                .try_add_connection_to_thread(existing_thread_id, request_id.connection_id)
+                .await;
+
             let config_snapshot = existing_thread.config_snapshot().await;
             let mismatch_details = collect_resume_override_mismatches(params, &config_snapshot);
             if !mismatch_details.is_empty() {
@@ -6530,6 +6539,11 @@ impl CodexMessageProcessor {
             Err(_) => None,
         }
     }
+
+    /// Replace the internal [`ThreadManager`] with an externally-owned one.
+    pub(crate) fn set_thread_manager(&mut self, thread_manager: Arc<ThreadManager>) {
+        self.thread_manager = thread_manager;
+    }
 }
 
 async fn handle_thread_listener_command(
@@ -6546,7 +6560,6 @@ async fn handle_thread_listener_command(
             handle_pending_thread_resume_request(
                 conversation_id,
                 codex_home,
-                thread_state_manager,
                 thread_state,
                 thread_watch_manager,
                 outgoing,
@@ -6573,7 +6586,6 @@ async fn handle_thread_listener_command(
 async fn handle_pending_thread_resume_request(
     conversation_id: ThreadId,
     codex_home: &Path,
-    thread_state_manager: &ThreadStateManager,
     thread_state: &Arc<Mutex<ThreadState>>,
     thread_watch_manager: &ThreadWatchManager,
     outgoing: &Arc<OutgoingMessageSender>,
@@ -6661,9 +6673,9 @@ async fn handle_pending_thread_resume_request(
     outgoing
         .replay_requests_to_connection_for_thread(connection_id, conversation_id)
         .await;
-    let _attached = thread_state_manager
-        .try_add_connection_to_thread(conversation_id, connection_id)
-        .await;
+    // NOTE: Connection subscription is now registered synchronously in
+    // `resume_running_thread()` before this command is enqueued, so we no
+    // longer need to call `try_add_connection_to_thread()` here.
 }
 
 enum ResumeTurnSource<'a> {

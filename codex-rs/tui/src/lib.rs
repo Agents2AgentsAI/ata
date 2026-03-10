@@ -91,6 +91,7 @@ mod markdown;
 mod markdown_render;
 mod markdown_stream;
 mod mention_codec;
+mod mobile_daemon;
 mod model_migration;
 mod multi_agents;
 mod notifications;
@@ -98,6 +99,9 @@ pub mod onboarding;
 mod oss_selection;
 mod pager_overlay;
 pub mod public_widgets;
+mod qr_render;
+mod remote_control;
+mod remote_discovery;
 mod render;
 mod resume_picker;
 mod selection_list;
@@ -201,6 +205,11 @@ mod voice {
         pub(crate) fn enqueue_pcm(&self, _pcm: &[i16], _sample_rate: u32, _channels: u16) {}
         pub(crate) fn is_idle(&self) -> bool {
             true
+        }
+        pub(crate) fn pause(&self) {}
+        pub(crate) fn resume(&self) {}
+        pub(crate) fn is_paused(&self) -> bool {
+            false
         }
     }
 
@@ -918,6 +927,8 @@ async fn run_ratatui_app(
         && trust_decision_was_made
         && WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Disabled;
 
+    let remote_control_settings = remote_control::RemoteControlSettings::from_cli(&cli);
+
     let Cli {
         prompt,
         images,
@@ -941,6 +952,11 @@ async fn run_ratatui_app(
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
         should_prompt_windows_sandbox_nux_at_startup,
+        if remote_control_settings.enabled {
+            Some(remote_control_settings)
+        } else {
+            None
+        },
     )
     .await;
 

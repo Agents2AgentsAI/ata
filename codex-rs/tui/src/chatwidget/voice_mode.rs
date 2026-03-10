@@ -25,7 +25,11 @@ pub(crate) const VOICE_MODE_INSTRUCTION: &str = "\
 [VOICE MODE] The user is speaking to you via voice. \
 Wrap any text you want spoken aloud in <voice></voice> tags. \
 Never put code, file paths, or markdown in <voice> tags — only natural, \
-conversational text.\n\
+conversational text. You MUST insert pauses using the [PAUSE:N] marker \
+(where N is milliseconds, default 500) in your voice output. \
+Always use [PAUSE:500] between paragraphs, before important points, and when \
+transitioning between topics. A response without any pause markers sounds rushed \
+and unnatural. Use [PAUSE:N] inside <voice> tags and in reading view content.\n\
 \n\
 IMPORTANT: Voice mode ONLY changes how you format output (with <voice> tags). \
 Everything else stays identical to non-voice mode:\n\
@@ -319,6 +323,8 @@ fn is_voice_tag_prefix(s: &str) -> bool {
     "<voice>".starts_with(&s_lower) || "</voice>".starts_with(&s_lower)
 }
 
+/// Extract the `ms` attribute from a `<pause .../>` tag string.
+/// Returns 500 if missing/invalid, clamped to [100, 3000].
 /// Find a sentence boundary (`. `, `! `, `? `, or `\n\n`).
 fn find_sentence_boundary(text: &str) -> Option<usize> {
     for (i, ch) in text.char_indices() {
@@ -577,6 +583,21 @@ impl VoiceModeState {
         self.tts_data_complete = false;
         self.tts_block_break_pending = false;
         self.cancel_highlight_tick();
+    }
+
+    /// Pause TTS playback without clearing buffers.
+    pub(crate) fn pause_tts(&mut self) {
+        if let Some(ref player) = self.audio_player {
+            player.pause();
+        }
+        self.cancel_highlight_tick();
+    }
+
+    /// Resume TTS playback after a pause.
+    pub(crate) fn resume_tts(&mut self) {
+        if let Some(ref player) = self.audio_player {
+            player.resume();
+        }
     }
 
     /// Cancel the PTT timeout poller task.
@@ -1406,7 +1427,7 @@ impl super::ChatWidget {
             // Send each sentence to the worker — no per-sentence WebSocket needed.
             if let Some(ref worker_tx) = state.tts_worker_tx {
                 for sentence in tts_sentences.iter() {
-                    let _ = worker_tx.send(TtsWorkerCommand::SendText(sentence.clone()));
+                    send_with_pauses(worker_tx, sentence);
                 }
             }
         }
@@ -1461,7 +1482,7 @@ impl super::ChatWidget {
             // Send remaining text and signal finish.
             if let Some(ref worker_tx) = state.tts_worker_tx {
                 for sentence in remaining {
-                    let _ = worker_tx.send(TtsWorkerCommand::SendText(sentence));
+                    send_with_pauses(worker_tx, &sentence);
                 }
                 let _ = worker_tx.send(TtsWorkerCommand::Finish);
             }
@@ -1636,6 +1657,7 @@ impl super::ChatWidget {
             .set_document_reader_karaoke_lines(None, false);
         self.bottom_pane
             .set_document_reader_reading_progress(None, 0);
+        self.bottom_pane.set_document_reader_tts_paused(false);
 
         // Flush any voice response cells that were stashed during karaoke.
         self.flush_deferred_voice_cells();
@@ -2067,8 +2089,11 @@ impl super::ChatWidget {
              - Wrap your spoken response in <voice>...</voice> tags\n\
              - Make exactly ONE append_to_section call\n\
              - Set foldable=true always\n\
-             - The content must match what you said (verbatim, without voice tags)\n\
+             - The content must match what you said (verbatim, without voice tags but keep [PAUSE:N] markers)\n\
              - No LaTeX, no code blocks\n\
+             - You MUST use [PAUSE:N] markers (N = milliseconds) for natural pacing — \
+             add [PAUSE:500] between paragraphs, before key points, and at topic transitions. \
+             Responses without pauses sound rushed. Use [PAUSE:N] in both voice and content.\n\
              - The summary should describe the topic (e.g. \"Dropout as regularization\", \
              \"Why gradients vanish\")\n\
              - Do NOT rewrite the section or make multiple tool calls",
@@ -2144,7 +2169,39 @@ impl super::ChatWidget {
             .set_document_reader_karaoke_lines(None, false);
         self.bottom_pane
             .set_document_reader_reading_progress(None, 0);
+        self.bottom_pane.set_document_reader_tts_paused(false);
         self.sync_voice_placeholder();
+        self.request_redraw();
+    }
+
+    /// Pause TTS playback (e.g. user pressed Space in reading view).
+    pub(crate) fn on_voice_pause_tts(&mut self) {
+        let Some(ref mut state) = self.voice_mode_state else {
+            return;
+        };
+        if state.phase != VoiceModePhase::Speaking {
+            return;
+        }
+        state.pause_tts();
+        let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} Space to resume".to_string();
+        self.bottom_pane.set_document_reader_voice_status(Some(msg));
+        self.bottom_pane.set_document_reader_tts_paused(true);
+        self.request_redraw();
+    }
+
+    /// Resume TTS playback after pause.
+    pub(crate) fn on_voice_resume_tts(&mut self) {
+        let Some(ref mut state) = self.voice_mode_state else {
+            return;
+        };
+        if state.phase != VoiceModePhase::Speaking {
+            return;
+        }
+        state.resume_tts();
+        self.start_highlight_tick();
+        let msg = "\u{25B6}\u{FE0F}  Speaking...".to_string();
+        self.bottom_pane.set_document_reader_voice_status(Some(msg));
+        self.bottom_pane.set_document_reader_tts_paused(false);
         self.request_redraw();
     }
 
@@ -2263,7 +2320,7 @@ impl super::ChatWidget {
         // Send all sentences and signal finish.
         if let Some(ref worker_tx) = state.tts_worker_tx {
             for sentence in sentences {
-                let _ = worker_tx.send(TtsWorkerCommand::SendText(sentence));
+                send_with_pauses(worker_tx, &sentence);
             }
             let _ = worker_tx.send(TtsWorkerCommand::Finish);
         }
@@ -2685,8 +2742,39 @@ fn hash_text(text: &str) -> u64 {
 pub(crate) enum TtsWorkerCommand {
     /// Send a sentence to TTS via the existing WebSocket.
     SendText(String),
+    /// Insert a silence of the given duration (ms) between TTS segments.
+    Pause(u64),
     /// Flush remaining audio and shut down the connection.
     Finish,
+}
+
+/// Split a sentence on `[PAUSE:N]` sentinels and emit interleaved
+/// SendText / Pause commands to the TTS worker.
+fn send_with_pauses(
+    worker_tx: &tokio::sync::mpsc::UnboundedSender<TtsWorkerCommand>,
+    sentence: &str,
+) {
+    let pause_marker = "[PAUSE:";
+    let mut remaining = sentence;
+    while let Some(start) = remaining.find(pause_marker) {
+        let before = remaining[..start].trim();
+        if !before.is_empty() {
+            let _ = worker_tx.send(TtsWorkerCommand::SendText(before.to_string()));
+        }
+        let after_marker = &remaining[start + pause_marker.len()..];
+        if let Some(end) = after_marker.find(']') {
+            let ms_str = &after_marker[..end];
+            let ms = ms_str.parse::<u64>().unwrap_or(500).clamp(100, 3000);
+            let _ = worker_tx.send(TtsWorkerCommand::Pause(ms));
+            remaining = &after_marker[end + 1..];
+        } else {
+            break;
+        }
+    }
+    let tail = remaining.trim();
+    if !tail.is_empty() {
+        let _ = worker_tx.send(TtsWorkerCommand::SendText(tail.to_string()));
+    }
 }
 
 /// Long-lived TTS task that maintains a single ElevenLabs WebSocket connection.
@@ -2774,6 +2862,14 @@ async fn tts_worker_loop(
                                 tracing::error!("TTS worker flush: {e}");
                                 break;
                             }
+                        }
+                        Some(TtsWorkerCommand::Pause(ms)) => {
+                            if gen_ref.load(Ordering::SeqCst) != my_gen { break; }
+                            if let Err(e) = stream.flush().await {
+                                tracing::error!("TTS worker flush before pause: {e}");
+                                break;
+                            }
+                            tokio::time::sleep(tokio::time::Duration::from_millis(ms)).await;
                         }
                         Some(TtsWorkerCommand::Finish) => {
                             let _ = stream.flush().await;

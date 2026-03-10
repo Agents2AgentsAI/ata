@@ -39,6 +39,7 @@ mod app_cmd;
 #[cfg(target_os = "macos")]
 mod desktop_app;
 mod mcp_cmd;
+mod mobile_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
@@ -146,6 +147,9 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
+
+    /// Manage the mobile background server.
+    Mobile(mobile_cmd::MobileCommand),
 
     /// Manage scheduled jobs.
     Jobs(codex_scheduler::cli::JobsCli),
@@ -837,6 +841,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 disable_feature_in_config(&interactive, &feature).await?;
             }
         },
+        Some(Subcommand::Mobile(cmd)) => {
+            mobile_cmd::run_mobile_command(cmd)?;
+        }
         Some(Subcommand::Jobs(jobs_cli)) => {
             codex_scheduler::cli::run_jobs_command(jobs_cli).await?;
         }

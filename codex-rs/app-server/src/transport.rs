@@ -667,6 +667,168 @@ pub(crate) async fn route_outgoing_envelope(
     }
 }
 
+/// WebSocket acceptor with optional token-based authentication.
+///
+/// Behaves identically to [`start_websocket_acceptor`] but, when
+/// `auth_token` is `Some`, rejects connections whose upgrade request does
+/// not include a matching `?token=<value>` query parameter. Rejected
+/// connections receive an HTTP 401 response before the socket is closed.
+pub(crate) async fn start_websocket_acceptor_with_auth(
+    bind_address: SocketAddr,
+    transport_event_tx: mpsc::Sender<TransportEvent>,
+    shutdown_token: CancellationToken,
+    auth_token: Option<String>,
+) -> IoResult<JoinHandle<()>> {
+    let listener = TcpListener::bind(bind_address).await?;
+    let local_addr = listener.local_addr()?;
+    info!("remote-control websocket listening on ws://{local_addr}");
+
+    let connection_counter = Arc::new(AtomicU64::new(1));
+    let auth_token = auth_token.map(Arc::new);
+
+    Ok(tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = shutdown_token.cancelled() => {
+                    info!("remote-control websocket acceptor shutting down");
+                    break;
+                }
+                accept_result = listener.accept() => {
+                    match accept_result {
+                        Ok((stream, peer_addr)) => {
+                            let connection_id =
+                                ConnectionId(connection_counter.fetch_add(1, Ordering::Relaxed));
+                            let tx = transport_event_tx.clone();
+                            let token = auth_token.clone();
+                            tokio::spawn(async move {
+                                run_authenticated_websocket_connection(
+                                    connection_id,
+                                    stream,
+                                    tx,
+                                    token,
+                                    peer_addr,
+                                )
+                                .await;
+                            });
+                        }
+                        Err(err) => {
+                            error!("failed to accept remote-control connection: {err}");
+                        }
+                    }
+                }
+            }
+        }
+    }))
+}
+
+/// Perform the WebSocket handshake with optional token validation.
+///
+/// When `expected_token` is `Some`, the function inspects the HTTP upgrade
+/// request URI for a `?token=<value>` query parameter. If the token does not
+/// match, the connection is rejected with a 401 status before the upgrade
+/// completes.
+async fn run_authenticated_websocket_connection(
+    connection_id: ConnectionId,
+    stream: TcpStream,
+    transport_event_tx: mpsc::Sender<TransportEvent>,
+    expected_token: Option<Arc<String>>,
+    peer_addr: SocketAddr,
+) {
+    use tokio_tungstenite::tungstenite::handshake::server::ErrorResponse;
+    use tokio_tungstenite::tungstenite::handshake::server::Request;
+    use tokio_tungstenite::tungstenite::handshake::server::Response;
+
+    let expected_token_clone = expected_token.clone();
+    let callback =
+        move |request: &Request, response: Response| -> Result<Response, ErrorResponse> {
+            if let Some(ref expected) = expected_token_clone {
+                let uri = request.uri().to_string();
+                let token_ok = uri
+                    .split_once('?')
+                    .map(|(_, query)| {
+                        query.split('&').any(|pair| {
+                            pair.split_once('=')
+                                .is_some_and(|(k, v)| k == "token" && v == expected.as_str())
+                        })
+                    })
+                    .unwrap_or(false);
+
+                if !token_ok {
+                    warn!(%peer_addr, "remote-control: rejected connection (invalid token)");
+                    let mut err_response = ErrorResponse::new(None);
+                    *err_response.status_mut() =
+                        tokio_tungstenite::tungstenite::http::StatusCode::UNAUTHORIZED;
+                    return Err(err_response);
+                }
+            }
+            info!(%peer_addr, "remote-control: client connected");
+            Ok(response)
+        };
+
+    let websocket_stream = match tokio_tungstenite::accept_hdr_async_with_config(
+        stream,
+        callback,
+        Some(WebSocketConfig::default()),
+    )
+    .await
+    {
+        Ok(stream) => stream,
+        Err(err) => {
+            warn!(%peer_addr, "remote-control: websocket handshake failed: {err}");
+            return;
+        }
+    };
+
+    // From here the logic is identical to run_websocket_connection.
+    let (writer_tx, writer_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
+    let writer_tx_for_reader = writer_tx.clone();
+    let disconnect_token = CancellationToken::new();
+    if transport_event_tx
+        .send(TransportEvent::ConnectionOpened {
+            connection_id,
+            writer: writer_tx,
+            disconnect_sender: Some(disconnect_token.clone()),
+        })
+        .await
+        .is_err()
+    {
+        return;
+    }
+
+    let (websocket_writer, websocket_reader) = websocket_stream.split();
+    let (writer_control_tx, writer_control_rx) =
+        mpsc::channel::<WebSocketMessage>(CHANNEL_CAPACITY);
+    let mut outbound_task = tokio::spawn(run_websocket_outbound_loop(
+        websocket_writer,
+        writer_rx,
+        writer_control_rx,
+        disconnect_token.clone(),
+    ));
+    let mut inbound_task = tokio::spawn(run_websocket_inbound_loop(
+        websocket_reader,
+        transport_event_tx.clone(),
+        writer_tx_for_reader,
+        writer_control_tx,
+        connection_id,
+        disconnect_token.clone(),
+    ));
+
+    tokio::select! {
+        _ = &mut outbound_task => {
+            disconnect_token.cancel();
+            inbound_task.abort();
+        }
+        _ = &mut inbound_task => {
+            disconnect_token.cancel();
+            outbound_task.abort();
+        }
+    }
+
+    let _ = transport_event_tx
+        .send(TransportEvent::ConnectionClosed { connection_id })
+        .await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -356,6 +356,20 @@ pub(crate) enum AppEvent {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     SkipNextWorldWritableScan,
 
+    /// Start the embedded remote-control WebSocket server for mobile clients.
+    StartMobileServer {
+        port: u16,
+        token: Option<String>,
+    },
+    /// Stop the embedded remote-control WebSocket server.
+    StopMobileServer,
+    /// Start the persistent background mobile daemon (survives TUI exit).
+    StartMobileDaemon {
+        port: u16,
+    },
+    /// Stop the persistent background mobile daemon.
+    StopMobileDaemon,
+
     /// Re-open the approval presets popup.
     OpenApprovalsPopup,
 
@@ -519,6 +533,14 @@ pub(crate) enum AppEvent {
     /// Interrupt TTS playback (e.g. user navigated away in reading view).
     #[cfg(not(target_os = "linux"))]
     VoiceModeInterruptTts,
+
+    /// Pause TTS playback (audio paused, state preserved).
+    #[cfg(not(target_os = "linux"))]
+    VoiceModePauseTts,
+
+    /// Resume TTS playback after pause.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeResumeTts,
 
     /// Auto-narrate a reading view section via TTS when voice mode is active.
     #[cfg(not(target_os = "linux"))]
