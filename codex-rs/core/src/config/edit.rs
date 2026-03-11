@@ -131,6 +131,14 @@ pub fn voice_mode_elevenlabs_speed_edit(speed: f64) -> ConfigEdit {
     }
 }
 
+/// Produces a config edit that sets `[voice_mode] verbosity = "<verbosity>"`.
+pub fn voice_mode_verbosity_edit(verbosity: &str) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec!["voice_mode".into(), "verbosity".into()],
+        value: value(verbosity),
+    }
+}
+
 pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
     let mut array = toml_edit::Array::new();
     for item in items {

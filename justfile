@@ -58,6 +58,19 @@ test:
 test-all:
     cargo nextest run --workspace --no-fail-fast
 
+# Reading view unit + E2E tests (no API key needed)
+test-reading-view:
+    cargo test -p codex-tui --features voice-input --lib -- document_reader alignment_ find_word_ highlight_
+
+# Karaoke pipeline integration tests (no API key needed)
+test-karaoke:
+    cargo test -p codex-tui --features voice-input --lib -- alignment_ find_word_ highlight_ voice_progress_
+    cargo test -p codex-tui --test karaoke_integration
+
+# Live TTS E2E tests (requires ELEVENLABS_API_KEY env var)
+test-tts-live:
+    cargo test -p codex-tui --test tts_e2e -- --ignored
+
 # Build and run Codex from source using Bazel.
 # Note we have to use the combination of `[no-cd]` and `--run_under="cd $PWD &&"`
 # to ensure that Bazel runs the command in the current working directory.

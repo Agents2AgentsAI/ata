@@ -177,6 +177,7 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::PresentDocument(_)
         | EventMsg::UpdateDocumentSection(_)
         | EventMsg::AppendDocumentSection(_)
+        | EventMsg::AddDocumentSection(_)
         | EventMsg::PatchDocumentSection(_)
         | EventMsg::ImageGenerationBegin(_) => None,
     }

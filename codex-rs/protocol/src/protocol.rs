@@ -21,6 +21,7 @@ use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::ServiceTier;
 use crate::config_types::WindowsSandboxLevel;
 use crate::custom_prompts::CustomPrompt;
+use crate::document_reader::AddDocumentSectionEvent;
 use crate::document_reader::AppendDocumentSectionEvent;
 use crate::document_reader::PatchDocumentSectionEvent;
 use crate::document_reader::PresentDocumentEvent;
@@ -868,11 +869,15 @@ impl SandboxPolicy {
 
                 // Include /tmp on Unix unless explicitly excluded.
                 if cfg!(unix) && !exclude_slash_tmp {
-                    #[allow(clippy::expect_used)]
-                    let slash_tmp =
-                        AbsolutePathBuf::from_absolute_path("/tmp").expect("/tmp is absolute");
-                    if slash_tmp.as_path().is_dir() {
-                        roots.push(slash_tmp);
+                    match AbsolutePathBuf::from_absolute_path("/tmp") {
+                        Ok(slash_tmp) => {
+                            if slash_tmp.as_path().is_dir() {
+                                roots.push(slash_tmp);
+                            }
+                        }
+                        Err(e) => {
+                            error!("Ignoring /tmp for sandbox writable root: {e}");
+                        }
                     }
                 }
 
@@ -1296,6 +1301,9 @@ pub enum EventMsg {
 
     /// Agent appended content to a section of a document in reading mode.
     AppendDocumentSection(AppendDocumentSectionEvent),
+
+    /// Agent added a new section to a document in reading mode.
+    AddDocumentSection(AddDocumentSectionEvent),
 
     /// Agent patched (find-and-replace) a section of a document in reading mode.
     PatchDocumentSection(PatchDocumentSectionEvent),

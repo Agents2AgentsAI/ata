@@ -45,6 +45,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 #[cfg(feature = "data")]
 pub(crate) use data::DataBridgeHandler;
+pub use document_reader::ADD_DOCUMENT_SECTION_TOOL;
 pub use document_reader::APPEND_TO_SECTION_TOOL;
 pub use document_reader::DocumentCache;
 pub use document_reader::DocumentReaderHandler;

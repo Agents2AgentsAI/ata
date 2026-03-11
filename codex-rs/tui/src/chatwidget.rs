@@ -360,6 +360,22 @@ impl UnifiedExecWaitStreak {
     }
 }
 
+/// Strip `<voice>` / `</voice>` wrapper tags from text.
+///
+/// This is intentionally NOT behind a `cfg` gate because voice tags can appear
+/// in persisted rollout data from any platform.  When the `voice-input` feature
+/// is active, the richer `VoiceTagParser` pipeline handles stripping; this
+/// function is the fallback for all other configurations.
+fn strip_voice_tags(text: &str) -> String {
+    if !text.contains('<') {
+        return text.to_string();
+    }
+    text.replace("<voice>", "")
+        .replace("</voice>", "")
+        .replace("<Voice>", "")
+        .replace("</Voice>", "")
+}
+
 fn is_unified_exec_source(source: ExecCommandSource) -> bool {
     matches!(
         source,
@@ -1432,7 +1448,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn finalize_completed_assistant_message(&mut self, message: Option<&str>) {
+    fn finalize_completed_assistant_message(&mut self, message: Option<&str>, from_replay: bool) {
         if self.is_suppressing_streaming_for_reader() {
             return;
         }
@@ -1442,12 +1458,18 @@ impl ChatWidget {
             && let Some(message) = message
             && !message.is_empty()
         {
+            // Always strip <voice> tags for display.  On voice-input platforms
+            // the full voice pipeline handles parsing + optional TTS dispatch;
+            // strip_voice_tags is the universal fallback.
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
             let message = self
-                .on_voice_mode_agent_delta(message)
-                .unwrap_or_else(|| message.to_string());
+                .on_voice_mode_agent_delta(message, from_replay)
+                .unwrap_or_else(|| strip_voice_tags(message));
             #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
-            let message = message.to_string();
+            let message = {
+                let _ = from_replay;
+                strip_voice_tags(message)
+            };
             self.handle_streaming_delta(message);
         }
         self.flush_answer_stream_with_separator();
@@ -1456,21 +1478,23 @@ impl ChatWidget {
     }
 
     fn on_agent_message(&mut self, message: String) {
-        self.finalize_completed_assistant_message(Some(&message));
+        // on_agent_message is only called from replay / review-mode paths,
+        // so from_replay = true to suppress TTS dispatch.
+        self.finalize_completed_assistant_message(Some(&message), true);
     }
 
     fn on_agent_message_delta(&mut self, delta: String, from_replay: bool) {
-        // When voice mode is active, the parser strips <voice> tags from the
-        // display text and routes tagged content to TTS.  Skip during replay
-        // so resuming a session doesn't re-narrate old messages.
+        // Always strip <voice> tags from display text. TTS dispatch is skipped
+        // during replay inside the function, but tag stripping is consistent.
         #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
-        let delta = if from_replay {
-            delta
-        } else {
-            self.on_voice_mode_agent_delta(&delta).unwrap_or(delta)
-        };
+        let delta = self
+            .on_voice_mode_agent_delta(&delta, from_replay)
+            .unwrap_or_else(|| strip_voice_tags(&delta));
         #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
-        let _ = from_replay;
+        let delta = {
+            let _ = from_replay;
+            strip_voice_tags(&delta)
+        };
 
         if self.is_suppressing_streaming_for_reader() {
             return;
@@ -2654,6 +2678,7 @@ impl ChatWidget {
         }
         self.finalize_completed_assistant_message(
             (!message.is_empty()).then_some(message.as_str()),
+            false,
         );
         self.pending_status_indicator_restore = match item.phase {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
@@ -3849,51 +3874,57 @@ impl ChatWidget {
                 self.on_voice_interrupt_tts();
                 return;
             }
-            // Space in reading view while TTS is speaking/paused: toggle
-            // pause/resume, then also start the PTT hold timer so that
-            // holding Space records STT. Tap = toggle; hold = pause + record.
+            // Space Press in reading view while TTS is speaking:
+            // Start tap/hold detection. Pause TTS immediately (non-destructive)
+            // and start mic capture if STT is available. On release we decide
+            // whether it was a tap (toggle pause/resume) or hold (PTT).
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
             KeyEvent {
                 code: KeyCode::Char(' '),
-                kind,
+                kind: KeyEventKind::Press,
                 modifiers,
                 ..
             } if modifiers.is_empty()
                 && self.is_document_reader_active()
-                && self.is_voice_speaking() =>
+                && self.is_voice_speaking()
+                && !self.bottom_pane.is_view_composer_focused() =>
             {
-                match kind {
-                    KeyEventKind::Press => {
-                        // Toggle TTS pause/resume so the user can tap Space to
-                        // pause and tap again to resume.
-                        if self
-                            .voice_mode_state
-                            .as_ref()
-                            .is_some_and(|s| s.phase == voice_mode::VoiceModePhase::Speaking)
-                        {
-                            let is_paused = self
-                                .voice_mode_state
-                                .as_ref()
-                                .and_then(|s| s.audio_player.as_ref())
-                                .is_some_and(super::voice::RealtimeAudioPlayer::is_paused);
-                            if is_paused {
-                                self.on_voice_resume_tts();
-                            } else {
-                                self.on_voice_pause_tts();
-                            }
-                        }
-                        // Also kick off the PTT hold timer — if the user keeps
-                        // holding, recording will start after the threshold.
-                        self.on_ptt_press();
-                    }
-                    KeyEventKind::Release => {
-                        if let Some(ref mut s) = self.voice_mode_state {
-                            s.key_release_supported = true;
-                        }
-                        self.on_ptt_release();
-                    }
-                    KeyEventKind::Repeat => self.on_ptt_repeat(),
-                }
+                self.on_reading_view_space_press();
+                return;
+            }
+            // Space Release in reading view during tap/hold detection.
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            KeyEvent {
+                code: KeyCode::Char(' '),
+                kind: KeyEventKind::Release,
+                modifiers,
+                ..
+            } if modifiers.is_empty()
+                && self.is_document_reader_active()
+                && !self.bottom_pane.is_view_composer_focused()
+                && self
+                    .voice_mode_state
+                    .as_ref()
+                    .is_some_and(|s| s.space_press_at.is_some()) =>
+            {
+                self.on_reading_view_space_release();
+                return;
+            }
+            // Space Repeat in reading view during tap/hold detection: no-op.
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            KeyEvent {
+                code: KeyCode::Char(' '),
+                kind: KeyEventKind::Repeat,
+                modifiers,
+                ..
+            } if modifiers.is_empty()
+                && self.is_document_reader_active()
+                && !self.bottom_pane.is_view_composer_focused()
+                && self
+                    .voice_mode_state
+                    .as_ref()
+                    .is_some_and(|s| s.space_press_at.is_some()) =>
+            {
                 return;
             }
             // Space: push-to-talk (PTT) when voice mode is active and STT is enabled.
@@ -4825,7 +4856,12 @@ impl ChatWidget {
                 .is_some_and(|s| s.tts_enabled);
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
             if (voice_input || voice_mode_active) && tts_on {
-                let prefix = crate::chatwidget::voice_mode::VOICE_MODE_INSTRUCTION;
+                let verbosity = self
+                    .voice_mode_state
+                    .as_ref()
+                    .map(|s| s.verbosity)
+                    .unwrap_or_default();
+                let prefix = crate::chatwidget::voice_mode::voice_mode_instruction(verbosity);
                 let prefix_len = prefix.len();
                 let model_text = format!("{}{}", prefix, &text);
                 // Shift text_elements byte ranges forward by the prefix length
@@ -5254,6 +5290,7 @@ impl ChatWidget {
             EventMsg::PresentDocument(ev) => self.on_present_document(ev, from_replay),
             EventMsg::UpdateDocumentSection(ev) => self.on_update_document_section(ev),
             EventMsg::AppendDocumentSection(ev) => self.on_append_document_section(ev),
+            EventMsg::AddDocumentSection(ev) => self.on_add_document_section(ev),
             EventMsg::PatchDocumentSection(ev) => self.on_patch_document_section(ev),
             EventMsg::ExecApprovalRequest(ev) => {
                 // For replayed events, synthesize an empty id (these should not occur).
@@ -9622,10 +9659,12 @@ fn strip_system_instruction_prefix(
         }
 
         #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
-        let known_prefixes: &[&str] = &[
-            crate::chatwidget::voice_mode::VOICE_MODE_INSTRUCTION,
-            crate::chatwidget::voice_mode::VOICE_MODE_OFF_INSTRUCTION,
-        ];
+        let known_prefixes: Vec<&str> = {
+            let mut v: Vec<&str> =
+                crate::chatwidget::voice_mode::voice_mode_instruction_prefixes().to_vec();
+            v.push(crate::chatwidget::voice_mode::VOICE_MODE_OFF_INSTRUCTION);
+            v
+        };
         #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
         let known_prefixes: &[&str] = &[];
 

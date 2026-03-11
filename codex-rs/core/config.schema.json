@@ -1875,6 +1875,14 @@
           "description": "RMS energy threshold for voice activity detection (0.0–1.0).",
           "format": "double",
           "type": "number"
+        },
+        "verbosity": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/VoiceVerbosity"
+            }
+          ],
+          "description": "Controls how much the agent narrates: \"concise\" (final answer only) or \"verbose\" (progress + answer)."
         }
       },
       "type": "object"
@@ -1900,6 +1908,25 @@
           "description": "Show text AND play TTS audio (default).",
           "enum": [
             "both"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "VoiceVerbosity": {
+      "description": "Controls how much the agent narrates aloud via `<voice>` tags.",
+      "oneOf": [
+        {
+          "description": "Only the final answer/summary is spoken aloud.",
+          "enum": [
+            "concise"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Intermediate progress updates and final answer are spoken aloud.",
+          "enum": [
+            "verbose"
           ],
           "type": "string"
         }

@@ -112,6 +112,19 @@ pub(crate) trait BottomPaneView: Renderable {
     ) {
     }
 
+    /// Forward a new document section insertion to this view (no-op by default).
+    #[allow(dead_code)]
+    fn handle_document_section_add(
+        &mut self,
+        _document_id: &str,
+        _after_section_index: i32,
+        _heading: String,
+        _content: String,
+        _foldable: bool,
+        _summary: Option<String>,
+    ) {
+    }
+
     /// Forward a document section patch (find-and-replace) to this view (no-op by default).
     #[allow(dead_code)]
     fn handle_document_section_patch(
@@ -153,6 +166,11 @@ pub(crate) trait BottomPaneView: Renderable {
 
     #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn set_voice_tts_paused(&mut self, _paused: bool) {}
+
+    #[cfg(all(test, not(target_os = "linux"), feature = "voice-input"))]
+    fn voice_tts_paused(&self) -> bool {
+        false
+    }
 
     #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn set_pending_voice_question(&mut self, _section: usize, _question: String) {}

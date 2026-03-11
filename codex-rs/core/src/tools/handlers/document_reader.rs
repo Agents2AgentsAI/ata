@@ -8,6 +8,8 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::spec::JsonSchema;
 use async_trait::async_trait;
+use codex_protocol::document_reader::AddDocumentSectionArgs;
+use codex_protocol::document_reader::AddDocumentSectionEvent;
 use codex_protocol::document_reader::AppendDocumentSectionEvent;
 use codex_protocol::document_reader::AppendToSectionArgs;
 use codex_protocol::document_reader::PatchDocumentSectionArgs;
@@ -227,8 +229,16 @@ pub static PRESENT_DOCUMENT_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
                        'Figure Pointers' or 'How to view figures' that tell the user to look \
                        at specific figures. Instead, describe what each important figure shows \
                        inline in the narrative (e.g. 'The architecture diagram shows three \
-                       stages connected by…'). After calling this tool, end your response \
-                       and wait for user interaction. To re-display a previously presented \
+                       stages connected by…'). \
+                       CRITICAL — SILENCE AFTER PRESENTING: The reading view IS your \
+                       response. After calling this tool, do NOT output any additional text \
+                       in the chat — no summary, no recap, no 'here is what I found', no \
+                       restatement of the content. The user already sees the full document \
+                       in the reading view. Any text you add after this tool call will \
+                       appear as redundant duplication. The ONLY exception is a short \
+                       follow-up question to the user (e.g. 'Would you like me to go \
+                       deeper on any section?'). If you have no question, output nothing. \
+                       To re-display a previously presented \
                        document (with all section updates intact), pass only the document_id."
             .to_string(),
         strict: false,
@@ -273,7 +283,10 @@ pub static UPDATE_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
                        Content style: write straight prose that continues the section\u{2019}s \
                        voice. Do NOT prefix with bold/italic topic lines like \
                        '**On the efficiency gains:**' or '*Regarding caching:*' \u{2014} \
-                       just write the content directly."
+                       just write the content directly. \
+                       SILENCE AFTER UPDATING: The reading view already shows the updated \
+                       content. Do not repeat or summarize the changes in the chat. Only \
+                       add text if you have a follow-up question for the user."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -334,7 +347,10 @@ pub static APPEND_TO_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     ToolSpec::Function(ResponsesApiTool {
         name: "append_to_section".to_string(),
         description: "Append content to the end of a section in a document currently being read. \
-                       Use this when adding information to a section without rewriting it entirely."
+                       Use this when adding information to a section without rewriting it entirely. \
+                       SILENCE AFTER APPENDING: The reading view already shows the appended \
+                       content. Do not repeat or summarize what you added in the chat. Only \
+                       add text if you have a follow-up question for the user."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -402,7 +418,10 @@ pub static PATCH_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         name: "patch_document_section".to_string(),
         description: "Find and replace specific text within a section of a document currently \
                        being read. Use this for targeted edits like fixing a sentence or updating \
-                       a specific paragraph without rewriting the entire section."
+                       a specific paragraph without rewriting the entire section. \
+                       SILENCE AFTER PATCHING: The reading view already shows the patched \
+                       content. Do not repeat or summarize the changes in the chat. Only \
+                       add text if you have a follow-up question for the user."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -412,6 +431,83 @@ pub static PATCH_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
                 "section_index".to_string(),
                 "old_text".to_string(),
                 "new_text".to_string(),
+            ]),
+            additional_properties: Some(false.into()),
+        },
+    })
+});
+
+pub static ADD_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "document_id".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "The document to update (must match a previous present_reading_view call)"
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "after_section_index".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Insert the new section AFTER this 0-based index. Use -1 to insert at the beginning."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "heading".to_string(),
+        JsonSchema::String {
+            description: Some("The ## heading for the new section".to_string()),
+        },
+    );
+    properties.insert(
+        "content".to_string(),
+        JsonSchema::String {
+            description: Some("Markdown content for the section body".to_string()),
+        },
+    );
+    properties.insert(
+        "foldable".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "When true, the new section starts collapsed. Use for supplementary \
+                 content. Default: false."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "summary".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Short descriptive label for this section (5-10 words). Used as fold title when collapsed."
+                    .to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "add_document_section".to_string(),
+        description: "Add a new section to a document currently being read by the user. \
+                       Use this when a follow-up question introduces a new topic that deserves \
+                       its own section, rather than cramming new content into existing sections \
+                       via append. Do NOT use this to rewrite existing content \u{2014} use \
+                       update_document_section for that. \
+                       SILENCE AFTER ADDING: The reading view already shows the new section. \
+                       Do not repeat or summarize the content in the chat. Only add text if \
+                       you have a follow-up question for the user."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec![
+                "document_id".to_string(),
+                "after_section_index".to_string(),
+                "heading".to_string(),
+                "content".to_string(),
             ]),
             additional_properties: Some(false.into()),
         },
@@ -543,6 +639,10 @@ impl ToolHandler for DocumentReaderHandler {
                      middle of a numbered list or multi-step sequence.\n\
                      - `patch_document_section` \u{2014} for small targeted fixes like \
                      correcting a sentence or updating a specific paragraph.\n\
+                     - `add_document_section` \u{2014} when a follow-up introduces a new \
+                     topic that doesn\u{2019}t fit in any existing section. Creates a brand \
+                     new section. Set after_section_index to the section the user is \
+                     reading so it appears right after.\n\
                      \n\
                      Do NOT output plain text responses \u{2014} always \
                      use reading view tools for follow-ups on this topic. \
@@ -767,6 +867,100 @@ impl ToolHandler for DocumentReaderHandler {
                     "Content appended to section. The user can see the change immediately.\
                      {streaming_reminder}"
                 )
+            }
+            "add_document_section" => {
+                let mut args: AddDocumentSectionArgs =
+                    serde_json::from_str(&arguments).map_err(|e| {
+                        FunctionCallError::RespondToModel(format!(
+                            "failed to parse add_document_section arguments: {e}"
+                        ))
+                    })?;
+                args.content = strip_citation_markers(&args.content);
+                if !doc_cache.contains(&args.document_id) {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "No document with id \"{}\" is currently being viewed. \
+                         Call present_reading_view first to display a document.",
+                        args.document_id
+                    )));
+                }
+
+                // Bounds-check after_section_index: must be -1..len-1.
+                {
+                    let cache = doc_cache.lock();
+                    if let Some(doc) = cache.get(&args.document_id) {
+                        let max_idx = doc.sections.len() as i32 - 1;
+                        if args.after_section_index < -1 || args.after_section_index > max_idx {
+                            return Err(FunctionCallError::RespondToModel(format!(
+                                "after_section_index {} is out of bounds. \
+                                 Document has {} section(s) (valid range: -1\u{2013}{max_idx}).",
+                                args.after_section_index,
+                                doc.sections.len(),
+                            )));
+                        }
+                    }
+                }
+
+                // Insert the new section into the cache.
+                let insert_pos = {
+                    let mut cache = doc_cache.lock();
+                    if let Some(doc) = cache.get_mut(&args.document_id) {
+                        let insert_at = (args.after_section_index + 1) as usize;
+                        doc.sections.insert(
+                            insert_at,
+                            CachedSection {
+                                heading: args.heading.clone(),
+                                content: args.content.clone(),
+                            },
+                        );
+                        Some(insert_at)
+                    } else {
+                        None
+                    }
+                };
+
+                let foldable = args.foldable.unwrap_or(false);
+                let summary = args.summary;
+
+                // Re-open the reading view if the user closed it.
+                let reopen_payload = {
+                    let cache = doc_cache.lock();
+                    cache
+                        .get(&args.document_id)
+                        .map(|doc| (doc.title.clone(), doc.to_markdown()))
+                };
+                if let Some((title, full_content)) = reopen_payload {
+                    session
+                        .send_event(
+                            turn.as_ref(),
+                            EventMsg::PresentDocument(PresentDocumentEvent {
+                                call_id: call_id.clone(),
+                                turn_id: turn.sub_id.clone(),
+                                document_id: args.document_id.clone(),
+                                title,
+                                content: full_content,
+                            }),
+                        )
+                        .await;
+                }
+
+                if !is_subagent && let Some(_pos) = insert_pos {
+                    session
+                        .send_event(
+                            turn.as_ref(),
+                            EventMsg::AddDocumentSection(AddDocumentSectionEvent {
+                                call_id,
+                                turn_id: turn.sub_id.clone(),
+                                document_id: args.document_id,
+                                after_section_index: args.after_section_index,
+                                heading: args.heading,
+                                content: args.content,
+                                foldable,
+                                summary,
+                            }),
+                        )
+                        .await;
+                }
+                "New section added. The user can see the change immediately.".to_string()
             }
             "patch_document_section" => {
                 let mut args: PatchDocumentSectionArgs =

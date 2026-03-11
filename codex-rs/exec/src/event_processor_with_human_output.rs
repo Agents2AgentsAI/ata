@@ -874,6 +874,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::PresentDocument(_)
             | EventMsg::UpdateDocumentSection(_)
             | EventMsg::AppendDocumentSection(_)
+            | EventMsg::AddDocumentSection(_)
             | EventMsg::PatchDocumentSection(_)
             | EventMsg::DynamicToolCallResponse(_) => {}
         }

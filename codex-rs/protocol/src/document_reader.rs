@@ -52,6 +52,26 @@ pub struct AppendToSectionArgs {
     pub summary: Option<String>,
 }
 
+/// Arguments for the `add_document_section` tool call.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+pub struct AddDocumentSectionArgs {
+    /// The document to update (must match a previous `present_reading_view` call).
+    pub document_id: String,
+    /// Insert the new section AFTER this 0-based index. Use -1 to insert at the beginning.
+    pub after_section_index: i32,
+    /// The `## ` heading for the new section.
+    pub heading: String,
+    /// Markdown content for the section body.
+    pub content: String,
+    /// When true, the new section starts collapsed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foldable: Option<bool>,
+    /// Short summary shown when the fold is collapsed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
 /// Arguments for the `patch_document_section` tool call (find-and-replace).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
@@ -101,6 +121,24 @@ pub struct AppendDocumentSectionEvent {
     pub section_index: usize,
     pub content: String,
     /// Whether the appended content should be collapsible.
+    #[serde(default)]
+    pub foldable: bool,
+    /// Short summary shown when the fold is collapsed.
+    #[serde(default)]
+    pub summary: Option<String>,
+}
+
+/// Event emitted when the agent calls `add_document_section`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+pub struct AddDocumentSectionEvent {
+    pub call_id: String,
+    pub turn_id: String,
+    pub document_id: String,
+    /// Insert the new section AFTER this 0-based index. -1 for beginning.
+    pub after_section_index: i32,
+    pub heading: String,
+    pub content: String,
+    /// Whether the new section should be collapsible.
     #[serde(default)]
     pub foldable: bool,
     /// Short summary shown when the fold is collapsed.

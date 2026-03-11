@@ -2826,14 +2826,6 @@ impl ChatComposer {
                     return None;
                 }
 
-                // If textarea is empty, start recording immediately without inserting a space.
-                if self.textarea.text().is_empty() {
-                    if self.start_recording_with_placeholder() {
-                        return Some((InputResult::None, true));
-                    }
-                    return None;
-                }
-
                 // If a hold is already pending, swallow further press events to
                 // avoid inserting multiple spaces and resetting the timer on key repeat.
                 if self.voice_state.space_hold_started_at.is_some() {
