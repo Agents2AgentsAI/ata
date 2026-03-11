@@ -903,7 +903,7 @@ impl ToolHandler for DocumentReaderHandler {
                 // Insert the new section into the cache.
                 let insert_pos = {
                     let mut cache = doc_cache.lock();
-                    let pos = if let Some(doc) = cache.get_mut(&args.document_id) {
+                    if let Some(doc) = cache.get_mut(&args.document_id) {
                         let insert_at = (args.after_section_index + 1) as usize;
                         doc.sections.insert(
                             insert_at,
@@ -915,8 +915,7 @@ impl ToolHandler for DocumentReaderHandler {
                         Some(insert_at)
                     } else {
                         None
-                    };
-                    pos
+                    }
                 };
 
                 let foldable = args.foldable.unwrap_or(false);
@@ -944,24 +943,22 @@ impl ToolHandler for DocumentReaderHandler {
                         .await;
                 }
 
-                if !is_subagent {
-                    if let Some(_pos) = insert_pos {
-                        session
-                            .send_event(
-                                turn.as_ref(),
-                                EventMsg::AddDocumentSection(AddDocumentSectionEvent {
-                                    call_id,
-                                    turn_id: turn.sub_id.clone(),
-                                    document_id: args.document_id,
-                                    after_section_index: args.after_section_index,
-                                    heading: args.heading,
-                                    content: args.content,
-                                    foldable,
-                                    summary,
-                                }),
-                            )
-                            .await;
-                    }
+                if !is_subagent && let Some(_pos) = insert_pos {
+                    session
+                        .send_event(
+                            turn.as_ref(),
+                            EventMsg::AddDocumentSection(AddDocumentSectionEvent {
+                                call_id,
+                                turn_id: turn.sub_id.clone(),
+                                document_id: args.document_id,
+                                after_section_index: args.after_section_index,
+                                heading: args.heading,
+                                content: args.content,
+                                foldable,
+                                summary,
+                            }),
+                        )
+                        .await;
                 }
                 "New section added. The user can see the change immediately.".to_string()
             }
