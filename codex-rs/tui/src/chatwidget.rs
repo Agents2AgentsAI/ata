@@ -3886,7 +3886,8 @@ impl ChatWidget {
                 ..
             } if modifiers.is_empty()
                 && self.is_document_reader_active()
-                && self.is_voice_speaking() =>
+                && self.is_voice_speaking()
+                && !self.bottom_pane.is_view_composer_focused() =>
             {
                 self.on_reading_view_space_press();
                 return;
@@ -3900,6 +3901,7 @@ impl ChatWidget {
                 ..
             } if modifiers.is_empty()
                 && self.is_document_reader_active()
+                && !self.bottom_pane.is_view_composer_focused()
                 && self
                     .voice_mode_state
                     .as_ref()
@@ -3917,6 +3919,7 @@ impl ChatWidget {
                 ..
             } if modifiers.is_empty()
                 && self.is_document_reader_active()
+                && !self.bottom_pane.is_view_composer_focused()
                 && self
                     .voice_mode_state
                     .as_ref()
