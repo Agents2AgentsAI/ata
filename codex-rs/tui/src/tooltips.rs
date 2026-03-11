@@ -51,11 +51,23 @@ fn experimental_tooltips() -> Vec<&'static str> {
 }
 
 /// Pick a random tooltip to show to the user when starting Ata.
-pub(crate) fn get_tooltip(plan: Option<PlanType>, fast_mode_enabled: bool) -> Option<String> {
+pub(crate) fn get_tooltip(
+    plan: Option<PlanType>,
+    fast_mode_enabled: bool,
+    disabled_feature_announcements: &[&str],
+) -> Option<String> {
     let mut rng = rand::rng();
 
     if let Some(announcement) = announcement::fetch_announcement_tip() {
         return Some(announcement);
+    }
+
+    // If there are disabled experimental features, 30% of the time nudge the
+    // user to enable one. The remaining 70% falls through to the normal pool
+    // so tips stay varied.
+    if !disabled_feature_announcements.is_empty() && rng.random_ratio(3, 10) {
+        let idx = rng.random_range(0..disabled_feature_announcements.len());
+        return Some(disabled_feature_announcements[idx].to_string());
     }
 
     // Leave small chance for a random tooltip to be shown.

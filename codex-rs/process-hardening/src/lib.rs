@@ -55,6 +55,10 @@ pub(crate) fn pre_main_hardening_linux() {
     // For "defense in depth," set the core file size limit to 0.
     set_core_file_size_limit_to_zero();
 
+    // Raise file descriptor limit to the hard limit so that spawning many
+    // subagents in parallel does not hit EMFILE.
+    raise_file_descriptor_limit();
+
     // Official Codex releases are MUSL-linked, which means that variables such
     // as LD_PRELOAD are ignored anyway, but just to be sure, clear them here.
     let ld_keys = env_keys_with_prefix(std::env::vars_os(), b"LD_");
@@ -70,6 +74,8 @@ pub(crate) fn pre_main_hardening_linux() {
 pub(crate) fn pre_main_hardening_bsd() {
     // FreeBSD/OpenBSD: set RLIMIT_CORE to 0 and clear LD_* env vars
     set_core_file_size_limit_to_zero();
+
+    raise_file_descriptor_limit();
 
     let ld_keys = env_keys_with_prefix(std::env::vars_os(), b"LD_");
     for key in ld_keys {
@@ -93,6 +99,10 @@ pub(crate) fn pre_main_hardening_macos() {
 
     // Set the core file size limit to 0 to prevent core dumps.
     set_core_file_size_limit_to_zero();
+
+    // Raise file descriptor limit to the hard limit so that spawning many
+    // subagents in parallel does not hit EMFILE.
+    raise_file_descriptor_limit();
 
     // Remove all DYLD_ environment variables, which can be used to subvert
     // library loading.
@@ -119,6 +129,49 @@ fn set_core_file_size_limit_to_zero() {
             std::io::Error::last_os_error()
         );
         std::process::exit(SET_RLIMIT_CORE_FAILED_EXIT_CODE);
+    }
+}
+
+/// Raise the soft file-descriptor limit (`RLIMIT_NOFILE`) to the hard limit.
+///
+/// On macOS the default soft limit is 256, which is easily exhausted when
+/// spawning many subagents (each opens ~15-25 FDs for pipes, SQLite, network
+/// proxy, etc.). The hard limit is typically 10 240+, so raising the soft
+/// limit is a cheap way to prevent EMFILE panics.
+///
+/// This is best-effort: failure is logged but does not abort the process.
+#[cfg(unix)]
+fn raise_file_descriptor_limit() {
+    let mut rlim = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+
+    let ret_code = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) };
+    if ret_code != 0 {
+        eprintln!(
+            "WARNING: getrlimit(RLIMIT_NOFILE) failed: {}",
+            std::io::Error::last_os_error()
+        );
+        return;
+    }
+
+    if rlim.rlim_cur >= rlim.rlim_max {
+        return;
+    }
+
+    let new_rlim = libc::rlimit {
+        rlim_cur: rlim.rlim_max,
+        rlim_max: rlim.rlim_max,
+    };
+
+    let ret_code = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &new_rlim) };
+    if ret_code != 0 {
+        eprintln!(
+            "WARNING: setrlimit(RLIMIT_NOFILE, {}) failed: {}",
+            rlim.rlim_max,
+            std::io::Error::last_os_error()
+        );
     }
 }
 

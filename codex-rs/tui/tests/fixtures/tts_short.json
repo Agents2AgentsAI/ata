@@ -1,0 +1,13 @@
+{
+  "input_text": "Hello, world.",
+  "chunks": [
+    {
+      "pcm_samples": 12000,
+      "alignment": {
+        "chars": ["H", "e", "l", "l", "o", ",", " ", "w", "o", "r", "l", "d", "."],
+        "char_start_times_ms": [0, 45, 90, 135, 180, 225, 270, 315, 365, 415, 465, 515, 565],
+        "char_durations_ms": [45, 45, 45, 45, 45, 45, 45, 50, 50, 50, 50, 50, 35]
+      }
+    }
+  ]
+}

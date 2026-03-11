@@ -78,6 +78,26 @@ impl BottomPane {
         }
     }
 
+    /// Forward a new section insertion to the active document reader.
+    pub(crate) fn add_document_section(
+        &mut self,
+        ev: &codex_protocol::document_reader::AddDocumentSectionEvent,
+    ) {
+        if let Some(view) = self.view_stack.last_mut()
+            && view.view_id() == Some(document_reader::DOCUMENT_READER_VIEW_ID)
+        {
+            view.handle_document_section_add(
+                &ev.document_id,
+                ev.after_section_index,
+                ev.heading.clone(),
+                ev.content.clone(),
+                ev.foldable,
+                ev.summary.clone(),
+            );
+            self.request_redraw();
+        }
+    }
+
     /// Forward a section patch (find-and-replace) to the active document reader.
     pub(crate) fn patch_document_section(
         &mut self,
@@ -159,6 +179,14 @@ impl BottomPane {
             view.set_voice_tts_paused(paused);
             self.request_redraw();
         }
+    }
+
+    /// Query the TTS paused state of the active document reader.
+    #[cfg(all(test, not(target_os = "linux"), feature = "voice-input"))]
+    pub(crate) fn is_document_reader_tts_paused(&self) -> bool {
+        self.view_stack
+            .last()
+            .is_some_and(|v| v.voice_tts_paused())
     }
 
     /// Mark a section as pending a voice question answer (same inline

@@ -12,6 +12,8 @@ use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
 
+use codex_core::config::types::VoiceVerbosity;
+
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
@@ -87,9 +89,12 @@ const LANGUAGE_OPTIONS: &[(&str, &str)] = &[
 ];
 
 impl VoiceSetupView {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
+        voice_enabled: bool,
         tts_enabled: bool,
         stt_enabled: bool,
+        verbosity: VoiceVerbosity,
         api_key: Option<String>,
         language_code: Option<String>,
         speed: Option<f64>,
@@ -111,7 +116,29 @@ impl VoiceSetupView {
             .and_then(|code| lang_options.iter().position(|(v, _)| v == code))
             .unwrap_or(0); // default to "auto"
 
+        let verbosity_options: Vec<(String, String)> = vec![
+            (
+                "verbose".to_string(),
+                "Verbose (progress + answer)".to_string(),
+            ),
+            (
+                "concise".to_string(),
+                "Concise (final answer only)".to_string(),
+            ),
+        ];
+        let verbosity_idx = match verbosity {
+            VoiceVerbosity::Verbose => 0,
+            VoiceVerbosity::Concise => 1,
+        };
+
         let items = vec![
+            VoiceSetupItem {
+                name: "Voice Mode".to_string(),
+                description: "Full voice mode (STT + TTS)".to_string(),
+                kind: VoiceSetupItemKind::Toggle {
+                    enabled: voice_enabled,
+                },
+            },
             VoiceSetupItem {
                 name: "TTS".to_string(),
                 description: "Agent responses read aloud".to_string(),
@@ -124,6 +151,14 @@ impl VoiceSetupView {
                 description: "Hold Space to speak".to_string(),
                 kind: VoiceSetupItemKind::Toggle {
                     enabled: stt_enabled,
+                },
+            },
+            VoiceSetupItem {
+                name: "Verbosity".to_string(),
+                description: "How much the agent speaks aloud".to_string(),
+                kind: VoiceSetupItemKind::Selection {
+                    current_idx: verbosity_idx,
+                    options: verbosity_options,
                 },
             },
             VoiceSetupItem {
@@ -496,6 +531,25 @@ impl VoiceSetupView {
         None
     }
 
+    /// Extract the current verbosity selection.
+    fn current_verbosity(&self) -> VoiceVerbosity {
+        for item in &self.items {
+            if let VoiceSetupItemKind::Selection {
+                current_idx,
+                options,
+            } = &item.kind
+                && item.name == "Verbosity"
+            {
+                let current_value = options.get(*current_idx).map(|(v, _)| v.as_str());
+                return match current_value {
+                    Some("concise") => VoiceVerbosity::Concise,
+                    _ => VoiceVerbosity::Verbose,
+                };
+            }
+        }
+        VoiceVerbosity::default()
+    }
+
     /// Extract the current speed value.
     fn current_speed(&self) -> f64 {
         for item in &self.items {
@@ -608,6 +662,17 @@ impl BottomPaneView for VoiceSetupView {
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         // Extract toggle states.
+        let voice_enabled = self.items.iter().find_map(|i| {
+            if i.name == "Voice Mode" {
+                if let VoiceSetupItemKind::Toggle { enabled } = &i.kind {
+                    Some(*enabled)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
         let tts_enabled = self
             .items
             .iter()
@@ -641,13 +706,16 @@ impl BottomPaneView for VoiceSetupView {
         let api_key = self.changed_api_key();
         let language_code = self.current_language_code();
         let speed = self.current_speed();
+        let verbosity = self.current_verbosity();
 
         self.app_event_tx.send(AppEvent::UpdateVoiceSettings {
+            voice_enabled,
             tts_enabled,
             stt_enabled,
             elevenlabs_api_key: api_key,
             language_code: Some(language_code),
             speed: Some(speed),
+            verbosity,
         });
         self.complete = true;
         CancellationEvent::Handled

@@ -774,6 +774,10 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         ]));
     }
     feature_cmds.push(Line::from(vec!["/diff".cyan(), " show git changes".into()]));
+    feature_cmds.push(Line::from(vec![
+        "/experimental".cyan(),
+        " toggle treesitter, LSP, and more".into(),
+    ]));
 
     if !feature_cmds.is_empty() {
         result.push(Line::from(""));

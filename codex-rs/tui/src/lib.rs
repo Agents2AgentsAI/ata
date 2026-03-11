@@ -67,6 +67,17 @@ mod ascii_animation;
 mod audio_device;
 mod bottom_pane;
 mod chatwidget;
+
+// Re-export for integration tests.
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[doc(hidden)]
+pub use chatwidget::voice_mode::AlignmentEntry;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[doc(hidden)]
+pub use chatwidget::voice_mode::build_alignment_entries;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[doc(hidden)]
+pub use chatwidget::voice_mode::find_active_word;
 mod cli;
 mod clipboard_paste;
 mod clipboard_text;

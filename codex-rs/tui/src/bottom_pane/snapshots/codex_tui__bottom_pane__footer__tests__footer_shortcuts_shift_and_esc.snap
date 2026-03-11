@@ -10,4 +10,4 @@ expression: terminal.backend()
 "  ctrl + t to view transcript                                                   "
 "                                                                                "
 "  Feature commands:                                                             "
-"  /diff show git changes                                                        "
+"  /diff show git changes        /experimental toggle treesitter, LSP, and more  "

@@ -13,6 +13,7 @@ use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::research::SharedResearchToolkit;
 use crate::research::tool_names::find_mcp_tool_matches;
 use crate::research::tool_names::should_suppress_research_mcp_tool;
+use crate::tools::handlers::ADD_DOCUMENT_SECTION_TOOL;
 use crate::tools::handlers::APPEND_TO_SECTION_TOOL;
 use crate::tools::handlers::PATCH_DOCUMENT_SECTION_TOOL;
 use crate::tools::handlers::PLAN_TOOL;
@@ -1338,10 +1339,12 @@ pub(crate) fn build_specs_with_toolkits(
         builder.push_spec(PRESENT_DOCUMENT_TOOL.clone());
         builder.push_spec(UPDATE_DOCUMENT_SECTION_TOOL.clone());
         builder.push_spec(APPEND_TO_SECTION_TOOL.clone());
+        builder.push_spec(ADD_DOCUMENT_SECTION_TOOL.clone());
         builder.push_spec(PATCH_DOCUMENT_SECTION_TOOL.clone());
         builder.register_handler("present_reading_view", document_reader_handler.clone());
         builder.register_handler("update_document_section", document_reader_handler.clone());
         builder.register_handler("append_to_section", document_reader_handler.clone());
+        builder.register_handler("add_document_section", document_reader_handler.clone());
         builder.register_handler("patch_document_section", document_reader_handler);
     }
 
@@ -2030,6 +2033,7 @@ mod tests {
             PRESENT_DOCUMENT_TOOL.clone(),
             UPDATE_DOCUMENT_SECTION_TOOL.clone(),
             APPEND_TO_SECTION_TOOL.clone(),
+            ADD_DOCUMENT_SECTION_TOOL.clone(),
             PATCH_DOCUMENT_SECTION_TOOL.clone(),
             create_request_user_input_tool(CollaborationModesConfig::default()),
             create_apply_patch_freeform_tool(),
@@ -2475,6 +2479,7 @@ mod tests {
                 "present_reading_view",
                 "update_document_section",
                 "append_to_section",
+                "add_document_section",
                 "patch_document_section",
                 "request_user_input",
                 "apply_patch",
@@ -2498,6 +2503,7 @@ mod tests {
                 "present_reading_view",
                 "update_document_section",
                 "append_to_section",
+                "add_document_section",
                 "patch_document_section",
                 "request_user_input",
                 "apply_patch",
@@ -2523,6 +2529,7 @@ mod tests {
                 "present_reading_view",
                 "update_document_section",
                 "append_to_section",
+                "add_document_section",
                 "patch_document_section",
                 "request_user_input",
                 "apply_patch",
@@ -2548,6 +2555,7 @@ mod tests {
                 "present_reading_view",
                 "update_document_section",
                 "append_to_section",
+                "add_document_section",
                 "patch_document_section",
                 "request_user_input",
                 "apply_patch",
@@ -2571,6 +2579,7 @@ mod tests {
                 "present_reading_view",
                 "update_document_section",
                 "append_to_section",
+                "add_document_section",
                 "patch_document_section",
                 "request_user_input",
                 "apply_patch",
@@ -2594,6 +2603,7 @@ mod tests {
                 "present_reading_view",
                 "update_document_section",
                 "append_to_section",
+                "add_document_section",
                 "patch_document_section",
                 "request_user_input",
                 "apply_patch",
@@ -2617,6 +2627,7 @@ mod tests {
                 "present_reading_view",
                 "update_document_section",
                 "append_to_section",
+                "add_document_section",
                 "patch_document_section",
                 "request_user_input",
                 "web_search",
@@ -2639,6 +2650,7 @@ mod tests {
                 "present_reading_view",
                 "update_document_section",
                 "append_to_section",
+                "add_document_section",
                 "patch_document_section",
                 "request_user_input",
                 "apply_patch",
@@ -2664,6 +2676,7 @@ mod tests {
                 "present_reading_view",
                 "update_document_section",
                 "append_to_section",
+                "add_document_section",
                 "patch_document_section",
                 "request_user_input",
                 "apply_patch",
