@@ -45,8 +45,8 @@ echo "=== Pause / Resume State Machine Tests ==="
 cargo test -p codex-tui --features voice-input --lib -- tts_chunk_during_pause_does_not_transition_phase tts_chunk_transitions_to_speaking_when_not_paused tts_chunk_noop_when_already_speaking finalize_blocked_when_audio_paused finalize_allowed_when_audio_not_paused should_finalize_on_tick_blocked_when_paused should_finalize_on_tick_when_data_complete_and_drained resume_with_drained_buffer_does_not_enter_speaking resume_with_buffered_audio_succeeds pause_blocks_finalization_then_resume_without_audio_allows_it tts_data_incomplete_prevents_finalization_even_when_buffer_empty resume_after_finalization_does_not_resume
 
 echo ""
-echo "=== S-Key Pause/Resume + Space PTT E2E Tests ==="
-cargo test -p codex-tui --features voice-input --lib -- s_key_sends_pause_when_voice_active s_key_sends_resume_when_paused space_in_reading_view_triggers_ptt_not_pause
+echo "=== S-Key Pause/Resume + Space Pause/Resume E2E Tests ==="
+cargo test -p codex-tui --features voice-input --lib -- s_key_sends_pause_when_voice_active s_key_sends_resume_when_paused space_in_reading_view_toggles_pause_resume
 
 echo ""
 echo "=== All reading view & karaoke tests complete ==="

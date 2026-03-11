@@ -3874,30 +3874,54 @@ impl ChatWidget {
                 self.on_voice_interrupt_tts();
                 return;
             }
-            // Space in reading view while TTS is speaking: barge-in for PTT.
-            // Pause/resume is handled by the 's' key in the document reader.
+            // Space Press in reading view while TTS is speaking:
+            // Start tap/hold detection. Pause TTS immediately (non-destructive)
+            // and start mic capture if STT is available. On release we decide
+            // whether it was a tap (toggle pause/resume) or hold (PTT).
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
             KeyEvent {
                 code: KeyCode::Char(' '),
-                kind,
+                kind: KeyEventKind::Press,
                 modifiers,
                 ..
             } if modifiers.is_empty()
                 && self.is_document_reader_active()
                 && self.is_voice_speaking() =>
             {
-                match kind {
-                    KeyEventKind::Press => {
-                        self.on_ptt_press();
-                    }
-                    KeyEventKind::Release => {
-                        if let Some(ref mut s) = self.voice_mode_state {
-                            s.key_release_supported = true;
-                        }
-                        self.on_ptt_release();
-                    }
-                    KeyEventKind::Repeat => self.on_ptt_repeat(),
-                }
+                self.on_reading_view_space_press();
+                return;
+            }
+            // Space Release in reading view during tap/hold detection.
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            KeyEvent {
+                code: KeyCode::Char(' '),
+                kind: KeyEventKind::Release,
+                modifiers,
+                ..
+            } if modifiers.is_empty()
+                && self.is_document_reader_active()
+                && self
+                    .voice_mode_state
+                    .as_ref()
+                    .is_some_and(|s| s.space_press_at.is_some()) =>
+            {
+                self.on_reading_view_space_release();
+                return;
+            }
+            // Space Repeat in reading view during tap/hold detection: no-op.
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            KeyEvent {
+                code: KeyCode::Char(' '),
+                kind: KeyEventKind::Repeat,
+                modifiers,
+                ..
+            } if modifiers.is_empty()
+                && self.is_document_reader_active()
+                && self
+                    .voice_mode_state
+                    .as_ref()
+                    .is_some_and(|s| s.space_press_at.is_some()) =>
+            {
                 return;
             }
             // Space: push-to-talk (PTT) when voice mode is active and STT is enabled.
@@ -4829,7 +4853,12 @@ impl ChatWidget {
                 .is_some_and(|s| s.tts_enabled);
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
             if (voice_input || voice_mode_active) && tts_on {
-                let prefix = crate::chatwidget::voice_mode::VOICE_MODE_INSTRUCTION;
+                let verbosity = self
+                    .voice_mode_state
+                    .as_ref()
+                    .map(|s| s.verbosity)
+                    .unwrap_or_default();
+                let prefix = crate::chatwidget::voice_mode::voice_mode_instruction(verbosity);
                 let prefix_len = prefix.len();
                 let model_text = format!("{}{}", prefix, &text);
                 // Shift text_elements byte ranges forward by the prefix length
@@ -5258,6 +5287,7 @@ impl ChatWidget {
             EventMsg::PresentDocument(ev) => self.on_present_document(ev, from_replay),
             EventMsg::UpdateDocumentSection(ev) => self.on_update_document_section(ev),
             EventMsg::AppendDocumentSection(ev) => self.on_append_document_section(ev),
+            EventMsg::AddDocumentSection(ev) => self.on_add_document_section(ev),
             EventMsg::PatchDocumentSection(ev) => self.on_patch_document_section(ev),
             EventMsg::ExecApprovalRequest(ev) => {
                 // For replayed events, synthesize an empty id (these should not occur).
@@ -9626,10 +9656,12 @@ fn strip_system_instruction_prefix(
         }
 
         #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
-        let known_prefixes: &[&str] = &[
-            crate::chatwidget::voice_mode::VOICE_MODE_INSTRUCTION,
-            crate::chatwidget::voice_mode::VOICE_MODE_OFF_INSTRUCTION,
-        ];
+        let known_prefixes: Vec<&str> = {
+            let mut v: Vec<&str> =
+                crate::chatwidget::voice_mode::voice_mode_instruction_prefixes().to_vec();
+            v.push(crate::chatwidget::voice_mode::VOICE_MODE_OFF_INSTRUCTION);
+            v
+        };
         #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
         let known_prefixes: &[&str] = &[];
 

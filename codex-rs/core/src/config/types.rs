@@ -931,6 +931,17 @@ impl Default for ShellEnvironmentPolicy {
 
 // ─── Voice Mode ──────────────────────────────────────────────────────────────
 
+/// Controls how much the agent narrates aloud via `<voice>` tags.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceVerbosity {
+    /// Only the final answer/summary is spoken aloud.
+    #[default]
+    Concise,
+    /// Intermediate progress updates and final answer are spoken aloud.
+    Verbose,
+}
+
 /// Output mode for the voice mode pipeline.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -979,6 +990,8 @@ pub struct VoiceModeToml {
     pub tts_enabled: Option<bool>,
     /// When false, STT (speech-to-text / push-to-talk) is disabled even when voice mode is on.
     pub stt_enabled: Option<bool>,
+    /// Controls how much the agent narrates: "concise" (final answer only) or "verbose" (progress + answer).
+    pub verbosity: Option<VoiceVerbosity>,
     /// ElevenLabs API settings.
     #[serde(default)]
     pub elevenlabs: Option<ElevenLabsToml>,
