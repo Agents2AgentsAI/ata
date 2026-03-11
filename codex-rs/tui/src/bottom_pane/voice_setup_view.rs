@@ -89,6 +89,7 @@ const LANGUAGE_OPTIONS: &[(&str, &str)] = &[
 ];
 
 impl VoiceSetupView {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         voice_enabled: bool,
         tts_enabled: bool,

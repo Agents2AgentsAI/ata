@@ -178,6 +178,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "present_reading_view",
         "update_document_section",
         "append_to_section",
+        "add_document_section",
         "patch_document_section",
         "request_user_input",
         "apply_patch",

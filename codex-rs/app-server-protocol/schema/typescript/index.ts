@@ -1,6 +1,7 @@
 // GENERATED CODE! DO NOT MODIFY BY HAND!
 
 export type { AbsolutePathBuf } from "./AbsolutePathBuf";
+export type { AddDocumentSectionEvent } from "./AddDocumentSectionEvent";
 export type { AgentMessageContent } from "./AgentMessageContent";
 export type { AgentMessageContentDeltaEvent } from "./AgentMessageContentDeltaEvent";
 export type { AgentMessageDeltaEvent } from "./AgentMessageDeltaEvent";
