@@ -4,6 +4,9 @@
 //! `find_active_word` functions from `codex_tui` using synthetic TTS fixture
 //! files, without requiring an ElevenLabs API key.
 
+// Voice/TTS is only available on non-Linux platforms with the voice-input feature.
+#![cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+
 mod support;
 
 use codex_tui::find_active_word;

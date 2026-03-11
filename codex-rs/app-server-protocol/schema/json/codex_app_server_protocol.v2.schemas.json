@@ -5644,6 +5644,62 @@
           "type": "object"
         },
         {
+          "description": "Agent added a new section to a document in reading mode.",
+          "properties": {
+            "after_section_index": {
+              "description": "Insert the new section AFTER this 0-based index. -1 for beginning.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "call_id": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            },
+            "document_id": {
+              "type": "string"
+            },
+            "foldable": {
+              "default": false,
+              "description": "Whether the new section should be collapsible.",
+              "type": "boolean"
+            },
+            "heading": {
+              "type": "string"
+            },
+            "summary": {
+              "default": null,
+              "description": "Short summary shown when the fold is collapsed.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "add_document_section"
+              ],
+              "title": "AddDocumentSectionEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "after_section_index",
+            "call_id",
+            "content",
+            "document_id",
+            "heading",
+            "turn_id",
+            "type"
+          ],
+          "title": "AddDocumentSectionEventMsg",
+          "type": "object"
+        },
+        {
           "description": "Agent patched (find-and-replace) a section of a document in reading mode.",
           "properties": {
             "call_id": {
