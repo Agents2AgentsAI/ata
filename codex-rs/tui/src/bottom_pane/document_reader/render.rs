@@ -321,9 +321,9 @@ pub(super) fn hints_line(
         h.extend([" | ".dim(), "r".dim().bold(), ": read".dim()]);
         if voice_status.is_some() {
             if voice_paused {
-                h.extend([" | ".dim(), "s".dim().bold(), ": resume".dim()]);
+                h.extend([" | ".dim(), "s/Space".dim().bold(), ": resume".dim()]);
             } else {
-                h.extend([" | ".dim(), "s".dim().bold(), ": pause".dim()]);
+                h.extend([" | ".dim(), "s/Space".dim().bold(), ": pause".dim()]);
             }
         }
         h.extend([" | ".dim(), "t".dim().bold(), ": toc".dim()]);

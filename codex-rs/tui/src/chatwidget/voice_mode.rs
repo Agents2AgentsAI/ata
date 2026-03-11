@@ -15,13 +15,13 @@ use std::time::Instant;
 
 use codex_core::config::types::VoiceModeToml;
 use codex_core::config::types::VoiceOutput;
+use codex_core::config::types::VoiceVerbosity;
 
 // ─── Voice mode instruction prefix ──────────────────────────────────────────
 
-/// Instruction prepended to voice transcriptions so the agent wraps spoken
-/// content in `<voice>` tags — only tagged text goes to TTS while everything
-/// else is displayed as regular chat output.
-pub(crate) const VOICE_MODE_INSTRUCTION: &str = "\
+/// Verbose instruction: acknowledgments, progress updates, and final summary
+/// are all spoken aloud.
+const VOICE_MODE_INSTRUCTION_VERBOSE: &str = "\
 [VOICE MODE] The user is speaking to you via voice. \
 Wrap any text you want spoken aloud in <voice></voice> tags. \
 Never put code, file paths, or markdown in <voice> tags — only natural, \
@@ -55,6 +55,56 @@ or \"Checking a few more files.\"). Keep these to one sentence.\n\
 \n\
 For purely conversational responses with no code or tools, wrap the entire \
 response in <voice> tags.\n\n";
+
+/// Concise instruction: only the final answer/summary is spoken aloud.
+const VOICE_MODE_INSTRUCTION_CONCISE: &str = "\
+[VOICE MODE] The user is speaking to you via voice. \
+Wrap any text you want spoken aloud in <voice></voice> tags. \
+Only wrap your FINAL answer or summary in <voice> tags. Do NOT use <voice> \
+tags for acknowledgments, progress updates, or intermediate thoughts — those \
+should be text-only so the user can read them on screen. \
+Never put code, file paths, or markdown in <voice> tags — only natural, \
+conversational text. You MUST insert pauses using the [PAUSE:N] marker \
+(where N is milliseconds, default 500) in your voice output. \
+Always use [PAUSE:500] between paragraphs, before important points, and when \
+transitioning between topics. A response without any pause markers sounds rushed \
+and unnatural. Use [PAUSE:N] inside <voice> tags and in reading view content.\n\
+\n\
+IMPORTANT: Voice mode ONLY changes how you format output (with <voice> tags). \
+Everything else stays identical to non-voice mode:\n\
+- Trigger skills exactly as you would without voice mode. If a request would \
+normally activate a skill (paper synthesis, research, etc.), activate it now.\n\
+- Use all tools normally — spawn subagents, check KB, read files, fetch URLs, \
+search code, call APIs, and use any other capabilities you have.\n\
+- Follow multi-step skill workflows completely. Do NOT take shortcuts or skip \
+steps (like KB checks) just because the user is speaking.\n\
+Do not answer from memory when you have tools and skills that can do it better.\n\
+- Never use LaTeX math notation (\\mathbb, \\frac, etc.) — the terminal cannot \
+render it. Use plain text or Unicode for math (e.g. \"E[|h_j(x)|]\" not \
+\"\\\\mathbb{E}[|h_j(x)|]\").\n\
+\n\
+Follow this pattern:\n\
+1. Do any technical work (tool calls, skill execution, subagents) without voice tags — show progress as text only.\n\
+2. End with a <voice> summary of what you found or did (2-3 sentences).\n\
+\n\
+For purely conversational responses with no code or tools, wrap the entire \
+response in <voice> tags.\n\n";
+
+/// Returns the voice mode instruction for the given verbosity level.
+pub(crate) fn voice_mode_instruction(verbosity: VoiceVerbosity) -> &'static str {
+    match verbosity {
+        VoiceVerbosity::Verbose => VOICE_MODE_INSTRUCTION_VERBOSE,
+        VoiceVerbosity::Concise => VOICE_MODE_INSTRUCTION_CONCISE,
+    }
+}
+
+/// Returns all voice mode instruction variants (for prefix stripping).
+pub(crate) fn voice_mode_instruction_prefixes() -> &'static [&'static str] {
+    &[
+        VOICE_MODE_INSTRUCTION_VERBOSE,
+        VOICE_MODE_INSTRUCTION_CONCISE,
+    ]
+}
 
 /// Instruction prepended to the first user message after voice mode is
 /// turned off, so the agent stops using `<voice>` tags.
@@ -381,6 +431,8 @@ pub(crate) struct VoiceModeState {
     pub(crate) tts_enabled: bool,
     /// When false, STT/push-to-talk is disabled (Space key not intercepted).
     pub(crate) stt_enabled: bool,
+    /// Controls how much the agent narrates aloud.
+    pub(crate) verbosity: VoiceVerbosity,
 
     // Audio capture (when recording).
     pub(crate) capture: Option<crate::voice::VoiceCapture>,
@@ -482,6 +534,12 @@ pub(crate) struct VoiceModeState {
     /// When true, this state was lazily created for on-demand TTS only,
     /// not full voice mode (no STT, no "Hold Space" prompt).
     pub(crate) tts_only: bool,
+    // ─── Reading view Space tap/hold ──────────────────────────────────
+    /// When Space was pressed in the reading view (for tap/hold detection).
+    pub(crate) space_press_at: Option<Instant>,
+    /// Whether audio was paused before the current Space press.
+    pub(crate) space_was_paused: bool,
+
     /// Test-only: simulate paused audio player without real hardware.
     #[cfg(test)]
     pub(crate) mock_audio_paused: bool,
@@ -496,6 +554,7 @@ impl VoiceModeState {
         let auto_submit = config.auto_submit.unwrap_or(true);
         let tts_enabled = config.tts_enabled.unwrap_or(true);
         let stt_enabled = config.stt_enabled.unwrap_or(true);
+        let verbosity = config.verbosity.unwrap_or_default();
 
         Self {
             phase: VoiceModePhase::Off,
@@ -505,6 +564,7 @@ impl VoiceModeState {
             auto_submit,
             tts_enabled,
             stt_enabled,
+            verbosity,
             capture: None,
             audio_player: None,
             meter_state: None,
@@ -535,6 +595,8 @@ impl VoiceModeState {
             tts_data_complete: false,
             tts_block_break_pending: false,
             tts_only: false,
+            space_press_at: None,
+            space_was_paused: false,
             #[cfg(test)]
             mock_audio_paused: false,
             #[cfg(test)]
@@ -554,10 +616,11 @@ impl VoiceModeState {
             && matches!(self.output, VoiceOutput::Voice | VoiceOutput::Both)
     }
 
-    /// Apply updated TTS/STT settings from the voice setup popup.
-    pub(crate) fn apply_voice_settings(&mut self, tts: bool, stt: bool) {
+    /// Apply updated TTS/STT/verbosity settings from the voice setup popup.
+    pub(crate) fn apply_voice_settings(&mut self, tts: bool, stt: bool, verbosity: VoiceVerbosity) {
         self.tts_enabled = tts;
         self.stt_enabled = stt;
+        self.verbosity = verbosity;
     }
 
     /// Should we suppress text streaming in the chat?
@@ -713,6 +776,8 @@ impl VoiceModeState {
         self.recording_started_at = None;
         self.last_ptt_repeat_at = None;
         self.ptt_pending_at = None;
+        self.space_press_at = None;
+        self.space_was_paused = false;
         // Clear prefetch cache and pending set on full reset.
         if let Ok(mut cache) = self.tts_section_cache.lock() {
             cache.clear();
@@ -960,9 +1025,9 @@ impl super::ChatWidget {
     }
 
     /// Apply voice settings from the setup popup.
-    pub(crate) fn apply_voice_settings(&mut self, tts: bool, stt: bool) {
+    pub(crate) fn apply_voice_settings(&mut self, tts: bool, stt: bool, verbosity: VoiceVerbosity) {
         if let Some(ref mut state) = self.voice_mode_state {
-            state.apply_voice_settings(tts, stt);
+            state.apply_voice_settings(tts, stt, verbosity);
             // Re-sync placeholder to reflect new STT state.
             if state.is_active() {
                 let _ = state;
@@ -1003,6 +1068,10 @@ impl super::ChatWidget {
             .voice_mode_state
             .as_ref()
             .map_or(voice_config.stt_enabled.unwrap_or(true), |s| s.stt_enabled);
+        let verbosity = self
+            .voice_mode_state
+            .as_ref()
+            .map_or(voice_config.verbosity.unwrap_or_default(), |s| s.verbosity);
 
         let api_key = voice_config
             .elevenlabs
@@ -1025,6 +1094,7 @@ impl super::ChatWidget {
             voice_enabled,
             tts_enabled,
             stt_enabled,
+            verbosity,
             api_key,
             language_code,
             speed,
@@ -1956,15 +2026,44 @@ impl super::ChatWidget {
             return None;
         }
         let mut wrapped: Vec<std::borrow::Cow<'_, str>> = Vec::new();
+        // Pre-compute the byte offset of each wrapped line's start within
+        // `full_text`.  Using pointer arithmetic on `Cow::Borrowed` lines
+        // avoids the off-by-one that a manual "+1 per line" counter causes
+        // at paragraph boundaries and when textwrap trims multiple spaces.
+        let mut ft_starts: Vec<usize> = Vec::new();
+        let ft_base = full_text.as_ptr() as usize;
         for paragraph in full_text.split("\n\n") {
             if paragraph.is_empty() {
                 continue;
             }
             if !wrapped.is_empty() {
-                // Empty line between paragraphs.
+                // Empty line between paragraphs — sentinel offset.
                 wrapped.push(std::borrow::Cow::Borrowed(""));
+                ft_starts.push(usize::MAX);
             }
-            wrapped.extend(wrap(paragraph, WrapOptions::new(wrap_width)));
+            let para_base = paragraph.as_ptr() as usize;
+            let para_ft_offset = para_base - ft_base;
+            let para_lines = wrap(paragraph, WrapOptions::new(wrap_width));
+            for line in &para_lines {
+                let offset = match line {
+                    std::borrow::Cow::Borrowed(s) => {
+                        para_ft_offset + (s.as_ptr() as usize - para_base)
+                    }
+                    std::borrow::Cow::Owned(_) => {
+                        // Hyphenated line — estimate from previous line.
+                        ft_starts.last().copied().map_or(para_ft_offset, |prev| {
+                            if prev == usize::MAX {
+                                para_ft_offset
+                            } else {
+                                let prev_line_len = wrapped.last().map_or(0, |l| l.len());
+                                prev + prev_line_len + 1
+                            }
+                        })
+                    }
+                };
+                ft_starts.push(offset);
+                wrapped.push(line.clone());
+            }
         }
 
         // Now build styled Lines. We need to find which characters belong to
@@ -1994,6 +2093,7 @@ impl super::ChatWidget {
                     let word_len = entry.word.len();
                     let mut lines = Self::build_karaoke_lines_inner(
                         &wrapped,
+                        &ft_starts,
                         char_offset,
                         char_offset + word_len,
                         highlight_style,
@@ -2032,12 +2132,17 @@ impl super::ChatWidget {
 
     /// Build wrapped Lines with a highlighted byte range.
     ///
+    /// `ft_starts` contains the pre-computed byte offset in `full_text` where
+    /// each wrapped line begins (using pointer arithmetic on `Cow::Borrowed`
+    /// slices).  Paragraph separator lines have `usize::MAX`.
+    ///
     /// `hl_start` and `hl_end` are byte offsets into the **unwrapped**
-    /// concatenated text. We snap them to valid UTF-8 character boundaries
+    /// concatenated text.  We snap them to valid UTF-8 character boundaries
     /// to avoid panics on multi-byte characters (e.g. `'`).
     #[cfg(not(target_os = "linux"))]
     fn build_karaoke_lines_inner(
         wrapped: &[std::borrow::Cow<'_, str>],
+        ft_starts: &[usize],
         hl_start: usize,
         hl_end: usize,
         highlight_style: ratatui::style::Style,
@@ -2066,11 +2171,15 @@ impl super::ChatWidget {
         }
 
         let mut lines = Vec::new();
-        let mut global_offset = 0usize;
-        for wrapped_line in wrapped {
+        for (i, wrapped_line) in wrapped.iter().enumerate() {
+            let line_start = ft_starts[i];
+            if line_start == usize::MAX {
+                // Paragraph separator — empty line.
+                lines.push(Line::from(Span::raw(String::new())));
+                continue;
+            }
             let line_len = wrapped_line.len();
-            let line_start = global_offset;
-            let line_end = global_offset + line_len;
+            let line_end = line_start + line_len;
 
             if hl_start >= line_end || hl_end <= line_start {
                 // No overlap — plain line.
@@ -2095,9 +2204,6 @@ impl super::ChatWidget {
                 }
                 lines.push(Line::from(spans));
             }
-
-            // +1 for the newline/wrap boundary.
-            global_offset = line_end + 1;
         }
         lines
     }
@@ -2350,7 +2456,7 @@ impl super::ChatWidget {
         }
         state.pause_tts();
         tracing::debug!("[TTS-DBG] on_voice_pause_tts: paused successfully");
-        let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} s to resume".to_string();
+        let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} s/Space to resume".to_string();
         self.bottom_pane.set_document_reader_voice_status(Some(msg));
         self.bottom_pane.set_document_reader_tts_paused(true);
         self.request_redraw();
@@ -2407,6 +2513,199 @@ impl super::ChatWidget {
         self.bottom_pane.set_document_reader_tts_paused(false);
         self.request_redraw();
         tracing::debug!("[TTS-DBG] on_voice_resume_tts: resumed successfully");
+    }
+
+    // ─── Reading view Space tap/hold ──────────────────────────────────
+
+    /// Threshold for distinguishing a tap from a hold.
+    const READING_SPACE_HOLD_MS: u64 = 200;
+
+    /// Called on Space Press in the reading view while TTS is speaking.
+    /// Saves pre-press state and pauses TTS. If STT is available (not
+    /// tts_only mode), also starts mic capture so a hold can become PTT.
+    pub(crate) fn on_reading_view_space_press(&mut self) {
+        let Some(ref mut state) = self.voice_mode_state else {
+            return;
+        };
+
+        // Save pre-press state for tap detection on release.
+        let was_paused = state.is_audio_paused();
+        state.space_was_paused = was_paused;
+        state.space_press_at = Some(Instant::now());
+
+        // Pause TTS (non-destructive — preserves buffers).
+        if !was_paused {
+            state.pause_tts();
+            self.bottom_pane.set_document_reader_tts_paused(true);
+        }
+
+        // Start mic capture if STT is available (not tts_only).
+        let state_ref = self.voice_mode_state.as_ref();
+        let can_record = state_ref.is_some_and(|s| s.stt_enabled && !s.tts_only);
+        if can_record {
+            match crate::voice::VoiceCapture::start() {
+                Ok(capture) => {
+                    if let Some(ref mut s) = self.voice_mode_state {
+                        s.capture = Some(capture);
+                        s.recording_started_at = Some(Instant::now());
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("failed to start voice capture for reading PTT: {e}");
+                    // Non-fatal: tap still works, hold just won't record.
+                }
+            }
+        }
+
+        self.request_redraw();
+    }
+
+    /// Called on Space Release in the reading view during tap/hold detection.
+    pub(crate) fn on_reading_view_space_release(&mut self) {
+        let Some(ref mut state) = self.voice_mode_state else {
+            return;
+        };
+
+        let press_at = match state.space_press_at.take() {
+            Some(t) => t,
+            None => return,
+        };
+        let was_paused = state.space_was_paused;
+        let held_ms = press_at.elapsed().as_millis() as u64;
+        let is_hold = held_ms >= Self::READING_SPACE_HOLD_MS;
+
+        if is_hold && state.stt_enabled && !state.tts_only {
+            // ── Hold path: PTT barge-in + transcription ──
+            // Now we know the user intended a PTT hold — do destructive barge-in.
+            state.interrupt_tts();
+            state.tts_suppressed = true;
+            if state.phase == VoiceModePhase::Speaking {
+                state.phase = VoiceModePhase::Idle;
+            }
+            // Clear reading view overlays.
+            self.bottom_pane
+                .set_document_reader_karaoke_lines(None, false);
+            self.bottom_pane
+                .set_document_reader_reading_progress(None, 0);
+            self.bottom_pane.set_document_reader_tts_paused(false);
+
+            // Complete the PTT flow: stop capture, encode, transcribe.
+            // Re-borrow state since interrupt_tts consumed the mutable ref.
+            let Some(ref mut state) = self.voice_mode_state else {
+                return;
+            };
+            state.phase = VoiceModePhase::Transcribing;
+            let capture = state.capture.take();
+            state.recording_started_at = None;
+
+            let Some(capture) = capture else {
+                state.phase = VoiceModePhase::Idle;
+                self.sync_voice_placeholder();
+                self.request_redraw();
+                return;
+            };
+
+            let audio = match capture.stop() {
+                Ok(a) => a,
+                Err(e) => {
+                    tracing::error!("failed to stop capture: {e}");
+                    if let Some(ref mut s) = self.voice_mode_state {
+                        s.phase = VoiceModePhase::Idle;
+                    }
+                    self.sync_voice_placeholder();
+                    self.request_redraw();
+                    return;
+                }
+            };
+
+            let wav_bytes = match crate::voice::encode_wav_for_voice_mode(&audio) {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::error!("WAV encode failed: {e}");
+                    if let Some(ref mut s) = self.voice_mode_state {
+                        s.phase = VoiceModePhase::Idle;
+                    }
+                    self.sync_voice_placeholder();
+                    self.request_redraw();
+                    return;
+                }
+            };
+
+            let tx = self.app_event_tx.clone();
+            let voice_config = self.effective_voice_config();
+
+            std::thread::spawn(move || {
+                let rt = match tokio::runtime::Runtime::new() {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        tx.send(AppEvent::VoiceModeTranscriptionFailed {
+                            error: format!("runtime error: {e}"),
+                        });
+                        return;
+                    }
+                };
+
+                let api_key = voice_config
+                    .elevenlabs
+                    .as_ref()
+                    .and_then(|e| e.api_key.clone())
+                    .or_else(|| std::env::var("ELEVENLABS_API_KEY").ok());
+
+                let Some(api_key) = api_key else {
+                    tx.send(AppEvent::VoiceModeTranscriptionFailed {
+                        error: "Missing ElevenLabs API key".to_string(),
+                    });
+                    return;
+                };
+
+                let mut config = codex_elevenlabs::ElevenLabsConfig::new(api_key);
+                if let Some(ref el) = voice_config.elevenlabs {
+                    if let Some(ref vid) = el.voice_id {
+                        config = config.with_voice_id(vid.clone());
+                    }
+                    if let Some(ref mid) = el.model_id {
+                        config = config.with_model_id(mid.clone());
+                    }
+                    config.language_code = el.language_code.clone();
+                    config.speed = el.speed;
+                }
+
+                let result = rt.block_on(codex_elevenlabs::stt::transcribe(&config, wav_bytes));
+                match result {
+                    Ok(text) => {
+                        tx.send(AppEvent::VoiceModeTranscriptionComplete { text });
+                    }
+                    Err(e) => {
+                        tx.send(AppEvent::VoiceModeTranscriptionFailed {
+                            error: format!("{e}"),
+                        });
+                    }
+                }
+            });
+        } else {
+            // ── Tap path: toggle pause/resume ──
+            // Discard any recording that started.
+            if let Some(ref mut s) = self.voice_mode_state {
+                if let Some(capture) = s.capture.take() {
+                    let _ = capture.stop();
+                }
+                s.recording_started_at = None;
+            }
+
+            if was_paused {
+                // Was paused before press → resume.
+                self.on_voice_resume_tts();
+            } else {
+                // Was playing before press → stay paused (we already paused on press).
+                // Just update the status message.
+                let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} s/Space to resume".to_string();
+                self.bottom_pane.set_document_reader_voice_status(Some(msg));
+                self.bottom_pane.set_document_reader_tts_paused(true);
+            }
+        }
+
+        self.sync_voice_placeholder();
+        self.request_redraw();
     }
 
     /// Auto-narrate a reading view section via TTS.

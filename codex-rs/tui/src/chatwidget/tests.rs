@@ -9852,13 +9852,15 @@ async fn review_queues_user_messages_snapshot() {
 
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 #[tokio::test]
-async fn space_in_reading_view_triggers_ptt_not_pause() {
+async fn space_in_reading_view_toggles_pause_resume() {
     use crate::chatwidget::voice_mode::VoiceModePhase;
     use crate::chatwidget::voice_mode::VoiceModeState;
     use codex_core::config::types::VoiceModeToml;
     use codex_protocol::document_reader::PresentDocumentEvent;
+    use crossterm::event::KeyEventKind;
+    use crossterm::event::KeyEventState;
 
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     // Activate reading view.
     chat.bottom_pane.show_document_reader(
@@ -9876,32 +9878,99 @@ async fn space_in_reading_view_triggers_ptt_not_pause() {
         "reading view must be active"
     );
 
-    // Set up voice mode state: Speaking (not paused).
+    // ── Tap test: press + immediate release pauses (was playing) ─────
+
+    // Set up voice mode state: Speaking (not paused), tts_only so no mic capture.
     let vc = VoiceModeToml::default();
     let mut state = VoiceModeState::new(&vc);
     state.phase = VoiceModePhase::Speaking;
     state.mock_audio_paused = false;
     state.tts_data_complete = true;
     state.mock_has_audio = Some(true);
+    state.tts_only = true; // Avoid mic capture in tests.
     chat.voice_mode_state = Some(state);
 
-    // Verify precondition.
     assert!(chat.is_voice_speaking(), "should report voice speaking");
 
-    // Press Space — should trigger PTT (barge-in), not pause/resume.
+    // Press Space — pauses TTS, starts tap/hold detection.
     chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
 
-    // Drain events and make sure no VoiceModePauseTts was emitted
-    // (pause/resume is now handled by 's' in the document reader).
-    let mut saw_pause = false;
-    while let Ok(event) = rx.try_recv() {
-        if matches!(event, AppEvent::VoiceModePauseTts) {
-            saw_pause = true;
-        }
-    }
+    // space_press_at should be set (pending release).
     assert!(
-        !saw_pause,
-        "Space in reading view must not emit VoiceModePauseTts — \
-         pause/resume is handled by 's' in the document reader"
+        chat.voice_mode_state
+            .as_ref()
+            .is_some_and(|s| s.space_press_at.is_some()),
+        "space_press_at must be set after Press"
     );
+
+    // Immediate Release (< 200ms) — tap path: was playing → stays paused.
+    let release = KeyEvent {
+        code: KeyCode::Char(' '),
+        modifiers: KeyModifiers::NONE,
+        kind: KeyEventKind::Release,
+        state: KeyEventState::NONE,
+    };
+    chat.handle_key_event(release);
+
+    assert!(
+        chat.bottom_pane.is_document_reader_tts_paused(),
+        "Tap Space while playing must pause TTS"
+    );
+    assert!(
+        chat.voice_mode_state
+            .as_ref()
+            .is_some_and(|s| s.space_press_at.is_none()),
+        "space_press_at must be cleared after Release"
+    );
+
+    // ── Tap test: press + immediate release resumes (was paused) ─────
+
+    if let Some(ref mut s) = chat.voice_mode_state {
+        s.mock_audio_paused = true;
+        s.phase = VoiceModePhase::Speaking;
+        s.mock_has_audio = Some(true);
+    }
+
+    // Press Space — starts tap/hold detection (was_paused = true).
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+
+    // Immediate Release — tap path: was paused → resume.
+    chat.handle_key_event(release);
+
+    // on_voice_resume_tts clears tts_paused.
+    assert!(
+        !chat.bottom_pane.is_document_reader_tts_paused(),
+        "Tap Space while paused must resume TTS"
+    );
+
+    // ── Repeat is ignored during tap/hold detection ──────────────────
+
+    if let Some(ref mut s) = chat.voice_mode_state {
+        s.mock_audio_paused = false;
+        s.phase = VoiceModePhase::Speaking;
+        s.mock_has_audio = Some(true);
+    }
+
+    // Press Space.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+
+    // Send Repeat — should be a no-op.
+    let repeat = KeyEvent {
+        code: KeyCode::Char(' '),
+        modifiers: KeyModifiers::NONE,
+        kind: KeyEventKind::Repeat,
+        state: KeyEventState::NONE,
+    };
+    chat.handle_key_event(repeat);
+
+    // space_press_at should still be set (not consumed by repeat).
+    assert!(
+        chat.voice_mode_state
+            .as_ref()
+            .is_some_and(|s| s.space_press_at.is_some()),
+        "Repeat must not consume space_press_at"
+    );
+
+    // Clean up: release.
+    chat.handle_key_event(release);
 }

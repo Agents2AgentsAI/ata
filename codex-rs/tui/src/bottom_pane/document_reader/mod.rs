@@ -681,6 +681,81 @@ impl DocumentReaderView {
         }
     }
 
+    /// Add a new section to the document.
+    pub(crate) fn add_section(
+        &mut self,
+        after_section_index: i32,
+        heading: String,
+        content: String,
+        foldable: bool,
+        summary: Option<String>,
+    ) {
+        let insert_at = (after_section_index + 1).max(0) as usize;
+        let insert_at = insert_at.min(self.sections.len());
+
+        let mut new_section = DocumentSection {
+            heading,
+            content,
+            rendered: RefCell::new(None),
+            recently_updated: true,
+            changed_from_line: Some(0),
+            changed_to_line: None,
+            folds: Vec::new(),
+        };
+
+        if foldable {
+            let fold_summary = summary.unwrap_or_else(|| {
+                new_section
+                    .content
+                    .lines()
+                    .next()
+                    .unwrap_or("...")
+                    .chars()
+                    .take(60)
+                    .collect()
+            });
+            new_section.folds.push(FoldRegion {
+                start: 0,
+                end: new_section.content.len(),
+                summary: fold_summary,
+                collapsed: false,
+            });
+        }
+
+        self.sections.insert(insert_at, new_section);
+
+        // Adjust pending_sections keys: any pending index >= insert_at shifts up.
+        let shifted: HashMap<usize, (String, Instant)> = self
+            .pending_sections
+            .drain()
+            .map(|(idx, val)| {
+                if idx >= insert_at {
+                    (idx + 1, val)
+                } else {
+                    (idx, val)
+                }
+            })
+            .collect();
+        self.pending_sections = shifted;
+
+        // Adjust current_section if the insertion is before or at it.
+        if insert_at <= self.current_section {
+            self.current_section += 1;
+        }
+
+        // Navigate to the new section.
+        self.current_section = insert_at;
+        self.scroll_offset.set(0);
+        self.cursor_line = 0;
+        self.cursor_col = 0;
+        self.visited_sections.insert(insert_at);
+
+        // Resolve any pending follow-ups for the current section.
+        // The new section itself resolves the pending question that spawned it.
+        self.resolve_pending(insert_at);
+        self.refresh_search();
+    }
+
     /// Collect all section headings (for the post-exit transcript card).
     pub(crate) fn section_headings(&self) -> Vec<String> {
         self.sections.iter().map(|s| s.heading.clone()).collect()
@@ -1064,6 +1139,11 @@ impl DocumentReaderView {
                  FALLBACK — use append ONLY when the question is about the section as a whole \
                  and no specific passage is relevant:\n\
                  append_to_section(document_id=\"{doc_id}\", section_index={idx}, content=\"...\")\n\n\
+                 NEW SECTION — use add_document_section when the follow-up introduces a \
+                 new topic that doesn't fit in any existing section:\n\
+                 add_document_section(document_id=\"{doc_id}\", after_section_index={idx}, \
+                 heading=\"<new section heading>\", content=\"<section body>\")\n\
+                 This creates a brand new section right after the current one.\n\n\
                  {formatting_guidance}",
                 doc_id = self.document_id,
                 idx = self.current_section,
@@ -2479,6 +2559,11 @@ impl BottomPaneView for DocumentReaderView {
         self.voice_tts_paused = paused;
     }
 
+    #[cfg(all(test, not(target_os = "linux"), feature = "voice-input"))]
+    fn voice_tts_paused(&self) -> bool {
+        self.voice_tts_paused
+    }
+
     #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn set_pending_voice_question(&mut self, section: usize, question: String) {
         self.pending_sections
@@ -2646,6 +2731,20 @@ impl BottomPaneView for DocumentReaderView {
     ) {
         if self.document_id == document_id {
             self.append_to_section(section_index, content, foldable, summary);
+        }
+    }
+
+    fn handle_document_section_add(
+        &mut self,
+        document_id: &str,
+        after_section_index: i32,
+        heading: String,
+        content: String,
+        foldable: bool,
+        summary: Option<String>,
+    ) {
+        if self.document_id == document_id {
+            self.add_section(after_section_index, heading, content, foldable, summary);
         }
     }
 

@@ -71,6 +71,22 @@ impl ChatWidget {
         self.bottom_pane.append_document_section(&ev);
     }
 
+    fn on_add_document_section(
+        &mut self,
+        ev: codex_protocol::document_reader::AddDocumentSectionEvent,
+    ) {
+        if !self.is_reading_view_enabled() {
+            self.flush_active_cell();
+            let markdown = format!("## {}\n\n{}", ev.heading, ev.content);
+            self.handle_streaming_delta(markdown);
+            self.flush_answer_stream_with_separator();
+            self.handle_stream_finished();
+            self.request_redraw();
+            return;
+        }
+        self.bottom_pane.add_document_section(&ev);
+    }
+
     fn on_patch_document_section(
         &mut self,
         ev: codex_protocol::document_reader::PatchDocumentSectionEvent,

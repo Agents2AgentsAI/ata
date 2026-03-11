@@ -495,6 +495,8 @@ pub(crate) enum AppEvent {
         language_code: Option<Option<String>>,
         /// Some(speed) = set speed, None = unchanged.
         speed: Option<f64>,
+        /// Voice verbosity: concise (final answer only) or verbose (progress + answer).
+        verbosity: codex_core::config::types::VoiceVerbosity,
     },
 
     /// PTT timeout check — for terminals that don't emit key release events.

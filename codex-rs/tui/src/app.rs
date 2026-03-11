@@ -3455,11 +3455,19 @@ impl App {
                 elevenlabs_api_key,
                 language_code,
                 speed,
+                verbosity,
             } => {
                 // Persist to config.
                 let tts_edit = codex_core::config::edit::voice_mode_tts_edit(tts_enabled);
                 let stt_edit = codex_core::config::edit::voice_mode_stt_edit(stt_enabled);
-                let mut edits: Vec<codex_core::config::edit::ConfigEdit> = vec![tts_edit, stt_edit];
+                let verbosity_str = match verbosity {
+                    codex_core::config::types::VoiceVerbosity::Concise => "concise",
+                    codex_core::config::types::VoiceVerbosity::Verbose => "verbose",
+                };
+                let verbosity_edit =
+                    codex_core::config::edit::voice_mode_verbosity_edit(verbosity_str);
+                let mut edits: Vec<codex_core::config::edit::ConfigEdit> =
+                    vec![tts_edit, stt_edit, verbosity_edit];
                 if let Some(ref key) = elevenlabs_api_key {
                     edits.push(codex_core::config::edit::voice_mode_elevenlabs_api_key_edit(key));
                 }
@@ -3496,7 +3504,7 @@ impl App {
                     .update_elevenlabs_voice_settings(language_code, speed);
                 // Update in-memory state.
                 self.chat_widget
-                    .apply_voice_settings(tts_enabled, stt_enabled);
+                    .apply_voice_settings(tts_enabled, stt_enabled, verbosity);
 
                 // Handle voice mode on/off toggle.
                 if let Some(enabled) = voice_enabled {
