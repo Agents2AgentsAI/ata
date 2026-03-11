@@ -1395,13 +1395,8 @@ mod tests {
             apply_word_highlight(Line::from("caf\u{00E9} ok".to_string()), 4, 7)
         });
         // Document whether this panics or not.
-        if result.is_err() {
-            // This is expected -- str slicing at non-char-boundary panics.
-            // Not a bug in apply_word_highlight per se, since callers should
-            // always pass valid byte offsets. But worth documenting.
-        } else {
-            // If it somehow doesn't panic, that's fine too.
-            let line_result = result.expect("already checked");
+        if let Ok(line_result) = result {
+            // If it somehow doesn't panic, verify the output is sane.
             let full_text: String = line_result
                 .spans
                 .iter()
@@ -1409,6 +1404,9 @@ mod tests {
                 .collect();
             assert!(full_text.contains("ok"));
         }
+        // If it panics, that's expected -- str slicing at non-char-boundary
+        // panics. Not a bug in apply_word_highlight per se, since callers
+        // should always pass valid byte offsets.
     }
 
     #[test]
