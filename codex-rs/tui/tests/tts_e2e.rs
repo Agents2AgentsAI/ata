@@ -10,6 +10,7 @@
 
 // codex-elevenlabs is only available on non-Linux platforms.
 #![cfg(not(target_os = "linux"))]
+#![allow(clippy::expect_used)]
 
 mod support;
 
