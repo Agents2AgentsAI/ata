@@ -45,6 +45,7 @@ pub enum SlashCommand {
     Theme,
     Mcp,
     Apps,
+    Account,
     Logout,
     Quit,
     Exit,
@@ -119,6 +120,7 @@ impl SlashCommand {
             SlashCommand::Research => "toggle research tool integrations",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Apps => "manage apps",
+            SlashCommand::Account => "manage your ATA account",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
@@ -165,6 +167,7 @@ impl SlashCommand {
             | SlashCommand::Review
             | SlashCommand::Plan
             | SlashCommand::Clear
+            | SlashCommand::Account
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate => false,

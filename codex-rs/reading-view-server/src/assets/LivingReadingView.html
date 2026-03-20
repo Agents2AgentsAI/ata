@@ -1,0 +1,2861 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Living Reading View</title>
+<!-- KaTeX 0.16.9 -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<!-- marked.js 12.0.0 -->
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+<!-- Prism.js 1.29.0 (tomorrow theme + autoloader) -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+<!-- Mermaid.js 11 -->
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+/* ===================================================================
+   CSS Variables — Dark theme
+   =================================================================== */
+:root {
+  --bg: #0f1117;
+  --bg-surface: #161922;
+  --bg-elevated: #1c1f2b;
+  --text: #c9cdd6;
+  --text-muted: #6b7280;
+  --text-heading: #f0f2f5;
+  --accent: #6C8EEF;
+  --accent-dim: #6C8EEF20;
+  --border: #ffffff0a;
+  --code-bg: #0d0f15;
+}
+
+/* ===================================================================
+   Reset
+   =================================================================== */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* ===================================================================
+   Layout
+   =================================================================== */
+.layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* --- Sidebar (fixed left, 240px) --- */
+.sidebar {
+  width: 240px;
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  z-index: 50;
+}
+
+.sidebar-logo {
+  padding: 20px 20px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.doc-title {
+  padding: 0 20px 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-heading);
+  line-height: 1.3;
+}
+
+.doc-meta {
+  padding: 0 20px 16px;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.toc-list {
+  flex: 1;
+  list-style: none;
+  overflow-y: auto;
+  padding: 0;
+  margin: 0;
+}
+
+.toc-item {
+  padding: 8px 20px;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: color 0.2s, border-left-color 0.2s, background 0.2s;
+  text-decoration: none;
+  display: block;
+}
+
+.toc-item:hover {
+  color: var(--text);
+  background: var(--bg-elevated);
+}
+
+.toc-item.active {
+  color: var(--accent);
+  border-left-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.progress-bar {
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.progress-bar-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.progress-bar-track {
+  height: 3px;
+  background: var(--bg-elevated);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.4s ease-out;
+}
+
+/* --- Main content (scrollable) --- */
+.main {
+  margin-left: 240px;
+  max-width: 1400px;
+  padding: 0 48px;
+  width: calc(100% - 240px);
+}
+
+.doc-header {
+  padding: 48px 0 32px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 40px;
+}
+
+.doc-header-title {
+  font-size: 32px;
+  font-weight: 800;
+  color: var(--text-heading);
+  line-height: 1.2;
+  margin-bottom: 8px;
+}
+
+.doc-header-meta {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.sections-container {
+  padding-bottom: 80px;
+}
+
+.doc-footer {
+  padding: 32px 0 64px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* ===================================================================
+   Streaming progress bar (fixed top, 3px)
+   =================================================================== */
+.streaming-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: transparent;
+  z-index: 200;
+  pointer-events: none;
+}
+
+.streaming-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent), #a78bfa);
+  border-radius: 0 2px 2px 0;
+  transition: width 0.6s ease-out;
+}
+
+/* ===================================================================
+   Typography
+   =================================================================== */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  font-size: 16px;
+  line-height: 1.75;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* --- Headings --- */
+h1 { font-size: 1.5em; font-weight: 700; margin: 0.8em 0 0.4em; color: var(--text-heading); }
+h2 { font-size: 1.3em; font-weight: 700; margin: 0.8em 0 0.4em; color: var(--text-heading); }
+h3 { font-size: 1.15em; font-weight: 600; margin: 0.6em 0 0.3em; color: var(--text-heading); }
+h4 { font-size: 1.05em; font-weight: 600; margin: 0.5em 0 0.25em; color: var(--text-heading); }
+
+/* --- Paragraphs & inline --- */
+p { margin: 0.5em 0; }
+p, li, blockquote, td, th { overflow-wrap: anywhere; word-break: break-word; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+strong { font-weight: 600; }
+hr { border: none; border-top: 1px solid var(--border); margin: 1em 0; }
+img { max-width: 100%; border-radius: 8px; }
+
+/* --- Lists --- */
+ul, ol { padding-left: 1.5em; margin: 0.5em 0; }
+li { margin: 0.2em 0; }
+
+/* --- Code (inline) --- */
+code {
+  font-family: 'SF Mono', Menlo, 'Fira Code', monospace;
+  font-size: 13px;
+  background: var(--code-bg);
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+  color: var(--text);
+}
+
+/* --- Code blocks --- */
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  overflow-x: auto;
+  margin: 0.8em 0;
+}
+
+pre code {
+  background: none;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+/* --- Blockquotes --- */
+blockquote {
+  border-left: 3px solid var(--accent);
+  padding-left: 16px;
+  margin: 0.8em 0;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+blockquote p {
+  margin: 0.3em 0;
+}
+
+/* --- Tables --- */
+table {
+  border-collapse: collapse;
+  margin: 0.8em 0;
+  width: 100%;
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
+}
+
+th, td {
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+  text-align: left;
+}
+
+th {
+  background: var(--bg-elevated);
+  font-weight: 600;
+  color: var(--text-heading);
+}
+
+td {
+  background: var(--bg-surface);
+}
+
+/* --- KaTeX --- */
+.katex-display {
+  margin: 0.8em auto;
+  overflow: visible;
+  text-align: center;
+  max-width: 100%;
+}
+
+.katex-display > .katex {
+  display: inline-block;
+  max-width: 100%;
+  transform-origin: center top;
+}
+
+.katex { font-size: 1.05em; }
+
+.equation-line-center { text-align: center; }
+.equation-line-center .katex {
+  display: inline-block;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* ===================================================================
+   Section styles
+   =================================================================== */
+.section {
+  margin-bottom: 48px;
+  scroll-margin-top: 24px;
+}
+
+.section-heading {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-heading);
+  padding-bottom: 12px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+  line-height: 1.3;
+}
+
+.section-heading .section-number {
+  color: var(--accent);
+  margin-right: 8px;
+  font-weight: 600;
+}
+
+.section-content {
+  /* content rendered here by JS */
+}
+
+/* ===================================================================
+   Foldable content (details/summary)
+   =================================================================== */
+details {
+  margin: 0.8em 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+details summary {
+  padding: 12px 16px;
+  background: var(--bg-elevated);
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text-heading);
+  font-size: 14px;
+}
+
+details summary:hover {
+  background: var(--bg-surface);
+}
+
+details[open] summary {
+  border-bottom: 1px solid var(--border);
+}
+
+details .details-content {
+  padding: 16px;
+}
+
+/* ===================================================================
+   Streaming state CSS
+   =================================================================== */
+
+/* Shimmer animation for sections currently being generated */
+.section-shimmer {
+  opacity: 0.5;
+  position: relative;
+  overflow: hidden;
+}
+
+.section-shimmer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, transparent, var(--accent-dim), transparent);
+  animation: sweep 2.5s ease-in-out infinite;
+}
+
+@keyframes sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+/* Pending sections not yet reached by streaming */
+.section-pending {
+  opacity: 0.2;
+}
+
+/* Fade-in animation when a section completes */
+.section-fade-in {
+  animation: fadeIn 0.4s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Shimmer placeholder content */
+.shimmer-placeholder {
+  padding: 16px 0;
+}
+
+.shimmer-line {
+  height: 14px;
+  background: var(--bg-elevated);
+  border-radius: 4px;
+  margin-bottom: 12px;
+}
+
+.shimmer-line:nth-child(1) { width: 90%; }
+.shimmer-line:nth-child(2) { width: 75%; }
+.shimmer-line:nth-child(3) { width: 85%; }
+.shimmer-line:nth-child(4) { width: 60%; }
+
+/* Generating indicator */
+.generating-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--accent);
+  padding: 8px 0;
+}
+
+.generating-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.generating-dot:nth-child(2) { animation-delay: 0.2s; }
+.generating-dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes pulse {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+/* ===================================================================
+   Mobile responsive layout
+   =================================================================== */
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: auto;
+    max-height: 48px;
+    overflow: hidden;
+    flex-direction: row;
+    z-index: 100;
+    padding: 8px 16px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar .toc-list {
+    display: flex;
+    flex-direction: row;
+    gap: 12px;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  .sidebar .doc-title,
+  .sidebar .doc-meta,
+  .sidebar .progress-bar,
+  .sidebar .sidebar-logo {
+    display: none;
+  }
+
+  .toc-item {
+    padding: 4px 8px;
+    font-size: 11px;
+    border-left: none;
+    border-bottom: 2px solid transparent;
+  }
+
+  .toc-item.active {
+    border-left-color: transparent;
+    border-bottom-color: var(--accent);
+  }
+
+  .main {
+    margin-left: 0;
+    margin-top: 56px;
+    padding: 0 16px;
+    max-width: 100%;
+  }
+
+  .doc-header {
+    padding: 24px 0 20px;
+  }
+
+  .doc-header-title {
+    font-size: 24px;
+  }
+
+  .section-heading {
+    font-size: 20px;
+  }
+}
+
+/* ===================================================================
+   Diff highlighting (for content updates)
+   =================================================================== */
+.diff-added {
+  border-left: 3px solid #32d74b;
+  padding-left: 12px;
+  margin-top: 0.8em;
+}
+
+.diff-added-full {
+  border-left: 3px solid #32d74b;
+  padding-left: 12px;
+}
+
+/* ===================================================================
+   Follow-up question input bar (fixed bottom)
+   =================================================================== */
+.followup-bar {
+  position: fixed;
+  bottom: 0;
+  left: 240px;
+  right: 0;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  padding: 12px 24px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.followup-input {
+  flex: 1;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 14px;
+  color: var(--text);
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.followup-input::placeholder {
+  color: var(--text-muted);
+}
+
+.followup-input:focus {
+  border-color: var(--accent);
+}
+
+.followup-send {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s;
+  white-space: nowrap;
+}
+
+.followup-send:hover {
+  opacity: 0.85;
+}
+
+.followup-send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Follow-up question card shown inline */
+.followup-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 16px 0;
+  font-size: 14px;
+}
+
+.followup-card-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+
+.followup-card-text {
+  color: var(--text);
+}
+
+/* Follow-up thinking indicator */
+.followup-thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 8px 16px;
+  margin: 8px 0;
+}
+
+.followup-thinking .generating-dot {
+  width: 5px;
+  height: 5px;
+}
+
+/* Read Aloud button */
+.read-aloud-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 6px;
+  margin-left: 8px;
+  font-size: 16px;
+  vertical-align: middle;
+  transition: color 0.2s;
+  border-radius: 4px;
+}
+
+.read-aloud-btn:hover {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.read-aloud-btn.tts-playing {
+  color: var(--accent);
+}
+
+@media (max-width: 768px) {
+  .followup-bar {
+    left: 0;
+    padding: 8px 12px;
+  }
+}
+
+/* ===================================================================
+   Karaoke / voice narration styles
+   =================================================================== */
+.kw { transition: opacity 0.3s ease-out; }
+.karaoke-active .kw {
+  opacity: 0.55;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: pointer;
+  /* Vertical padding increases touch target without affecting layout */
+  padding: 8px 2px;
+  margin: -8px -2px;
+  -webkit-tap-highlight-color: transparent;
+}
+.karaoke-active .kw.revealed { opacity: 1.0; }
+
+/* During karaoke, equations follow same reveal rhythm as words.
+   We use explicit dim class so active equations don't flicker dim
+   during streaming DOM/KaTeX patch cycles. */
+.karaoke-active .katex-eq-node {
+  opacity: 1.0;
+  transition: none;
+}
+.karaoke-active .katex-eq-node.katex-eq-dim {
+  opacity: 0.55;
+}
+.karaoke-active .katex-eq-node.katex-eq-active {
+  opacity: 1.0;
+}
+.karaoke-active .katex-eq-node.katex-eq-revealed {
+  opacity: 1.0;
+}
+
+/* ===================================================================
+   Now-Playing playback control bar
+   =================================================================== */
+.now-playing-bar {
+  position: fixed;
+  bottom: 56px; /* above the follow-up bar */
+  left: 240px; /* after sidebar */
+  right: 0;
+  height: 48px;
+  background: rgba(30, 30, 30, 0.95);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-top: 1px solid rgba(255,255,255,0.08);
+  display: none; /* hidden by default */
+  align-items: center;
+  padding: 0 20px;
+  z-index: 1001;
+  gap: 12px;
+}
+.now-playing-bar.visible { display: flex; }
+
+/* Play/Pause button */
+.np-play-pause {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: none;
+  color: #e0e0e0;
+  cursor: pointer;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background 0.15s;
+}
+.np-play-pause:hover { background: rgba(255,255,255,0.1); }
+
+/* Progress bar track */
+.np-progress-container {
+  flex: 1;
+  height: 4px;
+  background: rgba(255,255,255,0.15);
+  border-radius: 2px;
+  cursor: pointer;
+  position: relative;
+}
+.np-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #6366f1, #818cf8);
+  border-radius: 2px;
+  width: 0%;
+  transition: width 0.1s linear;
+}
+.np-progress-thumb {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 12px;
+  height: 12px;
+  background: white;
+  border-radius: 50%;
+  left: 0%;
+  transition: left 0.1s linear;
+  opacity: 0;
+}
+.np-progress-container:hover .np-progress-thumb { opacity: 1; }
+
+/* Stop button */
+.np-stop {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: none;
+  color: #999;
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background 0.15s, color 0.15s;
+}
+.np-stop:hover { background: rgba(255,255,255,0.1); color: #e0e0e0; }
+
+/* Read-aloud button pulsing animation when TTS is playing */
+.read-aloud-btn.tts-active {
+  color: var(--accent);
+  animation: tts-pulse 1.5s ease-in-out infinite;
+}
+@keyframes tts-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@media (max-width: 768px) {
+  .now-playing-bar {
+    left: 0;
+    bottom: 48px;
+    padding: 0 12px;
+    height: 44px;
+  }
+}
+
+/* ===================================================================
+   Selection action bar (floating "Ask about this" button)
+   =================================================================== */
+.selection-action-bar {
+  position: fixed;
+  z-index: 1100;
+  background: rgba(28, 31, 43, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 6px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  display: none;
+  align-items: center;
+  gap: 4px;
+  animation: selbar-in 0.15s ease-out;
+}
+
+.selection-action-bar.visible {
+  display: flex;
+}
+
+@keyframes selbar-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.95); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.selection-ask-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 0.15s;
+  font-family: inherit;
+}
+
+.selection-ask-btn:hover {
+  opacity: 0.85;
+}
+
+/* Selection question input (inline near the action bar) */
+.selection-question-wrap {
+  position: fixed;
+  z-index: 1100;
+  background: rgba(28, 31, 43, 0.95);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  animation: selbar-in 0.15s ease-out;
+}
+
+.selection-question-wrap.visible {
+  display: flex;
+}
+
+.selection-question-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+}
+
+.selection-question-preview {
+  font-size: 12px;
+  color: var(--text-muted);
+  max-height: 40px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selection-question-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.selection-question-input {
+  flex: 1;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text);
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.selection-question-input::placeholder {
+  color: var(--text-muted);
+}
+
+.selection-question-input:focus {
+  border-color: var(--accent);
+}
+
+.selection-question-send {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 0.15s;
+  font-family: inherit;
+}
+
+.selection-question-send:hover {
+  opacity: 0.85;
+}
+</style>
+</head>
+<body>
+
+<!-- Streaming progress bar (fixed top, 3px) -->
+<div class="streaming-bar" id="streaming-bar">
+  <div class="streaming-bar-fill" id="streaming-bar-fill"></div>
+</div>
+
+<div class="layout">
+  <!-- Sidebar -->
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-logo">ATA Research</div>
+    <div class="doc-title" id="sidebar-title">Document</div>
+    <div class="doc-meta" id="sidebar-meta"></div>
+
+    <ul class="toc-list" id="toc-list">
+      <!-- TOC items populated by JS -->
+    </ul>
+
+    <div class="progress-bar">
+      <div class="progress-bar-label" id="progress-label">Loading...</div>
+      <div class="progress-bar-track">
+        <div class="progress-bar-fill" id="progress-fill"></div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main content area -->
+  <main class="main" id="main">
+    <div class="doc-header">
+      <h1 class="doc-header-title" id="doc-title">Document</h1>
+      <div class="doc-header-meta" id="doc-meta"></div>
+    </div>
+
+    <div class="sections-container" id="sections-container">
+      <!-- Section divs populated by JS -->
+    </div>
+
+    <div class="doc-footer" id="doc-footer">
+      Generated by ATA
+    </div>
+  </main>
+</div>
+
+<!-- Follow-up question input bar (browser mode only) -->
+<div class="followup-bar" id="followup-bar" style="display:none;">
+  <input type="text" class="followup-input" id="followup-input" placeholder="Ask a follow-up question..." autocomplete="off">
+  <button class="followup-send" id="followup-send">Send</button>
+</div>
+
+<!-- Selection action bar (floating, shown when text is selected) -->
+<div class="selection-action-bar" id="selection-action-bar">
+  <button class="selection-ask-btn" id="selection-ask-btn">Ask about this</button>
+</div>
+
+<!-- Selection question input (shown after clicking "Ask about this") -->
+<div class="selection-question-wrap" id="selection-question-wrap">
+  <div class="selection-question-label">Ask about selection</div>
+  <div class="selection-question-preview" id="selection-question-preview"></div>
+  <div class="selection-question-row">
+    <input type="text" class="selection-question-input" id="selection-question-input" placeholder="Your question (Enter to send, empty = explain)" autocomplete="off">
+    <button class="selection-question-send" id="selection-question-send">Send</button>
+  </div>
+</div>
+
+<!-- Now-Playing playback control bar -->
+<div class="now-playing-bar" id="nowPlayingBar">
+  <button class="np-play-pause" id="npPlayPause" onclick="_togglePlayPause()">&#x23F8;</button>
+  <div class="np-progress-container" id="npProgressContainer">
+    <div class="np-progress-fill" id="npProgressFill"></div>
+    <div class="np-progress-thumb" id="npProgressThumb"></div>
+  </div>
+  <button class="np-stop" onclick="_stopPlayback()">&#x2715;</button>
+</div>
+
+<script>
+/* ===================================================================
+   Living Reading View — Core JavaScript API
+   Called by Swift via evaluateJavaScript or by WebSocket in TUI mode.
+   =================================================================== */
+
+// ---- Internal state ----
+var _sections = [];       // Array of {heading, markdown} for each section
+var _scrollObserver = null;
+var _activeTocIndex = -1;
+var _currentVisibleSection = 0; // Tracks the section currently in view
+var _streamingNextIndex = -1;
+
+// ---- Mermaid initialization ----
+if (typeof mermaid !== 'undefined') {
+  mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+}
+
+// =====================================================================
+//  fixBrokenLatexDelimiters(text)
+//  Port of RichTextView.swift:16-116.
+//  Canonicalizes \(...\) -> $...$, \[...\] -> $$...$$,
+//  handles double-escaped variants from JSON parsing,
+//  and detects bare [latex] blocks whose delimiters were lost.
+// =====================================================================
+function fixBrokenLatexDelimiters(text) {
+  if (!text) return text;
+
+  // --- Phase 1: Canonicalize backslash math delimiters ---
+  function canonicalizeBackslashMathDelimiters(source) {
+    var out = '';
+    var i = 0;
+    while (i < source.length) {
+      // Double-escaped inline: \\\\( ... \\\\)
+      if (source.substr(i, 4) === '\\\\\\(' || source.substr(i, 4) === '\\\\(') {
+        // Try double-escaped first: \\( ... \\)
+        var prefix = source.substr(i, 4) === '\\\\\\(' ? '\\\\\\(' : '\\\\(';
+        var closeTag = prefix === '\\\\\\(' ? '\\\\\\)' : '\\\\)';
+        var bodyStart = i + prefix.length;
+        var closePos = source.indexOf(closeTag, bodyStart);
+        if (closePos !== -1) {
+          var body = source.substring(bodyStart, closePos).trim();
+          out += '$' + body + '$';
+          i = closePos + closeTag.length;
+          continue;
+        }
+      }
+
+      // Single backslash inline: \( ... \)
+      if (i < source.length - 1 && source[i] === '\\' && source[i + 1] === '(') {
+        var bodyStart2 = i + 2;
+        var closePos2 = source.indexOf('\\)', bodyStart2);
+        if (closePos2 !== -1) {
+          var body2 = source.substring(bodyStart2, closePos2).trim();
+          out += '$' + body2 + '$';
+          i = closePos2 + 2;
+          continue;
+        }
+      }
+
+      // Double-escaped display: \\\\[ ... \\\\]
+      if (source.substr(i, 4) === '\\\\\\[' || source.substr(i, 4) === '\\\\[') {
+        var prefixD = source.substr(i, 4) === '\\\\\\[' ? '\\\\\\[' : '\\\\[';
+        var closeTagD = prefixD === '\\\\\\[' ? '\\\\\\]' : '\\\\]';
+        var bodyStartD = i + prefixD.length;
+        var closePosD = source.indexOf(closeTagD, bodyStartD);
+        if (closePosD !== -1) {
+          var bodyD = source.substring(bodyStartD, closePosD).trim().replace(/\s*\n\s*/g, ' ');
+          out += '$$ ' + bodyD + ' $$';
+          i = closePosD + closeTagD.length;
+          continue;
+        }
+      }
+
+      // Single backslash display: \[ ... \]
+      if (i < source.length - 1 && source[i] === '\\' && source[i + 1] === '[') {
+        var bodyStartD2 = i + 2;
+        var closePosD2 = source.indexOf('\\]', bodyStartD2);
+        if (closePosD2 !== -1) {
+          var bodyD2 = source.substring(bodyStartD2, closePosD2).trim().replace(/\s*\n\s*/g, ' ');
+          out += '$$ ' + bodyD2 + ' $$';
+          i = closePosD2 + 2;
+          continue;
+        }
+      }
+
+      out += source[i];
+      i++;
+    }
+    return out;
+  }
+
+  // --- Phase 2: Detect bare [latex] blocks ---
+  function looksLikeLatexBody(body) {
+    if (/\\[A-Za-z]+/.test(body)) return true;
+    if (body.indexOf('{') !== -1 || body.indexOf('}') !== -1) return true;
+    if (/[\u2207\u2202\u221E\u2248\u2260\u2264\u2265\u00B1\u221A\u2211\u220F\u03A8\u03C8\u03A6\u03C6\u0398\u03B8\u039B\u03BB\u03BC\u03C3\u03A9\u03C9\u03B7\u03B1\u03B2\u03B3\u03B4\u03C4\u2080-\u2089\u2070\u00B9\u00B2\u00B3\u2074-\u2079\u207B\u2016\u00BD\u00BC\u00BE]/.test(body)) return true;
+    return false;
+  }
+
+  var normalized = canonicalizeBackslashMathDelimiters(text.replace(/\r\n/g, '\n'));
+  var lines = normalized.split('\n');
+  var output = [];
+  var idx = 0;
+
+  while (idx < lines.length) {
+    var line = lines[idx];
+    var trimmed = line.trim();
+
+    // Multiline block: standalone [ ... ]
+    if (trimmed === '[') {
+      var end = idx + 1;
+      var bodyLines = [];
+      while (end < lines.length) {
+        var probe = lines[end].trim();
+        if (probe === ']') break;
+        bodyLines.push(lines[end]);
+        end++;
+      }
+      if (end < lines.length) {
+        var body = bodyLines.join('\n');
+        if (looksLikeLatexBody(body)) {
+          var singleLineBody = body.replace(/\s*\n\s*/g, ' ');
+          output.push('$$ ' + singleLineBody + ' $$');
+          idx = end + 1;
+          continue;
+        }
+      }
+    }
+
+    // Single-line block: [\frac{...}{...}]
+    if (trimmed.charAt(0) === '[' && trimmed.charAt(trimmed.length - 1) === ']' && trimmed.length > 2) {
+      var inner = trimmed.substring(1, trimmed.length - 1).trim();
+      if (looksLikeLatexBody(inner)) {
+        output.push('$$ ' + inner + ' $$');
+        idx++;
+        continue;
+      }
+    }
+
+    output.push(line);
+    idx++;
+  }
+
+  return output.join('\n');
+}
+
+// =====================================================================
+//  renderMarkdown(md) — parse markdown with marked.js
+//  LaTeX blocks are extracted before marked.parse() to prevent marked
+//  from mangling delimiters (e.g. $d_k$ → $<em>k</em>$).  Unique
+//  placeholders survive marked's HTML output and are restored after.
+// =====================================================================
+function renderMarkdown(md) {
+  marked.setOptions({ breaks: true, gfm: true });
+  md = fixBrokenLatexDelimiters(md);
+  md = md.replace(/\s+$/, '');
+
+  // ---- Extract LaTeX blocks and replace with placeholders ----
+  var latexStore = [];
+  var placeholderPrefix = '\x00LATEX_PLACEHOLDER_';
+
+  // Helper: push original text, return placeholder
+  function stash(match) {
+    var idx = latexStore.length;
+    latexStore.push(match);
+    return placeholderPrefix + idx + '\x00';
+  }
+
+  // Order matters: extract display math ($$…$$) before inline ($…$).
+  // Also handle \[…\] and \(…\) that may have survived fixBrokenLatexDelimiters.
+
+  // 1. Display math: $$…$$ (may span multiple lines)
+  md = md.replace(/\$\$([\s\S]+?)\$\$/g, function(m) { return stash(m); });
+
+  // 2. Display math: \[…\]
+  md = md.replace(/\\\[([\s\S]+?)\\\]/g, function(m) { return stash(m); });
+
+  // 3. Inline math: $…$ (single line, not preceded by backslash-escape)
+  //    Negative look-behind for \ to skip \$ escaped dollars.
+  //    Must contain at least one non-whitespace character.
+  md = md.replace(/(^|[^\\])\$([^\$\n]+?)\$/g, function(m, pre, inner) {
+    return pre + stash('$' + inner + '$');
+  });
+
+  // 4. Inline math: \(…\)
+  md = md.replace(/\\\(([\s\S]+?)\\\)/g, function(m) { return stash(m); });
+
+  // ---- Run marked ----
+  var html = marked.parse(md);
+
+  // ---- Restore LaTeX blocks ----
+  for (var i = 0; i < latexStore.length; i++) {
+    // The placeholder may have been wrapped in <p> tags or similar;
+    // replace every occurrence (there should be exactly one per index).
+    html = html.split(placeholderPrefix + i + '\x00').join(latexStore[i]);
+  }
+
+  return html;
+}
+
+// =====================================================================
+//  renderKaTeX(element) — run KaTeX auto-render on a DOM element
+// =====================================================================
+function renderKaTeX(element) {
+  if (typeof renderMathInElement !== 'undefined') {
+    renderMathInElement(element, {
+      delimiters: [
+        {left: '$$', right: '$$', display: true},
+        {left: '$', right: '$', display: false},
+        {left: '\\(', right: '\\)', display: false},
+        {left: '\\[', right: '\\]', display: true},
+        // Double-escaped variants surviving JSON parsing
+        {left: '\\\\(', right: '\\\\)', display: false},
+        {left: '\\\\[', right: '\\\\]', display: true}
+      ],
+      throwOnError: false
+    });
+  }
+}
+
+// =====================================================================
+//  Equation alignment and fitting
+//  Ported from RichTextView.swift:1187-1248
+// =====================================================================
+function _elementContainsOnlyEquation(el) {
+  if (!el) return false;
+  var hasEquation = false;
+  for (var i = 0; i < el.childNodes.length; i++) {
+    var node = el.childNodes[i];
+    if (node.nodeType === 3) {
+      if (node.textContent && node.textContent.trim().length > 0) return false;
+      continue;
+    }
+    if (node.nodeType !== 1) continue;
+    var isEquationNode = false;
+    if (node.classList && (node.classList.contains('katex-display') || node.classList.contains('katex'))) {
+      isEquationNode = true;
+    } else if (node.childNodes && node.childNodes.length === 1) {
+      var only = node.firstElementChild;
+      if (only && only.classList
+          && (only.classList.contains('katex-display') || only.classList.contains('katex'))) {
+        isEquationNode = true;
+      }
+    }
+    if (!isEquationNode) return false;
+    hasEquation = true;
+  }
+  return hasEquation;
+}
+
+function updateEquationAlignment() {
+  var container = document.getElementById('sections-container');
+  if (!container) return;
+  container.querySelectorAll('.equation-line-center').forEach(function(el) {
+    el.classList.remove('equation-line-center');
+  });
+  container.querySelectorAll('p, li, blockquote p').forEach(function(el) {
+    if (_elementContainsOnlyEquation(el)) {
+      el.classList.add('equation-line-center');
+    }
+  });
+}
+
+function fitDisplayedEquations() {
+  var container = document.getElementById('sections-container');
+  if (!container) return;
+  container.querySelectorAll('.katex-display > .katex').forEach(function(eq) {
+    var wrapper = eq.parentElement;
+    if (!wrapper) return;
+    eq.style.transform = '';
+    wrapper.style.minHeight = '';
+    var available = wrapper.clientWidth;
+    var naturalWidth = eq.scrollWidth;
+    var naturalHeight = eq.offsetHeight;
+    if (!available || !naturalWidth || naturalWidth <= available) return;
+    var scale = Math.max(available / naturalWidth, 0.55);
+    eq.style.transform = 'scale(' + scale + ')';
+    wrapper.style.minHeight = (naturalHeight * scale) + 'px';
+  });
+}
+
+// =====================================================================
+//  postProcess(sectionEl) — KaTeX + Prism + equation alignment/fitting
+// =====================================================================
+function _postProcess(sectionEl) {
+  renderKaTeX(sectionEl);
+  if (typeof Prism !== 'undefined') {
+    Prism.highlightAllUnder(sectionEl);
+  }
+  // Mermaid diagrams: convert <pre><code class="language-mermaid"> to rendered diagrams
+  if (typeof mermaid !== 'undefined') {
+    var mermaidBlocks = sectionEl.querySelectorAll('pre > code.language-mermaid');
+    for (var i = 0; i < mermaidBlocks.length; i++) {
+      var code = mermaidBlocks[i];
+      var pre = code.parentNode;
+      var div = document.createElement('div');
+      div.className = 'mermaid';
+      div.textContent = code.textContent;
+      pre.parentNode.replaceChild(div, pre);
+      mermaid.run({ nodes: [div] });
+    }
+  }
+  updateEquationAlignment();
+  fitDisplayedEquations();
+}
+
+// =====================================================================
+//  Shimmer placeholder HTML
+// =====================================================================
+function _shimmerHTML() {
+  return '<div class="shimmer-placeholder">'
+    + '<div class="shimmer-line"></div>'
+    + '<div class="shimmer-line"></div>'
+    + '<div class="shimmer-line"></div>'
+    + '<div class="shimmer-line"></div>'
+    + '</div>';
+}
+
+// =====================================================================
+//  Generating indicator HTML
+// =====================================================================
+function _generatingHTML(sectionName) {
+  var label = sectionName ? 'Generating ' + sectionName + '...' : 'Generating...';
+  return '<div class="generating-indicator">'
+    + '<span class="generating-dot"></span>'
+    + '<span class="generating-dot"></span>'
+    + '<span class="generating-dot"></span>'
+    + '<span>' + label + '</span>'
+    + '</div>';
+}
+
+// =====================================================================
+//  TOC management
+// =====================================================================
+function _buildTOC() {
+  var tocList = document.getElementById('toc-list');
+  if (!tocList) return;
+  tocList.innerHTML = '';
+  for (var i = 0; i < _sections.length; i++) {
+    var li = document.createElement('li');
+    var a = document.createElement('a');
+    a.className = 'toc-item';
+    a.setAttribute('data-toc-index', i);
+    a.href = '#section-' + i;
+    a.textContent = _sections[i].heading || 'Section ' + (i + 1);
+    a.addEventListener('click', (function(idx) {
+      return function(e) {
+        e.preventDefault();
+        var target = document.getElementById('section-' + idx);
+        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      };
+    })(i));
+    li.appendChild(a);
+    tocList.appendChild(li);
+  }
+  // Restore active state
+  if (_activeTocIndex >= 0 && _activeTocIndex < _sections.length) {
+    setActiveTocItem(_activeTocIndex);
+  }
+}
+
+function setActiveTocItem(index) {
+  _activeTocIndex = index;
+  var items = document.querySelectorAll('.toc-item');
+  items.forEach(function(item) {
+    var idx = parseInt(item.getAttribute('data-toc-index'));
+    if (idx === index) {
+      item.classList.add('active');
+    } else {
+      item.classList.remove('active');
+    }
+  });
+}
+
+// =====================================================================
+//  TOC scroll tracking via scroll event
+//  Finds the section whose top is closest to (but not below) the
+//  viewport top, with a small offset to handle edge cases.
+// =====================================================================
+var _scrollTrackingBound = false;
+var _scrollTrackingRAF = null;
+
+function _onScrollTrack() {
+  if (_scrollTrackingRAF) return;
+  _scrollTrackingRAF = requestAnimationFrame(function() {
+    _scrollTrackingRAF = null;
+    var sections = document.querySelectorAll('.section');
+    if (!sections.length) return;
+
+    var scrollTop = window.scrollY || document.documentElement.scrollTop;
+    var viewportHeight = window.innerHeight;
+    var offset = viewportHeight * 0.25; // trigger point at 25% from top
+    var bestIndex = 0;
+
+    for (var i = 0; i < sections.length; i++) {
+      var rect = sections[i].getBoundingClientRect();
+      // Section top relative to viewport; if top is above the offset line, this section is "active"
+      if (rect.top <= offset) {
+        bestIndex = i;
+      } else {
+        break;
+      }
+    }
+
+    _currentVisibleSection = bestIndex;
+    if (bestIndex !== _activeTocIndex) {
+      setActiveTocItem(bestIndex);
+      // Notify Swift of section change
+      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.sectionChanged) {
+        window.webkit.messageHandlers.sectionChanged.postMessage(bestIndex);
+      }
+    }
+  });
+}
+
+function setupScrollTracking() {
+  // Disconnect previous IntersectionObserver if any
+  if (_scrollObserver) {
+    _scrollObserver.disconnect();
+    _scrollObserver = null;
+  }
+
+  if (!_scrollTrackingBound) {
+    window.addEventListener('scroll', _onScrollTrack, { passive: true });
+    _scrollTrackingBound = true;
+  }
+
+  // Run once immediately to set initial active section
+  _scrollTrackingRAF = null;
+  _onScrollTrack();
+}
+
+// =====================================================================
+//  Progress bar
+// =====================================================================
+function _updateProgress() {
+  var total = _sections.length;
+  if (total === 0) return;
+
+  var completed = 0;
+  for (var i = 0; i < total; i++) {
+    if (_sections[i].markdown && _sections[i].markdown.trim().length > 0) {
+      completed++;
+    }
+  }
+
+  var pct = Math.round((completed / total) * 100);
+  var progressFill = document.getElementById('progress-fill');
+  var progressLabel = document.getElementById('progress-label');
+  var streamingFill = document.getElementById('streaming-bar-fill');
+
+  if (progressFill) progressFill.style.width = pct + '%';
+  if (streamingFill) streamingFill.style.width = pct + '%';
+
+  if (progressLabel) {
+    if (pct >= 100) {
+      progressLabel.textContent = 'Complete';
+      if (streamingFill) streamingFill.style.width = '0%';
+    } else {
+      progressLabel.textContent = completed + ' / ' + total + ' sections';
+    }
+  }
+}
+
+// =====================================================================
+//  presentDocument(title, sectionsJson)
+//  sectionsJson: JSON string or array of {heading, content}
+//  Creates all section divs, builds TOC, renders content or shimmer.
+// =====================================================================
+function presentDocument(title, sectionsJson) {
+  var sections;
+  if (typeof sectionsJson === 'string') {
+    sections = JSON.parse(sectionsJson);
+  } else {
+    sections = sectionsJson;
+  }
+
+  // Set document title
+  var docTitle = document.getElementById('doc-title');
+  var sidebarTitle = document.getElementById('sidebar-title');
+  if (docTitle) docTitle.textContent = title || 'Document';
+  if (sidebarTitle) sidebarTitle.textContent = title || 'Document';
+  document.title = title || 'Living Reading View';
+
+  // Reset internal state
+  _sections = [];
+  var container = document.getElementById('sections-container');
+  if (!container) return;
+  container.innerHTML = '';
+
+  // Create section divs
+  for (var i = 0; i < sections.length; i++) {
+    var sec = sections[i];
+    var heading = sec.heading || '';
+    var content = sec.content || '';
+
+    _sections.push({ heading: heading, markdown: content });
+
+    var div = document.createElement('div');
+    div.className = 'section';
+    div.id = 'section-' + i;
+    div.setAttribute('data-section-index', i);
+    div.setAttribute('data-markdown', content);
+
+    // Section heading
+    var h2 = document.createElement('h2');
+    h2.className = 'section-heading';
+    var numSpan = document.createElement('span');
+    numSpan.className = 'section-number';
+    numSpan.textContent = (i + 1) + '.';
+    h2.appendChild(numSpan);
+    h2.appendChild(document.createTextNode(' ' + heading));
+    h2.appendChild(_createReadAloudButton(i));
+    div.appendChild(h2);
+
+    // Section content
+    var contentDiv = document.createElement('div');
+    contentDiv.className = 'section-content';
+
+    if (content && content.trim().length > 0) {
+      contentDiv.innerHTML = renderMarkdown(content);
+      div.appendChild(contentDiv);
+      _postProcess(div);
+    } else {
+      // Show shimmer placeholder for empty sections
+      contentDiv.innerHTML = _shimmerHTML();
+      div.appendChild(contentDiv);
+      div.classList.add('section-pending');
+    }
+
+    container.appendChild(div);
+  }
+
+  // Build TOC
+  _buildTOC();
+
+  // Setup scroll tracking
+  setupScrollTracking();
+
+  // Update progress
+  _updateProgress();
+}
+
+// =====================================================================
+//  updateSection(index, markdownContent)
+//  Replaces a section's content with rendered markdown.
+// =====================================================================
+function updateSection(index, markdownContent) {
+  if (index < 0 || index >= _sections.length) return;
+
+  _sections[index].markdown = markdownContent;
+
+  var sectionEl = document.getElementById('section-' + index);
+  if (!sectionEl) return;
+
+  // Store raw markdown
+  sectionEl.setAttribute('data-markdown', markdownContent);
+
+  // Find or create section-content div
+  var contentDiv = sectionEl.querySelector('.section-content');
+  if (!contentDiv) {
+    contentDiv = document.createElement('div');
+    contentDiv.className = 'section-content';
+    sectionEl.appendChild(contentDiv);
+  }
+
+  // Render
+  contentDiv.innerHTML = renderMarkdown(markdownContent);
+
+  // Remove streaming states
+  sectionEl.classList.remove('section-shimmer', 'section-pending');
+
+  // Post-process (KaTeX, Prism, equations)
+  _postProcess(sectionEl);
+
+  // Fade-in animation
+  sectionEl.classList.remove('section-fade-in');
+  // Force reflow to restart animation
+  void sectionEl.offsetWidth;
+  sectionEl.classList.add('section-fade-in');
+
+  // Update progress
+  _updateProgress();
+}
+
+// =====================================================================
+//  appendToSection(index, markdownContent, foldable, summary)
+//  Appends content to an existing section. If foldable, wraps in <details>.
+// =====================================================================
+function appendToSection(index, markdownContent, foldable, summary) {
+  if (index < 0 || index >= _sections.length) return;
+
+  // Append to stored markdown
+  _sections[index].markdown = (_sections[index].markdown || '') + '\n' + markdownContent;
+
+  var sectionEl = document.getElementById('section-' + index);
+  if (!sectionEl) return;
+
+  sectionEl.setAttribute('data-markdown', _sections[index].markdown);
+
+  var contentDiv = sectionEl.querySelector('.section-content');
+  if (!contentDiv) {
+    contentDiv = document.createElement('div');
+    contentDiv.className = 'section-content';
+    sectionEl.appendChild(contentDiv);
+  }
+
+  if (foldable) {
+    // Create a <details> element
+    var details = document.createElement('details');
+    var summaryEl = document.createElement('summary');
+    summaryEl.textContent = summary || 'Details';
+    details.appendChild(summaryEl);
+
+    var detailsContent = document.createElement('div');
+    detailsContent.className = 'details-content';
+    detailsContent.innerHTML = renderMarkdown(markdownContent);
+    details.appendChild(detailsContent);
+
+    contentDiv.appendChild(details);
+    _postProcess(details);
+  } else {
+    // Append rendered markdown
+    var fragment = document.createElement('div');
+    fragment.innerHTML = renderMarkdown(markdownContent);
+    // Move children into content div
+    while (fragment.firstChild) {
+      contentDiv.appendChild(fragment.firstChild);
+    }
+    _postProcess(contentDiv);
+  }
+
+  // Remove streaming states
+  sectionEl.classList.remove('section-shimmer', 'section-pending');
+
+  _updateProgress();
+}
+
+// =====================================================================
+//  addSection(afterIndex, heading, content)
+//  Inserts a new section. afterIndex === -1 means prepend before all.
+// =====================================================================
+function addSection(afterIndex, heading, content) {
+  // Remove follow-up thinking indicator if present
+  var thinkingEl = document.querySelector('.followup-thinking');
+  if (thinkingEl) thinkingEl.remove();
+
+  var container = document.getElementById('sections-container');
+  if (!container) return;
+
+  var newIndex;
+  if (afterIndex === -1) {
+    newIndex = 0;
+  } else {
+    newIndex = afterIndex + 1;
+  }
+
+  // Insert into internal state
+  _sections.splice(newIndex, 0, { heading: heading || '', markdown: content || '' });
+
+  // Create new section DOM element
+  var div = document.createElement('div');
+  div.className = 'section';
+
+  var h2 = document.createElement('h2');
+  h2.className = 'section-heading';
+  var numSpan = document.createElement('span');
+  numSpan.className = 'section-number';
+  numSpan.textContent = (newIndex + 1) + '.';
+  h2.appendChild(numSpan);
+  h2.appendChild(document.createTextNode(' ' + (heading || '')));
+  h2.appendChild(_createReadAloudButton(newIndex));
+  div.appendChild(h2);
+
+  var contentDiv = document.createElement('div');
+  contentDiv.className = 'section-content';
+
+  if (content && content.trim().length > 0) {
+    contentDiv.innerHTML = renderMarkdown(content);
+    div.appendChild(contentDiv);
+    _postProcess(div);
+  } else {
+    contentDiv.innerHTML = _shimmerHTML();
+    div.appendChild(contentDiv);
+    div.classList.add('section-pending');
+  }
+
+  // Insert into DOM
+  var existingSections = container.querySelectorAll('.section');
+  if (afterIndex === -1) {
+    // Prepend
+    if (existingSections.length > 0) {
+      container.insertBefore(div, existingSections[0]);
+    } else {
+      container.appendChild(div);
+    }
+  } else {
+    var afterEl = document.getElementById('section-' + afterIndex);
+    if (afterEl && afterEl.nextSibling) {
+      container.insertBefore(div, afterEl.nextSibling);
+    } else {
+      container.appendChild(div);
+    }
+  }
+
+  // Re-index all sections
+  _reindexSections();
+
+  // Rebuild TOC
+  _buildTOC();
+
+  // Re-attach scroll tracking
+  setupScrollTracking();
+
+  // Fade-in the new section
+  div.classList.add('section-fade-in');
+
+  _updateProgress();
+}
+
+// =====================================================================
+//  _reindexSections() — update IDs and data attributes after insert
+// =====================================================================
+function _reindexSections() {
+  var container = document.getElementById('sections-container');
+  if (!container) return;
+  var sectionEls = container.querySelectorAll('.section');
+  for (var i = 0; i < sectionEls.length; i++) {
+    sectionEls[i].id = 'section-' + i;
+    sectionEls[i].setAttribute('data-section-index', i);
+    // Update the section number in the heading
+    var numSpan = sectionEls[i].querySelector('.section-number');
+    if (numSpan) {
+      numSpan.textContent = (i + 1) + '.';
+    }
+    // Sync data-markdown attribute
+    if (_sections[i]) {
+      sectionEls[i].setAttribute('data-markdown', _sections[i].markdown || '');
+    }
+  }
+}
+
+// =====================================================================
+//  patchSection(index, findStr, replaceStr)
+//  Find-and-replace in stored markdown, then re-render the section.
+// =====================================================================
+function patchSection(index, findStr, replaceStr) {
+  if (index < 0 || index >= _sections.length) return;
+
+  var md = _sections[index].markdown || '';
+  var patched = md.replace(findStr, replaceStr);
+
+  // Only re-render if something changed
+  if (patched !== md) {
+    updateSection(index, patched);
+  }
+}
+
+// =====================================================================
+//  updateStreamingState(nextIndex)
+//  Updates shimmer/pending/complete states and progress bar.
+//  nextIndex = the index of the section currently being generated.
+//  Pass -1 to mark all sections complete.
+// =====================================================================
+function updateStreamingState(nextIndex) {
+  // Normalise: null, undefined, or out-of-range values all mean "all done".
+  if (nextIndex == null || nextIndex < 0 || nextIndex >= _sections.length) {
+    nextIndex = -1;
+  }
+  _streamingNextIndex = nextIndex;
+
+  for (var i = 0; i < _sections.length; i++) {
+    var sectionEl = document.getElementById('section-' + i);
+    if (!sectionEl) continue;
+
+    var contentDiv = sectionEl.querySelector('.section-content');
+
+    if (nextIndex === -1) {
+      // All complete
+      sectionEl.classList.remove('section-shimmer', 'section-pending');
+      // Remove generating indicator if present
+      if (contentDiv) {
+        var gen = contentDiv.querySelector('.generating-indicator');
+        if (gen) gen.remove();
+      }
+    } else if (i < nextIndex) {
+      // Completed
+      sectionEl.classList.remove('section-shimmer', 'section-pending');
+      if (contentDiv) {
+        var gen2 = contentDiv.querySelector('.generating-indicator');
+        if (gen2) gen2.remove();
+      }
+    } else if (i === nextIndex) {
+      // Currently generating
+      sectionEl.classList.remove('section-pending');
+      sectionEl.classList.add('section-shimmer');
+      // Add generating indicator if not present and section is still empty
+      if (contentDiv && (!_sections[i].markdown || _sections[i].markdown.trim().length === 0)) {
+        if (!contentDiv.querySelector('.generating-indicator')) {
+          contentDiv.innerHTML = _generatingHTML(_sections[i].heading);
+        }
+      }
+    } else {
+      // Pending (not yet reached)
+      sectionEl.classList.remove('section-shimmer');
+      sectionEl.classList.add('section-pending');
+    }
+  }
+
+  _updateProgress();
+}
+
+// =====================================================================
+//  Window resize handler
+// =====================================================================
+window.addEventListener('resize', function() {
+  fitDisplayedEquations();
+});
+
+// =====================================================================
+//  WebSocket client for TUI mode (only if not in WKWebView)
+// =====================================================================
+if (!window.webkit) {
+  (function() {
+    var wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    var ws = new WebSocket(wsProtocol + '//' + location.host + '/ws');
+    window._readingViewWs = ws;
+
+    // Show follow-up bar in browser mode
+    var followupBar = document.getElementById('followup-bar');
+    if (followupBar) followupBar.style.display = '';
+
+    // Wire up follow-up input
+    var followupInput = document.getElementById('followup-input');
+    var followupSend = document.getElementById('followup-send');
+    if (followupInput) {
+      followupInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          _sendFollowUp();
+        }
+      });
+    }
+    if (followupSend) {
+      followupSend.addEventListener('click', function() {
+        _sendFollowUp();
+      });
+    }
+
+    ws.onmessage = function(e) {
+      try {
+        var msg = JSON.parse(e.data);
+        switch (msg.type) {
+          case 'presentDocument':
+            presentDocument(msg.title, msg.sections);
+            break;
+          case 'updateSection':
+            updateSection(msg.index, msg.content);
+            break;
+          case 'appendToSection':
+            appendToSection(msg.index, msg.content, msg.foldable, msg.summary);
+            break;
+          case 'addSection':
+            addSection(msg.afterIndex, msg.heading, msg.content);
+            break;
+          case 'patchSection':
+            patchSection(msg.index, msg.find, msg.replace);
+            break;
+          case 'updateStreamingState':
+            updateStreamingState(msg.nextIndex);
+            break;
+          case 'startKaraoke':
+            startKaraoke(msg.sectionIndex, msg.totalWords);
+            break;
+          case 'karaokeWord':
+            karaokeWord(msg.sectionIndex, msg.wordIndex);
+            break;
+          case 'stopKaraoke':
+            stopKaraoke();
+            break;
+          case 'ttsStateChanged':
+            ttsStateChanged(msg.state);
+            break;
+          case 'equationHighlight':
+            updateEquationHighlight(msg.activeIndex, msg.passedIndex);
+            break;
+          case 'followUpThinking':
+            _showFollowUpThinking(msg.question);
+            break;
+          default:
+            break;
+        }
+      } catch (err) {
+        // Silently ignore malformed messages
+      }
+    };
+
+    ws.onclose = function() {
+      // Could implement reconnection logic here
+    };
+  })();
+}
+
+// =====================================================================
+//  Karaoke / voice narration support
+//  Ported from RichTextView.swift:1320-1617.
+//  Scoped to individual sections (not global #content).
+// =====================================================================
+
+var _activeKaraokeSection = -1;  // which section is currently karaoke-wrapped
+var _kwCounter = 0;
+var _lastRevealed = -1;
+var _activeEquationIndex = null;
+var _requestedEquationIndex = null;
+var _requestedPassedEquationIndex = null;
+var _maxPassedEquationIndex = 0;
+var _karaokeTapBound = false;
+var _touchStartX = 0, _touchStartY = 0;
+var _lastSeekTime = 0;
+var _karaokeAutoScroll = true;   // auto-scroll to follow karaoke word
+var _karaokeScrollPending = false;  // guards against re-entrant scroll handler
+
+// Elements the walker must SKIP — their content is removed from TTS.
+var _skipTags = { 'pre':1, 'svg':1, 'script':1, 'style':1 };
+
+function _isLatexLikeToken(token) {
+  if (!token) return false;
+  var t = token.trim();
+  if (!t) return false;
+  // Keep karaoke word indexing aligned with TTS stripping.
+  // Tokens containing LaTeX markers are not spoken.
+  if (/[$\\]/.test(t) || /\\[()[\]]/.test(t)) return true;
+  if (/[\u2207\u2202\u221E\u2248\u2260\u2264\u2265\u00B1\u221A\u2211\u220F\u03A8\u03C8\u03A6\u03C6\u0398\u03B8\u039B\u03BB\u03BC\u03C3\u03A9\u03C9\u03B7\u03B1\u03B2\u03B3\u03B4\u03C4\u2080-\u2089\u2070\u00B9\u00B2\u00B3\u2074-\u2079\u207B\u2016\u00BD\u00BC\u00BE]/.test(t)) return true;
+  var hasBrackets = /[()[\]{}]/.test(t);
+  var hasMathOps =
+    t.indexOf('=') !== -1 ||
+    t.indexOf('+') !== -1 ||
+    t.indexOf('*') !== -1 ||
+    t.indexOf('/') !== -1 ||
+    t.indexOf('^') !== -1 ||
+    t.indexOf('\u2212') !== -1 ||
+    t.indexOf('\u00D7') !== -1 ||
+    t.indexOf('\u00F7') !== -1 ||
+    t.indexOf('<') !== -1 ||
+    t.indexOf('>') !== -1 ||
+    t.indexOf('\u2264') !== -1 ||
+    t.indexOf('\u2265') !== -1 ||
+    t.indexOf('\u2248') !== -1 ||
+    t.indexOf('\u2260') !== -1 ||
+    t.indexOf('\u00B1') !== -1;
+  if (hasMathOps) {
+    var hasDigits = /[0-9]/.test(t);
+    var hasAsciiLetters = /[A-Za-z]/.test(t);
+    if (hasBrackets || hasDigits || !hasAsciiLetters) return true;
+  }
+  if (/[\u2080-\u2089\u2070\u00B9\u00B2\u00B3\u2074-\u2079]/.test(t)) return true;
+  return false;
+}
+
+function _walkAndWrap(node, state) {
+  if (node.nodeType === 3) {
+    // Text node — split into words
+    var text = node.textContent;
+    // Force bullet glyphs into standalone tokens so they don't
+    // merge with adjacent words and shift karaoke indices.
+    text = text.replace(/[\u2022\u25E6\u25AA\u2023]/g, ' $& ');
+    if (!text.trim()) return;
+    var parts = text.split(/(\s+)/);
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < parts.length; i++) {
+      if (/^\s+$/.test(parts[i])) {
+        frag.appendChild(document.createTextNode(parts[i]));
+      } else if (/^[,;:!?\u2014\u2013\u2026.\u2025()[\]{}"'\u201C\u201D\u2018\u2019\u2022\u25E6\u25AA\u2023]+$/.test(parts[i])) {
+        // Standalone punctuation — TTS treats as pause (no alignment entry).
+        // Leave as plain text to avoid word count drift.
+        frag.appendChild(document.createTextNode(parts[i]));
+      } else if (_isLatexLikeToken(parts[i])) {
+        // LaTeX markers/commands are stripped before TTS.
+        // Keep as plain text so they don't consume karaoke indices.
+        frag.appendChild(document.createTextNode(parts[i]));
+      } else if (parts[i].length > 0) {
+        var span = document.createElement('span');
+        span.className = 'kw';
+        span.setAttribute('data-wi', state.index);
+        span.textContent = parts[i];
+        frag.appendChild(span);
+        state.index++;
+      }
+    }
+    node.parentNode.replaceChild(frag, node);
+  } else if (node.nodeType === 1) {
+    var tag = node.tagName.toLowerCase();
+    // Skip block elements whose content is removed from TTS
+    if (_skipTags[tag]) return;
+    // Skip KaTeX elements (LaTeX — replaced with space in TTS)
+    if (node.classList && (node.classList.contains('katex') || node.classList.contains('katex-display'))) return;
+    // Skip bare-URL links — TTS strips URLs so their words have no
+    // alignment entries.  Wrapping them as .kw would cause karaoke
+    // word index drift.  Markdown links [text](url) are fine because
+    // marked renders the link text (which IS spoken) as the <a> content.
+    if (tag === 'a') {
+      var linkText = (node.textContent || '').trim();
+      if (/^https?:\/\//.test(linkText)) return;
+    }
+    // Walk into everything else: strong, em, a, code, li, td, blockquote, del, etc.
+    var children = Array.from(node.childNodes);
+    for (var j = 0; j < children.length; j++) {
+      _walkAndWrap(children[j], state);
+    }
+  }
+}
+
+// =====================================================================
+//  wrapWordsForKaraoke(sectionIndex)
+//  Wraps words in <span class="kw" data-wi="N"> within a specific section.
+//  Returns the total word count.
+// =====================================================================
+function wrapWordsForKaraoke(sectionIndex) {
+  // Unwrap previous section if different
+  if (_activeKaraokeSection >= 0 && _activeKaraokeSection !== sectionIndex) {
+    unwrapKaraoke(_activeKaraokeSection);
+  }
+  _activeKaraokeSection = sectionIndex;
+
+  var container = document.querySelector('#section-' + sectionIndex + ' .section-content');
+  if (!container) return 0;
+
+  var previousRevealed = _lastRevealed;
+
+  // Unwrap any existing .kw spans from a previous karaoke session
+  // to prevent nested double-wrapping (opacity compounds -> stays dimmed).
+  container.querySelectorAll('.kw').forEach(function(span) {
+    span.replaceWith(document.createTextNode(span.textContent));
+  });
+  container.normalize(); // merge adjacent text nodes
+
+  container.classList.add('karaoke-active');
+
+  var state = { index: 0 };
+  _walkAndWrap(container, state);
+  _kwCounter = state.index;
+
+  _collectEquationNodes(container).forEach(function(node) {
+    node.classList.add('katex-eq-node');
+  });
+  if (typeof _applyEquationHighlightState === 'function') {
+    _applyEquationHighlightState(_collectEquationNodes(container), _activeEquationIndex, _maxPassedEquationIndex);
+  }
+
+  // Preserve the prior revealed position across DOM re-wraps so
+  // streaming paragraph updates cannot visibly step the highlight back.
+  if (previousRevealed >= 0 && _kwCounter > 0) {
+    var restoreTo = Math.min(previousRevealed, _kwCounter - 1);
+    _lastRevealed = -1;
+    updateKaraokeReveal(restoreTo + 1, false);
+  } else {
+    _lastRevealed = -1;
+  }
+
+  _addKaraokeTapListeners(container);
+  return _kwCounter;
+}
+
+// =====================================================================
+//  unwrapKaraoke(sectionIndex)
+//  Removes .kw wrapping from a section.
+// =====================================================================
+function unwrapKaraoke(sectionIndex) {
+  var container = document.querySelector('#section-' + sectionIndex + ' .section-content');
+  if (!container) return;
+
+  _removeKaraokeTapListeners(container);
+
+  // Replace each .kw span with its text content
+  container.querySelectorAll('.kw').forEach(function(span) {
+    span.replaceWith(document.createTextNode(span.textContent));
+  });
+  container.normalize();
+  container.classList.remove('karaoke-active');
+
+  // Reset equation classes
+  container.querySelectorAll('.katex-eq-node').forEach(function(el) {
+    el.classList.remove('katex-eq-node', 'katex-eq-dim', 'katex-eq-active', 'katex-eq-revealed');
+  });
+
+  if (sectionIndex === _activeKaraokeSection) {
+    _activeKaraokeSection = -1;
+    _lastRevealed = -1;
+    _kwCounter = 0;
+    _karaokeTapBound = false;
+    _activeEquationIndex = null;
+    _requestedEquationIndex = null;
+    _requestedPassedEquationIndex = null;
+    _maxPassedEquationIndex = 0;
+  }
+}
+
+// =====================================================================
+//  updateKaraokeReveal(upToIndex, allowBackward)
+//  Adds/removes .revealed class on .kw spans within active section.
+//  upToIndex = reveal words 0..upToIndex-1.  Pass null to deactivate.
+// =====================================================================
+function updateKaraokeReveal(upToIndex, allowBackward) {
+  if (_activeKaraokeSection < 0) return;
+  var container = document.querySelector('#section-' + _activeKaraokeSection + ' .section-content');
+  if (!container) return;
+
+  if (upToIndex === null || upToIndex === undefined) {
+    // Deactivate karaoke
+    container.classList.remove('karaoke-active');
+    container.querySelectorAll('.kw').forEach(function(el) { el.classList.add('revealed'); });
+    container.querySelectorAll('.katex-eq-revealed').forEach(function(el) {
+      el.classList.remove('katex-eq-revealed');
+    });
+    container.querySelectorAll('.katex-eq-active').forEach(function(el) {
+      el.classList.remove('katex-eq-active');
+    });
+    container.querySelectorAll('.katex-eq-dim').forEach(function(el) {
+      el.classList.remove('katex-eq-dim');
+    });
+    _removeKaraokeTapListeners(container);
+    _lastRevealed = -1;
+    _activeEquationIndex = null;
+    _maxPassedEquationIndex = 0;
+    return;
+  }
+
+  var target = upToIndex - 1;
+  if (target === _lastRevealed) return;
+  var canSeekBackward = (allowBackward === true);
+
+  if (target > _lastRevealed) {
+    // Forward reveal
+    for (var i = _lastRevealed + 1; i <= target; i++) {
+      var el = container.querySelector('.kw[data-wi="' + i + '"]');
+      if (el) el.classList.add('revealed');
+    }
+  } else {
+    if (!canSeekBackward) return;
+    // Backward seek — un-reveal words after target
+    for (var i = target + 1; i <= _lastRevealed; i++) {
+      var el = container.querySelector('.kw[data-wi="' + i + '"]');
+      if (el) el.classList.remove('revealed');
+    }
+  }
+  _lastRevealed = target;
+}
+
+// =====================================================================
+//  Equation highlight functions
+//  Ported from RichTextView.swift:1476-1556, scoped to container.
+// =====================================================================
+function _collectEquationNodes(container) {
+  if (!container) return [];
+  // Document-order list of rendered equations:
+  // - block equations: .katex-display
+  // - inline equations: span.katex not inside a display wrapper
+  return Array.from(container.querySelectorAll('.katex-display, span.katex')).filter(function(el) {
+    return !(el.classList.contains('katex') && el.closest('.katex-display'));
+  });
+}
+
+function _parseRequestedEquationIndex(raw) {
+  if (raw === null || raw === undefined) return null;
+  var parsed = parseInt(raw, 10);
+  if (isNaN(parsed) || parsed < 1) return null;
+  return parsed;
+}
+
+function _parseRequestedPassedIndex(raw) {
+  if (raw === null || raw === undefined) return null;
+  var parsed = parseInt(raw, 10);
+  if (isNaN(parsed)) return null;
+  return Math.max(0, parsed);
+}
+
+function _applyEquationHighlightState(equations, activeIdx, passedIdx) {
+  if (!equations || !equations.length) return false;
+
+  equations.forEach(function(node) {
+    node.classList.add('katex-eq-node');
+  });
+
+  var nextActive = null;
+  if (_requestedEquationIndex !== null) {
+    if (_requestedEquationIndex <= equations.length) {
+      nextActive = _requestedEquationIndex;
+    }
+  } else if (activeIdx !== null && activeIdx !== undefined) {
+    if (activeIdx <= equations.length) {
+      nextActive = activeIdx;
+    }
+  }
+
+  var explicitPassed = null;
+  if (_requestedPassedEquationIndex !== null) {
+    explicitPassed = Math.max(0, Math.min(_requestedPassedEquationIndex, equations.length));
+  } else if (passedIdx !== null && passedIdx !== undefined) {
+    explicitPassed = Math.max(0, Math.min(passedIdx, equations.length));
+  }
+
+  if (explicitPassed !== null) {
+    // Seek-aware mode from Swift: set exact passed boundary.
+    _maxPassedEquationIndex = explicitPassed;
+  } else if (_activeEquationIndex !== null && nextActive !== _activeEquationIndex) {
+    // Fallback mode when only active equation is provided.
+    _maxPassedEquationIndex = Math.max(_maxPassedEquationIndex, _activeEquationIndex);
+  }
+  _activeEquationIndex = nextActive;
+
+  equations.forEach(function(node, i) {
+    var isActive = (_activeEquationIndex !== null && i === (_activeEquationIndex - 1));
+    var isPassed = (i < _maxPassedEquationIndex);
+    if (isPassed) {
+      node.classList.add('katex-eq-revealed');
+    } else {
+      node.classList.remove('katex-eq-revealed');
+    }
+    if (isActive) {
+      node.classList.add('katex-eq-active');
+    } else {
+      node.classList.remove('katex-eq-active');
+    }
+    if (!isPassed && !isActive) {
+      node.classList.add('katex-eq-dim');
+    } else {
+      node.classList.remove('katex-eq-dim');
+    }
+  });
+  return true;
+}
+
+function updateEquationHighlight(eqIndex, passedEqIndex) {
+  _requestedEquationIndex = _parseRequestedEquationIndex(eqIndex);
+  _requestedPassedEquationIndex = _parseRequestedPassedIndex(passedEqIndex);
+  if (_activeKaraokeSection < 0) return;
+  var container = document.querySelector('#section-' + _activeKaraokeSection + ' .section-content');
+  if (!container) return;
+  _applyEquationHighlightState(_collectEquationNodes(container), _activeEquationIndex, _maxPassedEquationIndex);
+}
+
+// =====================================================================
+//  Karaoke tap-to-seek
+//  Ported from RichTextView.swift:1558-1617, scoped to container.
+// =====================================================================
+function _seekToKw(target) {
+  while (target) {
+    if (target.classList && target.classList.contains('kw')) {
+      var idx = parseInt(target.getAttribute('data-wi'), 10);
+      if (!isNaN(idx)) {
+        var now = Date.now();
+        if (now - _lastSeekTime < 300) return; // debounce
+        _lastSeekTime = now;
+        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.karaokeSeek) {
+          window.webkit.messageHandlers.karaokeSeek.postMessage(idx);
+        } else {
+          _sendWsMessage({"type": "karaokeSeek", "wordIndex": idx});
+        }
+      }
+      return;
+    }
+    target = target.parentNode;
+  }
+}
+
+function _onKaraokeTouchStart(e) {
+  if (e.touches.length === 1) {
+    _touchStartX = e.touches[0].clientX;
+    _touchStartY = e.touches[0].clientY;
+  }
+}
+
+function _onKaraokeTouchEnd(e) {
+  if (!e.changedTouches || e.changedTouches.length === 0) return;
+  var touch = e.changedTouches[0];
+  var dx = touch.clientX - _touchStartX;
+  var dy = touch.clientY - _touchStartY;
+  if (dx * dx + dy * dy > 400) return; // >20px movement = scroll, not tap
+  var target = document.elementFromPoint(touch.clientX, touch.clientY);
+  if (target) {
+    e.preventDefault();
+    _seekToKw(target);
+  }
+}
+
+function _onKaraokeClick(e) {
+  _seekToKw(e.target);
+}
+
+function _addKaraokeTapListeners(container) {
+  if (_karaokeTapBound) return;
+  container.addEventListener('touchstart', _onKaraokeTouchStart, {passive: true});
+  container.addEventListener('touchend', _onKaraokeTouchEnd, {passive: false});
+  container.addEventListener('click', _onKaraokeClick);
+  _karaokeTapBound = true;
+}
+
+function _removeKaraokeTapListeners(container) {
+  if (!_karaokeTapBound) return;
+  if (container) {
+    container.removeEventListener('touchstart', _onKaraokeTouchStart);
+    container.removeEventListener('touchend', _onKaraokeTouchEnd);
+    container.removeEventListener('click', _onKaraokeClick);
+  }
+  _karaokeTapBound = false;
+}
+
+// =====================================================================
+//  Text selection handler
+//  Ported from RichTextView.swift:1619-1625, extended for browser mode.
+// =====================================================================
+var _selectedText = '';
+var _selectedSectionIndex = null;
+
+// Find the section index for a given DOM node by walking up to the
+// nearest .section ancestor with a data-section-index attribute.
+function _sectionIndexForNode(node) {
+  var el = node;
+  if (el.nodeType === Node.TEXT_NODE) el = el.parentElement;
+  while (el && el !== document.body) {
+    if (el.classList && el.classList.contains('section') && el.hasAttribute('data-section-index')) {
+      return parseInt(el.getAttribute('data-section-index'), 10);
+    }
+    el = el.parentElement;
+  }
+  return null;
+}
+
+function _positionSelectionBar(bar, rect) {
+  // Position above the selection by default; if too close to top, position below.
+  var barHeight = 44;
+  var gap = 8;
+  var left = rect.left + rect.width / 2;
+  var top = rect.top - barHeight - gap + window.scrollY;
+
+  if (rect.top - barHeight - gap < 0) {
+    // Place below the selection instead
+    top = rect.bottom + gap + window.scrollY;
+  }
+
+  // Clamp horizontal position so the bar doesn't overflow viewport
+  var barWidth = bar.offsetWidth || 150;
+  left = Math.max(16, Math.min(left - barWidth / 2, window.innerWidth - barWidth - 16));
+  // Convert top to fixed positioning (subtract scrollY since we use position: fixed)
+  var fixedTop = top - window.scrollY;
+
+  bar.style.left = left + 'px';
+  bar.style.top = fixedTop + 'px';
+}
+
+document.addEventListener('selectionchange', function() {
+  var winSel = window.getSelection();
+  var sel = winSel ? winSel.toString().trim() : '';
+
+  // WKWebView bridge (existing behavior, preserved)
+  if (sel.length > 0 && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.textSelected) {
+    window.webkit.messageHandlers.textSelected.postMessage(sel);
+  }
+
+  // Browser mode: show/hide selection action bar
+  var actionBar = document.getElementById('selection-action-bar');
+  var questionWrap = document.getElementById('selection-question-wrap');
+  if (!actionBar) return;
+
+  if (sel.length > 0 && winSel.rangeCount > 0) {
+    _selectedText = sel;
+    _selectedSectionIndex = _sectionIndexForNode(winSel.anchorNode);
+    // If we couldn't find a section, fall back to the currently visible one
+    if (_selectedSectionIndex === null) {
+      _selectedSectionIndex = _currentVisibleSection;
+    }
+
+    // Don't show action bar if the question input is already visible
+    if (questionWrap && questionWrap.classList.contains('visible')) return;
+
+    var range = winSel.getRangeAt(0);
+    var rect = range.getBoundingClientRect();
+    if (rect.width > 0) {
+      actionBar.classList.add('visible');
+      _positionSelectionBar(actionBar, rect);
+    }
+  } else {
+    _selectedText = '';
+    _selectedSectionIndex = null;
+    actionBar.classList.remove('visible');
+  }
+});
+
+// Hide selection bar on scroll (it can become mispositioned)
+window.addEventListener('scroll', function() {
+  var actionBar = document.getElementById('selection-action-bar');
+  if (actionBar) actionBar.classList.remove('visible');
+}, { passive: true });
+
+// =====================================================================
+//  Selection action bar — "Ask about this" flow
+// =====================================================================
+(function() {
+  var askBtn = document.getElementById('selection-ask-btn');
+  var questionWrap = document.getElementById('selection-question-wrap');
+  var questionInput = document.getElementById('selection-question-input');
+  var questionSend = document.getElementById('selection-question-send');
+  var questionPreview = document.getElementById('selection-question-preview');
+  var actionBar = document.getElementById('selection-action-bar');
+
+  if (askBtn) {
+    askBtn.addEventListener('click', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!_selectedText) return;
+
+      // Hide the action bar, show the question input
+      if (actionBar) actionBar.classList.remove('visible');
+
+      // Show the question wrap near the selection
+      if (questionWrap && questionPreview) {
+        // Truncate preview
+        var preview = _selectedText.length > 80 ? _selectedText.substring(0, 80) + '...' : _selectedText;
+        questionPreview.textContent = '"' + preview + '"';
+
+        // Position near the selection
+        var winSel = window.getSelection();
+        if (winSel && winSel.rangeCount > 0) {
+          var rect = winSel.getRangeAt(0).getBoundingClientRect();
+          _positionSelectionBar(questionWrap, rect);
+        }
+
+        questionWrap.classList.add('visible');
+        if (questionInput) {
+          questionInput.value = '';
+          questionInput.focus();
+        }
+      }
+    });
+  }
+
+  function _submitSelectionQuestion() {
+    if (!questionInput) return;
+    var text = questionInput.value.trim();
+    // If empty, default to "Explain this in more detail" (like TUI)
+    if (!text) text = 'Explain this in more detail';
+
+    var sectionIdx = _selectedSectionIndex !== null ? _selectedSectionIndex : _currentVisibleSection;
+
+    // Send via WebSocket
+    if (window._readingViewWs && window._readingViewWs.readyState === WebSocket.OPEN) {
+      window._readingViewWs.send(JSON.stringify({
+        type: 'followUpQuestion',
+        text: text,
+        sectionIndex: sectionIdx,
+        selectedText: _selectedText
+      }));
+    }
+
+    // Show the question inline as a card (mention the selection)
+    _showFollowUpCard(text);
+
+    // Clear state
+    questionInput.value = '';
+    if (questionWrap) questionWrap.classList.remove('visible');
+    _selectedText = '';
+    _selectedSectionIndex = null;
+
+    // Clear the browser selection
+    if (window.getSelection) window.getSelection().removeAllRanges();
+  }
+
+  if (questionInput) {
+    questionInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        _submitSelectionQuestion();
+      }
+      if (e.key === 'Escape') {
+        if (questionWrap) questionWrap.classList.remove('visible');
+      }
+    });
+  }
+
+  if (questionSend) {
+    questionSend.addEventListener('click', function(e) {
+      e.preventDefault();
+      _submitSelectionQuestion();
+    });
+  }
+
+  // Close question wrap when clicking outside
+  document.addEventListener('mousedown', function(e) {
+    if (questionWrap && questionWrap.classList.contains('visible')) {
+      if (!questionWrap.contains(e.target)) {
+        questionWrap.classList.remove('visible');
+      }
+    }
+    // Also hide action bar if clicking outside it
+    if (actionBar && actionBar.classList.contains('visible')) {
+      if (!actionBar.contains(e.target)) {
+        actionBar.classList.remove('visible');
+      }
+    }
+  });
+})();
+
+// =====================================================================
+//  Read Aloud button factory
+// =====================================================================
+function _createReadAloudButton(sectionIndex) {
+  var btn = document.createElement('button');
+  btn.className = 'read-aloud-btn';
+  btn.setAttribute('data-section-index', sectionIndex);
+  btn.setAttribute('title', 'Read Aloud');
+  btn.innerHTML = '&#x1F50A;'; // speaker emoji
+  btn.addEventListener('click', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    var idx = parseInt(btn.getAttribute('data-section-index'), 10);
+    _requestReadAloud(idx);
+  });
+  return btn;
+}
+
+function _requestReadAloud(sectionIndex) {
+  // Send via WebSocket if available
+  if (window._readingViewWs && window._readingViewWs.readyState === WebSocket.OPEN) {
+    window._readingViewWs.send(JSON.stringify({ type: 'requestReadAloud', sectionIndex: sectionIndex }));
+  }
+  // Send via Swift bridge if available
+  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.requestReadAloud) {
+    window.webkit.messageHandlers.requestReadAloud.postMessage(sectionIndex);
+  }
+}
+
+// =====================================================================
+//  Karaoke WebSocket handlers — start, word highlight, stop
+// =====================================================================
+var _ttsState = 'stopped'; // 'playing' | 'paused' | 'stopped'
+var _totalKaraokeWords = 0;
+var _currentKaraokeWord = 0;
+
+function startKaraoke(sectionIndex, totalWords) {
+  wrapWordsForKaraoke(sectionIndex);
+  _totalKaraokeWords = totalWords || _kwCounter;
+  _currentKaraokeWord = 0;
+  _ttsState = 'playing';
+  _karaokeAutoScroll = true;
+  _showNowPlayingBar();
+  _markReadAloudActive(sectionIndex);
+  // Listen for user scroll to disable auto-follow.
+  window.addEventListener('touchstart', _karaokeOnUserScroll, { passive: true });
+  window.addEventListener('wheel', _karaokeOnUserScroll, { passive: true });
+}
+
+function karaokeWord(sectionIndex, wordIndex) {
+  // Ensure karaoke is active for the right section
+  if (_activeKaraokeSection !== sectionIndex) {
+    wrapWordsForKaraoke(sectionIndex);
+  }
+  updateKaraokeReveal(wordIndex + 1, false);
+  _currentKaraokeWord = wordIndex;
+  _updateNowPlayingProgress();
+  // Auto-scroll to keep the currently highlighted word visible.
+  _scrollToKaraokeWord(wordIndex);
+}
+
+function stopKaraoke() {
+  if (_activeKaraokeSection >= 0) {
+    unwrapKaraoke(_activeKaraokeSection);
+  }
+  _ttsState = 'stopped';
+  _karaokeAutoScroll = true;
+  _hideNowPlayingBar();
+  _clearReadAloudActive();
+  window.removeEventListener('touchstart', _karaokeOnUserScroll);
+  window.removeEventListener('wheel', _karaokeOnUserScroll);
+}
+
+// Disable karaoke auto-scroll when user scrolls manually.
+// Ignores programmatic scrolls triggered by _scrollToKaraokeWord.
+function _karaokeOnUserScroll() {
+  if (_karaokeScrollPending) return;
+  if (_activeKaraokeSection >= 0) {
+    _karaokeAutoScroll = false;
+  }
+}
+
+// Scroll the currently highlighted karaoke word into view.
+function _scrollToKaraokeWord(wordIndex) {
+  if (!_karaokeAutoScroll) return;
+  if (_activeKaraokeSection < 0) return;
+  var container = document.querySelector('#section-' + _activeKaraokeSection + ' .section-content');
+  if (!container) return;
+  var el = container.querySelector('.kw[data-wi="' + wordIndex + '"]');
+  if (!el) return;
+  // Use scrollIntoView with block: 'center' so the word appears in the
+  // middle of the viewport, giving context above and below.
+  // Guard against the programmatic scroll re-triggering the manual-scroll
+  // listener by setting _karaokeScrollPending.
+  _karaokeScrollPending = true;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  // Clear the guard after the scroll settles.
+  setTimeout(function() { _karaokeScrollPending = false; }, 400);
+}
+
+function ttsStateChanged(state) {
+  _ttsState = state;
+  _updatePlayPauseButton();
+  if (state === 'stopped') {
+    _hideNowPlayingBar();
+    _clearReadAloudActive();
+  }
+  // Update all read-aloud buttons
+  var buttons = document.querySelectorAll('.read-aloud-btn');
+  buttons.forEach(function(btn) {
+    if (state === 'playing') {
+      btn.classList.add('tts-playing');
+    } else {
+      btn.classList.remove('tts-playing');
+    }
+  });
+}
+
+// =====================================================================
+//  Now-Playing bar helpers
+// =====================================================================
+function _sendWsMessage(obj) {
+  if (window._readingViewWs && window._readingViewWs.readyState === WebSocket.OPEN) {
+    window._readingViewWs.send(JSON.stringify(obj));
+  }
+}
+
+function _showNowPlayingBar() {
+  var bar = document.getElementById('nowPlayingBar');
+  if (bar) bar.classList.add('visible');
+  // Adjust content padding to account for both bars
+  var sc = document.querySelector('.sections-container');
+  if (sc) sc.style.paddingBottom = '128px';
+}
+
+function _hideNowPlayingBar() {
+  var bar = document.getElementById('nowPlayingBar');
+  if (bar) bar.classList.remove('visible');
+  var sc = document.querySelector('.sections-container');
+  if (sc) sc.style.paddingBottom = '80px';
+  // Reset progress
+  var fill = document.getElementById('npProgressFill');
+  var thumb = document.getElementById('npProgressThumb');
+  if (fill) fill.style.width = '0%';
+  if (thumb) thumb.style.left = '0%';
+}
+
+function _updatePlayPauseButton() {
+  var btn = document.getElementById('npPlayPause');
+  if (!btn) return;
+  btn.innerHTML = _ttsState === 'playing' ? '&#x23F8;' : '&#x25B6;';
+}
+
+function _updateNowPlayingProgress() {
+  if (_totalKaraokeWords <= 0) return;
+  var fraction = _currentKaraokeWord / _totalKaraokeWords;
+  fraction = Math.min(1, Math.max(0, fraction));
+  var fill = document.getElementById('npProgressFill');
+  var thumb = document.getElementById('npProgressThumb');
+  if (fill) fill.style.width = (fraction * 100) + '%';
+  if (thumb) thumb.style.left = (fraction * 100) + '%';
+}
+
+function _togglePlayPause() {
+  if (_ttsState === 'playing') {
+    _sendWsMessage({"type": "requestPause"});
+  } else {
+    _sendWsMessage({"type": "requestResume"});
+  }
+}
+
+function _stopPlayback() {
+  _sendWsMessage({"type": "requestStop"});
+}
+
+function _markReadAloudActive(sectionIndex) {
+  _clearReadAloudActive();
+  var btn = document.querySelector('.read-aloud-btn[data-section-index="' + sectionIndex + '"]');
+  if (btn) btn.classList.add('tts-active');
+}
+
+function _clearReadAloudActive() {
+  document.querySelectorAll('.read-aloud-btn.tts-active').forEach(function(btn) {
+    btn.classList.remove('tts-active');
+  });
+}
+
+// Progress bar scrubbing — click and drag to seek
+(function() {
+  var pc = document.getElementById('npProgressContainer');
+  if (!pc) return;
+  var dragging = false;
+
+  function seekFromEvent(e) {
+    var rect = pc.getBoundingClientRect();
+    var clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    var fraction = (clientX - rect.left) / rect.width;
+    fraction = Math.min(1, Math.max(0, fraction));
+    // Update visual immediately
+    var fill = document.getElementById('npProgressFill');
+    var thumb = document.getElementById('npProgressThumb');
+    if (fill) fill.style.width = (fraction * 100) + '%';
+    if (thumb) { thumb.style.left = (fraction * 100) + '%'; thumb.style.opacity = '1'; }
+    return fraction;
+  }
+
+  function onStart(e) {
+    dragging = true;
+    seekFromEvent(e);
+    e.preventDefault();
+  }
+  function onMove(e) {
+    if (!dragging) return;
+    seekFromEvent(e);
+  }
+  function onEnd(e) {
+    if (!dragging) return;
+    dragging = false;
+    var rect = pc.getBoundingClientRect();
+    var clientX = e.changedTouches ? e.changedTouches[0].clientX : e.clientX;
+    var fraction = (clientX - rect.left) / rect.width;
+    fraction = Math.min(1, Math.max(0, fraction));
+    _sendWsMessage({"type": "seekToProgress", "fraction": fraction});
+  }
+
+  pc.addEventListener('mousedown', onStart);
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onEnd);
+  pc.addEventListener('touchstart', onStart, {passive: false});
+  document.addEventListener('touchmove', onMove, {passive: true});
+  document.addEventListener('touchend', onEnd);
+
+  // Also keep click for simple taps
+  pc.addEventListener('click', function(e) {
+    if (!dragging) {
+      var rect = pc.getBoundingClientRect();
+      var fraction = (e.clientX - rect.left) / rect.width;
+      fraction = Math.min(1, Math.max(0, fraction));
+      _sendWsMessage({"type": "seekToProgress", "fraction": fraction});
+    }
+  });
+})();
+
+// =====================================================================
+//  Follow-up question bar (browser mode)
+// =====================================================================
+var _followUpWs = null; // will be set from ws reference
+
+function _sendFollowUp() {
+  var input = document.getElementById('followup-input');
+  if (!input) return;
+  var text = input.value.trim();
+  if (!text) return;
+
+  // Build message with optional selected text
+  var msg = { type: 'followUpQuestion', text: text, sectionIndex: _currentVisibleSection };
+  if (_selectedText) {
+    msg.selectedText = _selectedText;
+    msg.sectionIndex = _selectedSectionIndex !== null ? _selectedSectionIndex : _currentVisibleSection;
+  }
+
+  // Send via WebSocket
+  if (window._readingViewWs && window._readingViewWs.readyState === WebSocket.OPEN) {
+    window._readingViewWs.send(JSON.stringify(msg));
+  }
+
+  // Show the question inline as a card
+  _showFollowUpCard(text);
+
+  // Clear input and selection state
+  input.value = '';
+  _selectedText = '';
+  _selectedSectionIndex = null;
+}
+
+function _showFollowUpCard(questionText) {
+  var container = document.getElementById('sections-container');
+  if (!container) return;
+
+  var card = document.createElement('div');
+  card.className = 'followup-card';
+
+  var label = document.createElement('div');
+  label.className = 'followup-card-label';
+  label.textContent = 'Follow-up Question';
+  card.appendChild(label);
+
+  var textDiv = document.createElement('div');
+  textDiv.className = 'followup-card-text';
+  textDiv.textContent = questionText;
+  card.appendChild(textDiv);
+
+  // Insert after the current section instead of at the end
+  var sections = container.querySelectorAll('.section');
+  var targetSection = sections[_currentVisibleSection];
+  if (targetSection && targetSection.nextSibling) {
+    container.insertBefore(card, targetSection.nextSibling);
+  } else {
+    container.appendChild(card);
+  }
+
+  // Scroll to the card
+  card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
+function _showFollowUpThinking(question) {
+  // Remove any existing thinking indicator
+  var existing = document.querySelector('.followup-thinking');
+  if (existing) existing.remove();
+
+  var container = document.getElementById('sections-container');
+  if (!container) return;
+
+  var indicator = document.createElement('div');
+  indicator.className = 'followup-thinking';
+  indicator.innerHTML = '<span class="generating-dot"></span>'
+    + '<span class="generating-dot"></span>'
+    + '<span class="generating-dot"></span>'
+    + ' <span style="margin-left: 4px;">Thinking...</span>';
+
+  // Insert after the current section
+  var sections = container.querySelectorAll('.section');
+  var targetSection = sections[_currentVisibleSection];
+  if (targetSection && targetSection.nextSibling) {
+    container.insertBefore(indicator, targetSection.nextSibling);
+  } else {
+    container.appendChild(indicator);
+  }
+
+  indicator.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+</script>
+
+</body>
+</html>

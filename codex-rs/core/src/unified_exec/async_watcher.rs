@@ -8,6 +8,7 @@ use tokio::time::Instant;
 use tokio::time::Sleep;
 
 use super::UnifiedExecContext;
+use super::UnifiedExecProcessManager;
 use super::process::UnifiedExecProcess;
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -105,6 +106,7 @@ pub(crate) fn start_streaming_output(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_exit_watcher(
     process: Arc<UnifiedExecProcess>,
+    manager: UnifiedExecProcessManager,
     session_ref: Arc<Session>,
     turn_ref: Arc<TurnContext>,
     call_id: String,
@@ -129,13 +131,15 @@ pub(crate) fn spawn_exit_watcher(
             call_id,
             command,
             cwd,
-            Some(process_id),
+            Some(process_id.clone()),
             transcript,
             String::new(),
             exit_code,
             duration,
         )
         .await;
+
+        manager.release_process_id(&process_id).await;
     });
 }
 

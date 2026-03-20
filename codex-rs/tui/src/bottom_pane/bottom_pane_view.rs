@@ -165,6 +165,9 @@ pub(crate) trait BottomPaneView: Renderable {
     fn set_voice_status(&mut self, _status: Option<String>) {}
 
     #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    fn set_tts_flash_msg(&mut self, _msg: Option<String>) {}
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn set_voice_tts_paused(&mut self, _paused: bool) {}
 
     #[cfg(all(test, not(target_os = "linux"), feature = "voice-input"))]

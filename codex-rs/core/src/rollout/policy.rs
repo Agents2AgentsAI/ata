@@ -174,11 +174,14 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::CollabWaitingBegin(_)
         | EventMsg::CollabCloseBegin(_)
         | EventMsg::CollabResumeBegin(_)
-        | EventMsg::PresentDocument(_)
+        | EventMsg::ImageGenerationBegin(_) => None,
+        // Document reader events are persisted so sessions can restore reading
+        // view state on resume (show the DocumentCell indicator and pre-populate
+        // the document cache for fast reopen).
+        EventMsg::PresentDocument(_)
         | EventMsg::UpdateDocumentSection(_)
         | EventMsg::AppendDocumentSection(_)
         | EventMsg::AddDocumentSection(_)
-        | EventMsg::PatchDocumentSection(_)
-        | EventMsg::ImageGenerationBegin(_) => None,
+        | EventMsg::PatchDocumentSection(_) => Some(EventPersistenceMode::Limited),
     }
 }

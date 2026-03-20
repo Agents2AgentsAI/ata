@@ -1531,6 +1531,7 @@ impl CodexMessageProcessor {
                         }
                     }
                 }
+                CoreAuthMode::Ata => Some(Account::ApiKey {}),
             },
             None => None,
         };

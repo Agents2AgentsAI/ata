@@ -42,6 +42,7 @@ pub enum ToolDecisionSource {
 pub enum TelemetryAuthMode {
     ApiKey,
     Chatgpt,
+    Ata,
 }
 
 #[derive(Debug, Clone)]

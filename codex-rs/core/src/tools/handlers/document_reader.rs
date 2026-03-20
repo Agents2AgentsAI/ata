@@ -145,15 +145,43 @@ fn streaming_unfilled_reminder(doc: &CachedDocument) -> String {
 ///
 /// Storing the cache on `Session` mirrors how other cross-turn state (e.g.
 /// `JsReplHandle`, `FileReferenceCache`) is managed.
+/// Display mode for the reading view, set by the UI layer.
+///
+/// Controls formatting guidance given to the agent (e.g. whether to use
+/// LaTeX or Unicode math symbols).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReadingViewDisplayMode {
+    /// Terminal (TUI) — no LaTeX/HTML rendering.
+    #[default]
+    Tui,
+    /// Browser with full HTML/KaTeX/Mermaid rendering.
+    Browser,
+}
+
 pub struct DocumentCache {
     docs: Mutex<HashMap<String, CachedDocument>>,
+    display_mode: Mutex<ReadingViewDisplayMode>,
 }
 
 impl DocumentCache {
     pub fn new() -> Self {
         Self {
             docs: Mutex::new(HashMap::new()),
+            display_mode: Mutex::new(ReadingViewDisplayMode::default()),
         }
+    }
+
+    /// Set the display mode (called by the UI layer when the user changes
+    /// reading view mode).
+    pub fn set_display_mode(&self, mode: ReadingViewDisplayMode) {
+        if let Ok(mut m) = self.display_mode.lock() {
+            *m = mode;
+        }
+    }
+
+    /// Get the current display mode.
+    pub fn display_mode(&self) -> ReadingViewDisplayMode {
+        self.display_mode.lock().map(|m| *m).unwrap_or_default()
     }
 
     fn contains(&self, document_id: &str) -> bool {
@@ -167,6 +195,100 @@ impl DocumentCache {
         self.docs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Restore a document into the cache from a replayed `PresentDocument`
+    /// event.  Called during session resume so that subsequent tool calls
+    /// (e.g. `present_reading_view(document_id=...)` without title/content)
+    /// can serve the cached version instantly instead of forcing the agent
+    /// to regenerate the document from scratch.
+    pub fn restore_document(&self, document_id: String, title: String, content: &str) {
+        let sections = parse_sections(content);
+        let mut cache = self.lock();
+        cache.insert(
+            document_id,
+            CachedDocument {
+                title,
+                sections,
+                streaming_next: None,
+            },
+        );
+    }
+
+    /// Apply a section update to a cached document (used during resume
+    /// replay to keep the cache in sync with `UpdateDocumentSection` events).
+    pub fn replay_update_section(&self, document_id: &str, section_index: usize, content: &str) {
+        let mut cache = self.lock();
+        if let Some(doc) = cache.get_mut(document_id)
+            && let Some(section) = doc.sections.get_mut(section_index)
+        {
+            if let Some(rest) = content.strip_prefix("## ") {
+                if let Some(nl) = rest.find('\n') {
+                    section.heading = rest[..nl].trim().to_string();
+                    section.content = rest[nl + 1..].to_string();
+                } else {
+                    section.heading = rest.trim().to_string();
+                    section.content = String::new();
+                }
+            } else {
+                section.content = content.to_string();
+            }
+        }
+    }
+
+    /// Append content to a cached section (used during resume replay).
+    pub fn replay_append_section(&self, document_id: &str, section_index: usize, content: &str) {
+        let mut cache = self.lock();
+        if let Some(doc) = cache.get_mut(document_id)
+            && let Some(section) = doc.sections.get_mut(section_index)
+        {
+            if !section.content.is_empty() && !section.content.ends_with('\n') {
+                section.content.push('\n');
+            }
+            section.content.push_str(content);
+        }
+    }
+
+    /// Insert a new section after the given index (used during resume replay).
+    pub fn replay_add_section(
+        &self,
+        document_id: &str,
+        after_section_index: i32,
+        heading: &str,
+        content: &str,
+    ) {
+        let mut cache = self.lock();
+        if let Some(doc) = cache.get_mut(document_id) {
+            let insert_pos = if after_section_index < 0 {
+                0
+            } else {
+                let idx = after_section_index as usize;
+                (idx + 1).min(doc.sections.len())
+            };
+            doc.sections.insert(
+                insert_pos,
+                CachedSection {
+                    heading: heading.to_string(),
+                    content: content.to_string(),
+                },
+            );
+        }
+    }
+
+    /// Apply a find-and-replace patch to a cached section (used during resume replay).
+    pub fn replay_patch_section(
+        &self,
+        document_id: &str,
+        section_index: usize,
+        old_text: &str,
+        new_text: &str,
+    ) {
+        let mut cache = self.lock();
+        if let Some(doc) = cache.get_mut(document_id)
+            && let Some(section) = doc.sections.get_mut(section_index)
+        {
+            section.content = section.content.replace(old_text, new_text);
+        }
     }
 }
 
@@ -224,12 +346,33 @@ pub static PRESENT_DOCUMENT_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
                        matter, not internal storage. Use the paper/topic name as the title \
                        (e.g. 'Cosmos Policy Walkthrough', not 'KB Walkthrough: paper-cosmos-policy'). \
                        Write as if you understand the material directly, not as if you are \
-                       reading from a database entry. FIGURES: The reading view is text-only — \
-                       images and figures cannot be displayed. Never include sections like \
-                       'Figure Pointers' or 'How to view figures' that tell the user to look \
-                       at specific figures. Instead, describe what each important figure shows \
-                       inline in the narrative (e.g. 'The architecture diagram shows three \
-                       stages connected by…'). \
+                       reading from a database entry. \
+                       CITATION STYLE: Never use academic citation format like \
+                       'Smith et al. (2026)' or parenthetical years '(2025)'. Reading view \
+                       content is read aloud — use natural phrasing instead: 'the authors \
+                       showed...', 'researchers found...', 'the original transformer paper \
+                       introduced...'. Reference papers by title or description, not by \
+                       author-year citation. When the method name or paper title is short \
+                       and recognizable, prefer it over a generic phrase — say 'the GRPO \
+                       method showed' or 'the Attention paper demonstrated' rather than \
+                       just 'researchers showed'. Use 'researchers showed' only when \
+                       neither the method nor the paper name is short or memorable. \
+                       FIGURES: To include figures from the paper, \
+                       call `crop_and_store_figure` with the page number and bounding box \
+                       coordinates for each figure you want to include. Then reference the \
+                       returned asset_path in your markdown as `![caption](asset_path)`. \
+                       You can also use ```mermaid code blocks for generated diagrams. \
+                       MATH: By default, use Unicode math symbols directly \
+                       (\u{03C0}, \u{03B8}, \u{03B1}, \u{2211}, \u{222B}, \u{2264}, \
+                       \u{2265}, \u{2192}, \u{00D7}, \u{207F}, \u{00B2}, \u{221A}, \
+                       \u{1D40}, etc.) instead of LaTeX. Only use LaTeX $...$ notation \
+                       if the tool result explicitly says browser mode with KaTeX \
+                       rendering is active. \
+                       NEVER use underscore subscript notation (W_Q, d_k) — write \
+                       subscripts as inline lowercase letters (Wq, Wk, Wv, dk) or use \
+                       Unicode sub/superscripts where available (\u{2080}\u{2081}\u{2082}, \
+                       \u{1D62}, \u{2096}, x\u{207F}, n\u{00B2}). \
+                       NEVER wrap math in backtick code spans or code blocks. \
                        CRITICAL — SILENCE AFTER PRESENTING: The reading view IS your \
                        response. After calling this tool, do NOT output any additional text \
                        in the chat — no summary, no recap, no 'here is what I found', no \
@@ -618,38 +761,65 @@ impl ToolHandler for DocumentReaderHandler {
                     // agent receives it through the normal wait() path.
                     format!("# {title}\n\n{doc_content}")
                 } else {
-                    "Document displayed in reading mode. The user can now navigate sections \
-                     and ask follow-up questions. For ANY follow-up about this topic \u{2014} \
-                     whether about a specific section or a broad request like 'explain more \
-                     intuitively' or 'simplify this' \u{2014} use the reading view tools:\n\
-                     \n\
-                     Placement rule: before inserting content, determine its SCOPE. If the \
-                     content spans or references multiple items in a list/sequence (e.g. a \
-                     walkthrough of steps 1\u{2013}6), place it AFTER the entire list, not \
-                     after the first item it mentions. Match placement to the scope of the \
-                     content, not to the first keyword match.\n\
-                     \n\
-                     Tool choice for follow-ups:\n\
-                     - `append_to_section` with `foldable=true` \u{2014} preferred for \
-                     elaborations, examples, and walkthroughs. Adds a collapsible block at \
-                     the end of the section. Use a clear `fold_summary`.\n\
-                     - `update_document_section` \u{2014} for rewriting or restructuring a \
-                     section. When inserting new content, respect the placement rule above: \
-                     put elaborations after the full structure they reference, never in the \
-                     middle of a numbered list or multi-step sequence.\n\
-                     - `patch_document_section` \u{2014} for small targeted fixes like \
-                     correcting a sentence or updating a specific paragraph.\n\
-                     - `add_document_section` \u{2014} when a follow-up introduces a new \
-                     topic that doesn\u{2019}t fit in any existing section. Creates a brand \
-                     new section. Set after_section_index to the section the user is \
-                     reading so it appears right after.\n\
-                     \n\
-                     Do NOT output plain text responses \u{2014} always \
-                     use reading view tools for follow-ups on this topic. \
-                     Content style: write straight prose that continues the section\u{2019}s \
-                     voice. Never prefix with bold/italic topic lines like \
-                     '**On the efficiency gains:**' \u{2014} just write the content directly."
-                        .to_string()
+                    let display_mode_instructions = match doc_cache.display_mode() {
+                        ReadingViewDisplayMode::Tui => {
+                            "\n\
+                            \n\
+                            DISPLAY FORMAT: The reading view is displayed in a terminal (TUI) \
+                            with no LaTeX or HTML rendering.\n\
+                            - Do NOT use LaTeX ($...$). Instead use Unicode math symbols \
+                            directly: \u{03C0}, \u{03B8}, \u{03B1}, \u{03B2}, \u{2211}, \
+                            \u{222B}, \u{2264}, \u{2265}, \u{2192}, \u{00D7}, etc.\n\
+                            - Do NOT use Mermaid diagrams. Describe visual concepts in text \
+                            or use simple ASCII diagrams.\n\
+                            - Keep formatting simple: headers, bullet lists, bold, italic. \
+                            No tables (they render poorly in terminals)."
+                        }
+                        ReadingViewDisplayMode::Browser => {
+                            "\n\
+                            \n\
+                            DISPLAY FORMAT: The reading view is displayed in a web browser \
+                            with full HTML rendering support. You can use:\n\
+                            - LaTeX math: wrap equations in $...$ (inline) or $$...$$ (display)\n\
+                            - Mermaid diagrams: use ```mermaid code blocks for flowcharts, \
+                            sequence diagrams, etc.\n\
+                            - Rich markdown formatting including tables, blockquotes, etc."
+                        }
+                    };
+                    format!(
+                        "Document displayed in reading mode. The user can now navigate sections \
+                         and ask follow-up questions. For ANY follow-up about this topic \u{2014} \
+                         whether about a specific section or a broad request like 'explain more \
+                         intuitively' or 'simplify this' \u{2014} use the reading view tools:\n\
+                         \n\
+                         Placement rule: before inserting content, determine its SCOPE. If the \
+                         content spans or references multiple items in a list/sequence (e.g. a \
+                         walkthrough of steps 1\u{2013}6), place it AFTER the entire list, not \
+                         after the first item it mentions. Match placement to the scope of the \
+                         content, not to the first keyword match.\n\
+                         \n\
+                         Tool choice for follow-ups:\n\
+                         - `append_to_section` with `foldable=true` \u{2014} preferred for \
+                         elaborations, examples, and walkthroughs. Adds a collapsible block at \
+                         the end of the section. Use a clear `fold_summary`.\n\
+                         - `update_document_section` \u{2014} for rewriting or restructuring a \
+                         section. When inserting new content, respect the placement rule above: \
+                         put elaborations after the full structure they reference, never in the \
+                         middle of a numbered list or multi-step sequence.\n\
+                         - `patch_document_section` \u{2014} for small targeted fixes like \
+                         correcting a sentence or updating a specific paragraph.\n\
+                         - `add_document_section` \u{2014} when a follow-up introduces a new \
+                         topic that doesn\u{2019}t fit in any existing section. Creates a brand \
+                         new section. Set after_section_index to the section the user is \
+                         reading so it appears right after.\n\
+                         \n\
+                         Do NOT output plain text responses \u{2014} always \
+                         use reading view tools for follow-ups on this topic. \
+                         Content style: write straight prose that continues the section\u{2019}s \
+                         voice. Never prefix with bold/italic topic lines like \
+                         '**On the efficiency gains:**' \u{2014} just write the content directly.\
+                         {display_mode_instructions}"
+                    )
                 }
             }
             "update_document_section" => {

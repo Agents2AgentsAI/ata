@@ -32,7 +32,7 @@ But adapt freely — a narrow topic might need only 3 sections, a broad one migh
 
 Then fill each section via `update_document_section`. Common section types:
 
-- **Landscape / Background**: 2-3 short paragraphs. What is this field about? Main challenges and paradigms. Cite as Author (Year).
+- **Landscape / Background**: 2-3 short paragraphs. What is this field about? Main challenges and paradigms. Reference papers by title, not by Author (Year) citations.
 - **Approaches**: 3-6 approach clusters, each with Key idea / Papers / Tradeoff.
 - **Key Insights**: Findings extracted from the papers (NOT paper titles). End with "Proceeding to synthesize [N] papers..."
 - **Reading Plan**: Top papers ranked by relevance.
@@ -51,7 +51,7 @@ Add, remove, rename, or reorder sections as the content demands.
 - Do NOT open arXiv URLs for ANY reason — `paper_search` and `paper_citations` already return titles, authors, years, and abstracts
 - Do NOT use `web.run`, `web_search`, or any web browsing to look up papers
 - Do NOT call `paper_get` for papers returned by `paper_search` or `paper_citations` — those APIs already return all metadata. `paper_get` is ONLY useful for bare S2 IDs with no metadata.
-- Do NOT include `citeturn*view*` or similar citation markers — write citations as Author (Year) only
+- Do NOT include `citeturn*view*` or similar citation markers — reference papers by title, not Author (Year)
 
 **Speed matters.** The user should see results within 30 seconds. Every tool call before `paper_search` is delay the user feels.
 
@@ -144,7 +144,7 @@ Follow the template from the Rules section above. Choose sections that fit the c
 
 ### Citation Formatting
 
-- **In prose**: Author (Year) only. Never inline DOIs or arXiv IDs.
+- **In prose**: Reference papers by title (e.g., "the LAPA paper showed...") — NEVER use "Author (Year)" or "Name et al. (YYYY)" style. Reading view content is read aloud and academic citations sound unnatural when spoken. Never inline DOIs or arXiv IDs. When the method name or paper title is short and recognizable, prefer it over a generic phrase — say "the GRPO method showed" or "the Attention paper demonstrated" rather than just "researchers showed". Use "researchers showed" only when neither the method nor the paper name is short or memorable.
 - **References section at end**: full citations with IDs (the one place IDs appear).
 
 ### Follow-Up Expansion

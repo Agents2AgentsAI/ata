@@ -637,10 +637,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             let task_id = thread
                 .submit(Op::UserTurn {
                     items,
-                    cwd: default_cwd,
+                    cwd: default_cwd.clone(),
                     approval_policy: default_approval_policy,
                     sandbox_policy: default_sandbox_policy.clone(),
-                    model: default_model,
+                    model: default_model.clone(),
                     effort: default_effort,
                     summary: None,
                     service_tier: None,

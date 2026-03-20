@@ -3234,8 +3234,8 @@ impl ChatComposer {
     }
 
     fn custom_footer_height(&self) -> Option<u16> {
-        if self.is_reverse_search_active() {
-            return Some(1);
+        if let Some(h) = self.reverse_search_footer_height() {
+            return Some(h);
         }
         if self.footer_flash_visible() {
             return Some(1);

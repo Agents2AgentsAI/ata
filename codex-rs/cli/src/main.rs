@@ -12,6 +12,7 @@ use codex_cli::SeatbeltCommand;
 use codex_cli::WindowsCommand;
 use codex_cli::login::read_api_key_from_stdin;
 use codex_cli::login::run_login_status;
+use codex_cli::login::run_login_with_a2a;
 use codex_cli::login::run_login_with_api_key;
 use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::login::run_login_with_device_code;
@@ -163,9 +164,6 @@ enum Subcommand {
     /// Manage workspaces (repos, runs, artifacts, audit).
     #[clap(visible_alias = "ws")]
     Workspace(WorkspaceCli),
-
-    /// Show coordination agents and messages.
-    Team(TeamCli),
 }
 
 #[derive(Debug, Parser)]
@@ -299,6 +297,9 @@ struct LoginCommand {
     )]
     api_key: Option<String>,
 
+    #[arg(long = "a2a", help = "Sign in with your A2A account")]
+    use_a2a: bool,
+
     #[arg(long = "device-auth")]
     use_device_code: bool,
 
@@ -323,6 +324,10 @@ enum LoginSubcommand {
 
 #[derive(Debug, Parser)]
 struct LogoutCommand {
+    /// Only sign out of ATA account
+    #[arg(long = "ata-only")]
+    ata_only: bool,
+
     #[clap(skip)]
     config_overrides: CliConfigOverrides,
 }
@@ -559,56 +564,6 @@ struct FeatureSetArgs {
     feature: String,
 }
 
-#[derive(Debug, Parser)]
-struct TeamCli {
-    #[command(subcommand)]
-    sub: Option<TeamSubcommand>,
-}
-
-#[derive(Debug, Parser)]
-enum TeamSubcommand {
-    /// List active coordination agents.
-    Agents,
-    /// Show recent coordination messages (optionally filtered by agent name).
-    Messages(TeamMessagesArgs),
-    #[cfg(feature = "relay")]
-    /// Start the coordination relay server for cross-machine agent awareness.
-    Relay(TeamRelayArgs),
-    #[cfg(feature = "relay")]
-    /// Tail relay-related logs from the TUI log file.
-    RelayLogs(TeamRelayLogsArgs),
-}
-
-#[derive(Debug, Parser)]
-struct TeamMessagesArgs {
-    /// Filter messages to a specific agent name (prefix match).
-    agent: Option<String>,
-}
-
-#[cfg(feature = "relay")]
-#[derive(Debug, Parser)]
-struct TeamRelayLogsArgs {
-    /// Show last N lines before following (like tail -n).
-    #[arg(short = 'n', long, default_value_t = 50)]
-    lines: usize,
-}
-
-#[cfg(feature = "relay")]
-#[derive(Debug, Parser)]
-struct TeamRelayArgs {
-    /// Port to listen on.
-    #[arg(long, default_value_t = 7800)]
-    port: u16,
-
-    /// Optional shared secret. Clients must send a matching X-Relay-Secret header.
-    #[arg(long)]
-    secret: Option<String>,
-
-    /// Maximum number of messages retained per project.
-    #[arg(long, default_value_t = 100)]
-    max_messages: usize,
-}
-
 fn stage_str(stage: codex_core::features::Stage) -> &'static str {
     use codex_core::features::Stage;
     match stage {
@@ -750,7 +705,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     run_login_status(login_cli.config_overrides).await;
                 }
                 None => {
-                    if login_cli.use_device_code {
+                    if login_cli.use_a2a {
+                        run_login_with_a2a(login_cli.config_overrides).await;
+                    } else if login_cli.use_device_code {
                         run_login_with_device_code(
                             login_cli.config_overrides,
                             login_cli.issuer_base_url,
@@ -776,7 +733,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 &mut logout_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            run_logout(logout_cli.config_overrides).await;
+            run_logout(logout_cli.config_overrides, logout_cli.ata_only).await;
         }
         Some(Subcommand::Completion(completion_cli)) => {
             print_completion(completion_cli);
@@ -850,9 +807,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             let socket_path = cmd.socket_path;
             tokio::task::spawn_blocking(move || codex_stdio_to_uds::run(socket_path.as_path()))
                 .await??;
-        }
-        Some(Subcommand::Team(team_cli)) => {
-            run_team_command(team_cli).await?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
@@ -948,134 +902,6 @@ async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyho
         .await?;
     println!("Disabled feature `{feature}` in config.toml.");
     Ok(())
-}
-
-async fn run_team_command(cli: TeamCli) -> anyhow::Result<()> {
-    use codex_coordination::CoordinationDb;
-    use std::collections::HashMap;
-
-    let codex_home = find_codex_home()?;
-    let cwd = std::env::current_dir()?;
-    let db = CoordinationDb::open(&codex_home).await?;
-    let repo_path = codex_core::git_info::get_git_common_dir(&cwd)
-        .await
-        .or_else(|| codex_core::git_info::get_git_repo_root(&cwd))
-        .unwrap_or_else(|| cwd.clone())
-        .to_string_lossy()
-        .to_string();
-
-    match cli.sub {
-        #[cfg(feature = "relay")]
-        Some(TeamSubcommand::RelayLogs(args)) => {
-            let log_file = codex_home.join("log").join("codex-tui.log");
-            if !log_file.exists() {
-                anyhow::bail!("Log file not found: {}", log_file.display());
-            }
-
-            // Use a shell pipeline: tail -f | grep --line-buffered
-            let filter = "relay|coordination|team.message";
-            let status = tokio::process::Command::new("sh")
-                .args([
-                    "-c",
-                    &format!(
-                        "tail -n {} -f '{}' | grep --line-buffered -iE '{}'",
-                        args.lines,
-                        log_file.display(),
-                        filter
-                    ),
-                ])
-                .stdout(std::process::Stdio::inherit())
-                .stderr(std::process::Stdio::inherit())
-                .status()
-                .await?;
-
-            if !status.success() {
-                // grep returns 1 when no matches — that's fine.
-            }
-            return Ok(());
-        }
-        #[cfg(feature = "relay")]
-        Some(TeamSubcommand::Relay(args)) => {
-            // Relay doesn't need DB/repo_path — start the server directly.
-            println!(
-                "Starting coordination relay server on port {}...",
-                args.port
-            );
-            codex_coordination_relay::run_server(codex_coordination_relay::RelayServerConfig {
-                port: args.port,
-                secret: args.secret,
-                max_messages: args.max_messages,
-            })
-            .await?;
-            return Ok(());
-        }
-        None | Some(TeamSubcommand::Agents) => {
-            let sessions = db.active_sessions(&repo_path).await?;
-            if sessions.is_empty() {
-                println!("No active coordination agents.");
-                return Ok(());
-            }
-            println!("Coordination Agents");
-            println!();
-            for s in &sessions {
-                let name = coordination_agent_name(&s.session_id);
-                let branch = s.branch.as_deref().unwrap_or("—");
-                let desc = s.description.as_deref().unwrap_or("");
-                if desc.is_empty() {
-                    println!("  {name:<34} {branch}");
-                } else {
-                    println!("  {name:<34} {branch:<20} \"{desc}\"");
-                }
-            }
-        }
-        Some(TeamSubcommand::Messages(TeamMessagesArgs { agent })) => {
-            let messages = db.recent_messages(&repo_path).await?;
-            let sessions = db.active_sessions(&repo_path).await?;
-            let name_map: HashMap<String, String> = sessions
-                .iter()
-                .map(|s| (s.session_id.clone(), coordination_agent_name(&s.session_id)))
-                .collect();
-
-            let filtered: Vec<_> = messages
-                .iter()
-                .filter(|m| {
-                    if let Some(ref filter) = agent {
-                        let agent_name = name_map
-                            .get(&m.session_id)
-                            .cloned()
-                            .unwrap_or_else(|| coordination_agent_name(&m.session_id));
-                        agent_name.starts_with(filter.as_str())
-                    } else {
-                        true
-                    }
-                })
-                .collect();
-
-            if filtered.is_empty() {
-                if agent.is_some() {
-                    println!("No messages found for that agent.");
-                } else {
-                    println!("No recent coordination messages.");
-                }
-                return Ok(());
-            }
-
-            println!("Coordination Messages");
-            println!();
-            for m in filtered {
-                let agent_name = name_map
-                    .get(&m.session_id)
-                    .cloned()
-                    .unwrap_or_else(|| coordination_agent_name(&m.session_id));
-                println!("  [{agent_name}] {}: {}", m.message_type, m.message);
-            }
-        }
-    }
-    Ok(())
-}
-
-fn coordination_agent_name(session_id: &str) -> String {
-    codex_coordination::agent_name(session_id)
 }
 
 fn maybe_print_under_development_feature_warning(

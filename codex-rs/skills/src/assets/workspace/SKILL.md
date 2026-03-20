@@ -110,5 +110,7 @@ For detailed step-by-step instructions on specific operations, read the appropri
 | Research resources | `<skill_dir>/scripts/references/resources.md` | papers, datasets, artifacts, links |
 | Snapshots & export | `<skill_dir>/scripts/references/snapshots-and-export.md` | snapshot, restore, export, import |
 | Audit & KB | `<skill_dir>/scripts/references/audit-and-kb.md` | audit, audit-query, KB, locking |
+| Python environments | `<skill_dir>/scripts/references/python-env-manager.md` | detect, create, select, multi-env workflows |
+| Remote sync | `<skill_dir>/scripts/references/remote-sync.md` | push/pull source, divergence detection, sync strategies |
 
 Alternatively, use `ata workspace recipe <operation>` for quick inline recipes.

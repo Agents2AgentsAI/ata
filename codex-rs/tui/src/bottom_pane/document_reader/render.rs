@@ -33,9 +33,12 @@ pub(super) fn render_section(
 
     // Section body rendered as markdown.
     if !content.is_empty() {
-        let clean = strip_pause_sentinels(&strip_citation_annotations(content));
+        let clean = crate::text_formatting::latex_to_plain_text(&strip_voice_tags(
+            &strip_pause_sentinels(&strip_citation_annotations(content)),
+        ));
+        let spaced = ensure_paragraph_spacing(&clean);
         let wrap_width = width.saturating_sub(2).max(1) as usize;
-        append_markdown(&clean, Some(wrap_width), &mut lines);
+        append_markdown(&spaced, Some(wrap_width), &mut lines);
 
         // macOS Terminal.app renders ANSI italic (SGR 3) as reverse video,
         // producing white-bg/black-text on dark terminals.  Replace italic
@@ -57,10 +60,13 @@ pub(super) fn rendered_body_line_count(content: &str, width: u16) -> usize {
     if content.is_empty() {
         return 0;
     }
-    let clean = strip_pause_sentinels(&strip_citation_annotations(content));
+    let clean = crate::text_formatting::latex_to_plain_text(&strip_voice_tags(
+        &strip_pause_sentinels(&strip_citation_annotations(content)),
+    ));
+    let spaced = ensure_paragraph_spacing(&clean);
     let wrap_width = width.saturating_sub(2).max(1) as usize;
     let mut lines: Vec<Line<'static>> = Vec::new();
-    append_markdown(&clean, Some(wrap_width), &mut lines);
+    append_markdown(&spaced, Some(wrap_width), &mut lines);
     replace_italic_with_underline(&mut lines);
     lines.len()
 }
@@ -243,10 +249,10 @@ pub(super) fn hints_line(
     has_active_search: bool,
     visual_mode: bool,
     has_folds: bool,
-    pending_quit: bool,
     line_number_input: Option<&str>,
     voice_status: Option<&str>,
     voice_paused: bool,
+    search_match_info: Option<&str>,
     width: u16,
 ) -> Line<'static> {
     let hints: Vec<Span<'static>> = if let Some(input) = line_number_input {
@@ -254,15 +260,6 @@ pub(super) fn hints_line(
             ":".cyan().bold(),
             Span::from(input.to_string()).cyan(),
             "  (type line number, Enter to jump, Esc to cancel)".dim(),
-        ]
-    } else if pending_quit {
-        vec![
-            "Close reading view? ".magenta(),
-            "q/Esc/y".magenta().bold(),
-            ": yes".magenta(),
-            " | ".magenta(),
-            "any other key".magenta().bold(),
-            ": cancel".magenta(),
         ]
     } else if search_focused {
         vec![
@@ -295,9 +292,13 @@ pub(super) fn hints_line(
             ": cancel".dim(),
         ]
     } else if has_active_search {
-        vec![
+        let mut h: Vec<Span<'static>> = Vec::new();
+        if let Some(info) = search_match_info {
+            h.extend([Span::from(info.to_string()).cyan().bold(), " ".dim()]);
+        }
+        h.extend([
             "n/N".dim().bold(),
-            ": match".dim(),
+            ": next/prev".dim(),
             " | ".dim(),
             "/".dim().bold(),
             ": search".dim(),
@@ -307,7 +308,8 @@ pub(super) fn hints_line(
             " | ".dim(),
             "q".dim().bold(),
             ": done".dim(),
-        ]
+        ]);
+        h
     } else {
         let mut h: Vec<Span<'static>> = Vec::new();
         h.extend([
@@ -325,6 +327,7 @@ pub(super) fn hints_line(
             } else {
                 h.extend([" | ".dim(), "s/Space".dim().bold(), ": pause".dim()]);
             }
+            h.extend([" | ".dim(), "+/-".dim().bold(), ": speed".dim()]);
         }
         h.extend([" | ".dim(), "t".dim().bold(), ": toc".dim()]);
         if has_folds {
@@ -792,6 +795,65 @@ fn strip_pause_sentinels(content: &str) -> String {
     }
     out.push_str(remaining);
     out
+}
+
+/// Ensure visible paragraph spacing in reading view content.
+///
+/// LLMs often emit section content with single newlines between what should be
+/// distinct paragraphs.  In standard markdown a single `\n` is a soft break
+/// within the same paragraph, so the text renders as a continuous wall.
+///
+/// This function converts single newlines to double newlines (paragraph breaks)
+/// outside of fenced code blocks, giving the reading view visible spacing
+/// between paragraphs.  Existing double newlines are preserved as-is.
+fn ensure_paragraph_spacing(content: &str) -> String {
+    let mut out = String::with_capacity(content.len() + content.len() / 4);
+    let mut in_code_block = false;
+    let mut prev_was_newline = false;
+
+    for line in content.split('\n') {
+        let trimmed = line.trim_start();
+        // Detect fenced code block boundaries (``` or ~~~).
+        let is_fence = trimmed.starts_with("```") || trimmed.starts_with("~~~");
+        if is_fence {
+            in_code_block = !in_code_block;
+        }
+
+        // Code fence lines and lines inside code blocks are emitted verbatim.
+        if in_code_block || is_fence {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(line);
+            prev_was_newline = false;
+        } else if line.is_empty() {
+            // An empty line — emit it but mark as blank so we don't double up.
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            prev_was_newline = true;
+        } else {
+            // Non-empty line outside a code block.
+            if !out.is_empty() && !prev_was_newline {
+                // Insert a blank line before this line (paragraph break).
+                out.push_str("\n\n");
+            } else if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(line);
+            prev_was_newline = false;
+        }
+    }
+
+    out
+}
+
+/// Strip `<voice>` / `</voice>` tags so they never appear in the reading view.
+///
+/// The LLM may produce these tags even when voice mode is off (e.g. session
+/// resume, or voice mode turned off mid-conversation).
+fn strip_voice_tags(content: &str) -> String {
+    crate::text_formatting::strip_voice_tags(content)
 }
 
 /// Apply fold regions as a post-processing step on rendered lines.

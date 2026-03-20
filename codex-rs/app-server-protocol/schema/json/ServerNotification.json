@@ -371,6 +371,13 @@
             "chatgptAuthTokens"
           ],
           "type": "string"
+        },
+        {
+          "description": "ATA account auth via Supabase (OTP / magic-link flow).",
+          "enum": [
+            "ata"
+          ],
+          "type": "string"
         }
       ]
     },

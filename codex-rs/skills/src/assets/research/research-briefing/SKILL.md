@@ -23,7 +23,7 @@ Rules:
 - Never mirror the paper's framing of its own importance — papers are designed to sound maximally novel.
 - Use the pattern: "[Paper] does [one concrete thing]. The trick is [specific mechanism]. Tradeoff: [what you gain vs. what you lose]."
 - Per-paper depth: 3-5 sentences max. Must include the one core idea (plainly stated), one specific number or result, how it relates to the other approaches, and what it trades off.
-- **Citation formatting**: cite as **Author (Year)** in prose. Never put DOIs or arXiv IDs inline in paragraphs — they break reading flow. Collect full references (with IDs) in a References section at the end of the briefing if the user needs them for follow-up.
+- **Citation formatting**: NEVER use academic citation style like "Smith et al. (2026)" or "Author (Year)" — reading view content is read aloud and academic citations sound unnatural when spoken. Instead, reference papers by title: "the LAPA paper showed..." or use natural descriptions: "researchers found...", "a recent study demonstrated...". Never put DOIs or arXiv IDs inline in paragraphs. Collect full references (with IDs) in a References section at the end of the briefing if the user needs them for follow-up. When the method name or paper title is short and recognizable, prefer it over a generic phrase — say "the GRPO method showed" or "the Attention paper demonstrated" rather than just "researchers showed". Use "researchers showed" only when neither the method nor the paper name is short or memorable.
 - **Never reference the KB in explanations.** Do not say "as summarized in your KB" or "your KB card says." The KB is infrastructure — present content as if you understand the papers directly.
 
 ## Phase 0: Source Material

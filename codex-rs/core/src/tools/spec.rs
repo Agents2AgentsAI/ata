@@ -63,6 +63,7 @@ use integrations::create_search_tool_bm25_tool;
 use javascript::create_artifacts_tool;
 use javascript::create_js_repl_reset_tool;
 use javascript::create_js_repl_tool;
+use workspace::create_crop_and_store_figure_tool;
 use workspace::create_grep_files_tool;
 use workspace::create_list_dir_tool;
 use workspace::create_read_file_tool;
@@ -612,36 +613,6 @@ Examples of valid command strings:
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["command".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-    })
-}
-
-fn create_team_post_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "message".to_string(),
-        JsonSchema::String {
-            description: Some("The message to post to the coordination channel.".to_string()),
-        },
-    );
-    properties.insert(
-        "message_type".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Category: intent, progress, conflict, or info (default: info).".to_string(),
-            ),
-        },
-    );
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "team_post".to_string(),
-        description: "Post a natural-language message to the agent coordination channel. Other agents working on the same repo will see it. Use to announce intent, flag conflicts, or share progress."
-            .to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["message".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -1242,6 +1213,7 @@ pub(crate) fn build_specs_with_toolkits(
 
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::ArtifactsHandler;
+    use crate::tools::handlers::CropFigureHandler;
     #[cfg(feature = "data")]
     use crate::tools::handlers::DataBridgeHandler;
     use crate::tools::handlers::DocumentReaderHandler;
@@ -1346,6 +1318,10 @@ pub(crate) fn build_specs_with_toolkits(
         builder.register_handler("append_to_section", document_reader_handler.clone());
         builder.register_handler("add_document_section", document_reader_handler.clone());
         builder.register_handler("patch_document_section", document_reader_handler);
+
+        let crop_figure_handler = Arc::new(CropFigureHandler);
+        builder.push_spec(create_crop_and_store_figure_tool());
+        builder.register_handler("crop_and_store_figure", crop_figure_handler);
     }
 
     if config.js_repl_enabled {
@@ -1475,14 +1451,6 @@ pub(crate) fn build_specs_with_toolkits(
             builder.push_spec(create_report_agent_job_result_tool());
             builder.register_handler("report_agent_job_result", agent_jobs_handler);
         }
-    }
-
-    // Coordination tool.
-    if config.features.enabled(Feature::Coordination) {
-        use crate::tools::handlers::team_post::TeamPostHandler;
-        let team_post_handler = Arc::new(TeamPostHandler::new());
-        builder.push_spec(create_team_post_tool());
-        builder.register_handler("team_post", team_post_handler);
     }
 
     let mut suppressed_mcp_research_tool_names: BTreeSet<String> = BTreeSet::new();
@@ -2035,6 +2003,7 @@ mod tests {
             APPEND_TO_SECTION_TOOL.clone(),
             ADD_DOCUMENT_SECTION_TOOL.clone(),
             PATCH_DOCUMENT_SECTION_TOOL.clone(),
+            create_crop_and_store_figure_tool(),
             create_request_user_input_tool(CollaborationModesConfig::default()),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {
@@ -2481,6 +2450,7 @@ mod tests {
                 "append_to_section",
                 "add_document_section",
                 "patch_document_section",
+                "crop_and_store_figure",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2505,6 +2475,7 @@ mod tests {
                 "append_to_section",
                 "add_document_section",
                 "patch_document_section",
+                "crop_and_store_figure",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2531,6 +2502,7 @@ mod tests {
                 "append_to_section",
                 "add_document_section",
                 "patch_document_section",
+                "crop_and_store_figure",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2557,6 +2529,7 @@ mod tests {
                 "append_to_section",
                 "add_document_section",
                 "patch_document_section",
+                "crop_and_store_figure",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2581,6 +2554,7 @@ mod tests {
                 "append_to_section",
                 "add_document_section",
                 "patch_document_section",
+                "crop_and_store_figure",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2605,6 +2579,7 @@ mod tests {
                 "append_to_section",
                 "add_document_section",
                 "patch_document_section",
+                "crop_and_store_figure",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2629,6 +2604,7 @@ mod tests {
                 "append_to_section",
                 "add_document_section",
                 "patch_document_section",
+                "crop_and_store_figure",
                 "request_user_input",
                 "web_search",
                 "view_image",
@@ -2652,6 +2628,7 @@ mod tests {
                 "append_to_section",
                 "add_document_section",
                 "patch_document_section",
+                "crop_and_store_figure",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -2678,6 +2655,7 @@ mod tests {
                 "append_to_section",
                 "add_document_section",
                 "patch_document_section",
+                "crop_and_store_figure",
                 "request_user_input",
                 "apply_patch",
                 "web_search",

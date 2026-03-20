@@ -339,9 +339,6 @@
             "connectors": {
               "type": "boolean"
             },
-            "coordination": {
-              "type": "boolean"
-            },
             "data": {
               "type": "boolean"
             },
@@ -594,20 +591,6 @@
             }
           ],
           "description": "Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution."
-        }
-      },
-      "type": "object"
-    },
-    "CoordinationToml": {
-      "description": "Agent coordination channel settings.",
-      "properties": {
-        "relay_secret": {
-          "description": "Shared secret for authenticating with the relay server.",
-          "type": "string"
-        },
-        "relay_url": {
-          "description": "URL for a remote relay server (Phase 2 — not yet implemented).",
-          "type": "string"
         }
       },
       "type": "object"
@@ -1425,6 +1408,17 @@
       },
       "type": "object"
     },
+    "ReadingViewToml": {
+      "additionalProperties": false,
+      "description": "Reading view configuration persisted under `[reading_view]` in config.toml.",
+      "properties": {
+        "mode": {
+          "description": "Display mode: \"tui\", \"browser\", or \"disabled\".",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "RealtimeAudioToml": {
       "additionalProperties": false,
       "properties": {
@@ -1521,6 +1515,14 @@
     "SandboxWorkspaceWrite": {
       "additionalProperties": false,
       "properties": {
+        "additional_writable_roots": {
+          "default": [],
+          "description": "Additional writable root paths that support `~` expansion and relative paths.  These are resolved at config-load time and merged into the effective writable roots for the sandbox.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "exclude_slash_tmp": {
           "default": false,
           "type": "boolean"
@@ -2062,15 +2064,6 @@
       "description": "Compact prompt used for history compaction.",
       "type": "string"
     },
-    "coordination": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/CoordinationToml"
-        }
-      ],
-      "default": null,
-      "description": "Agent coordination channel settings."
-    },
     "data": {
       "allOf": [
         {
@@ -2140,9 +2133,6 @@
           "type": "boolean"
         },
         "connectors": {
-          "type": "boolean"
-        },
-        "coordination": {
           "type": "boolean"
         },
         "data": {
@@ -2599,6 +2589,15 @@
         "$ref": "#/definitions/ProjectConfig"
       },
       "type": "object"
+    },
+    "reading_view": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ReadingViewToml"
+        }
+      ],
+      "default": null,
+      "description": "Reading view display mode settings."
     },
     "research": {
       "allOf": [

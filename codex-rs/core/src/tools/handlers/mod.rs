@@ -4,6 +4,7 @@ mod artifacts;
 pub(crate) mod attach_url_files;
 #[cfg(feature = "treesitter")]
 pub(crate) mod code_intel;
+pub(crate) mod crop_figure;
 #[cfg(feature = "data")]
 pub(crate) mod data;
 pub(crate) mod document_reader;
@@ -24,7 +25,6 @@ mod request_user_input;
 pub(crate) mod research;
 mod search_tool_bm25;
 mod shell;
-pub(crate) mod team_post;
 mod test_sync;
 pub(crate) mod unified_exec;
 mod view_image;
@@ -43,6 +43,7 @@ pub use apply_patch::ApplyPatchHandler;
 pub use artifacts::ArtifactsHandler;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+pub use crop_figure::CropFigureHandler;
 #[cfg(feature = "data")]
 pub(crate) use data::DataBridgeHandler;
 pub use document_reader::ADD_DOCUMENT_SECTION_TOOL;
@@ -51,6 +52,7 @@ pub use document_reader::DocumentCache;
 pub use document_reader::DocumentReaderHandler;
 pub use document_reader::PATCH_DOCUMENT_SECTION_TOOL;
 pub use document_reader::PRESENT_DOCUMENT_TOOL;
+pub use document_reader::ReadingViewDisplayMode;
 pub use document_reader::UPDATE_DOCUMENT_SECTION_TOOL;
 pub use dynamic::DynamicToolHandler;
 pub use grep_files::GrepFilesHandler;

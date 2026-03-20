@@ -84,6 +84,8 @@ pub(crate) struct ResearchToolItem {
     pub description: &'static str,
     pub setup_hint: &'static str,
     pub enabled: bool,
+    /// For the Reading View item, tracks the current mode instead of just on/off.
+    pub reading_view_mode: Option<crate::app_event::ReadingViewMode>,
 }
 
 pub(crate) struct ResearchToolsView {
@@ -136,8 +138,17 @@ impl ResearchToolsView {
             } else {
                 ' '
             };
-            let marker = if item.enabled { 'x' } else { ' ' };
-            let name = format!("{prefix} [{marker}] {}", item.name);
+            let name = if let Some(mode) = item.reading_view_mode {
+                let mode_label = match mode {
+                    crate::app_event::ReadingViewMode::Tui => "tui",
+                    crate::app_event::ReadingViewMode::Browser => "browser",
+                    crate::app_event::ReadingViewMode::Disabled => "off",
+                };
+                format!("{prefix} [{mode_label}] {}", item.name)
+            } else {
+                let marker = if item.enabled { 'x' } else { ' ' };
+                format!("{prefix} [{marker}] {}", item.name)
+            };
             let description = if !item.enabled && !item.setup_hint.is_empty() {
                 format!("{} ({})", item.description, item.setup_hint)
             } else {
@@ -175,7 +186,23 @@ impl ResearchToolsView {
             return;
         };
         if let Some(item) = self.items.get_mut(selected_idx) {
-            item.enabled = !item.enabled;
+            if let Some(ref mut mode) = item.reading_view_mode {
+                // Cycle: tui -> browser -> disabled -> tui
+                *mode = match *mode {
+                    crate::app_event::ReadingViewMode::Tui => {
+                        crate::app_event::ReadingViewMode::Browser
+                    }
+                    crate::app_event::ReadingViewMode::Browser => {
+                        crate::app_event::ReadingViewMode::Disabled
+                    }
+                    crate::app_event::ReadingViewMode::Disabled => {
+                        crate::app_event::ReadingViewMode::Tui
+                    }
+                };
+                item.enabled = *mode != crate::app_event::ReadingViewMode::Disabled;
+            } else {
+                item.enabled = !item.enabled;
+            }
         }
     }
 
@@ -258,6 +285,17 @@ impl BottomPaneView for ResearchToolsView {
             updates.push((Feature::Research, false));
             self.app_event_tx
                 .send(AppEvent::UpdateFeatureFlags { updates });
+
+            // Propagate reading view mode change if present.
+            if let Some(rv_item) = self
+                .items
+                .iter()
+                .find(|i| i.feature == Feature::ReadingView)
+                && let Some(mode) = rv_item.reading_view_mode
+            {
+                self.app_event_tx
+                    .send(AppEvent::ReadingViewModeChanged(mode));
+            }
         }
         self.complete = true;
         CancellationEvent::Handled
@@ -342,23 +380,29 @@ impl Renderable for ResearchToolsView {
 /// Build `ResearchToolItem`s from the hardcoded feature list, using current config state.
 pub(crate) fn build_research_tool_items(
     features: &codex_core::features::Features,
+    reading_view_mode: crate::app_event::ReadingViewMode,
 ) -> Vec<ResearchToolItem> {
     RESEARCH_FEATURES
         .iter()
         .map(|&(feature, name, description, setup_hint)| {
-            // ReadingView and KB are independent of the master Research toggle.
-            let enabled =
-                if feature == Feature::ReadingView || feature == Feature::ResearchKnowledgeBase {
-                    features.enabled(feature)
-                } else {
-                    features.enabled(Feature::Research) || features.enabled(feature)
-                };
+            let (enabled, rv_mode) = if feature == Feature::ReadingView {
+                let enabled = reading_view_mode != crate::app_event::ReadingViewMode::Disabled;
+                (enabled, Some(reading_view_mode))
+            } else if feature == Feature::ResearchKnowledgeBase {
+                (features.enabled(feature), None)
+            } else {
+                (
+                    features.enabled(Feature::Research) || features.enabled(feature),
+                    None,
+                )
+            };
             ResearchToolItem {
                 feature,
                 name,
                 description,
                 setup_hint,
                 enabled,
+                reading_view_mode: rv_mode,
             }
         })
         .collect()

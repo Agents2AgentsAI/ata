@@ -15,6 +15,15 @@ impl ChatComposer {
         self.reverse_search.is_some()
     }
 
+    /// Dynamic footer height for reverse search: candidate list + 1 prompt line.
+    pub(crate) fn reverse_search_footer_height(&self) -> Option<u16> {
+        self.reverse_search.as_ref().map(|search| {
+            let candidates = search.candidate_list_height() as u16;
+            // Always at least 1 line for the search prompt itself.
+            candidates + 1
+        })
+    }
+
     /// Try to handle a key event as a reverse-search action.
     ///
     /// Returns `Some((result, redraw))` if the key was consumed (either by the
@@ -43,7 +52,7 @@ impl ChatComposer {
         None
     }
 
-    /// Try to render the reverse-search prompt in the footer area.
+    /// Try to render the reverse-search footer (candidate list + search prompt).
     ///
     /// Returns `true` if reverse search is active and rendered, `false`
     /// otherwise (caller should proceed with normal footer rendering).
@@ -54,9 +63,38 @@ impl ChatComposer {
     ) -> bool {
         if let Some(search) = &self.reverse_search {
             let max_w = hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
-            search
-                .search_prompt_line(max_w)
-                .render(inset_footer_hint_area(hint_rect), buf);
+            let candidate_count = search.candidate_list_height() as u16;
+
+            if candidate_count > 0 && hint_rect.height > 1 {
+                // Split hint_rect into candidate area (top) and prompt area (bottom 1 line).
+                let candidate_height = candidate_count.min(hint_rect.height.saturating_sub(1));
+                let prompt_height = 1u16;
+                let [candidate_rect, prompt_rect] = Layout::vertical([
+                    Constraint::Length(candidate_height),
+                    Constraint::Length(prompt_height),
+                ])
+                .areas(hint_rect);
+
+                // Render candidate lines.
+                let lines = search.candidate_lines(max_w);
+                let inset_candidate = inset_footer_hint_area(candidate_rect);
+                for (i, line) in lines.iter().enumerate() {
+                    let y = inset_candidate.y + i as u16;
+                    if y < inset_candidate.y + inset_candidate.height {
+                        buf.set_line(inset_candidate.x, y, line, inset_candidate.width);
+                    }
+                }
+
+                // Render search prompt on the bottom line.
+                search
+                    .search_prompt_line(max_w)
+                    .render(inset_footer_hint_area(prompt_rect), buf);
+            } else {
+                // No candidates -- just the search prompt.
+                search
+                    .search_prompt_line(max_w)
+                    .render(inset_footer_hint_area(hint_rect), buf);
+            }
             true
         } else {
             false

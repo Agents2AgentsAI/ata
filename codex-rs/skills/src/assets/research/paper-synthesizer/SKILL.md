@@ -46,10 +46,12 @@ Structure your output with these sections:
 
 ### Extraction Quality Guidelines
 
-- **Equations**: Include key equations with variable definitions. Write each equation on its own line. The main agent needs them to build intuitive explanations.
+- **Equations**: Include key equations using LaTeX notation with $...$ for inline math and $$...$$ for display equations on their own line. Never use backtick code spans for math. Include variable definitions. The main agent needs them to build intuitive explanations.
 - **Tables**: For key results tables, extract the most important rows/columns as structured data. Include baseline names and numbers — the main agent needs specific comparisons.
 - **Figures**: Do not reference figure numbers (the user can't see them). Instead, describe what key figures show: "The architecture consists of [encoder → latent space → decoder], where..."
 - **Specific numbers**: Always include: model parameter count, training data size, key benchmark scores, inference speed if reported, and any ablation results that reveal which components matter.
 - **Training details**: Capture training stages, optimizer, learning rate, batch size, GPU hours if reported. These are essential for the main agent's Details blocks.
 
 Include concrete details but don't pad with boilerplate. Every sentence should carry information. The main agent will reshape this for the user — your job is to provide rich, accurate source material efficiently.
+
+**Writing style:** Do NOT use academic citation style like "Smith et al. (2026)" or parenthetical year references like "(2025)". The output will be read aloud. Use natural phrasing: "the authors showed...", "this paper demonstrates...", "a prior study found...". Reference papers by name or description, not by author-year citation. When the method name or paper title is short and recognizable, prefer it over a generic phrase — say "the GRPO method showed" or "the Attention paper demonstrated" rather than just "researchers showed". Use "researchers showed" only when neither the method nor the paper name is short or memorable.

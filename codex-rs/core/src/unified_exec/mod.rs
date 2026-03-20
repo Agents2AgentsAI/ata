@@ -134,15 +134,16 @@ impl ProcessStore {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct UnifiedExecProcessManager {
-    process_store: Mutex<ProcessStore>,
+    process_store: Arc<Mutex<ProcessStore>>,
     max_write_stdin_yield_time_ms: u64,
 }
 
 impl UnifiedExecProcessManager {
     pub(crate) fn new(max_write_stdin_yield_time_ms: u64) -> Self {
         Self {
-            process_store: Mutex::new(ProcessStore::default()),
+            process_store: Arc::new(Mutex::new(ProcessStore::default())),
             max_write_stdin_yield_time_ms: max_write_stdin_yield_time_ms
                 .max(MIN_EMPTY_YIELD_TIME_MS),
         }
@@ -507,6 +508,48 @@ mod tests {
                 .processes
                 .is_empty()
         );
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn exited_processes_are_released_without_follow_up_poll() -> anyhow::Result<()> {
+        skip_if_sandbox!(Ok(()));
+
+        let (session, turn) = test_session_and_turn().await;
+
+        let open_shell = exec_command(&session, &turn, "bash -i", 2_500).await?;
+        let process_id = open_shell
+            .process_id
+            .as_ref()
+            .expect("expected process id")
+            .clone();
+
+        write_stdin(&session, &process_id, "sleep 0.2; exit\n", 10).await?;
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        assert!(
+            session
+                .services
+                .unified_exec_manager
+                .process_store
+                .lock()
+                .await
+                .processes
+                .is_empty()
+        );
+
+        let err = write_stdin(&session, &process_id, "", 100)
+            .await
+            .expect_err("expected unknown process error");
+
+        match err {
+            UnifiedExecError::UnknownProcessId { process_id: err_id } => {
+                assert_eq!(err_id, process_id, "process id should match request");
+            }
+            other => panic!("expected UnknownProcessId, got {other:?}"),
+        }
 
         Ok(())
     }

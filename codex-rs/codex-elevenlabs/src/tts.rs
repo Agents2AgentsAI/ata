@@ -36,6 +36,7 @@ pub struct TtsChunk {
 pub struct TtsStream {
     text_tx: mpsc::Sender<TtsCommand>,
     audio_rx: mpsc::Receiver<TtsChunk>,
+    error_rx: mpsc::Receiver<String>,
 }
 
 enum TtsCommand {
@@ -48,8 +49,17 @@ enum TtsCommand {
 }
 
 impl TtsStream {
-    /// Open a WebSocket connection to ElevenLabs TTS streaming endpoint.
+    /// Open a connection to ElevenLabs TTS.
+    ///
+    /// When a proxy is configured, uses the HTTP streaming endpoint through the
+    /// proxy. Otherwise connects directly via WebSocket.
     pub async fn connect(config: &ElevenLabsConfig) -> Result<Self, ElevenLabsError> {
+        // Use HTTP proxy path if configured.
+        if let Some(ref proxy) = config.proxy {
+            return Self::connect_http_proxy(config, proxy).await;
+        }
+
+        let connect_start = std::time::Instant::now();
         // Ensure rustls has a crypto provider before any TLS handshake.
         codex_utils_rustls_provider::ensure_rustls_crypto_provider();
 
@@ -75,11 +85,17 @@ impl TtsStream {
             .body(())
             .map_err(|e| ElevenLabsError::Api(format!("failed to build request: {e}")))?;
 
+        debug!("[TTS-TIMING] TtsStream::connect: initiating WebSocket handshake to ElevenLabs...");
         let (ws_stream, _response) = connect_async(request).await?;
+        debug!(
+            "[TTS-TIMING] TtsStream::connect: WebSocket handshake completed in {:?}",
+            connect_start.elapsed(),
+        );
         let (mut ws_write, mut ws_read) = ws_stream.split();
 
         let (text_tx, mut text_rx) = mpsc::channel::<TtsCommand>(32);
         let (audio_tx, audio_rx) = mpsc::channel::<TtsChunk>(64);
+        let (error_tx, error_rx) = mpsc::channel::<String>(1);
 
         // Send BOS (beginning of stream) message.
         // Clamp speed to the ElevenLabs API range (0.7–1.2). Omit if
@@ -205,8 +221,18 @@ impl TtsStream {
                             }
                         }
                     }
-                    Ok(Message::Close(_)) => {
-                        debug!("TTS WebSocket closed by server");
+                    Ok(Message::Close(frame)) => {
+                        if let Some(frame) = frame {
+                            let reason = frame.reason.to_string();
+                            if !reason.is_empty() {
+                                tracing::warn!("TTS WebSocket closed by server: {reason}");
+                                let _ = error_tx.send(reason).await;
+                            } else {
+                                debug!("TTS WebSocket closed by server (no reason)");
+                            }
+                        } else {
+                            debug!("TTS WebSocket closed by server");
+                        }
                         break;
                     }
                     Err(e) => {
@@ -218,7 +244,129 @@ impl TtsStream {
             }
         });
 
-        Ok(Self { text_tx, audio_rx })
+        Ok(Self {
+            text_tx,
+            audio_rx,
+            error_rx,
+        })
+    }
+
+    /// Connect via HTTP streaming through a proxy.
+    ///
+    /// Uses the ElevenLabs HTTP TTS endpoint instead of WebSocket. Text is
+    /// collected until a flush/eos/close command, then sent as a single HTTP
+    /// request. The response body is streamed back as raw PCM chunks.
+    async fn connect_http_proxy(
+        config: &ElevenLabsConfig,
+        proxy: &crate::types::ElevenLabsProxy,
+    ) -> Result<Self, ElevenLabsError> {
+        let (text_tx, mut text_rx) = mpsc::channel::<TtsCommand>(32);
+        let (audio_tx, audio_rx) = mpsc::channel::<TtsChunk>(64);
+        let (error_tx, error_rx) = mpsc::channel::<String>(1);
+
+        let config = config.clone();
+        let proxy = proxy.clone();
+
+        tokio::spawn(async move {
+            let mut text_buffer = String::new();
+
+            // Collect all text until Flush/Eos/Close.
+            while let Some(cmd) = text_rx.recv().await {
+                match cmd {
+                    TtsCommand::Text(t) => text_buffer.push_str(&t),
+                    TtsCommand::Flush | TtsCommand::Eos | TtsCommand::Close => break,
+                }
+            }
+
+            if text_buffer.trim().is_empty() {
+                return;
+            }
+
+            // Build the proxy URL: {proxy.base_url}/proxy-elevenlabs/{voice_id}
+            let url = format!(
+                "{}/proxy-elevenlabs/{}",
+                proxy.base_url.trim_end_matches('/'),
+                config.voice_id
+            );
+
+            let clamped_speed = config
+                .speed
+                .map(|s| s.clamp(0.7, 1.2))
+                .filter(|&s| (s - 1.0).abs() > f64::EPSILON);
+
+            let mut body = serde_json::json!({
+                "text": text_buffer,
+                "model_id": config.model_id,
+                "output_format": "pcm_24000",
+                "voice_settings": {
+                    "stability": 0.5,
+                    "similarity_boost": 0.75
+                }
+            });
+            if let Some(speed) = clamped_speed {
+                body["voice_settings"]["speed"] = serde_json::json!(speed);
+            }
+            if let Some(ref lang) = config.language_code {
+                body["language_code"] = serde_json::json!(lang);
+            }
+
+            let client = reqwest::Client::new();
+            let mut req = client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", proxy.bearer_token))
+                .header("Content-Type", "application/json")
+                .json(&body);
+
+            if let Some((ref key, ref val)) = proxy.extra_header {
+                req = req.header(key.as_str(), val.as_str());
+            }
+
+            let resp = match req.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    error!("TTS proxy request failed: {e}");
+                    let _ = error_tx.send(format!("proxy request failed: {e}")).await;
+                    return;
+                }
+            };
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body_text = resp.text().await.unwrap_or_default();
+                error!("TTS proxy error: {status} {body_text}");
+                let _ = error_tx.send(format!("proxy error: {status}")).await;
+                return;
+            }
+
+            // Stream the response body as raw PCM chunks.
+            let mut stream = resp.bytes_stream();
+            while let Some(chunk_result) = stream.next().await {
+                match chunk_result {
+                    Ok(bytes) => {
+                        let pcm = bytes_to_pcm_i16(&bytes);
+                        if !pcm.is_empty() {
+                            let chunk = TtsChunk {
+                                pcm,
+                                alignment: None,
+                            };
+                            if audio_tx.send(chunk).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("TTS proxy stream error: {e}");
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(Self {
+            text_tx,
+            audio_rx,
+            error_rx,
+        })
     }
 
     /// Send a text chunk for synthesis.
@@ -259,6 +407,12 @@ impl TtsStream {
     /// Returns `None` when the stream is complete.
     pub async fn recv_audio(&mut self) -> Option<TtsChunk> {
         self.audio_rx.recv().await
+    }
+
+    /// Check if the server sent an error in the WebSocket close frame.
+    /// Returns the error reason string if one was received.
+    pub fn recv_error(&mut self) -> Option<String> {
+        self.error_rx.try_recv().ok()
     }
 }
 

@@ -435,6 +435,10 @@ impl HistoryCell for StatusHistoryCell {
             StatusAccountDisplay::ApiKey => {
                 "API key configured (run ata login to use ChatGPT)".to_string()
             }
+            StatusAccountDisplay::Ata { email } => match email {
+                Some(email) => format!("ata: signed in as {email}"),
+                None => "ata: signed in".to_string(),
+            },
         });
 
         let mut labels: Vec<String> = vec!["Model", "Directory", "Permissions", "Agents.md"]

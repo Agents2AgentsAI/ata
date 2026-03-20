@@ -78,6 +78,8 @@ mod experimental_features_view;
 mod voice_setup_view;
 #[cfg(not(target_os = "linux"))]
 pub(crate) use voice_setup_view::VoiceSetupView;
+mod account_view;
+pub(crate) use account_view::AccountView;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;

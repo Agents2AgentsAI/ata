@@ -139,6 +139,14 @@ pub fn voice_mode_verbosity_edit(verbosity: &str) -> ConfigEdit {
     }
 }
 
+/// Produces a config edit that sets `[reading_view] mode = "<mode>"`.
+pub fn reading_view_mode_edit(mode: &str) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec!["reading_view".to_string(), "mode".to_string()],
+        value: value(mode.to_string()),
+    }
+}
+
 pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
     let mut array = toml_edit::Array::new();
     for item in items {

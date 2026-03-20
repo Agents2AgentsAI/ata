@@ -27,8 +27,6 @@ codex-chatgpt = { workspace = true }
 codex-cloud-tasks = { path = "../cloud-tasks" }
 codex-utils-cli = { workspace = true }
 codex-config = { workspace = true }
-codex-coordination = { workspace = true }
-codex-coordination-relay = { workspace = true, optional = true }
 codex-core = { workspace = true }
 codex-exec = { workspace = true }
 codex-execpolicy = { workspace = true }
@@ -67,7 +65,6 @@ rand = { workspace = true }
 
 [features]
 data = ["codex-core/data"]
-relay = ["codex-core/relay", "codex-tui/relay", "dep:codex-coordination-relay"]
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
