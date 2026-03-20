@@ -214,8 +214,21 @@ mod voice {
 
         pub(crate) fn clear(&self) {}
         pub(crate) fn enqueue_pcm(&self, _pcm: &[i16], _sample_rate: u32, _channels: u16) {}
+        pub(crate) fn seek_to_sample(&self, _sample_offset: usize) {}
+        pub(crate) fn seek_to_ms(&self, _ms: u64) {}
         pub(crate) fn is_idle(&self) -> bool {
             true
+        }
+        pub(crate) fn has_buffered_audio(&self) -> bool {
+            false
+        }
+        pub(crate) fn playback_position_ms(&self) -> u64 {
+            0
+        }
+        pub(crate) fn reset_playback_position(&self) {}
+        pub(crate) fn set_playback_speed(&self, _speed: f32) {}
+        pub(crate) fn playback_speed(&self) -> f32 {
+            1.0
         }
         pub(crate) fn pause(&self) {}
         pub(crate) fn resume(&self) {}

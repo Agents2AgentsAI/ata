@@ -63,5 +63,6 @@ You can use `ata` with ChatGPT plan or OpenAI, Anthropic, or Gemini API key. All
 - [**Setting up Paper Search**](./docs/paper-search-setup.md)
 - [**Setting up Patent Search**](./docs/patent-search-setup.md)
 - [**Setting up Zotero**](./docs/zotero-setup.md)
+- [**Adding a ChatGPT subscription to the shared pool**](./codex-rs/supabase/scripts/README.md)
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).

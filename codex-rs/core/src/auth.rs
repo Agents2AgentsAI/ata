@@ -83,6 +83,7 @@ use crate::auth::refresh::request_chatgpt_token_refresh;
 pub enum AuthMode {
     ApiKey,
     Chatgpt,
+    Ata,
 }
 
 impl From<AuthMode> for TelemetryAuthMode {
@@ -90,6 +91,7 @@ impl From<AuthMode> for TelemetryAuthMode {
         match mode {
             AuthMode::ApiKey => TelemetryAuthMode::ApiKey,
             AuthMode::Chatgpt => TelemetryAuthMode::Chatgpt,
+            AuthMode::Ata => TelemetryAuthMode::Ata,
         }
     }
 }
@@ -100,6 +102,15 @@ pub enum CodexAuth {
     ApiKey(ApiKeyAuth),
     Chatgpt(ChatgptAuth),
     ChatgptAuthTokens(ChatgptAuthTokens),
+    Ata(AtaAuth),
+}
+
+/// ATA account auth: Supabase session tokens (access + refresh).
+#[derive(Debug, Clone)]
+pub struct AtaAuth {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -244,6 +255,12 @@ impl CodexAuth {
                 Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens { state }))
             }
             ApiAuthMode::ApiKey => unreachable!("api key mode is handled above"),
+            ApiAuthMode::Ata => {
+                // ATA auth is handled via Supabase sessions, not auth.json.
+                Err(std::io::Error::other(
+                    "ATA auth mode is not supported via auth.json; use Supabase login flow.",
+                ))
+            }
         }
     }
 
@@ -259,6 +276,7 @@ impl CodexAuth {
         match self {
             Self::ApiKey(_) => AuthMode::ApiKey,
             Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => AuthMode::Chatgpt,
+            Self::Ata(_) => AuthMode::Ata,
         }
     }
 
@@ -267,6 +285,7 @@ impl CodexAuth {
             Self::ApiKey(_) => ApiAuthMode::ApiKey,
             Self::Chatgpt(_) => ApiAuthMode::Chatgpt,
             Self::ChatgptAuthTokens(_) => ApiAuthMode::ChatgptAuthTokens,
+            Self::Ata(_) => ApiAuthMode::Ata,
         }
     }
 
@@ -282,7 +301,7 @@ impl CodexAuth {
     pub fn api_key(&self) -> Option<&str> {
         match self {
             Self::ApiKey(auth) => Some(auth.api_key.as_str()),
-            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => None,
+            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) | Self::Ata(_) => None,
         }
     }
 
@@ -307,6 +326,7 @@ impl CodexAuth {
                 let access_token = self.get_token_data()?.access_token;
                 Ok(access_token)
             }
+            Self::Ata(ata) => Ok(ata.access_token.clone()),
         }
     }
 
@@ -354,7 +374,7 @@ impl CodexAuth {
         let state = match self {
             Self::Chatgpt(auth) => &auth.state,
             Self::ChatgptAuthTokens(auth) => &auth.state,
-            Self::ApiKey(_) => return None,
+            Self::ApiKey(_) | Self::Ata(_) => return None,
         };
         #[expect(clippy::unwrap_used)]
         state.auth_dot_json.lock().unwrap().clone()
@@ -541,6 +561,8 @@ pub fn enforce_login_restrictions(
                 "ChatGPT login is required, but an API key is currently being used. Logging out."
                     .to_string(),
             ),
+            // ATA auth mode is independent of forced login method constraints.
+            (_, AuthMode::Ata) => None,
         };
 
         if let Some(message) = method_violation {
@@ -658,11 +680,31 @@ fn load_auth(
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
     let auth_dot_json = match storage.load()? {
         Some(auth) => auth,
-        None => return Ok(None),
+        None => return load_ata_session_as_auth(codex_home),
     };
 
     let auth = build_auth(auth_dot_json, auth_credentials_store_mode)?;
     Ok(Some(auth))
+}
+
+/// Falls back to ATA session when no LLM auth is configured.
+fn load_ata_session_as_auth(codex_home: &Path) -> std::io::Result<Option<CodexAuth>> {
+    match crate::supabase::session::load_ata_session(codex_home) {
+        Ok(Some(session)) => Ok(Some(CodexAuth::Ata(AtaAuth {
+            access_token: session.access_token,
+            refresh_token: session.refresh_token,
+            expires_at: session.expires_at,
+        }))),
+        _ => Ok(None),
+    }
+}
+
+/// Load ATA session info independently from LLM auth.
+/// Returns the full SupabaseSession if one exists and is readable.
+pub fn load_ata_session_info(codex_home: &Path) -> Option<crate::supabase::SupabaseSession> {
+    crate::supabase::session::load_ata_session(codex_home)
+        .ok()
+        .flatten()
 }
 
 // Persist refreshed tokens into auth storage and update last_refresh.
@@ -846,12 +888,12 @@ impl UnauthorizedRecovery {
     }
 
     pub fn has_next(&self) -> bool {
-        if !self
+        let is_refreshable = self
             .manager
             .auth_cached()
             .as_ref()
-            .is_some_and(CodexAuth::is_chatgpt_auth)
-        {
+            .is_some_and(|auth| auth.is_chatgpt_auth() || auth.auth_mode() == AuthMode::Ata);
+        if !is_refreshable {
             return false;
         }
 
@@ -882,11 +924,20 @@ impl UnauthorizedRecovery {
                         self.step = UnauthorizedRecoveryStep::RefreshToken;
                     }
                     ReloadOutcome::Skipped => {
-                        self.step = UnauthorizedRecoveryStep::Done;
-                        return Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
-                            RefreshTokenFailedReason::Other,
-                            REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE.to_string(),
-                        )));
+                        // ATA auth has no account_id, so reload is not applicable.
+                        // Proceed to RefreshToken instead of failing with a misleading
+                        // "account mismatch" error.
+                        if self.manager.auth_mode() == Some(AuthMode::Ata) {
+                            self.step = UnauthorizedRecoveryStep::RefreshToken;
+                        } else {
+                            self.step = UnauthorizedRecoveryStep::Done;
+                            return Err(RefreshTokenError::Permanent(
+                                RefreshTokenFailedError::new(
+                                    RefreshTokenFailedReason::Other,
+                                    REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE.to_string(),
+                                ),
+                            ));
+                        }
                     }
                 }
             }
@@ -1191,6 +1242,10 @@ impl AuthManager {
                     .await?;
                 Ok(())
             }
+            CodexAuth::Ata(ata) => {
+                self.refresh_ata_session(&ata.refresh_token).await?;
+                Ok(())
+            }
             CodexAuth::ApiKey(_) => Ok(()),
         }
     }
@@ -1215,6 +1270,16 @@ impl AuthManager {
     }
 
     async fn refresh_if_stale(&self, auth: &CodexAuth) -> Result<bool, RefreshTokenError> {
+        // Proactively refresh ATA sessions before they expire.
+        if let CodexAuth::Ata(ata) = auth {
+            let buffer = chrono::Duration::minutes(5);
+            if ata.expires_at - buffer <= chrono::Utc::now() {
+                self.refresh_ata_session(&ata.refresh_token).await?;
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+
         let chatgpt_auth = match auth {
             CodexAuth::Chatgpt(chatgpt_auth) => chatgpt_auth,
             _ => return Ok(false),
@@ -1310,6 +1375,29 @@ impl AuthManager {
         .map_err(RefreshTokenError::from)?;
         self.reload();
 
+        Ok(())
+    }
+
+    /// Refresh an ATA (Supabase) session and persist the new tokens.
+    async fn refresh_ata_session(&self, refresh_token: &str) -> Result<(), RefreshTokenError> {
+        use crate::config::types::DEFAULT_ATA_SUPABASE_ANON_KEY;
+        use crate::config::types::DEFAULT_ATA_SUPABASE_URL;
+        use crate::supabase::SupabaseAuth;
+        use crate::supabase::SupabaseClient;
+
+        let client = SupabaseClient::new(DEFAULT_ATA_SUPABASE_URL, DEFAULT_ATA_SUPABASE_ANON_KEY);
+        let auth = SupabaseAuth::new(client);
+
+        let new_session = auth.refresh_session(refresh_token).await.map_err(|e| {
+            RefreshTokenError::Transient(std::io::Error::other(format!(
+                "ATA session refresh failed: {e}"
+            )))
+        })?;
+
+        crate::supabase::save_ata_session(&self.codex_home, &new_session)
+            .map_err(RefreshTokenError::Transient)?;
+
+        self.reload();
         Ok(())
     }
 }

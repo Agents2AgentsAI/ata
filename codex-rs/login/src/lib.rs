@@ -2,6 +2,7 @@ mod device_code_auth;
 mod gemini_server;
 mod pkce;
 mod server;
+pub mod supabase_auth;
 
 pub use device_code_auth::DeviceCode;
 pub use device_code_auth::complete_device_code_login;
@@ -13,6 +14,13 @@ pub use server::LoginServer;
 pub use server::ServerOptions;
 pub use server::ShutdownHandle;
 pub use server::run_login_server;
+pub use supabase_auth::DeviceCodeResponse;
+pub use supabase_auth::complete_supabase_device_code_login;
+pub use supabase_auth::request_supabase_device_code;
+pub use supabase_auth::send_ata_otp;
+pub use supabase_auth::supabase_device_code_login;
+pub use supabase_auth::supabase_magic_link_login;
+pub use supabase_auth::verify_ata_otp;
 
 // Re-export commonly used auth types and helpers from codex-core for compatibility
 pub use codex_app_server_protocol::AuthMode;

@@ -189,8 +189,6 @@ pub enum Feature {
     Lsp,
     /// Enable tree-sitter structural code intelligence integration.
     TreeSitter,
-    /// Enable cross-session agent coordination channel.
-    Coordination,
 }
 
 impl Feature {
@@ -734,22 +732,14 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Lsp,
         key: "lsp",
-        stage: Stage::Experimental {
-            name: "LSP Integration",
-            menu_description: "Enable Language Server Protocol integration for diagnostics and code intelligence queries.",
-            announcement: "NEW: LSP integration provides real-time diagnostics and code navigation. Enable in /experimental!",
-        },
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::TreeSitter,
         key: "treesitter",
-        stage: Stage::Experimental {
-            name: "Tree-sitter Code Intel",
-            menu_description: "Enable fast structural code intelligence powered by tree-sitter indexing.",
-            announcement: "NEW: Tree-sitter code intelligence adds symbol search and structure exploration. Enable in /experimental!",
-        },
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Research,
@@ -935,12 +925,6 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Background job scheduler for cron/event triggers",
             announcement: "Scheduler is now enabled.",
         },
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::Coordination,
-        key: "coordination",
-        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
 ];

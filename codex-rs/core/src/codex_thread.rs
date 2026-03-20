@@ -93,6 +93,15 @@ impl CodexThread {
         self.codex.agent_status().await
     }
 
+    /// Update the reading view display mode so the agent gets the right
+    /// formatting instructions (TUI vs browser) when presenting documents.
+    pub fn set_reading_view_display_mode(
+        &self,
+        mode: crate::tools::handlers::ReadingViewDisplayMode,
+    ) {
+        self.codex.session.document_cache.set_display_mode(mode);
+    }
+
     pub(crate) fn subscribe_status(&self) -> watch::Receiver<AgentStatus> {
         self.codex.agent_status.clone()
     }

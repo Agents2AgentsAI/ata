@@ -96,6 +96,13 @@ content: "## Overview\n\n## Method\n\n## Results\n\n## Discussion"
 
 **Phase 2 (Fill):** The tool result tells you which section to fill. Call `update_document_section` for each section sequentially. Each section: 15-30 lines, bullet points and bold terms for scannability.
 
+**Writing style for spoken delivery:** Reading view content is often read aloud via TTS. Write naturally for spoken delivery:
+- NEVER use academic citation style like "Smith et al. (2026)" or "Johnson & Lee (2025)". Instead use natural phrasing: "the authors showed that...", "researchers found that...", "a recent study demonstrated...".
+- If referencing a specific paper's contribution, use the paper's name or a natural phrase: "the Attention paper introduced..." or "in the original transformer work..." rather than "Vaswani et al. (2017)".
+- When the method name or paper title is short and recognizable, prefer it over a generic phrase — say "the GRPO method showed" or "the Attention paper demonstrated" rather than just "researchers showed". Reserve "researchers showed" for cases where neither the method nor paper name is short or memorable.
+- NEVER include bare parenthetical years like "(2026)" or "(2025)" in the content.
+- Write as if explaining to a colleague in conversation, not writing a literature review.
+
 **Sections:** Let the paper's content determine the number and names of sections. A simple paper might need 3 sections; a paper with a novel dataset, a separate training pipeline, and a theoretical analysis might need 6. The only hard rules:
 
 - **No section may exceed 40 lines** (one terminal screen). If a section grows past that, split it.
@@ -103,6 +110,8 @@ content: "## Overview\n\n## Method\n\n## Results\n\n## Discussion"
 - Target **15-30 lines** per section for comfortable reading.
 
 Common section types (adapt as needed): Overview, Method, Architecture, Training, Results, Ablations, Discussion, Limitations.
+
+**Math:** Use $...$ for inline math and $$...$$ for display equations. Never use backtick code spans or code blocks for math — the reading view renders LaTeX via KaTeX.
 
 **Markdown:** Always put a blank line before list items (`1.`, `-`).
 

@@ -99,6 +99,10 @@ pub(crate) fn compose_account_display(
                 .or_else(|| Some("Unknown".to_string()));
             Some(StatusAccountDisplay::ChatGpt { email, plan })
         }
+        CoreAuthMode::Ata => {
+            let email = auth.get_account_email();
+            Some(StatusAccountDisplay::Ata { email })
+        }
     }
 }
 

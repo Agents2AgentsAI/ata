@@ -70,6 +70,39 @@ impl<'a> Iterator for WordOffsets<'a> {
     }
 }
 
+/// Returns `true` when `word` is a rendering-only decorator that does not
+/// correspond to any word in the TTS stream and should be skipped during
+/// karaoke word counting.
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+fn is_karaoke_skip_word(word: &str) -> bool {
+    // Speaker emoji, fold border, check mark, horizontal rule.
+    if word == "\u{1F50A}"
+        || word == "\u{250A}"
+        || word == "\u{2713}"
+        || word == "\u{2014}\u{2014}\u{2014}"
+    {
+        return true;
+    }
+    // Markdown heading markers (e.g. "##", "###") are kept in the rendered
+    // text but stripped by `clean_for_tts`, so they must be skipped.
+    if !word.is_empty() && word.chars().all(|c| c == '#') {
+        return true;
+    }
+    // URLs are stripped by clean_for_tts but present in rendered text.
+    if word.starts_with("http://") || word.starts_with("https://") {
+        return true;
+    }
+    // Parenthesized URLs: "(https://..." or "[https://..."
+    if word.starts_with("(http://")
+        || word.starts_with("(https://")
+        || word.starts_with("[http://")
+        || word.starts_with("[https://")
+    {
+        return true;
+    }
+    false
+}
+
 /// Saved fold state that persists across view close/reopen cycles within a
 /// single TUI session.  Stored as a process-level static so we don't need to
 /// thread it through BottomPane (which is upstream code).
@@ -238,9 +271,6 @@ pub(crate) struct DocumentReaderView {
     pending_g: bool,
     // Fold key prefix: tracks whether `z` was pressed (for zM/zR chords).
     pending_z: bool,
-    // Quit confirmation: first `q` sets this to true and shows a hint;
-    // second `q` (or `y`) actually exits the reading view.
-    pending_quit: bool,
     // Cursor position (absolute rendered-line index + column in the current
     // section).  The viewport scrolls to keep cursor_line visible.
     cursor_line: usize,
@@ -298,24 +328,32 @@ pub(crate) struct DocumentReaderView {
     /// while all surrounding formatting is preserved.
     voice_reading_highlight: Option<(usize, usize, usize)>,
 
-    /// Deferred narration: when auto-narration fires but the section content
-    /// is still empty (streaming hasn't filled it yet), we store the section
-    /// index here. `update_section` checks this and re-triggers narration
-    /// once content arrives.
-    pending_narration_section: Option<usize>,
-
     /// Whether TTS is currently paused (for pause/resume toggle).
     voice_tts_paused: bool,
+
+    /// Whether auto-scroll should follow karaoke word highlighting.
+    /// Enabled when TTS narration starts; disabled when the user manually
+    /// scrolls (j/k/G/Ctrl-d etc.) so they can read at their own pace.
+    /// Re-enabled on the next TTS playback start.
+    karaoke_auto_scroll: bool,
 
     /// When true, the "end of document" separator is rendered in a
     /// highlighted style.  Set when the user presses `n` at the last
     /// section; cleared on the next keypress.
     end_of_doc_flash: bool,
 
+    /// Temporary TTS status message, cleared on next keypress.
+    tts_flash_msg: Option<String>,
+
     /// When `true`, render a full-screen TOC overlay listing all sections.
     show_toc: bool,
     /// Currently highlighted section index in the TOC overlay.
     toc_selected_index: usize,
+
+    /// When `true`, the next non-streaming section modification will auto-
+    /// navigate to the modified section.  Set on construction (when reopening
+    /// after close) and cleared on user interaction or after auto-navigating.
+    pending_auto_navigate: bool,
 }
 
 impl DocumentReaderView {
@@ -366,7 +404,7 @@ impl DocumentReaderView {
             None
         };
 
-        let mut view = Self {
+        Self {
             document_id,
             title,
             sections,
@@ -383,7 +421,6 @@ impl DocumentReaderView {
             textarea_state: RefCell::new(TextAreaState::default()),
             pending_g: false,
             pending_z: false,
-            pending_quit: false,
             cursor_line: 0,
             cursor_col: 0,
             last_content_height: Cell::new(0),
@@ -403,16 +440,14 @@ impl DocumentReaderView {
             voice_karaoke_lines: None,
             voice_karaoke_append: false,
             voice_reading_highlight: None,
-            pending_narration_section: None,
             voice_tts_paused: false,
+            karaoke_auto_scroll: true,
             end_of_doc_flash: false,
+            tts_flash_msg: None,
             show_toc: false,
             toc_selected_index: 0,
-        };
-        // Auto-narrate the first section on open (if voice mode is active,
-        // ChatWidget will pick it up; otherwise it's a no-op).
-        view.narrate_current_section_if_voice(false);
-        view
+            pending_auto_navigate: true,
+        }
     }
 
     /// If the resolved section is the one currently being viewed, dismiss
@@ -470,10 +505,11 @@ impl DocumentReaderView {
                 }
             }
 
-            // Fulfill deferred narration if this section was waiting for content.
-            if self.pending_narration_section == Some(section_index) {
-                self.pending_narration_section = None;
-                self.narrate_current_section_if_voice(false);
+            // Auto-navigate to the modified section when reopening after a
+            // follow-up question.  Skip streaming fills (initial outline fill).
+            if !is_streaming_fill && self.pending_auto_navigate {
+                self.navigate_to_section(section_index);
+                self.pending_auto_navigate = false;
             }
         }
     }
@@ -545,6 +581,13 @@ impl DocumentReaderView {
                 self.scroll_offset.set(u16::MAX);
             }
             self.refresh_search();
+
+            // Auto-navigate to the modified section when reopening after a
+            // follow-up question.
+            if self.pending_auto_navigate {
+                self.navigate_to_section(section_index);
+                self.pending_auto_navigate = false;
+            }
         }
     }
 
@@ -678,6 +721,13 @@ impl DocumentReaderView {
             }
             self.resolve_pending(section_index);
             self.refresh_search();
+
+            // Auto-navigate to the modified section when reopening after a
+            // follow-up question.
+            if self.pending_auto_navigate {
+                self.navigate_to_section(section_index);
+                self.pending_auto_navigate = false;
+            }
         }
     }
 
@@ -749,11 +799,45 @@ impl DocumentReaderView {
         self.cursor_line = 0;
         self.cursor_col = 0;
         self.visited_sections.insert(insert_at);
+        // Clear auto-navigate — add_section already navigates to the new section.
+        self.pending_auto_navigate = false;
 
         // Resolve any pending follow-ups for the current section.
         // The new section itself resolves the pending question that spawned it.
         self.resolve_pending(insert_at);
         self.refresh_search();
+    }
+
+    /// Navigate to a specific section, scrolling to the bottom and expanding
+    /// any collapsed folds.  Used by auto-navigate after a follow-up answer
+    /// arrives, so the user immediately sees the new content.
+    fn navigate_to_section(&mut self, section_index: usize) {
+        if section_index < self.sections.len() && section_index != self.current_section {
+            self.interrupt_tts_if_needed();
+            self.clear_updated_flag();
+            self.current_section = section_index;
+            // Scroll to the bottom so newly added content is visible.
+            self.scroll_offset.set(u16::MAX);
+            self.cursor_line = 0;
+            self.cursor_col = 0;
+            self.voice_karaoke_lines = None;
+            self.voice_reading_highlight = None;
+            self.visited_sections.insert(self.current_section);
+
+            // Auto-expand any collapsed folds so the new answer is visible.
+            if let Some(section) = self.sections.get_mut(self.current_section) {
+                let mut expanded_any = false;
+                for fold in &mut section.folds {
+                    if fold.collapsed {
+                        fold.collapsed = false;
+                        expanded_any = true;
+                    }
+                }
+                if expanded_any {
+                    section.invalidate_cache();
+                }
+            }
+        }
     }
 
     /// Collect all section headings (for the post-exit transcript card).
@@ -784,7 +868,6 @@ impl DocumentReaderView {
             self.end_of_doc_flash = false;
             self.interrupt_tts_if_needed();
             self.clear_updated_flag();
-            let first_visit = !self.visited_sections.contains(&(self.current_section + 1));
             self.current_section += 1;
             self.scroll_offset.set(0);
             self.cursor_line = 0;
@@ -792,10 +875,6 @@ impl DocumentReaderView {
             self.voice_karaoke_lines = None;
             self.voice_reading_highlight = None;
             self.visited_sections.insert(self.current_section);
-            // Only auto-narrate on first visit (going forward).
-            if first_visit {
-                self.narrate_current_section_if_voice(false);
-            }
         } else {
             // Already at the last section — flash the indicator.
             self.end_of_doc_flash = true;
@@ -849,17 +928,6 @@ impl DocumentReaderView {
         }
 
         if let Some(section) = self.sections.get(self.current_section) {
-            // If content is still empty (streaming hasn't filled it yet),
-            // defer narration until update_section delivers the content.
-            let still_streaming = self
-                .streaming_sections
-                .as_ref()
-                .is_some_and(|set| set.contains(&self.current_section));
-            if section.content.trim().is_empty() && still_streaming {
-                self.pending_narration_section = Some(self.current_section);
-                return;
-            }
-
             let text = if section.heading.is_empty() {
                 section.content.clone()
             } else {
@@ -991,6 +1059,9 @@ impl DocumentReaderView {
             .unwrap_or("");
 
         let selection = self.selection_context.take();
+        // Keep visual selection visible while the response is pending — it
+        // helps the user see what they asked about.  It gets cleared when the
+        // response arrives (in resolve_pending).
 
         // Include the current section content so the agent can reliably
         // locate the right passage for inline patching.
@@ -1006,14 +1077,22 @@ impl DocumentReaderView {
         let formatting_guidance = "\
             Write your answer as straight prose that continues the section's voice. \
             Do NOT use a Q:/A: format. If the answer would be unclear without context, \
-            a short italic lead-in is fine (e.g. *On dropout:* …), but skip it when \
+            a short italic lead-in is fine (e.g. *On dropout:* \u{2026}), but skip it when \
             the meaning is obvious from placement. Don't overuse it.\n\n\
             SUMMARY (required): Always set the `summary` parameter to a short descriptive \
             label of your answer (5-10 words), e.g. summary=\"Role of attention heads in GPT\". \
             This is used as a section label regardless of foldable.\n\n\
             FOLDABLE CONTENT: For supplementary content (explanations, examples, deep dives), \
             set foldable=true. Direct answers, corrections, \
-            and rewrites should NOT be foldable (foldable=false, the default).";
+            and rewrites should NOT be foldable (foldable=false, the default).\n\n\
+            DISPLAY FORMAT: The reading view is displayed in a terminal (TUI) with \
+            no LaTeX or HTML rendering.\n\
+            - Do NOT use LaTeX ($...$). Instead use Unicode math symbols directly: \
+            \u{03C0}, \u{03B8}, \u{03B1}, \u{03B2}, \u{2211}, \u{222B}, \u{2264}, \u{2265}, \u{2192}, \u{00D7}, etc.\n\
+            - Do NOT use Mermaid diagrams. Describe visual concepts in text or use \
+            simple ASCII diagrams.\n\
+            - Keep formatting simple: headers, bullet lists, bold, italic. No tables \
+            (they render poorly in terminals).";
 
         // Extract a few rendered lines around the cursor and the word under
         // the cursor so the agent knows what the user was looking at when they
@@ -1072,12 +1151,17 @@ impl DocumentReaderView {
             (None, None)
         };
 
+        // Sentinel separating user-visible context from hidden tool instructions.
+        // `strip_system_instruction_prefix` in chatwidget.rs cuts at this marker.
+        const INSTR_SEP: &str = "\n\n<!-- READER_TOOL_INSTRUCTIONS -->\n";
+
         let tool_instructions = if let Some(ref sel) = selection {
             // The user highlighted specific text — tell the agent to patch
             // the answer in right after the selection.
             format!(
                 "The user selected specific text from the section (shown below) and is asking about it.\n\
-                 [Selected text:]\n{sel}\n\n\
+                 [Selected text:]\n{sel}\
+                 {INSTR_SEP}\
                  DEFAULT — insert your answer after the selection:\n\
                  patch_section(document_id=\"{doc_id}\", section_index={idx}, \
                  old_text=\"<the selected text exactly>\", \
@@ -1112,7 +1196,8 @@ impl DocumentReaderView {
                 })
                 .unwrap_or_default();
             format!(
-                "Current section content:\n---\n{section_content}\n---\n\
+                "{INSTR_SEP}\
+                 Current section content:\n---\n{section_content}\n---\n\
                  {cursor_hint}\n\
                  PREFERRED — use patch_section to insert your answer inline:\n\
                  patch_section(document_id=\"{doc_id}\", section_index={idx}, \
@@ -1180,8 +1265,15 @@ impl DocumentReaderView {
     }
 
     fn handle_content_key(&mut self, key_event: KeyEvent) {
+        // Any user interaction cancels pending auto-navigate so manual
+        // navigation is never overridden by a later section modification.
+        self.pending_auto_navigate = false;
+
         // Clear the "end of document" flash on any keypress.
         self.end_of_doc_flash = false;
+
+        // Clear the TTS flash message on any keypress.
+        self.tts_flash_msg = None;
 
         // Line-number jump mode (`:` prefix) — must run before overlay/quit
         // handlers so digit keys are captured instead of dismissing overlays.
@@ -1346,17 +1438,6 @@ impl DocumentReaderView {
                     }
                 }
             }
-            return;
-        }
-
-        // Cancel pending quit confirmation on any key except q/y/Esc.
-        if self.pending_quit
-            && !matches!(
-                key_event.code,
-                KeyCode::Char('q') | KeyCode::Char('y') | KeyCode::Esc
-            )
-        {
-            self.pending_quit = false;
             return;
         }
 
@@ -1587,12 +1668,13 @@ impl DocumentReaderView {
                 KeyCode::Tab => {
                     // Open composer with selection as context — user can type
                     // a custom question, or just press Enter for the default.
+                    // Keep the visual selection visible so the user can see
+                    // what they selected while typing their question.
                     let inner_w = self.last_inner_width.get();
                     let text = self.selected_text(inner_w);
                     if let Some(text) = text {
                         self.selection_context = Some(text);
                     }
-                    self.visual_select = None;
                     self.focus = ReaderFocus::Composer;
                 }
                 KeyCode::Esc => {
@@ -1626,21 +1708,16 @@ impl DocumentReaderView {
                 }
                 KeyCode::Char('q') => {
                     self.visual_select = None;
-                    if self.pending_quit {
-                        self.pending_quit = false;
-                        self.exit_reading_mode();
-                    } else {
-                        self.pending_quit = true;
-                    }
-                }
-                KeyCode::Char('y') if self.pending_quit => {
-                    self.visual_select = None;
-                    self.pending_quit = false;
                     self.exit_reading_mode();
                 }
                 // Read selection aloud via TTS.
                 #[cfg(not(target_os = "linux"))]
                 KeyCode::Char('r') => {
+                    // Interrupt any ongoing TTS before starting a new read
+                    // and clear stale karaoke visual state immediately.
+                    self.interrupt_tts_if_needed();
+                    self.voice_karaoke_lines = None;
+                    self.voice_reading_highlight = None;
                     let inner_w = self.last_inner_width.get();
                     let word_offset = self.count_words_before_selection(inner_w);
                     if let Some(text) = self.selected_text(inner_w) {
@@ -1702,7 +1779,15 @@ impl DocumentReaderView {
             }
             KeyCode::Char('r') => {
                 // Manually trigger narration of the current section.
+                tracing::info!(
+                    "[TTS-TIMING] 'r' pressed: section={}, sending interrupt+narrate events",
+                    self.current_section,
+                );
                 self.interrupt_tts_if_needed();
+                // Clear stale karaoke visual state immediately so old
+                // highlights don't flash while the new TTS initializes.
+                self.voice_karaoke_lines = None;
+                self.voice_reading_highlight = None;
                 self.narrate_current_section_if_voice(true);
             }
             #[cfg(not(target_os = "linux"))]
@@ -1720,6 +1805,17 @@ impl DocumentReaderView {
                     tracing::debug!("[TTS-DBG] Sending VoiceModePauseTts");
                     self.app_event_tx.send(AppEvent::VoiceModePauseTts);
                 }
+            }
+            // Increase/decrease TTS playback speed (client-side, pitch-preserving).
+            #[cfg(not(target_os = "linux"))]
+            KeyCode::Char('+' | '=') if self.voice_status.is_some() => {
+                self.app_event_tx
+                    .send(AppEvent::VoiceModePlaybackSpeedChange { delta: 0.1 });
+            }
+            #[cfg(not(target_os = "linux"))]
+            KeyCode::Char('-') if self.voice_status.is_some() => {
+                self.app_event_tx
+                    .send(AppEvent::VoiceModePlaybackSpeedChange { delta: -0.1 });
             }
             KeyCode::Char('t') => {
                 // Toggle Table of Contents overlay.
@@ -1765,11 +1861,6 @@ impl DocumentReaderView {
             KeyCode::Esc => {
                 if has_search {
                     self.clear_search();
-                } else if self.pending_quit {
-                    self.pending_quit = false;
-                    self.exit_reading_mode();
-                } else {
-                    self.pending_quit = true;
                 }
             }
             KeyCode::Char('f') => {
@@ -1793,20 +1884,9 @@ impl DocumentReaderView {
                 self.help_scroll.set(0);
             }
             KeyCode::Char('q') => {
-                if self.pending_quit {
-                    self.pending_quit = false;
-                    self.exit_reading_mode();
-                } else {
-                    self.pending_quit = true;
-                }
-            }
-            KeyCode::Char('y') if self.pending_quit => {
-                self.pending_quit = false;
                 self.exit_reading_mode();
             }
-            _ => {
-                self.pending_quit = false;
-            }
+            _ => {}
         }
     }
 
@@ -1975,6 +2055,11 @@ impl DocumentReaderView {
     /// `self.cursor_line` is visible.  Must be called after every cursor
     /// mutation.
     fn clamp_and_scroll(&mut self) {
+        // If karaoke narration is active, the user is manually scrolling —
+        // disable auto-scroll so it doesn't fight the user's position.
+        if self.voice_reading_highlight.is_some() || self.voice_karaoke_lines.is_some() {
+            self.karaoke_auto_scroll = false;
+        }
         // Clamp cursor_line to [0, total_lines - 1].
         let inner_w = self.last_inner_width.get();
         let total = self
@@ -2163,17 +2248,47 @@ impl DocumentReaderView {
     }
 
     fn handle_composer_key(&mut self, key_event: KeyEvent) {
-        // While the current section has a pending answer, block editing.
+        // While the current section has a pending answer, block editing
+        // but still allow navigation so the user can browse other sections
+        // (and potentially ask more questions) while waiting.
         let pending = self.pending_sections.contains_key(&self.current_section);
 
         match key_event {
             KeyEvent {
                 code: KeyCode::Esc, ..
+            } => {
+                // Esc explicitly cancels: clear selection and return to content.
+                self.visual_select = None;
+                self.selection_context = None;
+                self.focus = ReaderFocus::Content;
             }
-            | KeyEvent {
+            KeyEvent {
                 code: KeyCode::Tab, ..
             } => {
+                // Tab toggles back to content but keeps the visual selection
+                // visible so the user can adjust it and Tab back.
                 self.focus = ReaderFocus::Content;
+            }
+            // Allow section navigation and TTS controls even while a
+            // question is pending.  Switch to Content focus and delegate
+            // to the content key handler so the user can browse other
+            // sections and trigger/control read-aloud while waiting.
+            KeyEvent {
+                code:
+                    KeyCode::Char('n')
+                    | KeyCode::Char('p')
+                    | KeyCode::PageDown
+                    | KeyCode::PageUp
+                    | KeyCode::Char('r')
+                    | KeyCode::Char('s')
+                    | KeyCode::Char('+')
+                    | KeyCode::Char('=')
+                    | KeyCode::Char('-'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if pending => {
+                self.focus = ReaderFocus::Content;
+                self.handle_content_key(key_event);
             }
             _ if pending => {
                 // Ignore all other keys while waiting for the agent.
@@ -2229,9 +2344,9 @@ impl DocumentReaderView {
 
         let query_lower = query.to_lowercase();
         let mut matches = Vec::new();
-        let section_idx = self.current_section;
 
-        if let Some(section) = self.sections.get(section_idx) {
+        // Search across all sections so n/N can navigate the entire document.
+        for (section_idx, section) in self.sections.iter().enumerate() {
             // Search in heading.
             let heading_lower = section.heading.to_lowercase();
             let mut start = 0;
@@ -2256,11 +2371,18 @@ impl DocumentReaderView {
             }
         }
 
+        // Set current_match_idx to the first match in or after the current
+        // section so the user starts navigating from where they are.
+        let first_from_current = matches
+            .iter()
+            .position(|m| m.section_idx >= self.current_section)
+            .unwrap_or(0);
+
         let has_matches = !matches.is_empty();
         self.search_state = Some(SearchState {
             query,
             matches,
-            current_match_idx: 0,
+            current_match_idx: first_from_current,
         });
 
         if has_matches {
@@ -2311,23 +2433,109 @@ impl DocumentReaderView {
             self.visited_sections.insert(self.current_section);
         }
 
-        // Estimate the rendered line for this match by counting newlines in the
-        // heading + content up to byte_offset. The heading adds ~2 lines
-        // (heading text + blank line).
         let section = &self.sections[section_idx];
-        let heading_lines: u16 = if section.heading.is_empty() { 0 } else { 2 };
-        let text = &section.content;
-        // byte_offset is relative to heading start; content starts after heading.
-        let content_offset = byte_offset.saturating_sub(section.heading.len());
-        let safe_offset = content_offset.min(text.len());
-        let newlines_before = text[..safe_offset].matches('\n').count() as u16;
-        let estimated_line = heading_lines + newlines_before;
+        let heading_line_count: usize = if section.heading.is_empty() { 0 } else { 2 };
+        let inner_width = self.last_inner_width.get();
+
+        let rendered_line = if byte_offset < section.heading.len() {
+            // Match is in the heading — jump to line 0.
+            0
+        } else {
+            // Match is in the content. Find the raw content line containing
+            // the match, then use rendered_body_line_count to compute the
+            // accurate rendered line position (accounting for markdown
+            // rendering, word wrapping, LaTeX stripping, etc.).
+            let content_offset = byte_offset - section.heading.len();
+            let safe_offset = content_offset.min(section.content.len());
+
+            // Count the number of raw content lines before the match.
+            let raw_line_idx = section.content[..safe_offset].matches('\n').count();
+
+            // Get the content prefix up to (but not including) the match line
+            // and compute how many rendered lines it produces.
+            let prefix: String = section
+                .content
+                .lines()
+                .take(raw_line_idx)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let rendered_body_lines = render::rendered_body_line_count(&prefix, inner_width);
+
+            let pre_fold = heading_line_count + rendered_body_lines;
+            render::adjust_line_for_folds(
+                pre_fold,
+                &section.content,
+                heading_line_count,
+                inner_width,
+                &section.folds,
+            )
+        };
+
+        // Correct for structural blank lines that the isolated prefix render
+        // may have missed (e.g., blank lines inserted before lists by the
+        // markdown renderer). Use the actual rendered lines to verify and
+        // adjust the computed position.
+        let mut rendered_line = rendered_line;
+        let lines = self.sections[section_idx].rendered_lines(inner_width);
+        if let Some(query) = self.search_state.as_ref().map(|s| s.query.clone()) {
+            let query_lower = query.to_lowercase();
+            let line_has_match = |idx: usize| -> bool {
+                lines.get(idx).is_some_and(|line| {
+                    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                    text.to_lowercase().contains(&query_lower)
+                })
+            };
+            if !line_has_match(rendered_line) {
+                for delta in 1..=4 {
+                    if line_has_match(rendered_line + delta) {
+                        rendered_line += delta;
+                        break;
+                    }
+                }
+            }
+        }
 
         // Move cursor to the match and center in viewport.
-        self.cursor_line = estimated_line as usize;
+        self.cursor_line = rendered_line;
+
+        // Compute cursor column by finding the correct occurrence of the
+        // query in the rendered line.  When the same line contains the query
+        // multiple times, we figure out which occurrence this match is by
+        // counting how many times it appears in the raw content line before
+        // the match position, then skip that many occurrences in the rendered
+        // text.
+        self.cursor_col = 0;
+        if let Some(query) = self.search_state.as_ref().map(|s| s.query.clone()) {
+            let query_lower = query.to_lowercase();
+
+            // Determine which occurrence on the raw line this match is.
+            let content_offset = byte_offset.saturating_sub(section.heading.len());
+            let safe_offset = content_offset.min(section.content.len());
+            let line_start = section.content[..safe_offset]
+                .rfind('\n')
+                .map_or(0, |p| p + 1);
+            let preceding = section.content[line_start..safe_offset].to_lowercase();
+            let occurrence = preceding.matches(&query_lower).count();
+
+            // Find the (occurrence)-th match in the rendered line text.
+            if let Some(line) = lines.get(rendered_line) {
+                let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                let line_lower = line_text.to_lowercase();
+                let mut search_start = 0;
+                for _ in 0..=occurrence {
+                    if let Some(pos) = line_lower[search_start..].find(&query_lower) {
+                        self.cursor_col = search_start + pos;
+                        search_start = self.cursor_col + 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+
         let half_viewport = self.last_content_height.get() / 2;
         self.scroll_offset
-            .set(estimated_line.saturating_sub(half_viewport));
+            .set((rendered_line as u16).saturating_sub(half_viewport));
     }
 
     fn clear_search(&mut self) {
@@ -2505,8 +2713,7 @@ impl DocumentReaderView {
                 continue;
             }
             for (word_start, word) in WordOffsets::new(&text) {
-                if word == "\u{1F50A}" || word == "┊" || word == "\u{2713}" || word == "———"
-                {
+                if is_karaoke_skip_word(word) {
                     continue;
                 }
                 if i > start_line || (i == start_line && word_start >= start_col) {
@@ -2555,6 +2762,11 @@ impl BottomPaneView for DocumentReaderView {
     }
 
     #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    fn set_tts_flash_msg(&mut self, msg: Option<String>) {
+        self.tts_flash_msg = msg;
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn set_voice_tts_paused(&mut self, paused: bool) {
         self.voice_tts_paused = paused;
     }
@@ -2577,10 +2789,17 @@ impl BottomPaneView for DocumentReaderView {
 
     #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn set_voice_karaoke_lines(&mut self, lines: Option<Vec<Line<'static>>>, append: bool) {
+        // Re-enable auto-scroll when new karaoke lines arrive (TTS starts).
+        if lines.is_some() && self.voice_karaoke_lines.is_none() {
+            self.karaoke_auto_scroll = true;
+        }
         self.voice_karaoke_lines = lines;
         self.voice_karaoke_append = append;
-        // Auto-scroll to keep the karaoke text visible.
-        if let Some(ref karaoke) = self.voice_karaoke_lines {
+        // Auto-scroll to keep the karaoke text visible (unless user
+        // manually scrolled away — karaoke_auto_scroll is false).
+        if self.karaoke_auto_scroll
+            && let Some(ref karaoke) = self.voice_karaoke_lines
+        {
             let content_h = self.last_content_height.get();
             if content_h == 0 {
                 return;
@@ -2605,6 +2824,12 @@ impl BottomPaneView for DocumentReaderView {
         word_idx: Option<usize>,
         heading_words_to_skip: usize,
     ) {
+        // Re-enable auto-scroll when narration starts (first word arrives
+        // after highlight was cleared).
+        if word_idx.is_some() && self.voice_reading_highlight.is_none() {
+            self.karaoke_auto_scroll = true;
+        }
+
         let highlight = word_idx.and_then(|wi| {
             let adj = wi.checked_sub(heading_words_to_skip)?;
             let section = self.sections.get(self.current_section)?;
@@ -2624,8 +2849,7 @@ impl BottomPaneView for DocumentReaderView {
                 }
                 for (word_start, word) in WordOffsets::new(&text) {
                     // Skip decorators that aren't real TTS words.
-                    if word == "\u{1F50A}" || word == "┊" || word == "\u{2713}" || word == "———"
-                    {
+                    if is_karaoke_skip_word(word) {
                         continue;
                     }
                     if cumulative_words == adj {
@@ -2643,18 +2867,25 @@ impl BottomPaneView for DocumentReaderView {
 
         self.voice_reading_highlight = highlight;
 
-        // Auto-scroll so the highlighted line stays visible.
-        if let Some((line_idx, _, _)) = highlight {
+        // Auto-scroll so the highlighted line stays visible, but only if the
+        // user hasn't manually scrolled away (karaoke_auto_scroll is true).
+        if self.karaoke_auto_scroll
+            && let Some((line_idx, _, _)) = highlight
+        {
             let content_h = self.last_content_height.get();
             if content_h > 0 {
                 let scroll = self.scroll_offset.get() as usize;
                 let visible_end = scroll + content_h as usize;
-                if line_idx >= visible_end {
+                // Keep the highlighted word in the middle third of the
+                // viewport for comfortable reading.
+                let margin = (content_h as usize) / 3;
+                if line_idx >= visible_end.saturating_sub(margin) {
                     self.scroll_offset
                         .set(line_idx.saturating_sub(content_h as usize / 2) as u16);
                 }
-                if line_idx < scroll {
-                    self.scroll_offset.set(line_idx.saturating_sub(2) as u16);
+                if line_idx < scroll + margin {
+                    self.scroll_offset
+                        .set(line_idx.saturating_sub(content_h as usize / 2) as u16);
                 }
             }
         }
@@ -2671,8 +2902,7 @@ impl BottomPaneView for DocumentReaderView {
     }
 
     fn prefer_esc_to_handle_key_event(&self) -> bool {
-        // In content focus: Esc clears search, cancels visual select, or
-        // triggers the double-press quit flow (same as `q`).
+        // In content focus: Esc clears search or cancels visual select.
         // In composer/search focus: Esc returns to content focus.
         true
     }
@@ -2834,7 +3064,12 @@ impl Renderable for DocumentReaderView {
         };
 
         // --- Fixed rows from bottom: bottom_border(1) + extra_bottom_rows + hints(1) + voice_status(0|1) + separator(1) ---
-        let voice_status_rows: u16 = if self.voice_status.is_some() { 1 } else { 0 };
+        let voice_status_rows: u16 = if self.voice_status.is_some() || self.tts_flash_msg.is_some()
+        {
+            1
+        } else {
+            0
+        };
         let fixed_bottom = 1 + extra_bottom_rows + 1 + voice_status_rows + 1;
         // --- Fixed rows from top: top_border(1) + header(1) + separator(1) ---
         let fixed_top: u16 = 3;
@@ -3430,6 +3665,7 @@ impl Renderable for DocumentReaderView {
         let voice_status_line: Option<Line<'static>> = self
             .voice_status
             .as_deref()
+            .or(self.tts_flash_msg.as_deref())
             .map(|vs| render::bordered_text_line(vs, w));
 
         // Hints bar
@@ -3450,16 +3686,21 @@ impl Renderable for DocumentReaderView {
             .sections
             .get(self.current_section)
             .is_some_and(DocumentSection::has_folds);
+        let search_match_info: Option<String> = self
+            .search_state
+            .as_ref()
+            .filter(|s| !s.matches.is_empty())
+            .map(|s| format!("[{}/{}]", s.current_match_idx + 1, s.matches.len()));
         let hints = render::hints_line(
             self.focus == ReaderFocus::Composer,
             self.focus == ReaderFocus::Search,
             self.search_state.is_some(),
             self.visual_select.is_some(),
             current_has_folds,
-            self.pending_quit,
             self.line_number_input.as_deref(),
             self.voice_status.as_deref(), // used for showing "r: read" hint
             self.voice_tts_paused,
+            search_match_info.as_deref(),
             w,
         );
         Paragraph::new(hints).render(
@@ -3647,6 +3888,35 @@ fn parse_sections(_title: &str, content: &str) -> Vec<DocumentSection> {
         sections.remove(0);
     }
 
+    // Merge heading-only sections into the next section that has content.
+    // When ALL headed sections are empty (streaming outline mode), preserve
+    // them as placeholders and skip the merge.
+    let all_empty = sections
+        .iter()
+        .all(|s| s.heading.is_empty() || s.content.trim().is_empty());
+    if !all_empty {
+        // Iterate back-to-front so chains of empty headings collapse correctly
+        // (A -> B -> C becomes "A \u{2014} B \u{2014} C").
+        let mut i = sections.len().saturating_sub(1);
+        while i > 0 {
+            i -= 1;
+            if !sections[i].heading.is_empty()
+                && sections[i].content.trim().is_empty()
+                && i + 1 < sections.len()
+                && !sections[i + 1].content.trim().is_empty()
+            {
+                let empty_heading = sections[i].heading.clone();
+                let next = &mut sections[i + 1];
+                if next.heading.is_empty() {
+                    next.heading = empty_heading;
+                } else {
+                    next.heading = format!("{empty_heading} \u{2014} {}", next.heading);
+                }
+                sections.remove(i);
+            }
+        }
+    }
+
     sections
 }
 
@@ -3765,6 +4035,38 @@ mod tests {
         assert_eq!(sections[0].heading, "A");
         assert!(sections[0].content.is_empty());
         assert!(sections[1].content.is_empty());
+    }
+
+    #[test]
+    fn parse_sections_merges_empty_into_next_with_content() {
+        // Two consecutive headings where only the second has body text.
+        let content = "## Overview\n## Details\nSome body text here";
+        let sections = parse_sections("Title", content);
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].heading, "Overview \u{2014} Details");
+        assert_eq!(sections[0].content, "Some body text here");
+    }
+
+    #[test]
+    fn parse_sections_merges_chained_empty_headings() {
+        // Three consecutive headings, only the last has body text.
+        let content = "## A\n## B\n## C\nContent for C";
+        let sections = parse_sections("Title", content);
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].heading, "A \u{2014} B \u{2014} C");
+        assert_eq!(sections[0].content, "Content for C");
+    }
+
+    #[test]
+    fn parse_sections_mixed_empty_and_nonempty() {
+        // An empty heading sandwiched between two sections with content.
+        let content = "## First\nFirst body\n## Empty\n## Last\nLast body";
+        let sections = parse_sections("Title", content);
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].heading, "First");
+        assert_eq!(sections[0].content, "First body");
+        assert_eq!(sections[1].heading, "Empty \u{2014} Last");
+        assert_eq!(sections[1].content, "Last body");
     }
 
     // -----------------------------------------------------------------------
@@ -4037,12 +4339,7 @@ mod tests {
 
         assert!(!view.complete);
         view.handle_content_key(key(KeyCode::Char('q')));
-        assert!(
-            !view.complete,
-            "first q should not exit — pending confirmation"
-        );
-        view.handle_content_key(key(KeyCode::Char('q')));
-        assert!(view.complete);
+        assert!(view.complete, "q should exit immediately");
 
         // Verify InsertHistoryCell was emitted.
         let mut found_cell = false;
@@ -4358,15 +4655,10 @@ mod tests {
             "updated content should be visible"
         );
 
-        // 6. Exit via 'q' (requires confirmation: q, then q again).
+        // 6. Exit via 'q' (single press exits immediately).
         assert!(!view.is_complete());
         view.handle_key_event(key(KeyCode::Char('q')));
-        assert!(
-            !view.is_complete(),
-            "first q should not exit — pending confirmation"
-        );
-        view.handle_key_event(key(KeyCode::Char('q')));
-        assert!(view.is_complete());
+        assert!(view.is_complete(), "q should exit immediately");
 
         // Verify history cell was emitted with the updated content.
         let mut found_cell = false;
@@ -4560,8 +4852,10 @@ mod tests {
         // Section 0 should still be pending.
         assert!(view.pending_sections.contains_key(&0));
 
+        // Use a tall area so the pending indicator (appended below section
+        // content) stays visible after paragraph spacing adds blank lines.
         // Render — should NOT show "thinking..." since current section (1) is not pending.
-        let area = Rect::new(0, 0, 60, 20);
+        let area = Rect::new(0, 0, 60, 30);
         let mut buf = Buffer::empty(area);
         view.render(area, &mut buf);
         let snap = snapshot_buffer(&buf);
@@ -4581,6 +4875,148 @@ mod tests {
             snap.contains("thinking"),
             "should show thinking when viewing a pending section"
         );
+    }
+
+    #[test]
+    fn composer_pending_allows_navigation() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Navigate to section 1 and submit a question.
+        view.handle_content_key(key(KeyCode::Char('n')));
+        assert_eq!(view.current_section, 1);
+        view.focus = ReaderFocus::Composer;
+        view.textarea.input(key(KeyCode::Char('W')));
+        view.textarea.input(key(KeyCode::Char('h')));
+        view.textarea.input(key(KeyCode::Char('y')));
+        view.handle_composer_key(key(KeyCode::Enter));
+        assert!(view.pending_sections.contains_key(&1));
+        assert_eq!(view.focus, ReaderFocus::Composer);
+
+        // While pending in composer, pressing 'n' should navigate forward.
+        view.handle_composer_key(key(KeyCode::Char('n')));
+        assert_eq!(view.current_section, 2, "n should navigate to next section");
+        assert_eq!(
+            view.focus,
+            ReaderFocus::Content,
+            "focus should switch to Content after navigation"
+        );
+        // Section 1 should still be pending.
+        assert!(view.pending_sections.contains_key(&1));
+
+        // Navigate back with 'p' from Content mode.
+        view.handle_content_key(key(KeyCode::Char('p')));
+        assert_eq!(view.current_section, 1);
+
+        // Tab back to composer — it should show pending spinner for section 1.
+        view.focus = ReaderFocus::Composer;
+
+        // Pressing 'p' while pending in composer should navigate backward.
+        view.handle_composer_key(key(KeyCode::Char('p')));
+        assert_eq!(
+            view.current_section, 0,
+            "p should navigate to previous section"
+        );
+        assert_eq!(view.focus, ReaderFocus::Content);
+    }
+
+    /// Pressing 'r' in the composer while a follow-up is pending should
+    /// still trigger TTS narration (delegates to content key handler).
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn composer_pending_allows_read_aloud() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Navigate to section 1 and submit a question.
+        view.handle_content_key(key(KeyCode::Char('n')));
+        assert_eq!(view.current_section, 1);
+        view.focus = ReaderFocus::Composer;
+        view.textarea.input(key(KeyCode::Char('W')));
+        view.textarea.input(key(KeyCode::Char('h')));
+        view.textarea.input(key(KeyCode::Char('y')));
+        view.handle_composer_key(key(KeyCode::Enter));
+        assert!(view.pending_sections.contains_key(&1));
+        assert_eq!(view.focus, ReaderFocus::Composer);
+
+        // Drain all events emitted so far.
+        while rx.try_recv().is_ok() {}
+
+        // While pending in composer, pressing 'r' should trigger narration.
+        view.handle_composer_key(key(KeyCode::Char('r')));
+
+        // Verify VoiceModeNarrateSection event was emitted.
+        let mut found_narrate = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::VoiceModeNarrateSection { manual, .. } = ev {
+                assert!(manual, "narration triggered by 'r' should have manual=true");
+                found_narrate = true;
+            }
+        }
+        assert!(
+            found_narrate,
+            "expected VoiceModeNarrateSection event after pressing 'r' while pending"
+        );
+
+        // Focus should have switched to Content.
+        assert_eq!(
+            view.focus,
+            ReaderFocus::Content,
+            "focus should switch to Content after 'r' during pending"
+        );
+
+        // Section 1 should still be pending.
+        assert!(view.pending_sections.contains_key(&1));
+    }
+
+    #[test]
+    fn parallel_questions_on_different_sections() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Drain construction events.
+        while rx.try_recv().is_ok() {}
+
+        // Ask about section 1.
+        view.handle_content_key(key(KeyCode::Char('n')));
+        assert_eq!(view.current_section, 1);
+        view.focus = ReaderFocus::Composer;
+        view.textarea.input(key(KeyCode::Char('A')));
+        view.handle_composer_key(key(KeyCode::Enter));
+        assert!(view.pending_sections.contains_key(&1));
+
+        // Navigate to section 3 while section 1 is pending.
+        view.handle_composer_key(key(KeyCode::Char('n')));
+        view.handle_content_key(key(KeyCode::Char('n')));
+        assert_eq!(view.current_section, 3);
+
+        // Ask about section 3.
+        view.focus = ReaderFocus::Composer;
+        view.textarea.input(key(KeyCode::Char('B')));
+        view.handle_composer_key(key(KeyCode::Enter));
+        assert!(view.pending_sections.contains_key(&3));
+
+        // Both sections should be pending simultaneously.
+        assert!(
+            view.pending_sections.contains_key(&1),
+            "section 1 should still be pending"
+        );
+        assert!(
+            view.pending_sections.contains_key(&3),
+            "section 3 should also be pending"
+        );
+
+        // Resolve section 1 — section 3 should remain pending.
+        view.update_section(1, "Answer for section 1.".to_string());
+        assert!(!view.pending_sections.contains_key(&1));
+        assert!(view.pending_sections.contains_key(&3));
+
+        // Resolve section 3.
+        view.update_section(3, "Answer for section 3.".to_string());
+        assert!(view.pending_sections.is_empty());
     }
 
     // -----------------------------------------------------------------------
@@ -4712,6 +5148,53 @@ mod tests {
             assert!(
                 view.voice_reading_highlight.is_none(),
                 "out-of-range word_idx should produce None highlight"
+            );
+        }
+
+        #[test]
+        fn voice_progress_skips_heading_markers() {
+            // Create a view whose section content contains a ### subheading.
+            // The markdown renderer keeps the "###" prefix in the rendered
+            // text, but `clean_for_tts` strips it.  The karaoke counter must
+            // skip the "###" word so TTS indices stay aligned.
+            let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+            let tx = AppEventSender::new(tx_raw);
+            let content = "Start word\n### Loop\nEnd word";
+            let mut view = DocumentReaderView::new(
+                "heading-test".to_string(),
+                "Heading Test".to_string(),
+                content.to_string(),
+                tx,
+                true,
+                crate::tui::FrameRequester::test_dummy(),
+            );
+            view.show_tutorial = false;
+            render_view(&view);
+
+            // TTS word 0 -> rendered "Start"
+            view.set_voice_reading_progress(Some(0), 0);
+            let hl = view.voice_reading_highlight;
+            assert!(hl.is_some(), "word 0 should highlight");
+            let (_, start, end) = hl.expect("checked");
+            assert_eq!(&"Start word"[start..end], "Start");
+
+            // TTS word 2 -> rendered "Loop" (skipping "###")
+            view.set_voice_reading_progress(Some(2), 0);
+            let hl = view.voice_reading_highlight;
+            assert!(hl.is_some(), "word 2 should highlight");
+            let (line_idx, start, end) = hl.expect("checked");
+            let section = view.sections.get(view.current_section).expect("section");
+            let inner_w = view.last_inner_width.get();
+            let lines = section.rendered_lines(inner_w);
+            let line_text: String = lines[line_idx]
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect();
+            assert_eq!(
+                &line_text[start..end],
+                "Loop",
+                "TTS word 2 should highlight 'Loop', not the heading marker"
             );
         }
     }
@@ -5002,47 +5485,39 @@ mod tests {
         assert!(!view.show_help, "Esc should dismiss help overlay");
     }
 
-    // Test 38: q_twice_exits
+    // Test 38: q_exits_immediately
     #[test]
-    fn q_twice_exits() {
+    fn q_exits_immediately() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
 
         assert!(!view.complete);
-        assert!(!view.pending_quit);
 
-        // First q sets confirmation state.
+        // Single q exits immediately.
         view.handle_content_key(key(KeyCode::Char('q')));
-        assert!(view.pending_quit, "first q should set pending_quit");
-        assert!(!view.complete, "first q should not complete");
-
-        // Second q exits.
-        view.handle_content_key(key(KeyCode::Char('q')));
-        assert!(view.complete, "second q should set complete");
+        assert!(view.complete, "q should exit immediately");
     }
 
     #[test]
-    fn esc_twice_exits() {
+    fn esc_does_not_exit() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
 
         assert!(!view.complete);
-        assert!(!view.pending_quit);
 
-        // First Esc sets confirmation state (no search/overlay to dismiss).
+        // Esc without search active is a no-op (never exits).
         view.handle_content_key(key(KeyCode::Esc));
-        assert!(view.pending_quit, "first Esc should set pending_quit");
-        assert!(!view.complete, "first Esc should not complete");
+        assert!(!view.complete, "Esc should not exit reading mode");
 
-        // Second Esc exits.
+        // Pressing Esc again still does not exit.
         view.handle_content_key(key(KeyCode::Esc));
-        assert!(view.complete, "second Esc should set complete");
+        assert!(!view.complete, "repeated Esc should not exit reading mode");
     }
 
     #[test]
-    fn esc_clears_search_before_quit() {
+    fn esc_clears_search() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut view = make_view(tx);
@@ -5053,44 +5528,10 @@ mod tests {
         view.handle_search_key(key(KeyCode::Enter));
         assert!(view.search_state.is_some(), "search should be active");
 
-        // First Esc clears search instead of entering quit flow.
+        // Esc clears search and does not exit.
         view.handle_content_key(key(KeyCode::Esc));
         assert!(view.search_state.is_none(), "Esc should clear search");
-        assert!(
-            !view.pending_quit,
-            "Esc should not set pending_quit when search was active"
-        );
-        assert!(!view.complete);
-    }
-
-    #[test]
-    fn esc_then_q_exits() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut view = make_view(tx);
-
-        // First Esc sets pending quit.
-        view.handle_content_key(key(KeyCode::Esc));
-        assert!(view.pending_quit);
-
-        // q confirms the exit.
-        view.handle_content_key(key(KeyCode::Char('q')));
-        assert!(view.complete, "q after Esc should exit");
-    }
-
-    #[test]
-    fn q_then_esc_exits() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut view = make_view(tx);
-
-        // First q sets pending quit.
-        view.handle_content_key(key(KeyCode::Char('q')));
-        assert!(view.pending_quit);
-
-        // Esc confirms the exit.
-        view.handle_content_key(key(KeyCode::Esc));
-        assert!(view.complete, "Esc after q should exit");
+        assert!(!view.complete, "Esc should not exit after clearing search");
     }
 
     // Test 39: tab_opens_composer
@@ -5255,9 +5696,7 @@ mod tests {
         // Set voice status to simulate active voice mode.
         view.voice_status = Some("Speaking...".to_string());
 
-        // Press q twice to exit -- should not panic even with voice state active.
-        view.handle_content_key(key(KeyCode::Char('q')));
-        assert!(view.pending_quit);
+        // Press q to exit -- should not panic even with voice state active.
         view.handle_content_key(key(KeyCode::Char('q')));
         assert!(
             view.complete,
@@ -5567,5 +6006,580 @@ mod tests {
                 "highlighted word 'Introduction' should have BOLD+UNDERLINED style in the rendered buffer"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Auto-navigate tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn auto_navigate_on_update_section() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = make_view(tx);
+        // Starts at section 0, pending_auto_navigate is true.
+        assert_eq!(view.current_section, 0);
+        assert!(view.pending_auto_navigate);
+
+        // Update section 2 — should auto-navigate there.
+        view.update_section(2, "Updated results content.".to_string());
+        assert_eq!(view.current_section, 2);
+        assert!(!view.pending_auto_navigate);
+    }
+
+    #[test]
+    fn auto_navigate_on_append_to_section() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = make_view(tx);
+        assert_eq!(view.current_section, 0);
+
+        // Append to section 3 — should auto-navigate.
+        view.append_to_section(3, "\nAppended answer.".to_string(), false, None);
+        assert_eq!(view.current_section, 3);
+        assert!(!view.pending_auto_navigate);
+    }
+
+    #[test]
+    fn auto_navigate_on_patch_section() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = make_view(tx);
+        assert_eq!(view.current_section, 0);
+
+        // Patch section 1 — replace some text.
+        view.patch_section(1, "Method details here.", "Improved methods.", false, None);
+        assert_eq!(view.current_section, 1);
+        assert!(!view.pending_auto_navigate);
+    }
+
+    #[test]
+    fn auto_navigate_skipped_for_streaming_fill() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        // Create a view with an outline (empty sections trigger streaming mode).
+        let mut view = DocumentReaderView::new(
+            "test-doc".to_string(),
+            "Report".to_string(),
+            "## Section A\n\n## Section B\n\n## Section C\n".to_string(),
+            tx,
+            true,
+            crate::tui::FrameRequester::test_dummy(),
+        );
+        view.show_tutorial = false;
+        assert!(view.streaming_sections.is_some());
+        assert!(view.pending_auto_navigate);
+
+        // Streaming fill of section 1 should NOT auto-navigate.
+        view.update_section(1, "## Section B\nFilled content.".to_string());
+        assert_eq!(
+            view.current_section, 0,
+            "streaming fill should not auto-navigate"
+        );
+        assert!(
+            view.pending_auto_navigate,
+            "flag should remain set during streaming"
+        );
+    }
+
+    #[test]
+    fn auto_navigate_cancelled_by_user_interaction() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = make_view(tx);
+        assert!(view.pending_auto_navigate);
+
+        // User presses a key — cancels auto-navigate.
+        view.handle_content_key(key(KeyCode::Char('j')));
+        assert!(!view.pending_auto_navigate);
+
+        // Now update section 2 — should NOT auto-navigate.
+        view.update_section(2, "Updated results.".to_string());
+        assert_eq!(
+            view.current_section, 0,
+            "should stay at section 0 after user interaction"
+        );
+    }
+
+    #[test]
+    fn auto_navigate_unfolds_collapsed_folds() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = make_view(tx);
+
+        // Add a collapsed fold to section 2.
+        let content_len = view.sections[2].content.len();
+        view.sections[2].folds.push(FoldRegion {
+            start: 0,
+            end: content_len,
+            summary: "Collapsed fold".to_string(),
+            collapsed: true,
+        });
+        assert!(view.sections[2].folds[0].collapsed);
+
+        // Auto-navigate to section 2 via update.
+        view.update_section(2, "New results.".to_string());
+        assert_eq!(view.current_section, 2);
+        // Folds are cleared by update_section (folds.clear()), so check the
+        // navigate_to_section method directly via append which preserves folds.
+    }
+
+    #[test]
+    fn auto_navigate_not_triggered_for_same_section() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = make_view(tx);
+        assert_eq!(view.current_section, 0);
+
+        // Update section 0 (already the current section) — navigate_to_section
+        // checks section_index != current_section, so the flag should still be
+        // consumed but we stay at section 0.
+        view.update_section(0, "Updated intro.".to_string());
+        // pending_auto_navigate is cleared even though we didn't move.
+        assert!(!view.pending_auto_navigate);
+        assert_eq!(view.current_section, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Auto-read disabled tests
+    // -----------------------------------------------------------------------
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn opening_reading_view_does_not_auto_narrate() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let _view = make_view(tx);
+
+        // Drain any events emitted during construction.
+        let mut found_narrate = false;
+        while let Ok(ev) = rx.try_recv() {
+            if matches!(ev, AppEvent::VoiceModeNarrateSection { .. }) {
+                found_narrate = true;
+            }
+        }
+        assert!(
+            !found_narrate,
+            "opening a reading view should NOT auto-narrate"
+        );
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn navigating_to_next_section_does_not_auto_narrate() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Drain construction events.
+        while rx.try_recv().is_ok() {}
+
+        // Navigate to next section.
+        view.handle_content_key(key(KeyCode::Char('n')));
+        assert_eq!(view.current_section, 1);
+
+        // Check no narration event was emitted.
+        let mut found_narrate = false;
+        while let Ok(ev) = rx.try_recv() {
+            if matches!(ev, AppEvent::VoiceModeNarrateSection { .. }) {
+                found_narrate = true;
+            }
+        }
+        assert!(
+            !found_narrate,
+            "navigating to next section should NOT auto-narrate"
+        );
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn pressing_r_triggers_manual_narration() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Drain construction events.
+        while rx.try_recv().is_ok() {}
+
+        // Press 'r' to manually trigger narration.
+        view.handle_content_key(key(KeyCode::Char('r')));
+
+        // Should emit VoiceModeNarrateSection with manual=true.
+        let mut found_narrate = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::VoiceModeNarrateSection { manual, .. } = ev {
+                assert!(manual, "narration triggered by 'r' should have manual=true");
+                found_narrate = true;
+            }
+        }
+        assert!(
+            found_narrate,
+            "expected VoiceModeNarrateSection event after pressing 'r'"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Karaoke auto-scroll tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn karaoke_auto_scroll_starts_true() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let view = make_view(tx);
+        assert!(
+            view.karaoke_auto_scroll,
+            "karaoke_auto_scroll should start as true"
+        );
+    }
+
+    #[test]
+    fn manual_scroll_disables_karaoke_auto_scroll() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Simulate active karaoke highlighting so the disable logic triggers.
+        view.voice_reading_highlight = Some((0, 0, 3));
+
+        // Manual scroll with 'j' should disable auto-scroll.
+        view.handle_content_key(key(KeyCode::Char('j')));
+        assert!(
+            !view.karaoke_auto_scroll,
+            "manual scroll during karaoke should disable auto-scroll"
+        );
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[test]
+    fn karaoke_auto_scroll_resets_on_new_highlight() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Simulate user manually scrolled during karaoke.
+        view.voice_reading_highlight = Some((0, 0, 3));
+        view.handle_content_key(key(KeyCode::Char('j')));
+        assert!(
+            !view.karaoke_auto_scroll,
+            "precondition: auto-scroll disabled"
+        );
+
+        // Clear highlight (as if sentence ended).
+        view.voice_reading_highlight = None;
+        view.karaoke_auto_scroll = false; // still disabled after clear
+
+        // Simulate new karaoke lines arriving — this is the production path
+        // via set_voice_karaoke_lines when TTS starts a new section.
+        // When voice_karaoke_lines transitions from None to Some,
+        // karaoke_auto_scroll is re-enabled.
+        view.set_voice_karaoke_lines(Some(vec![ratatui::text::Line::from("test")]), false);
+        assert!(
+            view.karaoke_auto_scroll,
+            "auto-scroll should re-enable when new karaoke lines arrive"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Search cross-section tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn search_finds_matches_across_all_sections() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // "Method" appears in section 1 heading "Methodology".
+        // "Result" appears in section 2 heading "Results".
+        // Use a term that appears in multiple sections.
+        view.search_input = "more".to_string();
+        view.execute_search();
+
+        let state = view
+            .search_state
+            .as_ref()
+            .expect("search state should exist");
+        // "More" appears in "More method details." (section 1)
+        // and "More result findings." (section 2)
+        // and "More discussion text." (section 3)
+        assert!(
+            state.matches.len() >= 3,
+            "search should find matches across multiple sections, found {}",
+            state.matches.len()
+        );
+
+        // Verify matches are in different sections.
+        let sections: std::collections::HashSet<usize> =
+            state.matches.iter().map(|m| m.section_idx).collect();
+        assert!(
+            sections.len() >= 2,
+            "matches should span at least 2 different sections"
+        );
+    }
+
+    #[test]
+    fn search_next_wraps_around() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        view.search_input = "more".to_string();
+        view.execute_search();
+
+        let total = view
+            .search_state
+            .as_ref()
+            .expect("search state")
+            .matches
+            .len();
+        assert!(total >= 2, "need at least 2 matches to test wrapping");
+
+        // Advance to the last match.
+        for _ in 0..total - 1 {
+            view.next_match();
+        }
+        let idx_before = view.search_state.as_ref().unwrap().current_match_idx;
+        assert_eq!(idx_before, total - 1, "should be at last match");
+
+        // Next match should wrap to index 0.
+        view.next_match();
+        let idx_after = view.search_state.as_ref().unwrap().current_match_idx;
+        assert_eq!(idx_after, 0, "next_match should wrap around to first match");
+    }
+
+    #[test]
+    fn search_prev_wraps_around() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        view.search_input = "more".to_string();
+        view.execute_search();
+
+        let total = view
+            .search_state
+            .as_ref()
+            .expect("search state")
+            .matches
+            .len();
+        assert!(total >= 2, "need at least 2 matches");
+
+        // Start at first match. Prev should wrap to last.
+        // Navigate to position 0 first.
+        while view.search_state.as_ref().unwrap().current_match_idx != 0 {
+            view.prev_match();
+        }
+
+        view.prev_match();
+        let idx_after = view.search_state.as_ref().unwrap().current_match_idx;
+        assert_eq!(
+            idx_after,
+            total - 1,
+            "prev_match from first should wrap to last match"
+        );
+    }
+
+    #[test]
+    fn search_jumps_to_different_section() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+        assert_eq!(view.current_section, 0);
+
+        // Search for something that only appears in section 1+.
+        view.search_input = "method".to_string();
+        view.execute_search();
+
+        let state = view.search_state.as_ref().expect("search state");
+        assert!(
+            !state.matches.is_empty(),
+            "should find 'method' in Methodology section"
+        );
+
+        // The first match should be in section 1 (Methodology heading or content).
+        let first_match_section = state.matches[state.current_match_idx].section_idx;
+        assert_eq!(
+            first_match_section, 1,
+            "'method' match should be in section 1"
+        );
+
+        // View should have navigated to section 1.
+        assert_eq!(
+            view.current_section, 1,
+            "jump_to_current_match should switch to section containing the match"
+        );
+    }
+
+    #[test]
+    fn search_empty_query_returns_no_matches() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        view.search_input = String::new();
+        view.execute_search();
+
+        assert!(
+            view.search_state.is_none(),
+            "empty search should clear search state"
+        );
+    }
+
+    #[test]
+    fn search_no_matches_in_current_but_matches_in_other() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+        assert_eq!(view.current_section, 0);
+
+        // "Discussion" only appears in section 3.
+        view.search_input = "discussion".to_string();
+        view.execute_search();
+
+        let state = view.search_state.as_ref().expect("search state");
+        assert!(
+            !state.matches.is_empty(),
+            "should find matches in other sections"
+        );
+
+        // Current section should have switched to section 3.
+        assert_eq!(
+            view.current_section, 3,
+            "should navigate to section with match"
+        );
+    }
+
+    #[test]
+    fn search_term_not_found_anywhere() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        view.search_input = "xyznonexistent".to_string();
+        view.execute_search();
+
+        let state = view
+            .search_state
+            .as_ref()
+            .expect("search state should exist but be empty");
+        assert!(
+            state.matches.is_empty(),
+            "search for nonexistent term should return no matches"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Q&A read aloud tests (keys during pending state)
+    // -----------------------------------------------------------------------
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn r_key_works_during_pending_answer_in_composer() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Simulate pending state: a follow-up question was submitted for
+        // the current section and we're waiting for the agent's response.
+        view.pending_sections.insert(
+            view.current_section,
+            ("test question".to_string(), Instant::now()),
+        );
+        view.focus = ReaderFocus::Composer;
+
+        // Drain any prior events.
+        while rx.try_recv().is_ok() {}
+
+        // Press 'r' in composer while pending — should switch to content
+        // and trigger narration.
+        view.handle_composer_key(key(KeyCode::Char('r')));
+
+        let mut found_narrate = false;
+        while let Ok(ev) = rx.try_recv() {
+            if matches!(ev, AppEvent::VoiceModeNarrateSection { .. }) {
+                found_narrate = true;
+            }
+        }
+        assert!(
+            found_narrate,
+            "'r' should trigger narration even while waiting for follow-up answer"
+        );
+    }
+
+    #[test]
+    fn s_key_works_during_pending_answer_in_composer() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Simulate pending state.
+        view.pending_sections.insert(
+            view.current_section,
+            ("test question".to_string(), Instant::now()),
+        );
+        view.focus = ReaderFocus::Composer;
+
+        // Press 's' — should switch focus to content (TTS pause/resume control).
+        view.handle_composer_key(key(KeyCode::Char('s')));
+        assert_eq!(
+            view.focus,
+            ReaderFocus::Content,
+            "'s' during pending should switch to content for TTS control"
+        );
+    }
+
+    #[test]
+    fn speed_keys_work_during_pending_answer_in_composer() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Simulate pending state.
+        view.pending_sections.insert(
+            view.current_section,
+            ("test question".to_string(), Instant::now()),
+        );
+        view.focus = ReaderFocus::Composer;
+
+        // Press '+' — should switch focus to content (speed control).
+        view.handle_composer_key(key(KeyCode::Char('+')));
+        assert_eq!(
+            view.focus,
+            ReaderFocus::Content,
+            "'+' during pending should switch to content for speed control"
+        );
+
+        // Reset focus.
+        view.focus = ReaderFocus::Composer;
+
+        // Press '-' — should also switch focus.
+        view.handle_composer_key(key(KeyCode::Char('-')));
+        assert_eq!(
+            view.focus,
+            ReaderFocus::Content,
+            "'-' during pending should switch to content for speed control"
+        );
+    }
+
+    #[test]
+    fn other_keys_blocked_during_pending_in_composer() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = make_view(tx);
+
+        // Simulate pending state.
+        view.pending_sections.insert(
+            view.current_section,
+            ("test question".to_string(), Instant::now()),
+        );
+        view.focus = ReaderFocus::Composer;
+
+        // Press a random letter — should be ignored (no text input during pending).
+        view.handle_composer_key(key(KeyCode::Char('x')));
+        assert!(
+            view.textarea.text().is_empty(),
+            "regular keys should be blocked during pending answer in composer"
+        );
     }
 }

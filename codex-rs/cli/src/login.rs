@@ -326,6 +326,63 @@ pub async fn run_login_with_device_code_fallback_to_browser(
     }
 }
 
+pub async fn run_login_with_a2a(cli_config_overrides: CliConfigOverrides) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+
+    let ata_config = codex_core::config::types::AtaAccountConfig::default();
+    let client = codex_core::supabase::SupabaseClient::new(
+        ata_config.supabase_url,
+        ata_config.supabase_anon_key,
+    );
+
+    // Prompt for email
+    eprint!("Enter your email: ");
+    let mut email = String::new();
+    std::io::stdin().read_line(&mut email).unwrap_or_default();
+    let email = email.trim();
+    if email.is_empty() {
+        eprintln!("Email is required.");
+        std::process::exit(1);
+    }
+
+    // Send OTP
+    eprintln!("Sending sign-in code to {email}...");
+    if let Err(e) = codex_login::send_ata_otp(&client, email).await {
+        eprintln!("Failed to send sign-in code: {e}");
+        std::process::exit(1);
+    }
+    eprintln!("Check your email for a 6-digit code.");
+
+    // Prompt for OTP
+    eprint!("Enter code: ");
+    let mut otp = String::new();
+    std::io::stdin().read_line(&mut otp).unwrap_or_default();
+    let otp = otp.trim();
+    if otp.is_empty() {
+        eprintln!("Code is required.");
+        std::process::exit(1);
+    }
+
+    // Verify OTP
+    match codex_login::verify_ata_otp(&client, email, otp).await {
+        Ok(session) => {
+            if let Err(e) = codex_core::supabase::save_ata_session(&config.codex_home, &session) {
+                eprintln!("Failed to save session: {e}");
+                std::process::exit(1);
+            }
+            eprintln!("Successfully signed in with A2A account!");
+            if !session.user.email.is_empty() {
+                eprintln!("Email: {}", session.user.email);
+            }
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("Sign-in failed: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
@@ -343,6 +400,9 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
             AuthMode::ChatgptAuthTokens => {
                 eprintln!("Logged in using ChatGPT (external tokens)");
                 chatgpt_auth = true;
+            }
+            AuthMode::Ata => {
+                eprintln!("Logged in using ATA account");
             }
         },
         Ok(None) => {}
@@ -376,6 +436,21 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
             auth_method_label(provider.method)
         );
     }
+
+    // Check ATA session status independently
+    if let Some(ata_session) = codex_core::supabase::load_ata_session(&config.codex_home)
+        .ok()
+        .flatten()
+    {
+        if codex_core::supabase::is_session_expired(&ata_session) {
+            eprintln!("ATA account: {} (session expired)", ata_session.user.email);
+        } else {
+            eprintln!("ATA account: {}", ata_session.user.email);
+        }
+    } else {
+        eprintln!("ATA account: not signed in");
+    }
+
     std::process::exit(0);
 }
 
@@ -493,8 +568,20 @@ pub async fn run_logout_provider(
     }
 }
 
-pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
+pub async fn run_logout(cli_config_overrides: CliConfigOverrides, ata_only: bool) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
+
+    if ata_only {
+        match codex_core::supabase::delete_ata_session(&config.codex_home) {
+            Ok(true) => eprintln!("ATA session removed."),
+            Ok(false) => eprintln!("No ATA session found."),
+            Err(e) => {
+                eprintln!("Failed to remove ATA session: {e}");
+                std::process::exit(1);
+            }
+        }
+        std::process::exit(0);
+    }
 
     let auth_manager = AuthManager::new(
         config.codex_home.clone(),
@@ -504,17 +591,24 @@ pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
     match auth_manager.logout() {
         Ok(true) => {
             eprintln!("Successfully logged out");
-            std::process::exit(0);
         }
         Ok(false) => {
             eprintln!("Not logged in");
-            std::process::exit(0);
         }
         Err(e) => {
             eprintln!("Error logging out: {e}");
             std::process::exit(1);
         }
     }
+
+    // Also delete ATA session if present
+    match codex_core::supabase::delete_ata_session(&config.codex_home) {
+        Ok(true) => eprintln!("ATA session removed."),
+        Ok(false) => {} // No ATA session to remove
+        Err(e) => eprintln!("Warning: failed to remove ATA session: {e}"),
+    }
+
+    std::process::exit(0);
 }
 
 async fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config {

@@ -172,6 +172,15 @@ impl BottomPane {
         }
     }
 
+    /// Set a temporary flash message in the active document reader.
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    pub(crate) fn set_document_reader_tts_flash_msg(&mut self, msg: Option<String>) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.set_tts_flash_msg(msg);
+            self.request_redraw();
+        }
+    }
+
     /// Update the TTS paused state in the active document reader.
     #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     pub(crate) fn set_document_reader_tts_paused(&mut self, paused: bool) {

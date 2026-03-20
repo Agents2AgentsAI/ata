@@ -800,6 +800,11 @@ pub struct SkillsConfig {
 pub struct SandboxWorkspaceWrite {
     #[serde(default)]
     pub writable_roots: Vec<AbsolutePathBuf>,
+    /// Additional writable root paths that support `~` expansion and relative
+    /// paths.  These are resolved at config-load time and merged into the
+    /// effective writable roots for the sandbox.
+    #[serde(default)]
+    pub additional_writable_roots: Vec<PathBuf>,
     #[serde(default)]
     pub network_access: bool,
     #[serde(default)]
@@ -969,6 +974,14 @@ pub struct ElevenLabsToml {
     pub language_code: Option<String>,
     /// Speech speed multiplier. Range: 0.7–1.2, default 1.0.
     pub speed: Option<f64>,
+}
+
+/// Reading view configuration persisted under `[reading_view]` in config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ReadingViewToml {
+    /// Display mode: "tui", "browser", or "disabled".
+    pub mode: Option<String>,
 }
 
 /// Voice mode configuration nested under `[voice_mode]` in config.toml.
@@ -1415,4 +1428,60 @@ pub const fn default_treesitter_max_file_size() -> u64 {
 
 const fn default_treesitter_true() -> bool {
     true
+}
+
+// ---------------------------------------------------------------------------
+
+/// ATA Supabase project URL.
+pub const DEFAULT_ATA_SUPABASE_URL: &str = "https://natbqqfawsmcoeutsogu.supabase.co";
+
+/// ATA Supabase publishable (anon) key.
+pub const DEFAULT_ATA_SUPABASE_ANON_KEY: &str = "sb_publishable_MopvwXLh_k866kZvplSGGQ_IBircspG";
+
+/// Configuration for ATA account features (Supabase-backed auth and relay).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AtaAccountConfig {
+    /// Supabase project URL.
+    #[serde(default = "default_ata_supabase_url")]
+    pub supabase_url: String,
+
+    /// Supabase anonymous (public) API key.
+    #[serde(default = "default_ata_supabase_anon_key")]
+    pub supabase_anon_key: String,
+
+    /// How the client should connect to the relay.
+    #[serde(default)]
+    pub relay_mode: RelayMode,
+}
+
+impl Default for AtaAccountConfig {
+    fn default() -> Self {
+        Self {
+            supabase_url: default_ata_supabase_url(),
+            supabase_anon_key: default_ata_supabase_anon_key(),
+            relay_mode: RelayMode::default(),
+        }
+    }
+}
+
+fn default_ata_supabase_url() -> String {
+    DEFAULT_ATA_SUPABASE_URL.to_string()
+}
+
+fn default_ata_supabase_anon_key() -> String {
+    DEFAULT_ATA_SUPABASE_ANON_KEY.to_string()
+}
+
+/// Relay connection mode for ATA accounts.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "lowercase", tag = "type")]
+pub enum RelayMode {
+    /// Use the ATA cloud relay (default).
+    #[default]
+    Cloud,
+    /// Use a local relay for development.
+    Local,
+    /// Use a custom relay URL.
+    Custom { relay_url: String },
 }

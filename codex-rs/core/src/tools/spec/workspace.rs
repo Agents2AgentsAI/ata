@@ -1,5 +1,109 @@
 use super::*;
 
+pub(super) fn create_crop_and_store_figure_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "pdf_url".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "The URL of the PDF (must already be attached via attach_url_files)."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "page".to_string(),
+            JsonSchema::Number {
+                description: Some("1-indexed page number containing the figure.".to_string()),
+            },
+        ),
+        (
+            "x".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Left edge of the bounding box as a fraction of page width (0.0\u{2013}1.0)."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "y".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Top edge of the bounding box as a fraction of page height (0.0\u{2013}1.0)."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "w".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Width of the bounding box as a fraction of page width (0.0\u{2013}1.0)."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "h".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Height of the bounding box as a fraction of page height (0.0\u{2013}1.0)."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "caption".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Caption for the figure (e.g. 'Figure 3: Architecture overview').".to_string(),
+                ),
+            },
+        ),
+        (
+            "description".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Brief description of what the figure shows for accessibility and indexing."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "crop_and_store_figure".to_string(),
+        description: "Extract a figure from a PDF by specifying its page and bounding box. \
+             IMPORTANT: Coordinates are fractions (0.0\u{2013}1.0) of the FULL page \
+             including margins, where (0,0) is the absolute top-left corner of the \
+             page and (1,1) is the absolute bottom-right. Academic papers typically \
+             have ~15\u{2013}20% margins on each side, so a figure centered in the \
+             content area would start around x=0.15\u{2013}0.20, not x=0.0. \
+             A small padding is automatically added around your coordinates, so \
+             prefer tight bounding boxes. \
+             The PDF must already be attached via attach_url_files. \
+             Returns the asset path to reference in reading view markdown \
+             as ![caption](asset_path)."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec![
+                "pdf_url".to_string(),
+                "page".to_string(),
+                "x".to_string(),
+                "y".to_string(),
+                "w".to_string(),
+                "h".to_string(),
+                "caption".to_string(),
+                "description".to_string(),
+            ]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 pub(super) fn create_view_image_tool() -> ToolSpec {
     let properties = BTreeMap::from([(
         "path".to_string(),

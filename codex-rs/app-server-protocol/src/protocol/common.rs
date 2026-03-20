@@ -40,6 +40,8 @@ pub enum AuthMode {
     #[ts(rename = "chatgptAuthTokens")]
     #[strum(serialize = "chatgptAuthTokens")]
     ChatgptAuthTokens,
+    /// ATA account auth via Supabase (OTP / magic-link flow).
+    Ata,
 }
 
 macro_rules! experimental_reason_expr {

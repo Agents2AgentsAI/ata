@@ -16,6 +16,11 @@ pub(crate) enum UnifiedExecError {
     StdinClosed,
     #[error("missing command line for unified exec request")]
     MissingCommandLine,
+    #[error(
+        "File descriptor usage is critical ({usage_pct:.1}% of limit). \
+         Close unused terminals or processes before running new commands."
+    )]
+    FdLimitExhausted { usage_pct: f64 },
     #[error("Command denied by sandbox: {message}")]
     SandboxDenied {
         message: String,

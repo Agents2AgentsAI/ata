@@ -1870,6 +1870,13 @@ async fn make_chatwidget_manual(
         deferred_voice_cells: Vec::new(),
         #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
         pending_voice_startup_cells: Vec::new(),
+        reading_view_mode: crate::app_event::ReadingViewMode::default(),
+        reading_view_server: None,
+        reading_view_pending_events: Vec::new(),
+        reading_view_pending_section_updates: Vec::new(),
+        reading_view_browser_title: String::new(),
+        reading_view_browser_doc_id: String::new(),
+        reading_view_browser_sections: Vec::new(),
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
@@ -9973,4 +9980,104 @@ async fn space_in_reading_view_toggles_pause_resume() {
 
     // Clean up: release.
     chat.handle_key_event(release);
+}
+
+// ─── strip_system_instruction_prefix tests ──────────────────────────────────
+
+#[test]
+fn strip_system_instruction_prefix_reader_tool_instructions() {
+    // Input with READER_TOOL_INSTRUCTIONS sentinel: everything after should be cut,
+    // and only the question text (first paragraph after header) is kept.
+    let message = concat!(
+        "[The user is reading \"Test Document\"]\n\n",
+        "What does this mean?\n\n",
+        "<!-- READER_TOOL_INSTRUCTIONS -->\n",
+        "Do NOT change the title. Respond using the updateDocumentSection tool.\n",
+        "patch_section: 2\n",
+        "Section content: Some long content here..."
+    );
+    let (stripped, _) = strip_system_instruction_prefix(message.to_string(), Vec::new());
+    assert_eq!(
+        stripped, "What does this mean?",
+        "only the question text should survive"
+    );
+}
+
+#[test]
+fn strip_system_instruction_prefix_reader_with_selected_text() {
+    // Input with selected text context between the question and sentinel.
+    let message = concat!(
+        "[The user is reading \"Title\"]\n\n",
+        "Explain this.\n\n",
+        "Selected text: some selected content\n\n",
+        "<!-- READER_TOOL_INSTRUCTIONS -->\n",
+        "Internal instructions here..."
+    );
+    let (stripped, _) = strip_system_instruction_prefix(message.to_string(), Vec::new());
+    // Only the question (first paragraph after header bracket) survives.
+    assert_eq!(stripped, "Explain this.");
+}
+
+#[test]
+fn strip_system_instruction_prefix_no_markers_passes_through() {
+    let message = "Hello, how are you?".to_string();
+    let (stripped, _) = strip_system_instruction_prefix(message.clone(), Vec::new());
+    assert_eq!(
+        stripped, message,
+        "messages without markers should pass through unchanged"
+    );
+}
+
+#[test]
+fn strip_system_instruction_prefix_document_reader_close() {
+    let message =
+        "[The user closed the document reader and wants to continue chatting. Please greet them.]"
+            .to_string();
+    let (stripped, _) = strip_system_instruction_prefix(message, Vec::new());
+    assert_eq!(
+        stripped, "",
+        "document reader close message should be entirely hidden"
+    );
+}
+
+#[test]
+fn strip_system_instruction_prefix_reader_question_only() {
+    // Minimal reader question without selected text.
+    let message = concat!(
+        "[The user is reading \"Paper\"]\n\n",
+        "What is the main finding?\n\n",
+        "<!-- READER_TOOL_INSTRUCTIONS -->\n",
+        "instructions..."
+    );
+    let (stripped, _) = strip_system_instruction_prefix(message.to_string(), Vec::new());
+    assert_eq!(stripped, "What is the main finding?");
+}
+
+#[test]
+fn strip_system_instruction_prefix_reader_no_sentinel() {
+    // Reader header but no sentinel — this shouldn't match the reader branch,
+    // so it falls through unchanged.
+    let message = "[The user is reading \"Paper\"]\n\nJust a question".to_string();
+    let (stripped, _) = strip_system_instruction_prefix(message, Vec::new());
+    // Without the sentinel, it falls through (no stripping).
+    assert_eq!(
+        stripped,
+        "[The user is reading \"Paper\"]\n\nJust a question"
+    );
+}
+
+#[test]
+fn strip_system_instruction_prefix_multiple_paragraphs_after_header() {
+    // Multiple paragraphs after the header bracket but before the sentinel:
+    // only the first paragraph (the actual question) is kept.
+    let message = concat!(
+        "[The user is reading \"Report\"]\n\n",
+        "Why is this important?\n\n",
+        "Section content: blah blah blah\n\n",
+        "More context here\n\n",
+        "<!-- READER_TOOL_INSTRUCTIONS -->\n",
+        "hidden stuff"
+    );
+    let (stripped, _) = strip_system_instruction_prefix(message.to_string(), Vec::new());
+    assert_eq!(stripped, "Why is this important?");
 }

@@ -28,7 +28,9 @@ Never put code, file paths, or markdown in <voice> tags — only natural, \
 conversational text. You MUST insert pauses using the [PAUSE:N] marker \
 (where N is milliseconds, default 500) in your voice output. \
 Always use [PAUSE:500] between paragraphs, before important points, and when \
-transitioning between topics. A response without any pause markers sounds rushed \
+transitioning between topics. When listing multiple important points, concepts, \
+or problems, add a [PAUSE:400] between each list item so the listener can absorb \
+each point before the next. A response without any pause markers sounds rushed \
 and unnatural. Use [PAUSE:N] inside <voice> tags and in reading view content.\n\
 \n\
 IMPORTANT: Voice mode ONLY changes how you format output (with <voice> tags). \
@@ -40,9 +42,13 @@ search code, call APIs, and use any other capabilities you have.\n\
 - Follow multi-step skill workflows completely. Do NOT take shortcuts or skip \
 steps (like KB checks) just because the user is speaking.\n\
 Do not answer from memory when you have tools and skills that can do it better.\n\
-- Never use LaTeX math notation (\\mathbb, \\frac, etc.) — the terminal cannot \
-render it. Use plain text or Unicode for math (e.g. \"E[|h_j(x)|]\" not \
-\"\\\\mathbb{E}[|h_j(x)|]\").\n\
+- For every rendered equation or symbol, use an <eq> structured pair. \
+Inline form: <eq latex=\"...\">spoken reading</eq> \
+Display form: <eq latex=\"...\" display=\"block\">spoken reading</eq> \
+In each <eq>, the latex attribute is rendered visually and the inner text between tags is spoken aloud. \
+In the latex attribute, provide raw LaTeX body only (no $, $$, \\(, or \\[ delimiters). \
+The spoken reading should be a natural English paraphrase of the math. \
+Example: <eq latex=\"\\\\sqrt{d_k}\">square root of d sub k</eq>\n\
 \n\
 Follow this pattern:\n\
 1. Start with a brief <voice> acknowledgment (1-2 sentences).\n\
@@ -67,7 +73,9 @@ Never put code, file paths, or markdown in <voice> tags — only natural, \
 conversational text. You MUST insert pauses using the [PAUSE:N] marker \
 (where N is milliseconds, default 500) in your voice output. \
 Always use [PAUSE:500] between paragraphs, before important points, and when \
-transitioning between topics. A response without any pause markers sounds rushed \
+transitioning between topics. When listing multiple important points, concepts, \
+or problems, add a [PAUSE:400] between each list item so the listener can absorb \
+each point before the next. A response without any pause markers sounds rushed \
 and unnatural. Use [PAUSE:N] inside <voice> tags and in reading view content.\n\
 \n\
 IMPORTANT: Voice mode ONLY changes how you format output (with <voice> tags). \
@@ -79,9 +87,13 @@ search code, call APIs, and use any other capabilities you have.\n\
 - Follow multi-step skill workflows completely. Do NOT take shortcuts or skip \
 steps (like KB checks) just because the user is speaking.\n\
 Do not answer from memory when you have tools and skills that can do it better.\n\
-- Never use LaTeX math notation (\\mathbb, \\frac, etc.) — the terminal cannot \
-render it. Use plain text or Unicode for math (e.g. \"E[|h_j(x)|]\" not \
-\"\\\\mathbb{E}[|h_j(x)|]\").\n\
+- For every rendered equation or symbol, use an <eq> structured pair. \
+Inline form: <eq latex=\"...\">spoken reading</eq> \
+Display form: <eq latex=\"...\" display=\"block\">spoken reading</eq> \
+In each <eq>, the latex attribute is rendered visually and the inner text between tags is spoken aloud. \
+In the latex attribute, provide raw LaTeX body only (no $, $$, \\(, or \\[ delimiters). \
+The spoken reading should be a natural English paraphrase of the math. \
+Example: <eq latex=\"\\\\sqrt{d_k}\">square root of d sub k</eq>\n\
 \n\
 Follow this pattern:\n\
 1. Do any technical work (tool calls, skill execution, subagents) without voice tags — show progress as text only.\n\
@@ -230,6 +242,18 @@ pub(crate) struct VoiceTagParser {
     in_voice: bool,
     /// Accumulates voice-tagged text for sentence splitting.
     voice_buffer: String,
+
+    // ─── Equation tag state ──────────────────────────────────────────
+    /// Counts equations seen so far (1-based).
+    equation_ordinal: usize,
+    /// Whether we're currently inside an `<eq ...>...</eq>` region.
+    in_equation: bool,
+    /// The `latex` attribute of the current `<eq>` tag.
+    eq_latex: String,
+    /// Whether the current equation uses block display (`display="block"`).
+    eq_display: bool,
+    /// Accumulated spoken text for the current equation (inner text).
+    eq_speak: String,
 }
 
 impl VoiceTagParser {
@@ -238,6 +262,11 @@ impl VoiceTagParser {
             pending: String::new(),
             in_voice: false,
             voice_buffer: String::new(),
+            equation_ordinal: 0,
+            in_equation: false,
+            eq_latex: String::new(),
+            eq_display: false,
+            eq_speak: String::new(),
         }
     }
 
@@ -255,7 +284,12 @@ impl VoiceTagParser {
                 // Emit everything before the `<`.
                 let before = &self.pending[..tag_start];
                 if !before.is_empty() {
-                    display.push_str(before);
+                    if self.in_equation {
+                        // Inside <eq>...</eq>: accumulate as spoken text.
+                        self.eq_speak.push_str(before);
+                    } else {
+                        display.push_str(before);
+                    }
                     if self.in_voice {
                         self.voice_buffer.push_str(before);
                     }
@@ -268,7 +302,7 @@ impl VoiceTagParser {
                     let tag = &rest[..=tag_end];
                     let tag_lower = tag.to_ascii_lowercase();
 
-                    if tag_lower == "<voice>" {
+                    if tag_lower == "<voice>" || tag_lower.starts_with("<voice ") {
                         self.in_voice = true;
                         // Strip the tag from display output.
                         self.pending = rest[tag_end + 1..].to_string();
@@ -284,9 +318,75 @@ impl VoiceTagParser {
                         self.voice_buffer.clear();
                         // Strip the tag from display output.
                         self.pending = rest[tag_end + 1..].to_string();
+                    } else if tag_lower.starts_with("<eq ")
+                        || tag_lower.starts_with("<eq/")
+                        || tag_lower == "<eq>"
+                    {
+                        // Opening <eq> tag — parse attributes.
+                        let (latex, is_display, speak) = parse_eq_attributes(tag);
+                        let is_self_closing = tag.ends_with("/>");
+
+                        if is_self_closing {
+                            // Self-closing: <eq latex="..." speak="..."/>
+                            self.equation_ordinal += 1;
+                            let spoken = if speak.is_empty() {
+                                latex.clone()
+                            } else {
+                                speak
+                            };
+                            // Add LaTeX to display text.
+                            let delim = if is_display { "$$" } else { "$" };
+                            display.push_str(delim);
+                            display.push_str(&latex);
+                            display.push_str(delim);
+                            // Add spoken text with equation markers to voice buffer.
+                            if self.in_voice {
+                                let marker = format!(
+                                    "[[[EQ:{}]]]{}[[[/EQ]]]",
+                                    self.equation_ordinal, spoken,
+                                );
+                                self.voice_buffer.push_str(&marker);
+                            }
+                        } else {
+                            // Non-self-closing: <eq ...>inner text</eq>
+                            self.in_equation = true;
+                            self.eq_latex = latex;
+                            self.eq_display = is_display;
+                            self.eq_speak.clear();
+                            if !speak.is_empty() {
+                                self.eq_speak.push_str(&speak);
+                            }
+                        }
+                        self.pending = rest[tag_end + 1..].to_string();
+                    } else if tag_lower == "</eq>" {
+                        // Closing </eq> tag — finalize the equation.
+                        self.in_equation = false;
+                        self.equation_ordinal += 1;
+                        let spoken = self.eq_speak.trim().to_string();
+                        let latex = std::mem::take(&mut self.eq_latex);
+                        let is_display = self.eq_display;
+                        self.eq_speak.clear();
+
+                        // Add LaTeX to display text.
+                        let delim = if is_display { "$$" } else { "$" };
+                        display.push_str(delim);
+                        display.push_str(&latex);
+                        display.push_str(delim);
+
+                        // Add spoken text with equation markers to voice buffer.
+                        if self.in_voice && !spoken.is_empty() {
+                            let marker =
+                                format!("[[[EQ:{}]]]{}[[[/EQ]]]", self.equation_ordinal, spoken,);
+                            self.voice_buffer.push_str(&marker);
+                        }
+                        self.pending = rest[tag_end + 1..].to_string();
                     } else {
-                        // Not a voice tag — emit it as regular text.
-                        display.push_str(tag);
+                        // Not a voice/eq tag — emit it as regular text.
+                        if self.in_equation {
+                            self.eq_speak.push_str(tag);
+                        } else {
+                            display.push_str(tag);
+                        }
                         if self.in_voice {
                             self.voice_buffer.push_str(tag);
                         }
@@ -294,15 +394,19 @@ impl VoiceTagParser {
                     }
                 } else {
                     // `<` found but no closing `>` yet.
-                    // Check if this could be the start of a voice tag.
+                    // Check if this could be the start of a recognized tag.
                     if is_voice_tag_prefix(rest) {
                         // Buffer it — wait for more data.
                         self.pending = rest.to_string();
                         break;
                     } else {
-                        // Not a voice tag prefix (e.g., "< 5") — flush as text.
+                        // Not a recognized tag prefix (e.g., "< 5") — flush as text.
                         let ch = &rest[..1];
-                        display.push_str(ch);
+                        if self.in_equation {
+                            self.eq_speak.push_str(ch);
+                        } else {
+                            display.push_str(ch);
+                        }
                         if self.in_voice {
                             self.voice_buffer.push_str(ch);
                         }
@@ -312,7 +416,11 @@ impl VoiceTagParser {
             } else {
                 // No `<` — emit everything.
                 if !self.pending.is_empty() {
-                    display.push_str(&self.pending);
+                    if self.in_equation {
+                        self.eq_speak.push_str(&self.pending);
+                    } else {
+                        display.push_str(&self.pending);
+                    }
                     if self.in_voice {
                         self.voice_buffer.push_str(&self.pending);
                     }
@@ -342,6 +450,19 @@ impl VoiceTagParser {
             }
         }
 
+        // If we're still inside an <eq> tag at flush time, finalize it.
+        if self.in_equation {
+            self.in_equation = false;
+            self.equation_ordinal += 1;
+            let spoken = self.eq_speak.trim().to_string();
+            if !spoken.is_empty() {
+                let marker = format!("[[[EQ:{}]]]{}[[[/EQ]]]", self.equation_ordinal, spoken,);
+                self.voice_buffer.push_str(&marker);
+            }
+            self.eq_latex.clear();
+            self.eq_speak.clear();
+        }
+
         let text = self.voice_buffer.trim().to_string();
         self.voice_buffer.clear();
         self.in_voice = false;
@@ -353,6 +474,10 @@ impl VoiceTagParser {
         self.pending.clear();
         self.voice_buffer.clear();
         self.in_voice = false;
+        self.in_equation = false;
+        self.eq_latex.clear();
+        self.eq_display = false;
+        self.eq_speak.clear();
     }
 
     /// Extract complete sentences from voice_buffer into the output vec.
@@ -367,10 +492,138 @@ impl VoiceTagParser {
     }
 }
 
-/// Check if `s` (starting with `<`) could be the prefix of `<voice>` or `</voice>`.
+/// Check if `s` (starting with `<`) could be the prefix of a recognized tag
+/// (`<voice>`, `</voice>`, `<eq ...>`, or `</eq>`).
 fn is_voice_tag_prefix(s: &str) -> bool {
     let s_lower: String = s.to_ascii_lowercase();
-    "<voice>".starts_with(&s_lower) || "</voice>".starts_with(&s_lower)
+    "<voice>".starts_with(&s_lower)
+        || "</voice>".starts_with(&s_lower)
+        || s_lower.starts_with("<voice ")
+        || (s_lower.len() <= 3 && "<eq ".starts_with(&s_lower))
+        || s_lower.starts_with("<eq ")
+        || s_lower.starts_with("<eq/")
+        || "</eq>".starts_with(&s_lower)
+}
+
+/// Parse attributes from an `<eq ...>` tag string.
+///
+/// Returns `(latex, is_display, speak)` where:
+/// - `latex` is the value of the `latex` attribute
+/// - `is_display` is true if `display="block"` or `mode="display"` or `mode="block"`
+/// - `speak` is the value of the `speak` attribute (empty if absent)
+fn parse_eq_attributes(tag: &str) -> (String, bool, String) {
+    let mut latex = String::new();
+    let mut is_display = false;
+    let mut speak = String::new();
+
+    // Extract attribute values from the tag using a simple scanner.
+    // Handles both single and double quoted attribute values.
+    let inner = tag
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .trim_end_matches('/');
+
+    // Skip the tag name ("eq")
+    let attrs = if let Some(pos) = inner.find(char::is_whitespace) {
+        &inner[pos..]
+    } else {
+        return (latex, is_display, speak);
+    };
+
+    // Simple attribute parser: find name="value" or name='value' pairs.
+    let mut remaining = attrs;
+    while !remaining.is_empty() {
+        remaining = remaining.trim_start();
+        if remaining.is_empty() {
+            break;
+        }
+        // Find the attribute name (up to '=')
+        let eq_pos = match remaining.find('=') {
+            Some(p) => p,
+            None => break,
+        };
+        let attr_name = remaining[..eq_pos].trim().to_ascii_lowercase();
+        remaining = &remaining[eq_pos + 1..];
+        remaining = remaining.trim_start();
+
+        // Parse the quoted value
+        let quote = match remaining.chars().next() {
+            Some(q @ ('"' | '\'')) => q,
+            _ => break,
+        };
+        remaining = &remaining[1..]; // skip opening quote
+        let end_quote = match remaining.find(quote) {
+            Some(p) => p,
+            None => break,
+        };
+        let value = &remaining[..end_quote];
+        remaining = &remaining[end_quote + 1..];
+
+        match attr_name.as_str() {
+            "latex" => latex = value.to_string(),
+            "display" | "mode" => {
+                is_display = matches!(value.to_ascii_lowercase().as_str(), "block" | "display");
+            }
+            "speak" => speak = value.to_string(),
+            _ => {}
+        }
+    }
+
+    (latex, is_display, speak)
+}
+
+/// Parse `[[[EQ:N]]]...[[[/EQ]]]` markers from text prepared for TTS.
+///
+/// Returns `(cleaned_text, spans)` where:
+/// - `cleaned_text` has all markers stripped (clean for TTS)
+/// - `spans` is a Vec of `(eq_index, start_word, end_word)` for each equation
+pub(crate) fn parse_equation_markers(text: &str) -> (String, Vec<(usize, usize, usize)>) {
+    let mut result = String::new();
+    let mut spans = Vec::new();
+    let mut word_count: usize = 0;
+    let mut remaining = text;
+
+    while let Some(start_pos) = remaining.find("[[[EQ:") {
+        // Add text before the marker
+        let before = &remaining[..start_pos];
+        result.push_str(before);
+        word_count += before.split_whitespace().count();
+
+        // Parse equation index
+        let after_prefix = &remaining[start_pos + 6..]; // skip "[[[EQ:"
+        if let Some(end_idx) = after_prefix.find("]]]") {
+            let eq_index: usize = after_prefix[..end_idx].parse().unwrap_or(0);
+            let after_start = &after_prefix[end_idx + 3..]; // skip "]]]"
+
+            // Find the end marker
+            if let Some(end_pos) = after_start.find("[[[/EQ]]]") {
+                let eq_text = &after_start[..end_pos];
+                let eq_word_count = eq_text.split_whitespace().count();
+                let start_word = word_count;
+
+                // Add the equation spoken text to result (for TTS)
+                result.push_str(eq_text);
+                word_count += eq_word_count;
+
+                spans.push((eq_index, start_word, word_count));
+                remaining = &after_start[end_pos + 9..]; // skip "[[[/EQ]]]"
+            } else {
+                // No end marker, just add remaining text
+                result.push_str(&remaining[start_pos..]);
+                remaining = "";
+                break;
+            }
+        } else {
+            result.push_str(&remaining[start_pos..]);
+            remaining = "";
+            break;
+        }
+    }
+
+    // Add any remaining text
+    result.push_str(remaining);
+
+    (result, spans)
 }
 
 /// Extract the `ms` attribute from a `<pause .../>` tag string.
@@ -400,6 +653,17 @@ fn find_sentence_boundary(text: &str) -> Option<usize> {
 /// as accidental taps rather than intentional speech.
 #[allow(dead_code)]
 const MIN_RECORDING_MS: u64 = 600;
+
+/// Audio pipeline latency compensation in milliseconds.
+/// The audio callback reports samples consumed, but there's buffering between
+/// the callback and the speaker. Without this offset, the karaoke highlight
+/// runs ahead of what the user actually hears. Swift uses 200ms default.
+const AUDIO_LATENCY_COMPENSATION_MS: u64 = 200;
+
+/// Extra compensation for the first ~2 seconds of audio playback.
+/// The initial cpal stream creation and OS audio buffer fill introduces
+/// more latency than steady-state buffering.
+const INITIAL_AUDIO_LATENCY_COMPENSATION_MS: u64 = 450;
 
 /// Cached TTS audio for a reading view section.
 pub(crate) struct TtsCacheEntry {
@@ -513,6 +777,15 @@ pub(crate) struct VoiceModeState {
     /// Chunks collected during narration for cache storage.
     pub(crate) narrating_chunks: Vec<Vec<i16>>,
 
+    // ─── Equation karaoke highlighting ───────────────────────────────
+    /// Word spans for each equation: `(eq_index, start_word, end_word)`.
+    /// Populated by `parse_equation_markers()` when preparing TTS text.
+    pub(crate) equation_word_spans: Vec<(usize, usize, usize)>,
+    /// Currently narrated equation index (1-based), or `None` if between equations.
+    pub(crate) active_equation_index: Option<usize>,
+    /// Highest equation index that has been fully passed (0 = none yet).
+    pub(crate) passed_equation_index: usize,
+
     // ─── Word-level alignment highlighting ──────────────────────────────
     /// Timeline of word-level alignment entries for the current voice turn.
     pub(crate) tts_alignment_timeline: Vec<AlignmentEntry>,
@@ -527,6 +800,9 @@ pub(crate) struct VoiceModeState {
     /// Set when TTS worker has finished sending all audio to the player,
     /// but the player may still be playing buffered audio.
     pub(crate) tts_data_complete: bool,
+    /// Instant when the first TTS chunk was enqueued. Used to detect the
+    /// initial audio pipeline ramp-up window for higher latency compensation.
+    pub(crate) tts_first_chunk_instant: Option<Instant>,
     /// Set when a `</voice>` block closes; cleared when the next block's
     /// sentences are about to be sent to TTS.  Used to insert paragraph
     /// break sentinels in the alignment timeline between voice blocks.
@@ -587,12 +863,16 @@ impl VoiceModeState {
             selection_word_offset: None,
             narrating_cleaned_text: None,
             narrating_chunks: Vec::new(),
+            equation_word_spans: Vec::new(),
+            active_equation_index: None,
+            passed_equation_index: 0,
             tts_alignment_timeline: Vec::new(),
             tts_cumulative_ms: 0,
             tts_highlight_word_idx: None,
             highlight_tick_cancel: None,
             tts_pending_word: None,
             tts_data_complete: false,
+            tts_first_chunk_instant: None,
             tts_block_break_pending: false,
             tts_only: false,
             space_press_at: None,
@@ -656,12 +936,17 @@ impl VoiceModeState {
         self.selection_word_offset = None;
         self.narrating_cleaned_text = None;
         self.narrating_chunks.clear();
+        // Clear equation highlighting state.
+        self.equation_word_spans.clear();
+        self.active_equation_index = None;
+        self.passed_equation_index = 0;
         // Clear alignment timeline and highlight.
         self.tts_alignment_timeline.clear();
         self.tts_cumulative_ms = 0;
         self.tts_highlight_word_idx = None;
         self.tts_pending_word = None;
         self.tts_data_complete = false;
+        self.tts_first_chunk_instant = None;
         self.tts_block_break_pending = false;
         self.cancel_highlight_tick();
     }
@@ -793,14 +1078,100 @@ impl VoiceModeState {
 use crate::app_event::AppEvent;
 use crate::history_cell;
 
-/// Check if the ElevenLabs API key is available (config or environment).
-fn has_elevenlabs_api_key(config: &codex_core::config::Config) -> bool {
+/// Check if the ElevenLabs API key is available (config, environment, or ATA key vending).
+fn has_elevenlabs_api_key(
+    config: &codex_core::config::Config,
+    auth_manager: &codex_core::AuthManager,
+) -> bool {
     let vc = voice_mode_config(config);
     vc.elevenlabs
         .as_ref()
         .and_then(|e| e.api_key.as_ref())
         .is_some()
         || std::env::var("ELEVENLABS_API_KEY").is_ok()
+        || auth_manager.auth_mode() == Some(codex_core::auth::AuthMode::Ata)
+}
+
+/// Resolve the ElevenLabs API key from config or environment.
+/// Returns `None` if no key is available (ATA users will use proxy mode instead).
+fn resolve_elevenlabs_api_key_from_config(voice_config: &VoiceModeToml) -> Option<String> {
+    voice_config
+        .elevenlabs
+        .as_ref()
+        .and_then(|e| e.api_key.clone())
+        .or_else(|| {
+            std::env::var("ELEVENLABS_API_KEY")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+        })
+}
+
+/// Build an `ElevenLabsProxy` for ATA-authenticated users.
+/// Returns `None` if not in ATA mode or if auth is unavailable.
+fn build_elevenlabs_proxy(
+    auth_manager: &codex_core::AuthManager,
+) -> Option<codex_elevenlabs::ElevenLabsProxy> {
+    if auth_manager.auth_mode() != Some(codex_core::auth::AuthMode::Ata) {
+        return None;
+    }
+    let auth = auth_manager.auth_cached()?;
+    let token = match &auth {
+        codex_core::auth::CodexAuth::Ata(ata) => ata.access_token.clone(),
+        _ => return None,
+    };
+
+    let base_url = std::env::var("ATA_ELEVENLABS_PROXY_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| {
+            format!(
+                "{}/functions/v1",
+                codex_core::config::types::DEFAULT_ATA_SUPABASE_URL
+            )
+        });
+
+    Some(codex_elevenlabs::ElevenLabsProxy {
+        base_url,
+        bearer_token: token,
+        extra_header: Some((
+            "apikey".to_string(),
+            codex_core::config::types::DEFAULT_ATA_SUPABASE_ANON_KEY.to_string(),
+        )),
+    })
+}
+
+/// Build an `ElevenLabsConfig` with the API key from config/env, or with proxy
+/// for ATA users. Returns `None` if neither is available.
+fn build_elevenlabs_config(
+    voice_config: &VoiceModeToml,
+    auth_manager: &codex_core::AuthManager,
+) -> Option<codex_elevenlabs::ElevenLabsConfig> {
+    let api_key = resolve_elevenlabs_api_key_from_config(voice_config);
+    let proxy = if api_key.is_none() {
+        build_elevenlabs_proxy(auth_manager)
+    } else {
+        None
+    };
+
+    if api_key.is_none() && proxy.is_none() {
+        return None;
+    }
+
+    let mut config = codex_elevenlabs::ElevenLabsConfig::new(api_key.unwrap_or_default());
+    if let Some(proxy) = proxy {
+        config.proxy = Some(proxy);
+    }
+    if let Some(ref el) = voice_config.elevenlabs {
+        if let Some(ref vid) = el.voice_id {
+            config = config.with_voice_id(vid.clone());
+        }
+        if let Some(ref mid) = el.model_id {
+            config = config.with_model_id(mid.clone());
+        }
+        config.language_code = el.language_code.clone();
+        config.speed = el.speed;
+    }
+    Some(config)
 }
 
 /// Extract `VoiceModeToml` from the merged effective config (which is a raw `toml::Value`).
@@ -814,6 +1185,7 @@ fn voice_mode_config(config: &codex_core::config::Config) -> VoiceModeToml {
         .unwrap_or_default()
 }
 
+#[cfg(not(target_os = "linux"))]
 impl super::ChatWidget {
     /// Return the voice mode config with in-session overrides (speed, language)
     /// applied on top of the on-disk config.  `/voice-setup` writes to disk but
@@ -860,8 +1232,10 @@ impl super::ChatWidget {
         } else {
             Some(label.to_string())
         };
-        self.bottom_pane
-            .set_document_reader_voice_status(reading_status);
+        if !self.is_reading_view_browser_mode() {
+            self.bottom_pane
+                .set_document_reader_voice_status(reading_status);
+        }
     }
 
     /// Restore the default placeholder text when voice mode turns off.
@@ -872,7 +1246,9 @@ impl super::ChatWidget {
         self.bottom_pane
             .set_placeholder_text(placeholders[idx].to_string());
         // Clear reading view voice status.
-        self.bottom_pane.set_document_reader_voice_status(None);
+        if !self.is_reading_view_browser_mode() {
+            self.bottom_pane.set_document_reader_voice_status(None);
+        }
     }
 
     /// Toggle voice mode on/off (`/voice` command).
@@ -906,8 +1282,6 @@ impl super::ChatWidget {
         {
             // Turn off.
             state.reset();
-            self.app_event_tx
-                .send(AppEvent::PersistVoiceModeEnabled(false));
             self.add_info_message("Voice mode off.".to_string(), None);
             self.restore_default_placeholder();
             self.bottom_pane.set_force_hide_cursor(false);
@@ -927,13 +1301,9 @@ impl super::ChatWidget {
 
         // Show a friendly API key hint if TTS won't work (STT still works
         // without ElevenLabs because it uses the built-in Whisper path).
-        let api_key = voice_config
-            .elevenlabs
-            .as_ref()
-            .and_then(|e| e.api_key.clone())
-            .or_else(|| std::env::var("ELEVENLABS_API_KEY").ok());
+        // ATA users get keys vended at runtime, so skip the warning for them.
         let session_not_ready = self.thread_id.is_none();
-        if api_key.is_none() {
+        if !has_elevenlabs_api_key(&self.config, &self.auth_manager) {
             let warning_cell = history_cell::new_warning_event(
                 "ElevenLabs API key not found — TTS will not work.\n\
                  Set ELEVENLABS_API_KEY or run /voice-setup to paste your key."
@@ -978,9 +1348,6 @@ impl super::ChatWidget {
         // PTT mode: don't start capture yet — it starts on Space press.
         state.phase = VoiceModePhase::Idle;
         self.voice_mode_state = Some(state);
-
-        self.app_event_tx
-            .send(AppEvent::PersistVoiceModeEnabled(true));
 
         if session_not_ready {
             self.pending_voice_startup_cells
@@ -1040,10 +1407,14 @@ impl super::ChatWidget {
     /// Deactivate voice mode if it's currently active (called when both
     /// TTS and STT are turned off via the setup popup).
     pub(crate) fn deactivate_voice_mode_if_active(&mut self) {
-        if let Some(ref mut state) = self.voice_mode_state
-            && state.is_active()
-        {
-            state.reset();
+        let should_deactivate = self
+            .voice_mode_state
+            .as_ref()
+            .is_some_and(VoiceModeState::is_active);
+        if should_deactivate {
+            if let Some(ref mut state) = self.voice_mode_state {
+                state.reset();
+            }
             self.app_event_tx
                 .send(AppEvent::PersistVoiceModeEnabled(false));
             self.add_info_message(
@@ -1052,6 +1423,35 @@ impl super::ChatWidget {
             );
             self.restore_default_placeholder();
             self.bottom_pane.set_force_hide_cursor(false);
+            // Clear any stale karaoke state from the document reader.
+            #[cfg(not(target_os = "linux"))]
+            {
+                self.bottom_pane
+                    .set_document_reader_karaoke_lines(None, false);
+                self.bottom_pane
+                    .set_document_reader_reading_progress(None, 0);
+                self.bottom_pane.set_document_reader_voice_status(None);
+            }
+            self.request_redraw();
+        }
+    }
+
+    /// Clear a TTS-only voice state if one exists. Called when voice mode
+    /// is explicitly disabled to prevent zombie TTS processing.
+    pub(crate) fn clear_tts_only_state(&mut self) {
+        if self.voice_mode_state.as_ref().is_some_and(|s| s.tts_only) {
+            if let Some(ref mut state) = self.voice_mode_state {
+                state.reset();
+            }
+            // Clear any stale karaoke state from the document reader.
+            #[cfg(not(target_os = "linux"))]
+            {
+                self.bottom_pane
+                    .set_document_reader_karaoke_lines(None, false);
+                self.bottom_pane
+                    .set_document_reader_reading_progress(None, 0);
+                self.bottom_pane.set_document_reader_voice_status(None);
+            }
             self.request_redraw();
         }
     }
@@ -1114,6 +1514,7 @@ impl super::ChatWidget {
     /// For terminals without release: enter a "pending" state — recording
     /// only starts once key repeats prove the user is *holding* Space.
     pub(crate) fn on_ptt_press(&mut self) {
+        let browser_mode = self.is_reading_view_browser_mode();
         let Some(ref mut state) = self.voice_mode_state else {
             return;
         };
@@ -1134,11 +1535,32 @@ impl super::ChatWidget {
             if state.phase == VoiceModePhase::Speaking {
                 state.phase = VoiceModePhase::Idle;
             }
+            // Forward stopKaraoke to browser if in browser mode.
+            if browser_mode {
+                let ws_msg = serde_json::json!({ "type": "stopKaraoke" }).to_string();
+                if let Some(ref server) = self.reading_view_server {
+                    server.send_event(&ws_msg);
+                } else {
+                    self.reading_view_pending_events.push(ws_msg);
+                }
+                let ws_msg = serde_json::json!({
+                    "type": "ttsStateChanged",
+                    "state": "stopped",
+                })
+                .to_string();
+                if let Some(ref server) = self.reading_view_server {
+                    server.send_event(&ws_msg);
+                } else {
+                    self.reading_view_pending_events.push(ws_msg);
+                }
+            }
             // Clear reading view overlays so the highlight doesn't stick.
-            self.bottom_pane
-                .set_document_reader_karaoke_lines(None, false);
-            self.bottom_pane
-                .set_document_reader_reading_progress(None, 0);
+            if !browser_mode {
+                self.bottom_pane
+                    .set_document_reader_karaoke_lines(None, false);
+                self.bottom_pane
+                    .set_document_reader_reading_progress(None, 0);
+            }
             // Fall through to start recording / enter pending state.
         }
 
@@ -1355,6 +1777,16 @@ impl super::ChatWidget {
 
         let tx = self.app_event_tx.clone();
         let voice_config = self.effective_voice_config();
+        let auth_mgr = Arc::clone(&self.auth_manager);
+
+        let Some(config) = build_elevenlabs_config(&voice_config, &auth_mgr) else {
+            tx.send(AppEvent::VoiceModeTranscriptionFailed {
+                error: "Missing ElevenLabs API key. Set ELEVENLABS_API_KEY or configure voice_mode.elevenlabs.api_key".to_string(),
+            });
+            self.sync_voice_placeholder();
+            self.request_redraw();
+            return;
+        };
 
         // Spawn STT transcription on a background thread (network I/O).
         std::thread::spawn(move || {
@@ -1367,32 +1799,6 @@ impl super::ChatWidget {
                     return;
                 }
             };
-
-            // Resolve ElevenLabs API key.
-            let api_key = voice_config
-                .elevenlabs
-                .as_ref()
-                .and_then(|e| e.api_key.clone())
-                .or_else(|| std::env::var("ELEVENLABS_API_KEY").ok());
-
-            let Some(api_key) = api_key else {
-                tx.send(AppEvent::VoiceModeTranscriptionFailed {
-                    error: "Missing ElevenLabs API key. Set ELEVENLABS_API_KEY or configure voice_mode.elevenlabs.api_key".to_string(),
-                });
-                return;
-            };
-
-            let mut config = codex_elevenlabs::ElevenLabsConfig::new(api_key);
-            if let Some(ref el) = voice_config.elevenlabs {
-                if let Some(ref vid) = el.voice_id {
-                    config = config.with_voice_id(vid.clone());
-                }
-                if let Some(ref mid) = el.model_id {
-                    config = config.with_model_id(mid.clone());
-                }
-                config.language_code = el.language_code.clone();
-                config.speed = el.speed;
-            }
 
             let result = rt.block_on(codex_elevenlabs::stt::transcribe(&config, wav_bytes));
             match result {
@@ -1528,11 +1934,7 @@ impl super::ChatWidget {
                 // Voice mode was never initialized. Still strip any `<voice>`
                 // tags that may be present in replayed/historical content.
                 if delta.contains('<') {
-                    let stripped = delta
-                        .replace("<voice>", "")
-                        .replace("</voice>", "")
-                        .replace("<Voice>", "")
-                        .replace("</Voice>", "");
+                    let stripped = crate::text_formatting::strip_voice_tags(delta);
                     if stripped != delta {
                         return Some(stripped);
                     }
@@ -1593,7 +1995,9 @@ impl super::ChatWidget {
 
             // Skip TTS silently if no API key — the user was already warned
             // at voice mode activation time.
-            if state.tts_worker_tx.is_none() && !has_elevenlabs_api_key(&self.config) {
+            if state.tts_worker_tx.is_none()
+                && !has_elevenlabs_api_key(&self.config, &self.auth_manager)
+            {
                 return Some(result.display_text);
             }
 
@@ -1606,19 +2010,26 @@ impl super::ChatWidget {
                 let gen_ref = state.tts_generation.clone();
                 let spawn_gen = gen_ref.load(Ordering::SeqCst);
                 in_flight.fetch_add(1, Ordering::SeqCst);
+                let proxy = build_elevenlabs_proxy(&self.auth_manager);
 
                 let (worker_tx, worker_rx) = tokio::sync::mpsc::unbounded_channel();
                 state.tts_worker_tx = Some(worker_tx);
 
                 tokio::spawn(async move {
-                    tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen).await;
+                    tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, proxy).await;
                 });
             }
 
             // Send each sentence to the worker — no per-sentence WebSocket needed.
+            // Strip equation markers before sending to TTS, and record word spans
+            // for equation karaoke highlighting.
             if let Some(ref worker_tx) = state.tts_worker_tx {
                 for sentence in tts_sentences.iter() {
-                    send_with_pauses(worker_tx, sentence);
+                    let (cleaned_sentence, spans) = parse_equation_markers(sentence);
+                    if !spans.is_empty() {
+                        state.equation_word_spans.extend(spans);
+                    }
+                    send_with_pauses(worker_tx, &cleaned_sentence);
                 }
             }
         }
@@ -1661,19 +2072,25 @@ impl super::ChatWidget {
                 let gen_ref = state.tts_generation.clone();
                 let spawn_gen = gen_ref.load(Ordering::SeqCst);
                 in_flight.fetch_add(1, Ordering::SeqCst);
+                let proxy = build_elevenlabs_proxy(&self.auth_manager);
 
                 let (worker_tx, worker_rx) = tokio::sync::mpsc::unbounded_channel();
                 state.tts_worker_tx = Some(worker_tx);
 
                 tokio::spawn(async move {
-                    tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen).await;
+                    tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, proxy).await;
                 });
             }
 
-            // Send remaining text and signal finish.
+            // Send remaining text and signal finish. Strip equation markers
+            // before sending to TTS and record word spans for highlighting.
             if let Some(ref worker_tx) = state.tts_worker_tx {
                 for sentence in remaining {
-                    send_with_pauses(worker_tx, &sentence);
+                    let (cleaned_sentence, spans) = parse_equation_markers(&sentence);
+                    if !spans.is_empty() {
+                        state.equation_word_spans.extend(spans);
+                    }
+                    send_with_pauses(worker_tx, &cleaned_sentence);
                 }
                 let _ = worker_tx.send(TtsWorkerCommand::Finish);
             }
@@ -1705,6 +2122,21 @@ impl super::ChatWidget {
 
         // Compute chunk duration from PCM length (24kHz mono).
         let chunk_duration_ms = (pcm.len() as u64) * 1000 / 24000;
+
+        // Log first chunk enqueue for timing diagnosis.
+        if state.tts_cumulative_ms == 0 {
+            tracing::info!(
+                "[TTS-TIMING] on_voice_tts_audio_chunk: FIRST chunk enqueued to player \
+                 ({} samples, ~{chunk_duration_ms}ms audio, has_player={})",
+                pcm.len(),
+                state.audio_player.is_some(),
+            );
+        }
+
+        // Record the instant when the first chunk arrives for initial-ramp compensation.
+        if state.tts_first_chunk_instant.is_none() {
+            state.tts_first_chunk_instant = Some(Instant::now());
+        }
 
         // Reset playback position counter on the first chunk of a turn
         // so alignment timing stays in sync with audio output.
@@ -1753,11 +2185,31 @@ impl super::ChatWidget {
         }
     }
 
-    /// Called when TTS playback is finished.
     /// Handle a TTS error from the background worker. Surfaces the error
-    /// in the voice status / placeholder so the user knows what happened.
+    /// in the voice status / placeholder so the user knows what happened,
+    /// and clears the narration state so the UI doesn't stay stuck in
+    /// "Speaking..." with no audio playing.
     pub(crate) fn on_voice_tts_error(&mut self, error: &str) {
         tracing::warn!("Voice TTS error surfaced to user: {error}");
+
+        // Clear the narration state so the UI is not stuck in "Speaking..."
+        // with is_narrating=true, phase=Speaking, but no audio arriving.
+        if let Some(ref mut state) = self.voice_mode_state {
+            state.interrupt_tts();
+            if state.phase == VoiceModePhase::Speaking {
+                state.phase = VoiceModePhase::Idle;
+            }
+        }
+
+        // Clear karaoke overlay and reading cursor.
+        if !self.is_reading_view_browser_mode() {
+            self.bottom_pane
+                .set_document_reader_karaoke_lines(None, false);
+            self.bottom_pane
+                .set_document_reader_reading_progress(None, 0);
+            self.bottom_pane.set_document_reader_tts_paused(false);
+        }
+
         // Show a user-friendly error in the placeholder and reading view status.
         let msg = if error.contains("401") || error.contains("Unauthorized") {
             "TTS error: invalid ElevenLabs API key".to_string()
@@ -1767,7 +2219,20 @@ impl super::ChatWidget {
             format!("TTS error: {}", truncate_error(error, 60))
         };
         self.bottom_pane.set_placeholder_text(msg.clone());
-        self.bottom_pane.set_document_reader_voice_status(Some(msg));
+        if !self.is_reading_view_browser_mode() {
+            self.bottom_pane.set_document_reader_voice_status(Some(msg));
+        }
+        // Forward error state to browser if in browser mode.
+        if self.is_reading_view_browser_mode() {
+            let ws_msg = serde_json::json!({ "type": "stopKaraoke" });
+            self.forward_to_reading_view_server(&ws_msg.to_string());
+            let ws_msg = serde_json::json!({
+                "type": "ttsStateChanged",
+                "state": "stopped",
+            });
+            self.forward_to_reading_view_server(&ws_msg.to_string());
+        }
+        self.request_redraw();
     }
 
     pub(crate) fn on_voice_tts_finished(&mut self) {
@@ -1867,12 +2332,25 @@ impl super::ChatWidget {
         // Ready for next PTT press.
         state.phase = VoiceModePhase::Idle;
 
+        // Forward stopKaraoke to browser if in browser mode.
+        if self.is_reading_view_browser_mode() {
+            let ws_msg = serde_json::json!({ "type": "stopKaraoke" });
+            self.forward_to_reading_view_server(&ws_msg.to_string());
+            let ws_msg = serde_json::json!({
+                "type": "ttsStateChanged",
+                "state": "stopped",
+            });
+            self.forward_to_reading_view_server(&ws_msg.to_string());
+        }
+
         // Clear karaoke overlay and reading cursor in the reading view.
-        self.bottom_pane
-            .set_document_reader_karaoke_lines(None, false);
-        self.bottom_pane
-            .set_document_reader_reading_progress(None, 0);
-        self.bottom_pane.set_document_reader_tts_paused(false);
+        if !self.is_reading_view_browser_mode() {
+            self.bottom_pane
+                .set_document_reader_karaoke_lines(None, false);
+            self.bottom_pane
+                .set_document_reader_reading_progress(None, 0);
+            self.bottom_pane.set_document_reader_tts_paused(false);
+        }
 
         // Flush any voice response cells that were stashed during karaoke.
         self.flush_deferred_voice_cells();
@@ -1881,7 +2359,9 @@ impl super::ChatWidget {
         // For tts_only mode, sync_voice_placeholder skips setting
         // the reading view status; explicitly clear it so the `s` hint
         // disappears when playback finishes.
-        if self.voice_mode_state.as_ref().is_some_and(|s| s.tts_only) {
+        if self.voice_mode_state.as_ref().is_some_and(|s| s.tts_only)
+            && !self.is_reading_view_browser_mode()
+        {
             self.bottom_pane.set_document_reader_voice_status(None);
         }
         self.request_redraw();
@@ -1915,7 +2395,7 @@ impl super::ChatWidget {
                     break;
                 }
                 tx.send(AppEvent::VoiceModeHighlightTick);
-                std::thread::sleep(Duration::from_millis(50));
+                std::thread::sleep(Duration::from_millis(33));
             }
         });
     }
@@ -1947,6 +2427,17 @@ impl super::ChatWidget {
             .as_ref()
             .map(super::super::voice::RealtimeAudioPlayer::playback_position_ms)
             .unwrap_or(0);
+        // Compensate for audio pipeline latency — the audio callback reports samples
+        // consumed but there's buffering before the user hears them.
+        // Use higher compensation during the initial audio pipeline ramp-up
+        // (first ~2 seconds), then fall back to steady-state compensation.
+        let compensation = state
+            .tts_first_chunk_instant
+            .filter(|t| t.elapsed().as_millis() < 2000)
+            .map_or(AUDIO_LATENCY_COMPENSATION_MS, |_| {
+                INITIAL_AUDIO_LATENCY_COMPENSATION_MS
+            });
+        let pos_ms = pos_ms.saturating_sub(compensation);
 
         if state.tts_alignment_timeline.is_empty() {
             return;
@@ -2217,6 +2708,109 @@ impl super::ChatWidget {
     /// existing section content (word-level highlight in plain text).
     #[cfg(not(target_os = "linux"))]
     fn push_karaoke_to_reader(&mut self) {
+        // Browser mode: forward karaoke word updates via WebSocket.
+        if self.is_reading_view_browser_mode() {
+            let is_narrating = self
+                .voice_mode_state
+                .as_ref()
+                .is_some_and(|s| s.narrating_section.is_some());
+            if is_narrating {
+                let (word_idx, sel_offset, section_index) = self
+                    .voice_mode_state
+                    .as_ref()
+                    .map(|s| {
+                        let sec_idx = s
+                            .narrating_section
+                            .as_ref()
+                            .map(|(_, idx, _)| *idx)
+                            .unwrap_or(0);
+                        (
+                            s.tts_highlight_word_idx,
+                            s.selection_word_offset.unwrap_or(0),
+                            sec_idx,
+                        )
+                    })
+                    .unwrap_or((None, 0, 0));
+                if let Some(word_idx) = word_idx {
+                    let adjusted = word_idx + sel_offset;
+
+                    // Convert from spoken word index to visible word count.
+                    // Equation paraphrase words are spoken but not visible in
+                    // the DOM (they correspond to rendered KaTeX equations, not
+                    // .kw spans), so the browser index must skip them.
+                    let visible_word_idx = {
+                        let eq_spans = self
+                            .voice_mode_state
+                            .as_ref()
+                            .map(|s| &s.equation_word_spans);
+                        if let Some(spans) = eq_spans.filter(|s| !s.is_empty()) {
+                            let spoken = adjusted;
+                            let mut hidden = 0usize;
+                            for &(_, start, end) in spans.iter() {
+                                if start >= spoken {
+                                    break;
+                                }
+                                let overlap_end = spoken.min(end);
+                                if overlap_end > start {
+                                    hidden += overlap_end - start;
+                                }
+                            }
+                            spoken.saturating_sub(hidden)
+                        } else {
+                            adjusted
+                        }
+                    };
+
+                    let ws_msg = serde_json::json!({
+                        "type": "karaokeWord",
+                        "sectionIndex": section_index,
+                        "wordIndex": visible_word_idx,
+                    });
+                    self.forward_to_reading_view_server(&ws_msg.to_string());
+
+                    // Compute and send equation highlight state if spans exist.
+                    let eq_update = self.voice_mode_state.as_mut().and_then(|state| {
+                        if state.equation_word_spans.is_empty() {
+                            return None;
+                        }
+                        let active_eq = state
+                            .equation_word_spans
+                            .iter()
+                            .find(|(_, start, end)| word_idx > *start && word_idx <= *end)
+                            .map(|(idx, _, _)| *idx);
+                        let passed_eq = state
+                            .equation_word_spans
+                            .iter()
+                            .filter(|(_, _, end)| word_idx >= *end)
+                            .map(|(idx, _, _)| *idx)
+                            .max()
+                            .unwrap_or(0);
+
+                        if active_eq != state.active_equation_index
+                            || passed_eq != state.passed_equation_index
+                        {
+                            state.active_equation_index = active_eq;
+                            state.passed_equation_index = passed_eq;
+                            Some((active_eq, passed_eq))
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some((active_eq, passed_eq)) = eq_update {
+                        let eq_msg = serde_json::json!({
+                            "type": "equationHighlight",
+                            "activeIndex": active_eq
+                                .map(|i| i as i64)
+                                .unwrap_or(-1),
+                            "passedIndex": passed_eq,
+                        });
+                        self.forward_to_reading_view_server(&eq_msg.to_string());
+                    }
+                }
+            }
+            return;
+        }
+
         if !self.bottom_pane.is_document_reader_active() {
             return;
         }
@@ -2249,7 +2843,7 @@ impl super::ChatWidget {
         // Non-narrating Q&A responses: push karaoke into the reading view
         // in append mode so the user sees the spoken text below the section
         // content, even though chat streaming is suppressed.
-        if !is_narrating {
+        if !is_narrating && !self.is_reading_view_browser_mode() {
             let width = self.last_rendered_width.get().unwrap_or(80) as u16;
             let lines = self.voice_karaoke_lines(width);
             self.bottom_pane
@@ -2330,10 +2924,18 @@ impl super::ChatWidget {
              Write your explanation as plain conversational prose. \
              Your text response will be read aloud AND saved as a note, so write \
              it exactly as you want it to sound and appear. \
+             NEVER use academic citation style like 'Smith et al. (2026)' — use natural \
+             phrasing like 'the authors showed' or 'researchers found'. No parenthetical \
+             years like '(2025)'. Write for spoken delivery. \
              Wrap ALL of your spoken text in <voice>...</voice> tags so it is read aloud. \
-             Do NOT include LaTeX, code blocks, or markdown formatting \
-             since this is a terminal TTS context. Use plain language instead \
-             (e.g. say \"the attention equation\" instead of writing $\\text{{Attention}}(Q,K,V)$).\n\n\
+             For every rendered equation or symbol, use an <eq> structured pair. \
+             Inline form: <eq latex=\"...\">spoken reading</eq> \
+             Display form: <eq latex=\"...\" display=\"block\">spoken reading</eq> \
+             In each <eq>, the latex attribute is rendered visually and the inner text between tags is spoken aloud. \
+             In the latex attribute, provide raw LaTeX body only (no $, $$, \\(, or \\[ delimiters). \
+             The spoken reading should be a natural English paraphrase of the math. \
+             Example: <eq latex=\"\\\\sqrt{{d_k}}\">square root of d sub k</eq> \
+             Do NOT include raw LaTeX, code blocks, or markdown formatting.\n\n\
              After your spoken explanation, save it using EXACTLY ONE tool call:\n\
              append_to_section(document_id=\"{doc_id}\", section_index={idx}, \
              content=\"<same text you just spoke, without the voice tags>\", foldable=true, \
@@ -2346,9 +2948,11 @@ impl super::ChatWidget {
              - Make exactly ONE append_to_section call\n\
              - Set foldable=true always\n\
              - The content must match what you said (verbatim, without voice tags but keep [PAUSE:N] markers)\n\
-             - No LaTeX, no code blocks\n\
+             - Use <eq> tags for math; no raw LaTeX, no code blocks\n\
              - You MUST use [PAUSE:N] markers (N = milliseconds) for natural pacing — \
              add [PAUSE:500] between paragraphs, before key points, and at topic transitions. \
+             When listing multiple important points, concepts, or problems, add a [PAUSE:400] \
+             between each list item so the listener can absorb each point before the next. \
              Responses without pauses sound rushed. Use [PAUSE:N] in both voice and content.\n\
              - The summary should describe the topic (e.g. \"Dropout as regularization\", \
              \"Why gradients vanish\")\n\
@@ -2415,18 +3019,36 @@ impl super::ChatWidget {
         let Some(ref mut state) = self.voice_mode_state else {
             return;
         };
+        tracing::info!(
+            "[TTS-TIMING] on_voice_interrupt_tts: phase={:?}, has_worker={}, has_player={}",
+            state.phase,
+            state.tts_worker_tx.is_some(),
+            state.audio_player.is_some(),
+        );
         // Always clear the audio player buffer and TTS state, regardless
         // of phase. Audio may still be buffered after phase left Speaking.
         state.interrupt_tts();
         if state.phase == VoiceModePhase::Speaking {
             state.phase = VoiceModePhase::Idle;
         }
+        // Forward stopKaraoke to browser if in browser mode.
+        if self.is_reading_view_browser_mode() {
+            let ws_msg = serde_json::json!({ "type": "stopKaraoke" });
+            self.forward_to_reading_view_server(&ws_msg.to_string());
+            let ws_msg = serde_json::json!({
+                "type": "ttsStateChanged",
+                "state": "stopped",
+            });
+            self.forward_to_reading_view_server(&ws_msg.to_string());
+        }
         // Clear karaoke overlay and reading cursor in the reading view.
-        self.bottom_pane
-            .set_document_reader_karaoke_lines(None, false);
-        self.bottom_pane
-            .set_document_reader_reading_progress(None, 0);
-        self.bottom_pane.set_document_reader_tts_paused(false);
+        if !self.is_reading_view_browser_mode() {
+            self.bottom_pane
+                .set_document_reader_karaoke_lines(None, false);
+            self.bottom_pane
+                .set_document_reader_reading_progress(None, 0);
+            self.bottom_pane.set_document_reader_tts_paused(false);
+        }
         self.sync_voice_placeholder();
         self.request_redraw();
     }
@@ -2456,9 +3078,19 @@ impl super::ChatWidget {
         }
         state.pause_tts();
         tracing::debug!("[TTS-DBG] on_voice_pause_tts: paused successfully");
-        let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} s/Space to resume".to_string();
-        self.bottom_pane.set_document_reader_voice_status(Some(msg));
-        self.bottom_pane.set_document_reader_tts_paused(true);
+        // Forward pause state to browser.
+        if self.is_reading_view_browser_mode() {
+            let ws_msg = serde_json::json!({
+                "type": "ttsStateChanged",
+                "state": "paused",
+            });
+            self.forward_to_reading_view_server(&ws_msg.to_string());
+        }
+        if !self.is_reading_view_browser_mode() {
+            let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} s/Space to resume".to_string();
+            self.bottom_pane.set_document_reader_voice_status(Some(msg));
+            self.bottom_pane.set_document_reader_tts_paused(true);
+        }
         self.request_redraw();
     }
 
@@ -2497,7 +3129,9 @@ impl super::ChatWidget {
             );
             // Unpause the player so it doesn't block future narration.
             state.resume_tts();
-            self.bottom_pane.set_document_reader_tts_paused(false);
+            if !self.is_reading_view_browser_mode() {
+                self.bottom_pane.set_document_reader_tts_paused(false);
+            }
             self.finalize_voice_turn();
             return;
         }
@@ -2508,11 +3142,43 @@ impl super::ChatWidget {
         }
         state.resume_tts();
         self.start_highlight_tick();
-        let msg = "\u{25B6}\u{FE0F}  Speaking...".to_string();
-        self.bottom_pane.set_document_reader_voice_status(Some(msg));
-        self.bottom_pane.set_document_reader_tts_paused(false);
+        // Forward resume state to browser.
+        if self.is_reading_view_browser_mode() {
+            let ws_msg = serde_json::json!({
+                "type": "ttsStateChanged",
+                "state": "playing",
+            });
+            self.forward_to_reading_view_server(&ws_msg.to_string());
+        }
+        if !self.is_reading_view_browser_mode() {
+            let msg = "\u{25B6}\u{FE0F}  Speaking...".to_string();
+            self.bottom_pane.set_document_reader_voice_status(Some(msg));
+            self.bottom_pane.set_document_reader_tts_paused(false);
+        }
         self.request_redraw();
         tracing::debug!("[TTS-DBG] on_voice_resume_tts: resumed successfully");
+    }
+
+    /// Change the client-side TTS playback speed by `delta` (e.g. +0.1 or -0.1).
+    /// The speed is clamped to [0.75, 3.0] and rounded to the nearest 0.1.
+    pub(crate) fn on_voice_playback_speed_change(&mut self, delta: f64) {
+        let Some(ref state) = self.voice_mode_state else {
+            return;
+        };
+        let Some(ref player) = state.audio_player else {
+            return;
+        };
+        let current = player.playback_speed() as f64;
+        let new_speed = ((current + delta) * 10.0).round() / 10.0;
+        let clamped = new_speed.clamp(0.75, 3.0) as f32;
+        player.set_playback_speed(clamped);
+        // Update voice status to show current speed.
+        if !self.is_reading_view_browser_mode() {
+            let speed_str = format!("{clamped:.1}");
+            let msg = format!("\u{25B6}\u{FE0F}  Speaking ({speed_str}\u{00D7})");
+            self.bottom_pane.set_document_reader_voice_status(Some(msg));
+        }
+        self.request_redraw();
     }
 
     // ─── Reading view Space tap/hold ──────────────────────────────────
@@ -2536,7 +3202,9 @@ impl super::ChatWidget {
         // Pause TTS (non-destructive — preserves buffers).
         if !was_paused {
             state.pause_tts();
-            self.bottom_pane.set_document_reader_tts_paused(true);
+            if !self.is_reading_view_browser_mode() {
+                self.bottom_pane.set_document_reader_tts_paused(true);
+            }
         }
 
         // Start mic capture if STT is available (not tts_only).
@@ -2583,11 +3251,13 @@ impl super::ChatWidget {
                 state.phase = VoiceModePhase::Idle;
             }
             // Clear reading view overlays.
-            self.bottom_pane
-                .set_document_reader_karaoke_lines(None, false);
-            self.bottom_pane
-                .set_document_reader_reading_progress(None, 0);
-            self.bottom_pane.set_document_reader_tts_paused(false);
+            if !self.is_reading_view_browser_mode() {
+                self.bottom_pane
+                    .set_document_reader_karaoke_lines(None, false);
+                self.bottom_pane
+                    .set_document_reader_reading_progress(None, 0);
+                self.bottom_pane.set_document_reader_tts_paused(false);
+            }
 
             // Complete the PTT flow: stop capture, encode, transcribe.
             // Re-borrow state since interrupt_tts consumed the mutable ref.
@@ -2633,6 +3303,16 @@ impl super::ChatWidget {
 
             let tx = self.app_event_tx.clone();
             let voice_config = self.effective_voice_config();
+            let auth_mgr = Arc::clone(&self.auth_manager);
+
+            let Some(config) = build_elevenlabs_config(&voice_config, &auth_mgr) else {
+                tx.send(AppEvent::VoiceModeTranscriptionFailed {
+                    error: "Missing ElevenLabs API key".to_string(),
+                });
+                self.sync_voice_placeholder();
+                self.request_redraw();
+                return;
+            };
 
             std::thread::spawn(move || {
                 let rt = match tokio::runtime::Runtime::new() {
@@ -2644,31 +3324,6 @@ impl super::ChatWidget {
                         return;
                     }
                 };
-
-                let api_key = voice_config
-                    .elevenlabs
-                    .as_ref()
-                    .and_then(|e| e.api_key.clone())
-                    .or_else(|| std::env::var("ELEVENLABS_API_KEY").ok());
-
-                let Some(api_key) = api_key else {
-                    tx.send(AppEvent::VoiceModeTranscriptionFailed {
-                        error: "Missing ElevenLabs API key".to_string(),
-                    });
-                    return;
-                };
-
-                let mut config = codex_elevenlabs::ElevenLabsConfig::new(api_key);
-                if let Some(ref el) = voice_config.elevenlabs {
-                    if let Some(ref vid) = el.voice_id {
-                        config = config.with_voice_id(vid.clone());
-                    }
-                    if let Some(ref mid) = el.model_id {
-                        config = config.with_model_id(mid.clone());
-                    }
-                    config.language_code = el.language_code.clone();
-                    config.speed = el.speed;
-                }
 
                 let result = rt.block_on(codex_elevenlabs::stt::transcribe(&config, wav_bytes));
                 match result {
@@ -2698,9 +3353,11 @@ impl super::ChatWidget {
             } else {
                 // Was playing before press → stay paused (we already paused on press).
                 // Just update the status message.
-                let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} s/Space to resume".to_string();
-                self.bottom_pane.set_document_reader_voice_status(Some(msg));
-                self.bottom_pane.set_document_reader_tts_paused(true);
+                if !self.is_reading_view_browser_mode() {
+                    let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} s/Space to resume".to_string();
+                    self.bottom_pane.set_document_reader_voice_status(Some(msg));
+                    self.bottom_pane.set_document_reader_tts_paused(true);
+                }
             }
         }
 
@@ -2720,18 +3377,38 @@ impl super::ChatWidget {
         selection_word_offset: Option<usize>,
         manual: bool,
     ) {
+        let narrate_start = std::time::Instant::now();
+        tracing::info!(
+            "[TTS-TIMING] on_voice_narrate_section: section={section_index}, manual={manual}, \
+             voice_state_exists={}, text_len={}",
+            self.voice_mode_state.is_some(),
+            raw_text.len(),
+        );
+
         // Lazily initialize a TTS-only state when voice mode is off but
         // the user manually pressed `r` to narrate.
         if self.voice_mode_state.is_none() && manual {
-            if !has_elevenlabs_api_key(&self.config) {
+            if !has_elevenlabs_api_key(&self.config, &self.auth_manager) {
+                self.bottom_pane.set_document_reader_tts_flash_msg(Some(
+                    "TTS not configured \u{2014} use /voice to set up".to_string(),
+                ));
+                self.request_redraw();
                 return;
             }
+            tracing::info!("[TTS-TIMING] creating TTS-only voice state + audio player...");
+            let player_start = std::time::Instant::now();
             let vc = self.effective_voice_config();
             let mut state = VoiceModeState::new(&vc);
             state.tts_only = true;
             state.phase = VoiceModePhase::Idle;
             match crate::voice::RealtimeAudioPlayer::start(&self.config) {
-                Ok(player) => state.audio_player = Some(player),
+                Ok(player) => {
+                    tracing::info!(
+                        "[TTS-TIMING] audio player created in {:?}",
+                        player_start.elapsed(),
+                    );
+                    state.audio_player = Some(player);
+                }
                 Err(e) => {
                     tracing::warn!("Failed to start audio player for TTS: {e}");
                     return;
@@ -2740,21 +3417,63 @@ impl super::ChatWidget {
             self.voice_mode_state = Some(state);
         }
 
+        // When the user explicitly presses 'r', clear any lingering TTS
+        // suppression (e.g. from a prior PTT barge-in) so narration works.
+        if manual && let Some(ref mut state) = self.voice_mode_state {
+            state.tts_suppressed = false;
+        }
+
+        // Show a helpful error if voice mode is on but TTS is disabled
+        // (e.g., STT-only mode) and the user explicitly pressed `r`.
+        if manual
+            && let Some(ref state) = self.voice_mode_state
+            && !state.tts_only
+            && !state.should_tts()
+        {
+            if !state.tts_enabled {
+                self.bottom_pane.set_document_reader_tts_flash_msg(Some(
+                    "TTS is disabled \u{2014} enable in /voice-setup".to_string(),
+                ));
+                self.request_redraw();
+            }
+            return;
+        }
+
         // Phase 1: check preconditions and interrupt (borrows state mutably).
         {
             let Some(ref mut state) = self.voice_mode_state else {
                 return;
             };
-            // Skip should_tts() for tts_only mode — we know we want TTS.
-            if !state.tts_only && !state.should_tts() {
+            // Skip should_tts() for tts_only mode and for manual 'r'
+            // presses — the user explicitly wants TTS in both cases.
+            if !state.tts_only && !manual && !state.should_tts() {
                 return;
             }
             // Skip TTS silently if no API key — the user was already warned
             // at voice mode activation time.
-            if state.tts_worker_tx.is_none() && !has_elevenlabs_api_key(&self.config) {
+            if state.tts_worker_tx.is_none()
+                && !has_elevenlabs_api_key(&self.config, &self.auth_manager)
+            {
                 return;
             }
+            tracing::info!(
+                "[TTS-TIMING] interrupting previous TTS (elapsed since entry: {:?})",
+                narrate_start.elapsed(),
+            );
             state.interrupt_tts();
+        }
+
+        // Clear the document reader's visual karaoke state immediately so
+        // stale highlights from a previous read don't linger while we wait
+        // for new alignment data to arrive.  Without this, pressing `r`
+        // would briefly show the old highlight (random jumping words) until
+        // the first chunk of the new TTS response overwrites it.
+        if !self.is_reading_view_browser_mode() {
+            self.bottom_pane
+                .set_document_reader_karaoke_lines(None, false);
+            self.bottom_pane
+                .set_document_reader_reading_progress(None, 0);
+            self.bottom_pane.set_document_reader_tts_paused(false);
         }
 
         let cleaned = clean_for_tts(&raw_text);
@@ -2766,6 +3485,7 @@ impl super::ChatWidget {
 
         // Phase 2: check cache (works for both full sections and selections —
         // the content_hash distinguishes different text under the same key).
+        let cache_check_start = std::time::Instant::now();
         let cached: Option<(Vec<Vec<i16>>, Vec<AlignmentEntry>)> =
             self.voice_mode_state.as_ref().and_then(|state| {
                 state.tts_section_cache.lock().ok().and_then(|cache| {
@@ -2775,14 +3495,34 @@ impl super::ChatWidget {
                         .map(|entry| (entry.chunks.clone(), entry.alignment_timeline.clone()))
                 })
             });
+        let cache_hit = cached.is_some();
+        let cache_chunks = cached.as_ref().map(|(c, _)| c.len()).unwrap_or(0);
+        let cache_samples: usize = cached
+            .as_ref()
+            .map(|(c, _)| c.iter().map(std::vec::Vec::len).sum())
+            .unwrap_or(0);
+        tracing::info!(
+            "[TTS-TIMING] cache check: hit={cache_hit}, chunks={cache_chunks}, \
+             samples={cache_samples}, lookup took {:?} (total elapsed: {:?})",
+            cache_check_start.elapsed(),
+            narrate_start.elapsed(),
+        );
 
         // Heading words to skip = 0: the heading exists in BOTH the TTS
         // timeline and the rendered section lines, so word indices are
         // naturally aligned and no skip is needed.
         let heading_words = 0;
 
+        // Compute total word count for browser progress bar before `cleaned` is moved.
+        // Strip [PAUSE:N] markers first — they are not spoken by TTS and must
+        // not inflate the word count, otherwise karaoke highlighting drifts.
+        let total_words = strip_pause_markers(&cleaned).split_whitespace().count();
+
         if let Some((chunks, cached_timeline)) = cached {
             // Cache hit — play cached chunks and restore alignment for karaoke.
+            let enqueue_start = std::time::Instant::now();
+            let num_chunks = chunks.len();
+            let total_samples: usize = chunks.iter().map(std::vec::Vec::len).sum();
             if let Some(ref mut state) = self.voice_mode_state {
                 state.phase = VoiceModePhase::Speaking;
                 state.narrating_section = Some((document_id, section_index, content_hash));
@@ -2794,6 +3534,27 @@ impl super::ChatWidget {
             for chunk in chunks {
                 self.on_voice_tts_audio_chunk(chunk, None);
             }
+            tracing::info!(
+                "[TTS-TIMING] cache hit: enqueued {num_chunks} chunks ({total_samples} samples, \
+                 ~{}ms audio) in {:?} (total elapsed: {:?})",
+                total_samples as u64 * 1000 / 24000,
+                enqueue_start.elapsed(),
+                narrate_start.elapsed(),
+            );
+            // Forward startKaraoke to browser if in browser mode.
+            if self.is_reading_view_browser_mode() {
+                let ws_msg = serde_json::json!({
+                    "type": "startKaraoke",
+                    "sectionIndex": section_index,
+                    "totalWords": total_words,
+                });
+                self.forward_to_reading_view_server(&ws_msg.to_string());
+                let ws_msg = serde_json::json!({
+                    "type": "ttsStateChanged",
+                    "state": "playing",
+                });
+                self.forward_to_reading_view_server(&ws_msg.to_string());
+            }
             // Start highlight tick so karaoke progresses during playback.
             self.start_highlight_tick();
             self.app_event_tx.send(AppEvent::VoiceModeTtsFinished);
@@ -2801,13 +3562,19 @@ impl super::ChatWidget {
             // Ensure the reading view shows "Speaking..." so the `s` key
             // hint and handler are active (sync_voice_placeholder skips
             // tts_only mode).
-            self.bottom_pane.set_document_reader_voice_status(Some(
-                "\u{25B6}\u{FE0F}  Speaking...".to_string(),
-            ));
+            if !self.is_reading_view_browser_mode() {
+                self.bottom_pane.set_document_reader_voice_status(Some(
+                    "\u{25B6}\u{FE0F}  Speaking...".to_string(),
+                ));
+            }
             return;
         }
 
         // Phase 3: cache miss — use persistent TTS worker (single WebSocket).
+        tracing::info!(
+            "[TTS-TIMING] cache miss: spawning TTS worker (total elapsed: {:?})",
+            narrate_start.elapsed(),
+        );
         let narration_vc = self.effective_voice_config();
         let Some(ref mut state) = self.voice_mode_state else {
             return;
@@ -2839,12 +3606,13 @@ impl super::ChatWidget {
             let gen_ref = state.tts_generation.clone();
             let spawn_gen = gen_ref.load(Ordering::SeqCst);
             in_flight.fetch_add(1, Ordering::SeqCst);
+            let proxy = build_elevenlabs_proxy(&self.auth_manager);
 
             let (worker_tx, worker_rx) = tokio::sync::mpsc::unbounded_channel();
             state.tts_worker_tx = Some(worker_tx);
 
             tokio::spawn(async move {
-                tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen).await;
+                tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, proxy).await;
             });
         }
 
@@ -2857,12 +3625,30 @@ impl super::ChatWidget {
         }
         state.tts_worker_tx = None;
 
+        // Forward startKaraoke to browser if in browser mode.
+        if self.is_reading_view_browser_mode() {
+            let ws_msg = serde_json::json!({
+                "type": "startKaraoke",
+                "sectionIndex": section_index,
+                "totalWords": total_words,
+            });
+            self.forward_to_reading_view_server(&ws_msg.to_string());
+            let ws_msg = serde_json::json!({
+                "type": "ttsStateChanged",
+                "state": "playing",
+            });
+            self.forward_to_reading_view_server(&ws_msg.to_string());
+        }
+
         self.sync_voice_placeholder();
         // Ensure the reading view shows "Speaking..." so the `s` key
         // hint and handler are active (sync_voice_placeholder skips
         // tts_only mode).
-        self.bottom_pane
-            .set_document_reader_voice_status(Some("\u{25B6}\u{FE0F}  Speaking...".to_string()));
+        if !self.is_reading_view_browser_mode() {
+            self.bottom_pane.set_document_reader_voice_status(Some(
+                "\u{25B6}\u{FE0F}  Speaking...".to_string(),
+            ));
+        }
     }
 
     /// Handle a prefetch request: generate TTS in background, cache result.
@@ -2912,12 +3698,13 @@ impl super::ChatWidget {
         let vc = self.effective_voice_config();
         let cache = state.tts_section_cache.clone();
         let pending = state.prefetch_pending.clone();
+        let proxy = build_elevenlabs_proxy(&self.auth_manager);
 
         tokio::spawn(async move {
             let mut all_chunks = Vec::new();
             let mut all_timeline = Vec::new();
             for sentence in &sentences {
-                match prefetch_sentence_tts(&vc, sentence).await {
+                match prefetch_sentence_tts(&vc, sentence, proxy.as_ref()).await {
                     Ok((chunks, timeline)) => {
                         all_chunks.extend(chunks);
                         all_timeline.extend(timeline);
@@ -2954,8 +3741,8 @@ impl super::ChatWidget {
 /// Strip markdown formatting from text to make it suitable for TTS narration.
 ///
 /// Removes code blocks, inline code backticks, heading markers, bold/italic
-/// markers, link syntax, LaTeX blocks, and image markers. Collapses whitespace
-/// and caps length at ~2000 chars on a sentence boundary.
+/// markers, link syntax, LaTeX blocks, and image markers. Collapses
+/// consecutive newlines (3+ to 2) and strips horizontal-rule lines.
 pub(crate) fn clean_for_tts(markdown: &str) -> String {
     let mut out = String::with_capacity(markdown.len());
     let mut chars = markdown.chars().peekable();
@@ -3072,6 +3859,7 @@ pub(crate) fn clean_for_tts(markdown: &str) -> String {
         }
 
         // Links [text](url) — keep text, drop url
+        // Also strip numeric bracket citations like [1], [2,3], [1-3].
         if ch == '[' {
             let mut link_text = String::new();
             for c in chars.by_ref() {
@@ -3086,6 +3874,15 @@ pub(crate) fn clean_for_tts(markdown: &str) -> String {
                 out.push(']');
                 continue;
             }
+            // Numeric citation markers (e.g. [1], [2,3], [1-3]) — drop entirely.
+            if !link_text.is_empty()
+                && link_text.starts_with(|c: char| c.is_ascii_digit())
+                && link_text
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || c == ',' || c == '-' || c == ' ')
+            {
+                continue;
+            }
             if chars.peek() == Some(&'(') {
                 chars.next();
                 for c in chars.by_ref() {
@@ -3096,6 +3893,29 @@ pub(crate) fn clean_for_tts(markdown: &str) -> String {
             }
             out.push_str(&link_text);
             continue;
+        }
+
+        // Bare URLs (https://... or http://...) — strip them entirely.
+        // TTS engines skip or garble URLs, so keeping them creates a word
+        // count mismatch between the spoken alignment and the rendered
+        // display, causing karaoke highlighting to drift.
+        if ch == 'h'
+            && (out.is_empty()
+                || out.ends_with(|c: char| c.is_whitespace() || c == '(' || c == '[' || c == '"'))
+        {
+            let rest: String = chars.clone().take(8).collect(); // "ttps://X" or "ttp://XX"
+            let is_url = rest.starts_with("ttps://") || rest.starts_with("ttp://");
+            if is_url {
+                // Consume the rest of the URL (until whitespace or end).
+                for c in chars.by_ref() {
+                    if c.is_whitespace() {
+                        // Push the whitespace so spacing is preserved.
+                        out.push(c);
+                        break;
+                    }
+                }
+                continue;
+            }
         }
 
         // Markdown headings at start of line (strip # markers)
@@ -3149,23 +3969,67 @@ pub(crate) fn clean_for_tts(markdown: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n");
 
-    let trimmed = collapsed.trim().to_string();
+    // Strip academic citation artifacts that sound unnatural when spoken.
+    // 1. Parenthetical years: "(2024)", "(2025)", "(2026)", etc.
+    // 2. "et al." (with or without trailing period)
+    // 3. Bracket citation markers: "[1]", "[2,3]", "[1-3]", "[12, 15]", etc.
+    use std::sync::LazyLock;
+    static RE_PAREN_YEAR: LazyLock<regex_lite::Regex> =
+        LazyLock::new(|| match regex_lite::Regex::new(r"\s*\(\d{4}\)") {
+            Ok(r) => r,
+            Err(e) => panic!("invalid RE_PAREN_YEAR regex: {e}"),
+        });
+    static RE_ET_AL: LazyLock<regex_lite::Regex> =
+        LazyLock::new(|| match regex_lite::Regex::new(r"\s*et\s+al\.?") {
+            Ok(r) => r,
+            Err(e) => panic!("invalid RE_ET_AL regex: {e}"),
+        });
+    static RE_BRACKET_CITE: LazyLock<regex_lite::Regex> =
+        LazyLock::new(|| match regex_lite::Regex::new(r"\s*\[\d[\d,\s\-]*\]") {
+            Ok(r) => r,
+            Err(e) => panic!("invalid RE_BRACKET_CITE regex: {e}"),
+        });
 
-    // Cap at ~2000 chars at a sentence boundary
-    if trimmed.len() <= 2000 {
-        return trimmed;
-    }
+    let collapsed = RE_PAREN_YEAR.replace_all(&collapsed, "");
+    let collapsed = RE_ET_AL.replace_all(&collapsed, "");
+    let collapsed = RE_BRACKET_CITE.replace_all(&collapsed, "");
 
-    // Find last sentence end before 2000
-    let search_region = &trimmed[..2000];
-    let last_sentence_end = search_region
-        .rfind(". ")
-        .or_else(|| search_region.rfind("! "))
-        .or_else(|| search_region.rfind("? "))
-        .map(|i| i + 1)
-        .unwrap_or(2000);
+    // Insert [PAUSE:400] between consecutive list items so TTS adds a brief
+    // silence between them.  This is a safety net — even if the agent forgets
+    // to add pause tokens, list items get natural spacing.
+    //
+    // Detected patterns (at the start of a line, after optional whitespace):
+    //   - Unordered: "- ", "+ "
+    //   - Ordered:   "1. ", "2. ", "10. ", etc.
+    // We insert the pause marker BEFORE the list item line (between items),
+    // so the first item in a group is not paused.
+    static RE_LIST_ITEM: LazyLock<regex_lite::Regex> = LazyLock::new(
+        || match regex_lite::Regex::new(r"^[ \t]*(?:[-+]|\d{1,3}\.) ") {
+            Ok(r) => r,
+            Err(e) => panic!("invalid RE_LIST_ITEM regex: {e}"),
+        },
+    );
+    let collapsed = {
+        let text = collapsed.to_string();
+        let lines: Vec<&str> = text.split('\n').collect();
+        let mut result = String::with_capacity(text.len() + lines.len() * 12);
+        let mut prev_was_list_item = false;
+        for (i, line) in lines.iter().enumerate() {
+            if i > 0 {
+                result.push('\n');
+            }
+            let is_list_item = RE_LIST_ITEM.is_match(line);
+            // Insert pause between consecutive list items (not before the first).
+            if is_list_item && prev_was_list_item {
+                result.push_str("[PAUSE:400]");
+            }
+            result.push_str(line);
+            prev_was_list_item = is_list_item;
+        }
+        result
+    };
 
-    trimmed[..last_sentence_end].trim().to_string()
+    collapsed.trim().to_string()
 }
 
 /// Strip `[PAUSE:N]` markers from text so they are not spoken literally by TTS.
@@ -3193,9 +4057,10 @@ fn strip_pause_markers(text: &str) -> String {
 async fn prefetch_sentence_tts(
     voice_config: &codex_core::config::types::VoiceModeToml,
     sentence: &str,
+    proxy: Option<&codex_elevenlabs::ElevenLabsProxy>,
 ) -> Result<(Vec<Vec<i16>>, Vec<AlignmentEntry>), codex_elevenlabs::ElevenLabsError> {
     let cleaned = strip_pause_markers(sentence);
-    let mut rx = start_tts_generation(voice_config, &cleaned)?;
+    let mut rx = start_tts_generation(voice_config, &cleaned, proxy)?;
     let mut chunks = Vec::new();
     let mut timeline = Vec::new();
     let mut pending_word: Option<AlignmentEntry> = None;
@@ -3216,18 +4081,21 @@ async fn prefetch_sentence_tts(
 fn start_tts_generation(
     voice_config: &codex_core::config::types::VoiceModeToml,
     sentence: &str,
+    proxy: Option<&codex_elevenlabs::ElevenLabsProxy>,
 ) -> Result<
     tokio::sync::mpsc::UnboundedReceiver<codex_elevenlabs::TtsChunk>,
     codex_elevenlabs::ElevenLabsError,
 > {
-    let api_key = voice_config
-        .elevenlabs
-        .as_ref()
-        .and_then(|e| e.api_key.clone())
-        .or_else(|| std::env::var("ELEVENLABS_API_KEY").ok())
-        .ok_or(codex_elevenlabs::ElevenLabsError::MissingApiKey)?;
+    let api_key = resolve_elevenlabs_api_key_from_config(voice_config);
 
-    let mut config = codex_elevenlabs::ElevenLabsConfig::new(api_key);
+    if api_key.is_none() && proxy.is_none() {
+        return Err(codex_elevenlabs::ElevenLabsError::MissingApiKey);
+    }
+
+    let mut config = codex_elevenlabs::ElevenLabsConfig::new(api_key.unwrap_or_default());
+    if let Some(proxy) = proxy {
+        config.proxy = Some(proxy.clone());
+    }
     if let Some(ref el) = voice_config.elevenlabs {
         if let Some(ref vid) = el.voice_id {
             config = config.with_voice_id(vid.clone());
@@ -3350,14 +4218,12 @@ async fn tts_worker_loop(
     in_flight: Arc<AtomicUsize>,
     gen_ref: Arc<AtomicUsize>,
     my_gen: usize,
+    proxy: Option<codex_elevenlabs::ElevenLabsProxy>,
 ) {
-    let api_key = voice_config
-        .elevenlabs
-        .as_ref()
-        .and_then(|e| e.api_key.clone())
-        .or_else(|| std::env::var("ELEVENLABS_API_KEY").ok());
-    let Some(api_key) = api_key else {
-        tracing::error!("TTS worker: missing API key");
+    let api_key = resolve_elevenlabs_api_key_from_config(&voice_config);
+
+    if api_key.is_none() && proxy.is_none() {
+        tracing::error!("TTS worker: missing API key and no proxy configured");
         event_tx.send(AppEvent::VoiceModeTtsError {
             error: "Missing ElevenLabs API key".to_string(),
         });
@@ -3365,9 +4231,14 @@ async fn tts_worker_loop(
             event_tx.send(AppEvent::VoiceModeTtsFinished);
         }
         return;
-    };
+    }
 
-    let mut config = codex_elevenlabs::ElevenLabsConfig::new(api_key);
+    let worker_start = std::time::Instant::now();
+    tracing::info!("[TTS-TIMING] tts_worker_loop: connecting to ElevenLabs WebSocket...");
+    let mut config = codex_elevenlabs::ElevenLabsConfig::new(api_key.unwrap_or_default());
+    if let Some(proxy) = proxy {
+        config.proxy = Some(proxy);
+    }
     if let Some(ref el) = voice_config.elevenlabs {
         if let Some(ref vid) = el.voice_id {
             config = config.with_voice_id(vid.clone());
@@ -3380,7 +4251,13 @@ async fn tts_worker_loop(
     }
 
     let mut stream = match codex_elevenlabs::tts::TtsStream::connect(&config).await {
-        Ok(s) => s,
+        Ok(s) => {
+            tracing::info!(
+                "[TTS-TIMING] tts_worker_loop: WebSocket connected in {:?}",
+                worker_start.elapsed(),
+            );
+            s
+        }
         Err(e) => {
             tracing::error!("TTS worker connect: {e}");
             event_tx.send(AppEvent::VoiceModeTtsError {
@@ -3395,7 +4272,7 @@ async fn tts_worker_loop(
 
     tracing::debug!("TTS worker started (gen={my_gen})");
     let mut finishing = false;
-
+    let mut first_chunk_sent = false;
     loop {
         if finishing {
             // Drain remaining audio after close request.
@@ -3419,10 +4296,12 @@ async fn tts_worker_loop(
                             if gen_ref.load(Ordering::SeqCst) != my_gen { break; }
                             if let Err(e) = stream.send_text(&text).await {
                                 tracing::error!("TTS worker send: {e}");
+
                                 break;
                             }
                             if let Err(e) = stream.flush().await {
                                 tracing::error!("TTS worker flush: {e}");
+
                                 break;
                             }
                         }
@@ -3430,6 +4309,7 @@ async fn tts_worker_loop(
                             if gen_ref.load(Ordering::SeqCst) != my_gen { break; }
                             if let Err(e) = stream.flush().await {
                                 tracing::error!("TTS worker flush before pause: {e}");
+
                                 break;
                             }
                             tokio::time::sleep(tokio::time::Duration::from_millis(ms)).await;
@@ -3452,6 +4332,16 @@ async fn tts_worker_loop(
                 chunk = stream.recv_audio() => {
                     match chunk {
                         Some(chunk) if gen_ref.load(Ordering::SeqCst) == my_gen => {
+                            if !first_chunk_sent {
+                                first_chunk_sent = true;
+                                tracing::info!(
+                                    "[TTS-TIMING] tts_worker_loop: first audio chunk received \
+                                     ({} samples, ~{}ms) after {:?} total",
+                                    chunk.pcm.len(),
+                                    chunk.pcm.len() as u64 * 1000 / 24000,
+                                    worker_start.elapsed(),
+                                );
+                            }
                             event_tx.send(AppEvent::VoiceModeTtsAudioChunk {
                                 pcm: chunk.pcm,
                                 alignment: chunk.alignment,
@@ -3466,7 +4356,16 @@ async fn tts_worker_loop(
     }
 
     tracing::debug!("TTS worker exiting (gen={my_gen})");
-    if gen_ref.load(Ordering::SeqCst) == my_gen && in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
+    // Check if the stream was closed with an error (e.g., invalid voice_id)
+    if let Some(err) = stream.recv_error() {
+        tracing::warn!("TTS worker detected server error: {err}");
+        if gen_ref.load(Ordering::SeqCst) == my_gen {
+            in_flight.fetch_sub(1, Ordering::SeqCst);
+            event_tx.send(AppEvent::VoiceModeTtsError { error: err });
+        }
+    } else if gen_ref.load(Ordering::SeqCst) == my_gen
+        && in_flight.fetch_sub(1, Ordering::SeqCst) == 1
+    {
         event_tx.send(AppEvent::VoiceModeTtsFinished);
     }
 }
@@ -3789,6 +4688,163 @@ mod tests {
         assert_eq!(r2.voice_sentences, vec!["Done."]);
     }
 
+    // ─── Equation tag tests ────────────────────────────────────────────
+
+    #[test]
+    fn eq_tag_inline_basic() {
+        let mut parser = VoiceTagParser::new();
+        let r = parser.push("<voice>The value is <eq latex=\"x^2\">x squared</eq> here.</voice>");
+        // Display text should contain $x^2$, not the eq tags or spoken text.
+        assert_eq!(r.display_text, "The value is $x^2$ here.");
+        // Voice sentence should contain equation markers around spoken text.
+        assert_eq!(r.voice_sentences.len(), 1);
+        assert!(r.voice_sentences[0].contains("[[[EQ:1]]]x squared[[[/EQ]]]"));
+    }
+
+    #[test]
+    fn eq_tag_display_block() {
+        let mut parser = VoiceTagParser::new();
+        let r = parser.push(
+            "<voice>Consider <eq latex=\"E=mc^2\" display=\"block\">E equals m c squared</eq> now.</voice>",
+        );
+        // Display should use $$ for block mode.
+        assert_eq!(r.display_text, "Consider $$E=mc^2$$ now.");
+        assert!(r.voice_sentences[0].contains("[[[EQ:1]]]E equals m c squared[[[/EQ]]]"));
+    }
+
+    #[test]
+    fn eq_tag_self_closing_with_speak() {
+        let mut parser = VoiceTagParser::new();
+        let r = parser.push("<voice>Result: <eq latex=\"\\pi\" speak=\"pi\"/> done.</voice>");
+        assert_eq!(r.display_text, "Result: $\\pi$ done.");
+        assert!(r.voice_sentences[0].contains("[[[EQ:1]]]pi[[[/EQ]]]"));
+    }
+
+    #[test]
+    fn eq_tag_self_closing_without_speak() {
+        let mut parser = VoiceTagParser::new();
+        let r = parser.push("<voice>Value <eq latex=\"42\" speak=\"forty two\"/> end.</voice>");
+        assert_eq!(r.display_text, "Value $42$ end.");
+        assert!(r.voice_sentences[0].contains("[[[EQ:1]]]forty two[[[/EQ]]]"));
+    }
+
+    #[test]
+    fn eq_tag_multiple_equations() {
+        let mut parser = VoiceTagParser::new();
+        let r = parser.push(
+            "<voice>First <eq latex=\"a\">alpha</eq> then <eq latex=\"b\">beta</eq> end.</voice>",
+        );
+        assert_eq!(r.display_text, "First $a$ then $b$ end.");
+        let s = &r.voice_sentences[0];
+        assert!(s.contains("[[[EQ:1]]]alpha[[[/EQ]]]"));
+        assert!(s.contains("[[[EQ:2]]]beta[[[/EQ]]]"));
+    }
+
+    #[test]
+    fn eq_tag_streaming_split() {
+        let mut parser = VoiceTagParser::new();
+        // Tag split across deltas.
+        let r1 = parser.push("<voice>See <eq lat");
+        assert_eq!(r1.display_text, "See ");
+        let r2 = parser.push("ex=\"y\">why</eq> ok.</voice>");
+        assert_eq!(r2.display_text, "$y$ ok.");
+        assert!(r2.voice_sentences[0].contains("[[[EQ:1]]]why[[[/EQ]]]"));
+    }
+
+    #[test]
+    fn eq_tag_does_not_break_voice_tags() {
+        // Ensure existing voice tag handling still works alongside eq tags.
+        let mut parser = VoiceTagParser::new();
+        let r = parser.push("<voice>Hello world.</voice> code <voice>Bye.</voice>");
+        assert_eq!(r.display_text, "Hello world. code Bye.");
+        assert_eq!(r.voice_sentences, vec!["Hello world.", "Bye."]);
+    }
+
+    #[test]
+    fn eq_tag_outside_voice_still_displays() {
+        // <eq> outside of <voice> tags should still render LaTeX in display text.
+        let mut parser = VoiceTagParser::new();
+        let r = parser.push("Result: <eq latex=\"x+1\">x plus one</eq> done.");
+        assert_eq!(r.display_text, "Result: $x+1$ done.");
+        // No voice sentences since not inside <voice> tags.
+        assert!(r.voice_sentences.is_empty());
+    }
+
+    #[test]
+    fn eq_tag_clear_resets_equation_state() {
+        let mut parser = VoiceTagParser::new();
+        parser.push("<voice><eq latex=\"a\">alpha</eq></voice>");
+        parser.clear();
+        // After clear, equation_ordinal should reset? No — clear doesn't
+        // reset ordinal (it's a counter for the whole turn). But in_equation
+        // should be false.
+        let r = parser.push("<voice><eq latex=\"b\">beta</eq></voice>");
+        assert_eq!(r.display_text, "$b$");
+        // The ordinal continues from where it was (2), so this is EQ:2.
+        assert!(r.voice_sentences[0].contains("[[[EQ:2]]]beta[[[/EQ]]]"));
+    }
+
+    // ─── parse_equation_markers tests ────────────────────────────────
+
+    #[test]
+    fn parse_eq_markers_basic() {
+        let input = "Before [[[EQ:1]]]alpha[[[/EQ]]] after";
+        let (cleaned, spans) = parse_equation_markers(input);
+        assert_eq!(cleaned, "Before alpha after");
+        assert_eq!(spans, vec![(1, 1, 2)]); // "alpha" is word index 1..2
+    }
+
+    #[test]
+    fn parse_eq_markers_multiple() {
+        let input = "A [[[EQ:1]]]one[[[/EQ]]] B [[[EQ:2]]]two three[[[/EQ]]] C";
+        let (cleaned, spans) = parse_equation_markers(input);
+        assert_eq!(cleaned, "A one B two three C");
+        assert_eq!(spans, vec![(1, 1, 2), (2, 3, 5)]);
+    }
+
+    #[test]
+    fn parse_eq_markers_no_markers() {
+        let input = "Just plain text";
+        let (cleaned, spans) = parse_equation_markers(input);
+        assert_eq!(cleaned, "Just plain text");
+        assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn parse_eq_markers_at_start() {
+        let input = "[[[EQ:1]]]hello world[[[/EQ]]] rest";
+        let (cleaned, spans) = parse_equation_markers(input);
+        assert_eq!(cleaned, "hello world rest");
+        assert_eq!(spans, vec![(1, 0, 2)]);
+    }
+
+    // ─── parse_eq_attributes tests ───────────────────────────────────
+
+    #[test]
+    fn parse_eq_attrs_basic() {
+        let (latex, display, speak) =
+            parse_eq_attributes("<eq latex=\"x^2\" display=\"block\" speak=\"x squared\">");
+        assert_eq!(latex, "x^2");
+        assert!(display);
+        assert_eq!(speak, "x squared");
+    }
+
+    #[test]
+    fn parse_eq_attrs_single_quotes() {
+        let (latex, display, speak) = parse_eq_attributes("<eq latex='y+1'>");
+        assert_eq!(latex, "y+1");
+        assert!(!display);
+        assert_eq!(speak, "");
+    }
+
+    #[test]
+    fn parse_eq_attrs_self_closing() {
+        let (latex, display, speak) = parse_eq_attributes("<eq latex=\"\\pi\" speak=\"pi\"/>");
+        assert_eq!(latex, "\\pi");
+        assert!(!display);
+        assert_eq!(speak, "pi");
+    }
+
     // ─── clean_for_tts tests ─────────────────────────────────────────────
 
     #[test]
@@ -3825,6 +4881,372 @@ mod tests {
             cleaned,
             "Results.\nGeneral benchmarks\n\nThe model achieved"
         );
+    }
+
+    #[test]
+    fn clean_for_tts_strips_bare_https_url() {
+        let text = "Visit https://example.com/path for details";
+        let cleaned = clean_for_tts(text);
+        // The URL is stripped; the space before it remains, so there's a
+        // double space.  That's fine — split_whitespace() and TTS both
+        // ignore extra whitespace.
+        assert_eq!(cleaned, "Visit  for details");
+    }
+
+    #[test]
+    fn clean_for_tts_strips_bare_http_url() {
+        let text = "See http://example.org for info";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "See  for info");
+    }
+
+    #[test]
+    fn clean_for_tts_strips_url_at_end_of_text() {
+        let text = "Link: https://example.com";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "Link:");
+    }
+
+    #[test]
+    fn clean_for_tts_strips_multiple_urls() {
+        let text = "First https://a.com then https://b.com end";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "First  then  end");
+    }
+
+    #[test]
+    fn clean_for_tts_keeps_non_url_h_words() {
+        // Words starting with 'h' that are not URLs should be kept.
+        let text = "hello http://x.com here";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "hello  here");
+    }
+
+    #[test]
+    fn clean_for_tts_strips_parenthetical_years() {
+        let text = "Smith (2026) showed that transformers work";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "Smith showed that transformers work");
+    }
+
+    #[test]
+    fn clean_for_tts_strips_et_al() {
+        let text = "Smith et al. showed that transformers work";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "Smith showed that transformers work");
+    }
+
+    #[test]
+    fn clean_for_tts_strips_et_al_with_year() {
+        let text = "Smith et al. (2026) showed that transformers work";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "Smith showed that transformers work");
+    }
+
+    #[test]
+    fn clean_for_tts_strips_bracket_citations() {
+        let text = "Attention is effective [1] and scalable [2,3]";
+        let cleaned = clean_for_tts(text);
+        // Double spaces are fine — TTS engines ignore extra whitespace.
+        assert_eq!(cleaned, "Attention is effective  and scalable");
+    }
+
+    #[test]
+    fn clean_for_tts_strips_bracket_citation_range() {
+        let text = "Prior work [1-3] explored this";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "Prior work  explored this");
+    }
+
+    // ─── clean_for_tts list item pause tests ────────────────────────────
+
+    #[test]
+    fn clean_for_tts_inserts_pause_between_unordered_list_items() {
+        let text = "Problems:\n- First problem\n- Second problem\n- Third problem";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(
+            cleaned,
+            "Problems:\n- First problem\n[PAUSE:400]- Second problem\n[PAUSE:400]- Third problem"
+        );
+    }
+
+    #[test]
+    fn clean_for_tts_inserts_pause_between_ordered_list_items() {
+        let text = "Steps:\n1. Do this\n2. Then that\n3. Finally this";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(
+            cleaned,
+            "Steps:\n1. Do this\n[PAUSE:400]2. Then that\n[PAUSE:400]3. Finally this"
+        );
+    }
+
+    #[test]
+    fn clean_for_tts_no_pause_before_first_list_item() {
+        let text = "Here are items:\n- Only one item";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "Here are items:\n- Only one item");
+    }
+
+    #[test]
+    fn clean_for_tts_no_pause_for_dashes_in_text() {
+        let text = "Llama-2 is a model";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "Llama-2 is a model");
+    }
+
+    #[test]
+    fn clean_for_tts_pause_with_plus_list_marker() {
+        let text = "Items:\n+ Alpha\n+ Beta";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "Items:\n+ Alpha\n[PAUSE:400]+ Beta");
+    }
+
+    // ─── Additional clean_for_tts tests (comprehensive) ─────────────────
+
+    #[test]
+    fn clean_for_tts_url_at_start_of_text() {
+        let text = "https://example.com is great";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "is great");
+    }
+
+    #[test]
+    fn clean_for_tts_preserves_hypothetical() {
+        // "hypothetical" starts with 'h' but is not a URL.
+        let text = "hypothetical scenarios";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "hypothetical scenarios");
+    }
+
+    #[test]
+    fn clean_for_tts_strips_multiple_parenthetical_years() {
+        let text = "In (2024) and (2025) we saw";
+        let cleaned = clean_for_tts(text);
+        // The regex `\s*\(\d{4}\)` also consumes the leading space.
+        assert_eq!(cleaned, "In and we saw");
+    }
+
+    #[test]
+    fn clean_for_tts_preserves_year_without_parens() {
+        // Year without parentheses should NOT be stripped — it's likely
+        // used in normal prose ("founded in 2026").
+        let text = "founded in 2026";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "founded in 2026");
+    }
+
+    #[test]
+    fn clean_for_tts_strips_et_al_without_period() {
+        // "et al" without trailing period — regex allows optional period.
+        let text = "Smith et al showed";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "Smith showed");
+    }
+
+    #[test]
+    fn clean_for_tts_no_truncation_at_2000_chars() {
+        // Verify the 2000-char truncation was removed.
+        let text = "a ".repeat(3000);
+        let cleaned = clean_for_tts(&text);
+        // Should NOT be truncated — the full text should come through.
+        assert!(
+            cleaned.len() > 4000,
+            "clean_for_tts should not truncate at 2000 chars; got len={}",
+            cleaned.len()
+        );
+    }
+
+    #[test]
+    fn clean_for_tts_very_long_input_processed_correctly() {
+        // 10000 characters with mixed content.
+        let mut text = String::new();
+        for i in 0..500 {
+            text.push_str(&format!("Sentence number {i}. "));
+        }
+        let cleaned = clean_for_tts(&text);
+        // All sentences should be preserved.
+        assert!(
+            cleaned.contains("Sentence number 499"),
+            "last sentence should be present in output"
+        );
+    }
+
+    #[test]
+    fn clean_for_tts_mixed_paragraph_and_list() {
+        // Paragraph → list items → paragraph: pauses only between consecutive items.
+        let text = "Intro paragraph.\n- Item A\n- Item B\nConclusion.";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(
+            cleaned,
+            "Intro paragraph.\n- Item A\n[PAUSE:400]- Item B\nConclusion."
+        );
+    }
+
+    #[test]
+    fn clean_for_tts_single_list_item_no_pause() {
+        let text = "Summary:\n- Only one item";
+        let cleaned = clean_for_tts(text);
+        // Single item — no pause before it.
+        assert_eq!(cleaned, "Summary:\n- Only one item");
+    }
+
+    #[test]
+    fn clean_for_tts_bracket_citation_at_end() {
+        let text = "Results were significant [4]";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "Results were significant");
+    }
+
+    #[test]
+    fn clean_for_tts_url_with_query_params() {
+        let text = "Check http://foo.bar/path?q=1&v=2 now";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "Check  now");
+    }
+
+    #[test]
+    fn clean_for_tts_only_urls() {
+        let text = "https://a.com https://b.com";
+        let cleaned = clean_for_tts(text);
+        // Both stripped, spaces remain.
+        assert_eq!(cleaned.trim(), "");
+    }
+
+    #[test]
+    fn clean_for_tts_strips_parenthesized_url() {
+        let text = "see (https://example.com) for details";
+        let cleaned = clean_for_tts(text);
+        assert_eq!(cleaned, "see ( for details");
+    }
+
+    // ─── strip_pause_markers tests ─────────────────────────────────────
+
+    #[test]
+    fn strip_pause_markers_basic() {
+        let text = "First [PAUSE:400] Second";
+        let result = strip_pause_markers(text);
+        assert_eq!(result, "First  Second");
+    }
+
+    #[test]
+    fn strip_pause_markers_multiple() {
+        let text = "[PAUSE:200]Hello [PAUSE:400]World [PAUSE:600]End";
+        let result = strip_pause_markers(text);
+        assert_eq!(result, "Hello World End");
+    }
+
+    #[test]
+    fn strip_pause_markers_no_markers() {
+        let text = "No markers here";
+        let result = strip_pause_markers(text);
+        assert_eq!(result, "No markers here");
+    }
+
+    #[test]
+    fn strip_pause_markers_malformed() {
+        // Missing closing bracket.
+        let text = "Before [PAUSE:400 After";
+        let result = strip_pause_markers(text);
+        // Malformed: keeps the rest as-is.
+        assert_eq!(result, "Before [PAUSE:400 After");
+    }
+
+    #[test]
+    fn strip_pause_markers_empty_input() {
+        assert_eq!(strip_pause_markers(""), "");
+    }
+
+    // ─── totalWords pause exclusion tests ──────────────────────────────
+
+    #[test]
+    fn total_words_excludes_pause_markers() {
+        let cleaned = "First item [PAUSE:400] Second item";
+        let total_words = strip_pause_markers(cleaned).split_whitespace().count();
+        assert_eq!(total_words, 4, "PAUSE markers should not count as words");
+    }
+
+    #[test]
+    fn total_words_no_pauses() {
+        let cleaned = "Hello beautiful world";
+        let total_words = strip_pause_markers(cleaned).split_whitespace().count();
+        assert_eq!(total_words, 3);
+    }
+
+    #[test]
+    fn total_words_all_pauses() {
+        let cleaned = "[PAUSE:400][PAUSE:200]";
+        let total_words = strip_pause_markers(cleaned).split_whitespace().count();
+        assert_eq!(total_words, 0, "text with only pauses should have 0 words");
+    }
+
+    // ─── VoiceTagParser attributed voice tag tests ─────────────────────
+
+    #[test]
+    fn voice_tag_with_name_attribute() {
+        let mut parser = VoiceTagParser::new();
+        let r = parser.push(r#"<voice name="alloy">hello</voice>"#);
+        assert_eq!(r.display_text, "hello");
+        assert_eq!(r.voice_sentences, vec!["hello"]);
+    }
+
+    #[test]
+    fn voice_tag_with_multiple_attributes() {
+        let mut parser = VoiceTagParser::new();
+        let r = parser.push(r#"<voice name="shimmer" style="expressive">spoken text.</voice>"#);
+        assert_eq!(r.display_text, "spoken text.");
+        assert_eq!(r.voice_sentences, vec!["spoken text."]);
+    }
+
+    #[test]
+    fn voice_tag_attribute_streaming_split() {
+        let mut parser = VoiceTagParser::new();
+
+        // Tag with attribute split across two deltas.
+        let r1 = parser.push(r#"<voice na"#);
+        assert_eq!(r1.display_text, "");
+        assert!(r1.voice_sentences.is_empty());
+
+        let r2 = parser.push(r#"me="alloy">Hello.</voice>"#);
+        assert_eq!(r2.display_text, "Hello.");
+        assert_eq!(r2.voice_sentences, vec!["Hello."]);
+    }
+
+    // ─── is_voice_tag_prefix tests ────────────────────────────────────
+
+    #[test]
+    fn is_voice_tag_prefix_with_space_for_attributes() {
+        // "<voice " (with trailing space) indicates attributes may follow.
+        assert!(
+            is_voice_tag_prefix("<voice "),
+            "should recognize '<voice ' as prefix for attributed voice tag"
+        );
+    }
+
+    #[test]
+    fn is_voice_tag_prefix_partial_voice() {
+        assert!(is_voice_tag_prefix("<vo"));
+        assert!(is_voice_tag_prefix("<voic"));
+        assert!(is_voice_tag_prefix("<voice"));
+        assert!(is_voice_tag_prefix("<voice>"));
+    }
+
+    #[test]
+    fn is_voice_tag_prefix_closing() {
+        assert!(is_voice_tag_prefix("</vo"));
+        assert!(is_voice_tag_prefix("</voice>"));
+    }
+
+    #[test]
+    fn is_voice_tag_prefix_eq_tag() {
+        assert!(is_voice_tag_prefix("<eq"));
+        assert!(is_voice_tag_prefix("<eq "));
+    }
+
+    #[test]
+    fn is_voice_tag_prefix_not_recognized() {
+        assert!(!is_voice_tag_prefix("<div"));
+        assert!(!is_voice_tag_prefix("<p>"));
+        assert!(!is_voice_tag_prefix("<span"));
     }
 
     // ─── build_alignment_entries tests ──────────────────────────────────

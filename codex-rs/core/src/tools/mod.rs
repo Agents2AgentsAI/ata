@@ -6,6 +6,7 @@ pub mod js_repl;
 pub(crate) mod network_approval;
 pub mod orchestrator;
 pub mod parallel;
+pub(crate) mod pdfium_downloader;
 pub mod registry;
 pub mod router;
 pub mod runtimes;

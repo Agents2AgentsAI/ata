@@ -139,18 +139,6 @@ pub(crate) enum AppEvent {
     /// Result of computing a `/diff` command.
     DiffResult(String),
 
-    /// Result of a `/team` command query.
-    TeamResult(Vec<ratatui::text::Line<'static>>),
-
-    /// Push notification of new coordination messages from peer agents.
-    /// Contains display lines for chat history + raw text for agent submission.
-    #[allow(dead_code)]
-    CoordinationNotification {
-        lines: Vec<ratatui::text::Line<'static>>,
-        agent_name: String,
-        message: String,
-    },
-
     /// Open the app link view in the bottom pane.
     OpenAppLink {
         app_id: String,
@@ -382,6 +370,17 @@ pub(crate) enum AppEvent {
     /// Stop the persistent background mobile daemon.
     StopMobileDaemon,
 
+    /// The reading-view HTTP server finished starting up.
+    ReadingViewServerStarted(codex_reading_view_server::ReadingViewServer),
+
+    /// A message received from a browser WebSocket client connected to the
+    /// reading-view server (e.g. follow-up question, read-aloud request).
+    /// The payload is the raw JSON string sent by the browser.
+    ReadingViewBrowserMessage(String),
+
+    /// The user changed the reading view mode via the setup popup.
+    ReadingViewModeChanged(ReadingViewMode),
+
     /// Re-open the approval presets popup.
     OpenApprovalsPopup,
 
@@ -559,6 +558,13 @@ pub(crate) enum AppEvent {
     #[cfg(not(target_os = "linux"))]
     VoiceModeResumeTts,
 
+    /// Change client-side TTS playback speed by a delta (e.g. +0.1 or -0.1).
+    /// Pitch-preserving interpolation is applied in the audio callback.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModePlaybackSpeedChange {
+        delta: f64,
+    },
+
     /// Auto-narrate a reading view section via TTS when voice mode is active.
     #[cfg(not(target_os = "linux"))]
     VoiceModeNarrateSection {
@@ -607,4 +613,16 @@ pub(crate) enum FeedbackCategory {
     Bug,
     SafetyCheck,
     Other,
+}
+
+/// Reading view display mode, chosen via the `/reading-view` setup popup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ReadingViewMode {
+    /// Built-in terminal reader (default).
+    #[default]
+    Tui,
+    /// Opens in browser with rich HTML rendering.
+    Browser,
+    /// No reading view — content stays in chat.
+    Disabled,
 }

@@ -16,6 +16,8 @@ use crate::exec_env::CODEX_SESSION_ID_ENV_VAR;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::protocol::ExecCommandSource;
+use crate::resource_monitor::FdHealth;
+use crate::resource_monitor::check_fd_health;
 use crate::sandboxing::ExecRequest;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -163,6 +165,30 @@ impl UnifiedExecProcessManager {
         request: ExecCommandRequest,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecResponse, UnifiedExecError> {
+        // Check file descriptor health before spawning a new process.
+        match check_fd_health() {
+            FdHealth::Critical(_pct) => {
+                // Attempt to reclaim FDs by pruning completed processes first.
+                self.cleanup_exited_processes().await;
+                // Re-check after cleanup.
+                if let FdHealth::Critical(pct) = check_fd_health() {
+                    tracing::error!(
+                        fd_usage_pct = pct,
+                        "Refusing to spawn new process: FD usage is critical"
+                    );
+                    return Err(UnifiedExecError::FdLimitExhausted { usage_pct: pct });
+                }
+            }
+            FdHealth::Warning(pct) => {
+                tracing::warn!(
+                    fd_usage_pct = pct,
+                    "FD usage is elevated; cleaning up stale processes"
+                );
+                self.cleanup_exited_processes().await;
+            }
+            FdHealth::Healthy => {}
+        }
+
         let cwd = request
             .workdir
             .clone()
@@ -517,6 +543,7 @@ impl UnifiedExecProcessManager {
 
         spawn_exit_watcher(
             Arc::clone(&process),
+            self.clone(),
             Arc::clone(&context.session),
             Arc::clone(&context.turn),
             context.call_id.clone(),
@@ -768,6 +795,38 @@ impl UnifiedExecProcessManager {
         lru.into_iter()
             .find(|(process_id, _, _)| !protected.contains(process_id))
             .map(|(process_id, _, _)| process_id)
+    }
+
+    /// Removes all processes that have already exited from the store,
+    /// freeing their associated file descriptors (PTY fds, pipes, etc.).
+    pub(crate) async fn cleanup_exited_processes(&self) {
+        let exited_entries: Vec<ProcessEntry> = {
+            let mut store = self.process_store.lock().await;
+            let exited_ids: Vec<String> = store
+                .processes
+                .iter()
+                .filter(|(_, entry)| entry.process.has_exited())
+                .map(|(id, _)| id.clone())
+                .collect();
+            let mut entries = Vec::with_capacity(exited_ids.len());
+            for id in &exited_ids {
+                if let Some(entry) = store.remove(id) {
+                    entries.push(entry);
+                }
+            }
+            entries
+        };
+        let count = exited_entries.len();
+        for entry in &exited_entries {
+            Self::unregister_network_approval_for_entry(entry).await;
+            entry.process.terminate();
+        }
+        if count > 0 {
+            tracing::info!(
+                cleaned_up = count,
+                "Cleaned up exited unified exec processes to reclaim FDs"
+            );
+        }
     }
 
     pub(crate) async fn terminate_all_processes(&self) {

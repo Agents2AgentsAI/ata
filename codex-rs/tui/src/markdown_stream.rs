@@ -38,6 +38,16 @@ impl MarkdownStreamCollector {
         out
     }
 
+    /// Strip `<voice>` / `</voice>` tags so they never appear in rendered text.
+    ///
+    /// The LLM may produce these tags even when voice mode is off (e.g. session
+    /// resume, or voice mode turned off mid-conversation).  This is the
+    /// defense-in-depth layer that ensures tags are invisible regardless of
+    /// voice mode state.
+    fn strip_voice_tags(content: &str) -> String {
+        crate::text_formatting::strip_voice_tags(content)
+    }
+
     pub fn clear(&mut self) {
         self.buffer.clear();
         self.committed_line_count = 0;
@@ -59,7 +69,7 @@ impl MarkdownStreamCollector {
         } else {
             return Vec::new();
         };
-        let source = Self::strip_pause_sentinels(&source);
+        let source = Self::strip_voice_tags(&Self::strip_pause_sentinels(&source));
         let mut rendered: Vec<Line<'static>> = Vec::new();
         markdown::append_markdown(&source, self.width, &mut rendered);
         let mut complete_line_count = rendered.len();
@@ -101,7 +111,7 @@ impl MarkdownStreamCollector {
         );
         tracing::trace!("markdown finalize (raw source):\n---\n{source}\n---");
 
-        let source = Self::strip_pause_sentinels(&source);
+        let source = Self::strip_voice_tags(&Self::strip_pause_sentinels(&source));
         let mut rendered: Vec<Line<'static>> = Vec::new();
         markdown::append_markdown(&source, self.width, &mut rendered);
 

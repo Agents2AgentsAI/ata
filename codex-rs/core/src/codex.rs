@@ -189,7 +189,6 @@ mod mcp_startup;
 mod response_events;
 mod url_file_recovery;
 
-use crate::coordination_context;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
 use crate::file_watcher::FileWatcher;
@@ -1597,18 +1596,6 @@ impl Session {
                 (None, None)
             };
 
-        let coordination = if config.features.enabled(Feature::Coordination) {
-            coordination_context::Handle::init(
-                &config.codex_home,
-                &session_configuration.cwd,
-                &conversation_id.to_string(),
-                config.coordination.as_ref(),
-            )
-            .await
-        } else {
-            coordination_context::Handle::disabled()
-        };
-
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
             // instance. It will be replaced with one created via
@@ -1655,7 +1642,6 @@ impl Session {
             network_proxy,
             network_approval: Arc::clone(&network_approval),
             state_db: state_db_ctx.clone(),
-            coordination,
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,
@@ -1691,6 +1677,10 @@ impl Session {
             document_cache: crate::tools::handlers::DocumentCache::new(),
             next_internal_sub_id: AtomicU64::new(0),
         });
+
+        // Check that the OS file descriptor limit is high enough for
+        // sustained agent sessions. This is a one-time diagnostic at startup.
+        crate::resource_monitor::check_fd_limit_at_startup();
 
         #[cfg(feature = "lsp")]
         code_intel::setup_lsp_install_callback(&sess).await;
@@ -1962,6 +1952,12 @@ impl Session {
                     self.set_mcp_tool_selection(selected_tools).await;
                 }
 
+                // Restore document cache from replayed reading-view events so
+                // that `present_reading_view(document_id=...)` can serve cached
+                // content instantly (fast reopen) instead of forcing the agent
+                // to regenerate the document from scratch.
+                Self::restore_document_cache_from_rollout(&self.document_cache, &rollout_items);
+
                 // Defer seeding the session's initial context until the first turn starts so
                 // turn/start overrides can be merged before we write to the rollout.
                 if !is_subagent {
@@ -2033,6 +2029,49 @@ impl Session {
             RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => ev.info.clone(),
             _ => None,
         })
+    }
+
+    /// Replay persisted reading-view events to pre-populate the document
+    /// cache.  This makes `present_reading_view(document_id=...)` (without
+    /// title/content) return instantly on resumed sessions instead of
+    /// failing and forcing the agent to regenerate the entire document.
+    fn restore_document_cache_from_rollout(
+        cache: &crate::tools::handlers::DocumentCache,
+        rollout_items: &[RolloutItem],
+    ) {
+        for item in rollout_items {
+            let RolloutItem::EventMsg(ev) = item else {
+                continue;
+            };
+            match ev {
+                EventMsg::PresentDocument(e) => {
+                    cache.restore_document(e.document_id.clone(), e.title.clone(), &e.content);
+                }
+                EventMsg::UpdateDocumentSection(e) => {
+                    cache.replay_update_section(&e.document_id, e.section_index, &e.content);
+                }
+                EventMsg::AppendDocumentSection(e) => {
+                    cache.replay_append_section(&e.document_id, e.section_index, &e.content);
+                }
+                EventMsg::AddDocumentSection(e) => {
+                    cache.replay_add_section(
+                        &e.document_id,
+                        e.after_section_index,
+                        &e.heading,
+                        &e.content,
+                    );
+                }
+                EventMsg::PatchDocumentSection(e) => {
+                    cache.replay_patch_section(
+                        &e.document_id,
+                        e.section_index,
+                        &e.old_text,
+                        &e.new_text,
+                    );
+                }
+                _ => {}
+            }
+        }
     }
 
     fn extract_mcp_tool_selection_from_rollout(
@@ -3167,11 +3206,6 @@ impl Session {
                 build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
         {
             developer_sections.push(memory_prompt);
-        }
-        if let Some(coordination_instructions) =
-            self.services.coordination.developer_instructions_text()
-        {
-            developer_sections.push(coordination_instructions);
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         if let Some(collab_instructions) =
@@ -4788,11 +4822,6 @@ mod handlers {
             sess.send_event_raw(event).await;
         }
 
-        sess.services
-            .coordination
-            .shutdown(&sess.conversation_id.to_string())
-            .await;
-
         let event = Event {
             id: sub_id,
             msg: EventMsg::ShutdownComplete,
@@ -5213,11 +5242,6 @@ pub(crate) async fn run_turn(
     sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
         .await;
 
-    sess.services
-        .coordination
-        .update_description(&sess.conversation_id.to_string(), &input)
-        .await;
-
     // Track the previous-turn baseline from the regular user-turn path only so
     // standalone tasks (compact/shell/review/undo) cannot suppress future
     // model/realtime injections.
@@ -5246,7 +5270,6 @@ pub(crate) async fn run_turn(
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
 
     let mut url_file_recovery_state = UrlFileRecoveryState::default();
-    let mut coord_tracker = coordination_context::CoordinationTracker::new();
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -5288,19 +5311,6 @@ pub(crate) async fn run_turn(
             });
             sess.send_event(&turn_context, event).await;
             break;
-        }
-
-        if let Some(item) = sess
-            .services
-            .coordination
-            .build_if_changed(
-                &mut coord_tracker,
-                &sess.conversation_id.to_string(),
-                &turn_context.cwd,
-            )
-            .await
-        {
-            sess.record_conversation_items(&turn_context, &[item]).await;
         }
 
         // Construct the input that we will send to the model.

@@ -8,6 +8,9 @@ use codex_core::auth::login_with_provider_api_key;
 use codex_core::auth::read_openai_api_key_from_env;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::edit::default_model_for_provider;
+use codex_core::config::types::AtaAccountConfig;
+use codex_core::supabase::SupabaseClient;
+use codex_core::supabase::save_ata_session;
 use codex_login::DeviceCode;
 use codex_login::GeminiServerOptions;
 use codex_login::ServerOptions;
@@ -106,6 +109,12 @@ pub(crate) enum SignInState {
     ProviderOauthContinueInBrowser(ProviderOauthContinueInBrowserState),
     ProviderOauthSuccessMessage(ProviderOption),
     ProviderConfigured,
+    AtaEmailInput(AtaEmailInputState),
+    AtaSendingOtp { email: String },
+    AtaOtpInput(AtaOtpInputState),
+    AtaVerifyingOtp { _email: String },
+    AtaSuccessMessage,
+    AtaSuccess,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,6 +124,7 @@ pub(crate) enum SignInOption {
     #[allow(dead_code)]
     ApiKey,
     ConfigureProviders,
+    AtaAccount,
 }
 
 const API_KEY_DISABLED_MESSAGE: &str = "API key login is disabled.";
@@ -161,6 +171,19 @@ pub(crate) struct ContinueWithDeviceCodeState {
     cancel: Option<Arc<Notify>>,
 }
 
+#[derive(Clone)]
+pub(crate) struct AtaEmailInputState {
+    pub email: String,
+    pub error: Option<String>,
+}
+
+#[derive(Clone)]
+pub(crate) struct AtaOtpInputState {
+    pub email: String,
+    pub otp: String,
+    pub error: Option<String>,
+}
+
 impl Drop for ContinueInBrowserState {
     fn drop(&mut self) {
         if let Some(handle) = &self.shutdown_flag {
@@ -186,6 +209,10 @@ pub(crate) enum ProviderAuthMethod {
 impl KeyboardHandler for AuthModeWidget {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.handle_api_key_entry_key_event(&key_event) {
+            return;
+        }
+
+        if self.handle_ata_input_key_event(&key_event) {
             return;
         }
 
@@ -228,6 +255,42 @@ impl KeyboardHandler for AuthModeWidget {
                 SignInState::ProviderOauthSuccessMessage(_) => {
                     *self.sign_in_state.write().unwrap() = SignInState::ProviderConfigured;
                 }
+                SignInState::AtaSuccessMessage => {
+                    *self.sign_in_state.write().unwrap() = SignInState::AtaSuccess;
+                }
+                SignInState::AtaEmailInput(state) => {
+                    let trimmed = state.email.trim().to_string();
+                    if trimmed.is_empty() || !trimmed.contains('@') {
+                        if let SignInState::AtaEmailInput(s) =
+                            &mut *self.sign_in_state.write().unwrap()
+                        {
+                            s.error = Some("Please enter a valid email address.".to_string());
+                        }
+                    } else {
+                        *self.sign_in_state.write().unwrap() = SignInState::AtaSendingOtp {
+                            email: trimmed.clone(),
+                        };
+                        self.spawn_ata_send_otp(trimmed);
+                    }
+                    self.request_frame.schedule_frame();
+                }
+                SignInState::AtaOtpInput(state) => {
+                    if state.otp.len() != 6 {
+                        if let SignInState::AtaOtpInput(s) =
+                            &mut *self.sign_in_state.write().unwrap()
+                        {
+                            s.error = Some("Please enter the 6-digit code.".to_string());
+                        }
+                    } else {
+                        let email = state.email.clone();
+                        let otp = state.otp;
+                        *self.sign_in_state.write().unwrap() = SignInState::AtaVerifyingOtp {
+                            _email: email.clone(),
+                        };
+                        self.spawn_ata_verify_otp(email, otp);
+                    }
+                    self.request_frame.schedule_frame();
+                }
                 _ => {}
             },
             KeyCode::Esc => {
@@ -257,6 +320,14 @@ impl KeyboardHandler for AuthModeWidget {
                         drop(sign_in_state);
                         self.request_frame.schedule_frame();
                     }
+                    SignInState::AtaEmailInput(_)
+                    | SignInState::AtaOtpInput(_)
+                    | SignInState::AtaSendingOtp { .. }
+                    | SignInState::AtaVerifyingOtp { .. } => {
+                        *sign_in_state = SignInState::PickMode;
+                        drop(sign_in_state);
+                        self.request_frame.schedule_frame();
+                    }
                     _ => {}
                 }
             }
@@ -265,6 +336,9 @@ impl KeyboardHandler for AuthModeWidget {
     }
 
     fn handle_paste(&mut self, pasted: String) {
+        if self.handle_ata_input_paste(&pasted) {
+            return;
+        }
         let _ = self.handle_api_key_entry_paste(pasted);
     }
 }
@@ -303,6 +377,7 @@ impl AuthModeWidget {
         if self.is_api_login_allowed() {
             options.push(SignInOption::ConfigureProviders);
         }
+        options.push(SignInOption::AtaAccount);
         options
     }
 
@@ -315,6 +390,7 @@ impl AuthModeWidget {
         if self.is_api_login_allowed() {
             options.push(SignInOption::ConfigureProviders);
         }
+        options.push(SignInOption::AtaAccount);
         options
     }
 
@@ -366,6 +442,9 @@ impl AuthModeWidget {
                     self.disallow_api_login();
                 }
             }
+            SignInOption::AtaAccount => {
+                self.start_ata_email_login();
+            }
         }
     }
 
@@ -380,7 +459,7 @@ impl AuthModeWidget {
         let mut lines: Vec<Line> = vec![
             Line::from(vec![
                 "  ".into(),
-                "Sign in to use Ata as part of your paid plan or connect ".into(),
+                "Sign in to use A2A as part of your paid plan or connect ".into(),
             ]),
             Line::from(vec![
                 "  ".into(),
@@ -457,6 +536,14 @@ impl AuthModeWidget {
                         option,
                         "Configure providers",
                         "Set up API keys for providers (OpenAI, Anthropic, Gemini)",
+                    ));
+                }
+                SignInOption::AtaAccount => {
+                    lines.extend(create_mode_item(
+                        idx,
+                        option,
+                        "Sign in with A2A account",
+                        "Sign in for shared keys and platform features",
                     ));
                 }
             }
@@ -1123,6 +1210,266 @@ impl AuthModeWidget {
             }
         }
     }
+
+    fn start_ata_email_login(&mut self) {
+        self.error = None;
+        *self.sign_in_state.write().unwrap() = SignInState::AtaEmailInput(AtaEmailInputState {
+            email: String::new(),
+            error: None,
+        });
+        self.request_frame.schedule_frame();
+    }
+
+    fn spawn_ata_send_otp(&self, email: String) {
+        let sign_in_state = self.sign_in_state.clone();
+        let request_frame = self.request_frame.clone();
+        tokio::spawn(async move {
+            let config = AtaAccountConfig::default();
+            let client = SupabaseClient::new(&config.supabase_url, &config.supabase_anon_key);
+            match codex_login::send_ata_otp(&client, &email).await {
+                Ok(()) => {
+                    *sign_in_state.write().unwrap() = SignInState::AtaOtpInput(AtaOtpInputState {
+                        email,
+                        otp: String::new(),
+                        error: None,
+                    });
+                }
+                Err(e) => {
+                    *sign_in_state.write().unwrap() =
+                        SignInState::AtaEmailInput(AtaEmailInputState {
+                            email,
+                            error: Some(format!("Failed to send code: {e}")),
+                        });
+                }
+            }
+            request_frame.schedule_frame();
+        });
+    }
+
+    fn spawn_ata_verify_otp(&self, email: String, otp: String) {
+        let sign_in_state = self.sign_in_state.clone();
+        let request_frame = self.request_frame.clone();
+        let codex_home = self.codex_home.clone();
+        tokio::spawn(async move {
+            let config = AtaAccountConfig::default();
+            let client = SupabaseClient::new(&config.supabase_url, &config.supabase_anon_key);
+            match codex_login::verify_ata_otp(&client, &email, &otp).await {
+                Ok(session) => {
+                    if let Err(e) = save_ata_session(&codex_home, &session) {
+                        *sign_in_state.write().unwrap() =
+                            SignInState::AtaEmailInput(AtaEmailInputState {
+                                email,
+                                error: Some(format!("Failed to save session: {e}")),
+                            });
+                    } else {
+                        *sign_in_state.write().unwrap() = SignInState::AtaSuccessMessage;
+                    }
+                }
+                Err(e) => {
+                    *sign_in_state.write().unwrap() = SignInState::AtaOtpInput(AtaOtpInputState {
+                        email,
+                        otp: String::new(),
+                        error: Some(format!("Verification failed: {e}")),
+                    });
+                }
+            }
+            request_frame.schedule_frame();
+        });
+    }
+
+    fn handle_ata_input_key_event(&mut self, key_event: &KeyEvent) -> bool {
+        let mut guard = self.sign_in_state.write().unwrap();
+        match &mut *guard {
+            SignInState::AtaEmailInput(state) => match key_event.code {
+                KeyCode::Backspace => {
+                    state.email.pop();
+                    state.error = None;
+                    drop(guard);
+                    self.request_frame.schedule_frame();
+                    true
+                }
+                KeyCode::Char(c)
+                    if key_event.kind == KeyEventKind::Press
+                        && !key_event.modifiers.contains(KeyModifiers::SUPER)
+                        && !key_event.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key_event.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    state.email.push(c);
+                    state.error = None;
+                    drop(guard);
+                    self.request_frame.schedule_frame();
+                    true
+                }
+                _ => false,
+            },
+            SignInState::AtaOtpInput(state) => match key_event.code {
+                KeyCode::Backspace => {
+                    state.otp.pop();
+                    state.error = None;
+                    drop(guard);
+                    self.request_frame.schedule_frame();
+                    true
+                }
+                KeyCode::Char(c)
+                    if c.is_ascii_digit()
+                        && key_event.kind == KeyEventKind::Press
+                        && !key_event.modifiers.contains(KeyModifiers::SUPER)
+                        && !key_event.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key_event.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    if state.otp.len() < 6 {
+                        state.otp.push(c);
+                    }
+                    state.error = None;
+                    drop(guard);
+                    self.request_frame.schedule_frame();
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    fn handle_ata_input_paste(&mut self, pasted: &str) -> bool {
+        if pasted.is_empty() {
+            return false;
+        }
+        let mut guard = self.sign_in_state.write().unwrap();
+        match &mut *guard {
+            SignInState::AtaEmailInput(state) => {
+                state.email.push_str(pasted.trim());
+                state.error = None;
+                drop(guard);
+                self.request_frame.schedule_frame();
+                true
+            }
+            SignInState::AtaOtpInput(state) => {
+                for c in pasted.chars() {
+                    if c.is_ascii_digit() && state.otp.len() < 6 {
+                        state.otp.push(c);
+                    }
+                }
+                state.error = None;
+                drop(guard);
+                self.request_frame.schedule_frame();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn render_ata_email_input(&self, area: Rect, buf: &mut Buffer, state: &AtaEmailInputState) {
+        let mut lines: Vec<Line<'_>> = vec![
+            "  Sign in with A2A account".bold().into(),
+            "".into(),
+            "  Enter your email address".dim().into(),
+            "".into(),
+        ];
+
+        if state.email.is_empty() {
+            lines.push(Line::from(vec!["  ".into(), "your@email.com".dim()]));
+        } else {
+            lines.push(Line::from(vec!["  ".into(), state.email.as_str().into()]));
+        }
+
+        lines.push("".into());
+        if let Some(err) = &state.error {
+            lines.push(Line::from(vec!["  ".into(), err.as_str().red()]));
+        }
+        lines.push("  Enter to continue \u{00b7} Esc to cancel".dim().into());
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+
+    fn render_ata_sending_otp(&self, area: Rect, buf: &mut Buffer, email: &str) {
+        let mut spans = vec!["  ".into()];
+        let banner = "Sign in with A2A account";
+        if self.animations_enabled {
+            self.request_frame
+                .schedule_frame_in(std::time::Duration::from_millis(100));
+            spans.extend(shimmer_spans(banner));
+        } else {
+            spans.push(banner.into());
+        }
+
+        let lines = vec![
+            spans.into(),
+            "".into(),
+            Line::from(format!("  Sending sign-in code to {email}...")),
+            "".into(),
+            "  Press Esc to cancel".dim().into(),
+        ];
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+
+    fn render_ata_otp_input(&self, area: Rect, buf: &mut Buffer, state: &AtaOtpInputState) {
+        let mut lines: Vec<Line<'_>> = vec![
+            "  Check your email".bold().into(),
+            "".into(),
+            Line::from(format!("  Enter the 6-digit code sent to {}", state.email).dim()),
+            "".into(),
+        ];
+
+        if state.otp.is_empty() {
+            lines.push(Line::from(vec!["  ".into(), "000000".dim()]));
+        } else {
+            lines.push(Line::from(vec!["  ".into(), state.otp.as_str().into()]));
+        }
+
+        lines.push("".into());
+        if let Some(err) = &state.error {
+            lines.push(Line::from(vec!["  ".into(), err.as_str().red()]));
+        }
+        lines.push("  Enter to verify \u{00b7} Esc to cancel".dim().into());
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+
+    fn render_ata_verifying_otp(&self, area: Rect, buf: &mut Buffer) {
+        let mut spans = vec!["  ".into()];
+        let banner = "Sign in with A2A account";
+        if self.animations_enabled {
+            self.request_frame
+                .schedule_frame_in(std::time::Duration::from_millis(100));
+            spans.extend(shimmer_spans(banner));
+        } else {
+            spans.push(banner.into());
+        }
+
+        let lines = vec![
+            spans.into(),
+            "".into(),
+            "  Verifying...".into(),
+            "".into(),
+            "  Press Esc to cancel".dim().into(),
+        ];
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+
+    fn render_ata_success_message(&self, area: Rect, buf: &mut Buffer) {
+        let lines = vec![
+            "✓ Successfully signed in with A2A account!"
+                .fg(Color::Green)
+                .into(),
+            "".into(),
+            "  Press Enter to continue".fg(Color::Cyan).into(),
+        ];
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
 }
 
 impl StepStateProvider for AuthModeWidget {
@@ -1139,10 +1486,16 @@ impl StepStateProvider for AuthModeWidget {
             | SignInState::PickProviderAuthMethod(_)
             | SignInState::ProviderList
             | SignInState::ProviderOauthContinueInBrowser(_)
-            | SignInState::ProviderOauthSuccessMessage(_) => StepState::InProgress,
+            | SignInState::ProviderOauthSuccessMessage(_)
+            | SignInState::AtaEmailInput(_)
+            | SignInState::AtaSendingOtp { .. }
+            | SignInState::AtaOtpInput(_)
+            | SignInState::AtaVerifyingOtp { .. }
+            | SignInState::AtaSuccessMessage => StepState::InProgress,
             SignInState::ChatGptSuccess
             | SignInState::ApiKeyConfigured
-            | SignInState::ProviderConfigured => StepState::Complete,
+            | SignInState::ProviderConfigured
+            | SignInState::AtaSuccess => StepState::Complete,
         }
     }
 }
@@ -1197,6 +1550,27 @@ impl WidgetRef for AuthModeWidget {
             }
             SignInState::ProviderConfigured => {
                 self.render_provider_configured(area, buf);
+            }
+            SignInState::AtaEmailInput(state) => {
+                self.render_ata_email_input(area, buf, state);
+            }
+            SignInState::AtaSendingOtp { email } => {
+                self.render_ata_sending_otp(area, buf, email);
+            }
+            SignInState::AtaOtpInput(state) => {
+                self.render_ata_otp_input(area, buf, state);
+            }
+            SignInState::AtaVerifyingOtp { .. } => {
+                self.render_ata_verifying_otp(area, buf);
+            }
+            SignInState::AtaSuccessMessage => {
+                self.render_ata_success_message(area, buf);
+            }
+            SignInState::AtaSuccess => {
+                let lines = vec!["✓ Signed in with A2A account".fg(Color::Green).into()];
+                Paragraph::new(lines)
+                    .wrap(Wrap { trim: false })
+                    .render(area, buf);
             }
         }
     }
@@ -1271,6 +1645,7 @@ mod tests {
                 SignInOption::ChatGpt,
                 SignInOption::DeviceCode,
                 SignInOption::ConfigureProviders,
+                SignInOption::AtaAccount,
             ],
         );
     }

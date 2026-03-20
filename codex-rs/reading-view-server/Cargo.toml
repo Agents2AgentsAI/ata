@@ -1,0 +1,19 @@
+[package]
+name = "codex-reading-view-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+axum = { workspace = true, default-features = false, features = [
+    "http1",
+    "tokio",
+    "ws",
+] }
+futures = { workspace = true, default-features = false }
+tokio = { workspace = true, features = ["net", "sync"] }
+tower-http = { workspace = true, features = ["fs"] }
+tracing = { workspace = true }

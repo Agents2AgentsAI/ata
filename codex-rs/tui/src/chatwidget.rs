@@ -360,20 +360,15 @@ impl UnifiedExecWaitStreak {
     }
 }
 
-/// Strip `<voice>` / `</voice>` wrapper tags from text.
+/// Strip `<voice>` / `</voice>` wrapper tags (with or without attributes)
+/// from text.
 ///
 /// This is intentionally NOT behind a `cfg` gate because voice tags can appear
 /// in persisted rollout data from any platform.  When the `voice-input` feature
 /// is active, the richer `VoiceTagParser` pipeline handles stripping; this
 /// function is the fallback for all other configurations.
 fn strip_voice_tags(text: &str) -> String {
-    if !text.contains('<') {
-        return text.to_string();
-    }
-    text.replace("<voice>", "")
-        .replace("</voice>", "")
-        .replace("<Voice>", "")
-        .replace("</Voice>", "")
+    crate::text_formatting::strip_voice_tags(text)
 }
 
 fn is_unified_exec_source(source: ExecCommandSource) -> bool {
@@ -747,6 +742,27 @@ pub(crate) struct ChatWidget {
     /// configured so they appear after the welcome/Tip box.
     #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     pending_voice_startup_cells: Vec<Box<dyn HistoryCell>>,
+    /// Current reading view mode chosen via the `/reading-view` setup popup.
+    pub(crate) reading_view_mode: crate::app_event::ReadingViewMode,
+    /// Handle to the running reading-view HTTP/WebSocket server, if any.
+    reading_view_server: Option<codex_reading_view_server::ReadingViewServer>,
+    /// Events queued while the reading-view server is starting up (async).
+    /// Flushed in `set_reading_view_server()` once the handle arrives.
+    reading_view_pending_events: Vec<String>,
+    /// Section update events (updateSection + updateStreamingState pairs) that
+    /// should be streamed to the browser with small delays so sections appear
+    /// progressively rather than all at once.  Populated by `on_present_document`
+    /// and flushed (with per-section delays) in `set_reading_view_server()`.
+    reading_view_pending_section_updates: Vec<String>,
+    /// Title of the document currently displayed in the browser reading view.
+    /// Populated when `on_present_document` fires in browser mode.
+    reading_view_browser_title: String,
+    /// Document ID for the browser reading view (same as the doc_id used in
+    /// codex-core's document cache).
+    reading_view_browser_doc_id: String,
+    /// Section headings + content for the document in the browser reading view.
+    /// Kept in sync as sections are updated, appended, or added.
+    reading_view_browser_sections: Vec<(String, String)>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -3191,6 +3207,23 @@ impl ChatWidget {
         let current_cwd = Some(config.cwd.clone());
         let queued_message_edit_binding =
             queued_message_edit_binding_for_terminal(terminal_info().name);
+        let reading_view_mode = config
+            .config_layer_stack
+            .effective_config()
+            .as_table()
+            .and_then(|t| t.get("reading_view"))
+            .and_then(|v| {
+                v.clone()
+                    .try_into::<codex_core::config::types::ReadingViewToml>()
+                    .ok()
+            })
+            .and_then(|rv| rv.mode)
+            .map(|m| match m.as_str() {
+                "browser" => crate::app_event::ReadingViewMode::Browser,
+                "disabled" => crate::app_event::ReadingViewMode::Disabled,
+                _ => crate::app_event::ReadingViewMode::Tui,
+            })
+            .unwrap_or_default();
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -3296,6 +3329,13 @@ impl ChatWidget {
             deferred_voice_cells: Vec::new(),
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
             pending_voice_startup_cells: Vec::new(),
+            reading_view_mode,
+            reading_view_server: None,
+            reading_view_pending_events: Vec::new(),
+            reading_view_pending_section_updates: Vec::new(),
+            reading_view_browser_title: String::new(),
+            reading_view_browser_doc_id: String::new(),
+            reading_view_browser_sections: Vec::new(),
         };
 
         widget.prefetch_rate_limits();
@@ -3346,28 +3386,6 @@ impl ChatWidget {
                 mobile_available,
                 research_enabled,
             );
-        }
-
-        // Auto-enable voice mode if persisted in config.
-        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
-        {
-            if widget.config.features.enabled(Feature::VoiceMode) {
-                let voice_config = widget
-                    .config
-                    .config_layer_stack
-                    .effective_config()
-                    .as_table()
-                    .and_then(|t| t.get("voice_mode"))
-                    .and_then(|v| {
-                        v.clone()
-                            .try_into::<codex_core::config::types::VoiceModeToml>()
-                            .ok()
-                    })
-                    .unwrap_or_default();
-                if voice_config.enabled == Some(true) {
-                    widget.toggle_voice_mode();
-                }
-            }
         }
 
         widget
@@ -3426,6 +3444,23 @@ impl ChatWidget {
 
         let queued_message_edit_binding =
             queued_message_edit_binding_for_terminal(terminal_info().name);
+        let reading_view_mode = config
+            .config_layer_stack
+            .effective_config()
+            .as_table()
+            .and_then(|t| t.get("reading_view"))
+            .and_then(|v| {
+                v.clone()
+                    .try_into::<codex_core::config::types::ReadingViewToml>()
+                    .ok()
+            })
+            .and_then(|rv| rv.mode)
+            .map(|m| match m.as_str() {
+                "browser" => crate::app_event::ReadingViewMode::Browser,
+                "disabled" => crate::app_event::ReadingViewMode::Disabled,
+                _ => crate::app_event::ReadingViewMode::Tui,
+            })
+            .unwrap_or_default();
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -3531,6 +3566,13 @@ impl ChatWidget {
             deferred_voice_cells: Vec::new(),
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
             pending_voice_startup_cells: Vec::new(),
+            reading_view_mode,
+            reading_view_server: None,
+            reading_view_pending_events: Vec::new(),
+            reading_view_pending_section_updates: Vec::new(),
+            reading_view_browser_title: String::new(),
+            reading_view_browser_doc_id: String::new(),
+            reading_view_browser_sections: Vec::new(),
         };
 
         widget.prefetch_rate_limits();
@@ -3631,6 +3673,23 @@ impl ChatWidget {
 
         let queued_message_edit_binding =
             queued_message_edit_binding_for_terminal(terminal_info().name);
+        let reading_view_mode = config
+            .config_layer_stack
+            .effective_config()
+            .as_table()
+            .and_then(|t| t.get("reading_view"))
+            .and_then(|v| {
+                v.clone()
+                    .try_into::<codex_core::config::types::ReadingViewToml>()
+                    .ok()
+            })
+            .and_then(|rv| rv.mode)
+            .map(|m| match m.as_str() {
+                "browser" => crate::app_event::ReadingViewMode::Browser,
+                "disabled" => crate::app_event::ReadingViewMode::Disabled,
+                _ => crate::app_event::ReadingViewMode::Tui,
+            })
+            .unwrap_or_default();
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -3736,6 +3795,13 @@ impl ChatWidget {
             deferred_voice_cells: Vec::new(),
             #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
             pending_voice_startup_cells: Vec::new(),
+            reading_view_mode,
+            reading_view_server: None,
+            reading_view_pending_events: Vec::new(),
+            reading_view_pending_section_updates: Vec::new(),
+            reading_view_browser_title: String::new(),
+            reading_view_browser_doc_id: String::new(),
+            reading_view_browser_sections: Vec::new(),
         };
 
         widget.prefetch_rate_limits();
@@ -3785,28 +3851,6 @@ impl ChatWidget {
                 mobile_available,
                 research_enabled,
             );
-        }
-
-        // Auto-enable voice mode if persisted in config (mirrors logic in `new()`).
-        #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
-        {
-            if widget.config.features.enabled(Feature::VoiceMode) {
-                let voice_config = widget
-                    .config
-                    .config_layer_stack
-                    .effective_config()
-                    .as_table()
-                    .and_then(|t| t.get("voice_mode"))
-                    .and_then(|v| {
-                        v.clone()
-                            .try_into::<codex_core::config::types::VoiceModeToml>()
-                            .ok()
-                    })
-                    .unwrap_or_default();
-                if voice_config.enabled == Some(true) {
-                    widget.toggle_voice_mode();
-                }
-            }
         }
 
         widget
@@ -4129,6 +4173,12 @@ impl ChatWidget {
         false
     }
 
+    fn start_account_view(&mut self) {
+        use crate::bottom_pane::AccountView;
+        let view = AccountView::new(self.frame_requester.clone(), self.config.codex_home.clone());
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
     fn clear_model_selection_for_logout(&self) {
         // Clear the model selection before logout so the next provider gets its default.
         // Clear both global config and active profile (if any) to ensure the model is fully reset.
@@ -4359,6 +4409,9 @@ impl ChatWidget {
             SlashCommand::Quit | SlashCommand::Exit => {
                 self.request_quit_without_confirmation();
             }
+            SlashCommand::Account => {
+                self.start_account_view();
+            }
             SlashCommand::Logout => {
                 self.clear_model_selection_for_logout();
                 if let Err(e) = self.auth_manager.logout() {
@@ -4435,9 +4488,7 @@ impl ChatWidget {
             SlashCommand::Ps => {
                 self.add_ps_output();
             }
-            SlashCommand::Team => {
-                self.add_team_output(String::new());
-            }
+            SlashCommand::Team => {}
             SlashCommand::Clean => {
                 self.clean_background_terminals();
             }
@@ -4620,7 +4671,6 @@ impl ChatWidget {
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::Team => {
-                self.add_team_output(trimmed.to_string());
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
@@ -5287,7 +5337,9 @@ impl ChatWidget {
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
-            EventMsg::PresentDocument(ev) => self.on_present_document(ev, from_replay),
+            EventMsg::PresentDocument(ev) => {
+                self.on_present_document(ev, from_replay, is_resume_initial_replay)
+            }
             EventMsg::UpdateDocumentSection(ev) => self.on_update_document_section(ev),
             EventMsg::AppendDocumentSection(ev) => self.on_append_document_section(ev),
             EventMsg::AddDocumentSection(ev) => self.on_add_document_section(ev),
@@ -5936,23 +5988,6 @@ impl ChatWidget {
             })
             .collect();
         self.add_to_history(history_cell::new_unified_exec_processes_output(processes));
-    }
-
-    fn add_team_output(&mut self, args: String) {
-        let codex_home = self.config.codex_home.clone();
-        let cwd = self.config.cwd.clone();
-        let tx = self.app_event_tx.clone();
-        let my_session_id = self.thread_id.map(|t| t.to_string());
-        tokio::spawn(async move {
-            let lines =
-                match build_team_lines(&codex_home, &cwd, &args, my_session_id.as_deref()).await {
-                    Ok(lines) => lines,
-                    Err(e) => vec![Line::from(
-                        format!("Failed to query coordination: {e}").red(),
-                    )],
-                };
-            tx.send(AppEvent::TeamResult(lines));
-        });
     }
 
     fn clean_background_terminals(&mut self) {
@@ -7206,7 +7241,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_research_popup(&mut self) {
-        let items = build_research_tool_items(&self.config.features);
+        let items = build_research_tool_items(&self.config.features, self.reading_view_mode);
         let view = ResearchToolsView::new(items, self.app_event_tx.clone());
         self.bottom_pane.show_view(Box::new(view));
     }
@@ -9431,6 +9466,19 @@ async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Vec<RateLimitSn
     }
 }
 
+impl ChatWidget {
+    /// Set the reading view mode (called from AppEvent handler).
+    pub(crate) fn set_reading_view_mode(&mut self, mode: crate::app_event::ReadingViewMode) {
+        self.reading_view_mode = mode;
+        let status = match mode {
+            crate::app_event::ReadingViewMode::Tui => "Reading view: TUI mode",
+            crate::app_event::ReadingViewMode::Browser => "Reading view: browser mode",
+            crate::app_event::ReadingViewMode::Disabled => "Reading view: disabled",
+        };
+        self.add_info_message(status.to_string(), None);
+    }
+}
+
 // Document reader integration (fork-specific, kept in a separate file to reduce
 // merge conflicts with upstream).
 include!("chatwidget_document_reader.rs");
@@ -9473,148 +9521,6 @@ pub(crate) fn show_review_commit_picker_with_entries(
         search_placeholder: Some("Type to search commits".to_string()),
         ..Default::default()
     });
-}
-
-// ---------------------------------------------------------------------------
-// /team command — coordination visibility
-// ---------------------------------------------------------------------------
-
-/// Derive a stable, human-readable name from a session ID.
-///
-/// Uses 3 bytes from the UUID to index into adjective x color x animal word
-/// lists (64 x 64 x 64 = 262,144 combinations), producing names like
-/// "swift-amber-falcon". The name is deterministic: the same session_id
-/// always yields the same name.
-fn coordination_agent_name(session_id: &str) -> String {
-    codex_coordination::agent_name(session_id)
-}
-
-async fn build_team_lines(
-    codex_home: &std::path::Path,
-    cwd: &std::path::Path,
-    args: &str,
-    my_session_id: Option<&str>,
-) -> anyhow::Result<Vec<Line<'static>>> {
-    use codex_coordination::CoordinationDb;
-    use ratatui::style::Modifier;
-    use ratatui::style::Style;
-    use ratatui::text::Span;
-
-    let db = CoordinationDb::open(codex_home).await?;
-    let repo_path = codex_core::git_info::get_git_common_dir(cwd)
-        .await
-        .or_else(|| codex_core::git_info::get_git_repo_root(cwd))
-        .unwrap_or_else(|| cwd.to_path_buf())
-        .to_string_lossy()
-        .to_string();
-
-    let bold = Style::default().add_modifier(Modifier::BOLD);
-    let dim = Style::default().add_modifier(Modifier::DIM);
-
-    let trimmed = args.trim();
-    let show_messages = trimmed.starts_with("messages") || trimmed.starts_with("msgs");
-
-    if show_messages {
-        // Parse optional agent filter: `/team messages <name>`
-        let filter_name = trimmed
-            .strip_prefix("messages")
-            .or_else(|| trimmed.strip_prefix("msgs"))
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string);
-
-        let messages = db.recent_messages(&repo_path).await?;
-        let sessions = db.active_sessions(&repo_path).await?;
-
-        // Build session_id → agent name map.
-        let name_map: std::collections::HashMap<String, String> = sessions
-            .iter()
-            .map(|s| (s.session_id.clone(), coordination_agent_name(&s.session_id)))
-            .collect();
-
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from(Span::styled("Coordination Messages", bold)));
-        lines.push(Line::default());
-
-        let filtered: Vec<_> = messages
-            .iter()
-            .filter(|m| {
-                if let Some(ref filter) = filter_name {
-                    let agent = name_map
-                        .get(&m.session_id)
-                        .cloned()
-                        .unwrap_or_else(|| coordination_agent_name(&m.session_id));
-                    agent.starts_with(filter.as_str())
-                } else {
-                    true
-                }
-            })
-            .collect();
-
-        if filtered.is_empty() {
-            let msg = if filter_name.is_some() {
-                "  No messages found for that agent."
-            } else {
-                "  No recent messages."
-            };
-            lines.push(Line::from(Span::styled(msg, dim)));
-        } else {
-            for m in filtered {
-                let agent = name_map
-                    .get(&m.session_id)
-                    .cloned()
-                    .unwrap_or_else(|| coordination_agent_name(&m.session_id));
-                let is_you = my_session_id == Some(m.session_id.as_str());
-                let label = if is_you {
-                    format!("(you) {agent}")
-                } else {
-                    agent
-                };
-                lines.push(Line::from(vec![
-                    Span::raw("  ["),
-                    Span::styled(label, bold),
-                    Span::raw("] "),
-                    Span::styled(format!("{}: ", m.message_type), dim),
-                    Span::raw(m.message.clone()),
-                ]));
-            }
-        }
-        Ok(lines)
-    } else {
-        // Agents mode (default, or explicit `/team agents`).
-        let sessions = db.active_sessions(&repo_path).await?;
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from(Span::styled("Coordination Agents", bold)));
-        lines.push(Line::default());
-
-        if sessions.is_empty() {
-            lines.push(Line::from(Span::styled("  No active agents.", dim)));
-        } else {
-            for s in &sessions {
-                let name = coordination_agent_name(&s.session_id);
-                let is_you = my_session_id == Some(s.session_id.as_str());
-                let branch = s.branch.as_deref().unwrap_or("—");
-                let desc = s.description.as_deref().unwrap_or("");
-
-                let name_display = if is_you {
-                    format!("(you) {name}")
-                } else {
-                    name
-                };
-
-                let mut spans = vec![
-                    Span::raw("  "),
-                    Span::styled(format!("{name_display:<34}"), bold),
-                    Span::raw(format!(" {branch:<20}")),
-                ];
-                if !desc.is_empty() {
-                    spans.push(Span::styled(format!(" \"{desc}\""), dim));
-                }
-                lines.push(Line::from(spans));
-            }
-        }
-        Ok(lines)
-    }
 }
 
 /// Strip system instruction prefixes that were injected for the model but
@@ -9699,6 +9605,29 @@ fn strip_system_instruction_prefix(
     // Document reader close feedback is entirely a system instruction.
     if message.starts_with("[The user closed the document reader") {
         return (String::new(), Vec::new());
+    }
+
+    // Document reader follow-up questions: extract just the user's question,
+    // stripping both the context header and the tool instructions after the
+    // sentinel so only the short question is visible in chat history.
+    const READER_INSTR_SEP: &str = "\n\n<!-- READER_TOOL_INSTRUCTIONS -->\n";
+    if message.starts_with("[The user is reading")
+        && let Some(cut) = message.find(READER_INSTR_SEP)
+    {
+        let before_sentinel = &message[..cut];
+        let question = if let Some(bracket_end) = before_sentinel.find("]\n\n") {
+            let after_header = &before_sentinel[bracket_end + 3..];
+            if let Some(para_end) = after_header.find("\n\n") {
+                after_header[..para_end].trim().to_string()
+            } else {
+                after_header.trim().to_string()
+            }
+        } else {
+            before_sentinel.trim().to_string()
+        };
+        // The extracted question is a substring, so original byte ranges
+        // from text_elements are no longer valid — return empty.
+        return (question, Vec::new());
     }
 
     (message, text_elements)

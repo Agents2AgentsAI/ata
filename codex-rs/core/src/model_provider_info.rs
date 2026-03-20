@@ -154,15 +154,20 @@ impl ModelProviderInfo {
         &self,
         auth_mode: Option<AuthMode>,
     ) -> crate::error::Result<ApiProvider> {
-        let default_base_url = if matches!(auth_mode, Some(AuthMode::Chatgpt)) {
-            "https://chatgpt.com/backend-api/codex"
-        } else {
-            "https://api.openai.com/v1"
+        let default_base_url = match auth_mode {
+            Some(AuthMode::Chatgpt) => "https://chatgpt.com/backend-api/codex".to_string(),
+            Some(AuthMode::Ata) => std::env::var("ATA_OPENAI_PROXY_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or_else(|| {
+                    format!(
+                        "{}/functions/v1/proxy-openai",
+                        crate::config::types::DEFAULT_ATA_SUPABASE_URL
+                    )
+                }),
+            _ => "https://api.openai.com/v1".to_string(),
         };
-        let base_url = self
-            .base_url
-            .clone()
-            .unwrap_or_else(|| default_base_url.to_string());
+        let base_url = self.base_url.clone().unwrap_or(default_base_url);
 
         let headers = self.build_header_map()?;
         let retry = ApiRetryConfig {
@@ -543,6 +548,19 @@ wire_api = "chat"
             headers.get("version").map(String::as_str),
             Some(crate::models_manager::OPENAI_MODELS_CLIENT_VERSION),
             "version header must use OPENAI_MODELS_CLIENT_VERSION, not CARGO_PKG_VERSION"
+        );
+    }
+
+    #[test]
+    fn ata_auth_mode_uses_proxy_url() {
+        let provider = ModelProviderInfo::create_openai_provider();
+        let api_provider = provider
+            .to_api_provider(Some(crate::auth::AuthMode::Ata))
+            .expect("to_api_provider should succeed");
+        assert!(
+            api_provider.base_url.contains("/functions/v1/proxy-openai"),
+            "ATA auth mode should route through Supabase proxy, got: {}",
+            api_provider.base_url
         );
     }
 }

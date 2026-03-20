@@ -180,12 +180,17 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "append_to_section",
         "add_document_section",
         "patch_document_section",
+        "crop_and_store_figure",
         "request_user_input",
         "apply_patch",
         "web_search",
         "view_image",
-        "attach_url_files",
     ]);
+    #[cfg(feature = "lsp")]
+    expected_tools_names.push("lsp");
+    #[cfg(feature = "treesitter")]
+    expected_tools_names.push("code_intel");
+    expected_tools_names.push("attach_url_files");
     let body0 = req1.single_request().body_json();
 
     let expected_instructions = if expected_tools_names.contains(&"apply_patch") {

@@ -17,6 +17,7 @@ use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
 use crate::config::types::OtelExporterKind;
 use crate::config::types::PluginConfig;
+use crate::config::types::ReadingViewToml;
 use crate::config::types::SandboxWorkspaceWrite;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
@@ -507,9 +508,6 @@ pub struct Config {
 
     /// Optional KB settings from `[kb]`.
     pub kb: Option<KbToml>,
-
-    /// Agent coordination channel settings from `[coordination]`.
-    pub coordination: Option<CoordinationToml>,
 
     /// When `true`, suppress warnings about unstable (under development) features.
     pub suppress_unstable_features_warning: bool,
@@ -1085,10 +1083,6 @@ pub struct ConfigToml {
     #[serde(default)]
     pub plugins: HashMap<String, PluginConfig>,
 
-    /// Agent coordination channel settings.
-    #[serde(default)]
-    pub coordination: Option<CoordinationToml>,
-
     /// Centralized feature flags (new). Prefer this over individual toggles.
     #[serde(default)]
     // Injects known feature keys into the schema and forbids unknown keys.
@@ -1156,6 +1150,10 @@ pub struct ConfigToml {
     /// Voice mode settings (mic → STT → agent → TTS → speaker).
     #[serde(default)]
     pub voice_mode: Option<VoiceModeToml>,
+
+    /// Reading view display mode settings.
+    #[serde(default)]
+    pub reading_view: Option<ReadingViewToml>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -1293,15 +1291,6 @@ pub struct KbToml {
     pub kb_path: Option<String>,
 }
 
-/// Agent coordination channel settings.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-pub struct CoordinationToml {
-    /// URL for a remote relay server (Phase 2 — not yet implemented).
-    pub relay_url: Option<String>,
-    /// Shared secret for authenticating with the relay server.
-    pub relay_secret: Option<String>,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct GhostSnapshotToml {
@@ -1357,16 +1346,36 @@ impl ConfigToml {
             SandboxMode::WorkspaceWrite => match self.sandbox_workspace_write.as_ref() {
                 Some(SandboxWorkspaceWrite {
                     writable_roots,
+                    additional_writable_roots,
                     network_access,
                     exclude_tmpdir_env_var,
                     exclude_slash_tmp,
-                }) => SandboxPolicy::WorkspaceWrite {
-                    writable_roots: writable_roots.clone(),
-                    read_only_access: ReadOnlyAccess::FullAccess,
-                    network_access: *network_access,
-                    exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
-                    exclude_slash_tmp: *exclude_slash_tmp,
-                },
+                }) => {
+                    let mut roots = writable_roots.clone();
+                    // Expand ~ and resolve relative paths from
+                    // additional_writable_roots in the config.
+                    for path in additional_writable_roots {
+                        match AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd) {
+                            Ok(abs) => {
+                                if !roots.iter().any(|existing| existing == &abs) {
+                                    roots.push(abs);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    "Ignoring invalid additional_writable_root {path:?}: {e}",
+                                );
+                            }
+                        }
+                    }
+                    SandboxPolicy::WorkspaceWrite {
+                        writable_roots: roots,
+                        read_only_access: ReadOnlyAccess::FullAccess,
+                        network_access: *network_access,
+                        exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
+                        exclude_slash_tmp: *exclude_slash_tmp,
+                    }
+                }
                 None => SandboxPolicy::new_workspace_write_policy(),
             },
             SandboxMode::DangerFullAccess => SandboxPolicy::DangerFullAccess,
@@ -2060,7 +2069,6 @@ impl Config {
             research: cfg.research,
             data: cfg.data,
             kb: cfg.kb,
-            coordination: cfg.coordination,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
                 .unwrap_or(false),

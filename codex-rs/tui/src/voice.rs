@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU16;
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use tracing::error;
@@ -494,6 +495,12 @@ pub(crate) struct RealtimeAudioPlayer {
     /// Whether audio output is currently paused.  Shared with the audio
     /// callback so it outputs silence instead of draining the queue.
     paused: Arc<AtomicBool>,
+    /// Playback speed factor stored as f32 bit-pattern.  1.0 = normal speed.
+    /// >1.0 skips input samples (faster, higher pitch);
+    /// > <1.0 repeats/interpolates (slower, lower pitch).
+    speed_factor: Arc<AtomicU32>,
+    /// All samples ever enqueued, kept so we can seek back to any position.
+    all_samples: Arc<Mutex<Vec<i16>>>,
 }
 
 impl RealtimeAudioPlayer {
@@ -505,12 +512,15 @@ impl RealtimeAudioPlayer {
         let queue = Arc::new(Mutex::new(VecDeque::new()));
         let samples_played = Arc::new(AtomicUsize::new(0));
         let paused = Arc::new(AtomicBool::new(false));
+        let speed_factor = Arc::new(AtomicU32::new(f32::to_bits(1.0)));
+        let all_samples = Arc::new(Mutex::new(Vec::new()));
         let stream = build_output_stream(
             &device,
             &config,
             Arc::clone(&queue),
             Arc::clone(&samples_played),
             Arc::clone(&paused),
+            Arc::clone(&speed_factor),
         )?;
         stream
             .play()
@@ -522,6 +532,8 @@ impl RealtimeAudioPlayer {
             output_channels,
             samples_played,
             paused,
+            speed_factor,
+            all_samples,
         })
     }
 
@@ -549,6 +561,9 @@ impl RealtimeAudioPlayer {
         if converted.is_empty() {
             return Ok(());
         }
+        if let Ok(mut all) = self.all_samples.lock() {
+            all.extend_from_slice(&converted);
+        }
         let mut guard = self
             .queue
             .lock()
@@ -562,6 +577,42 @@ impl RealtimeAudioPlayer {
         if let Ok(mut guard) = self.queue.lock() {
             guard.clear();
         }
+        if let Ok(mut all) = self.all_samples.lock() {
+            all.clear();
+        }
+        // Reset playback position so karaoke sync starts fresh.
+        self.samples_played
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Seek to a specific sample offset. Clears the current playback queue
+    /// and re-enqueues audio from the given offset. Resets `samples_played`
+    /// to reflect the new position.
+    pub(crate) fn seek_to_sample(&self, sample_offset: usize) {
+        let all = match self.all_samples.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+
+        let clamped = sample_offset.min(all.len());
+
+        // Clear the current queue and re-enqueue from offset
+        if let Ok(mut queue) = self.queue.lock() {
+            queue.clear();
+            queue.extend(all[clamped..].iter().copied());
+        }
+
+        // Reset samples_played to reflect the new position
+        self.samples_played.store(clamped, Ordering::Relaxed);
+    }
+
+    /// Seek to a specific time in milliseconds. Converts to a sample offset
+    /// using the output device's sample rate and channel count, then delegates
+    /// to `seek_to_sample`.
+    pub(crate) fn seek_to_ms(&self, ms: u64) {
+        let sample_offset =
+            (ms * self.output_sample_rate as u64 * self.output_channels as u64 / 1000) as usize;
+        self.seek_to_sample(sample_offset);
     }
 
     /// Returns `true` if the audio buffer has samples waiting to be played.
@@ -587,6 +638,9 @@ impl RealtimeAudioPlayer {
         );
         if converted.is_empty() {
             return;
+        }
+        if let Ok(mut all) = self.all_samples.lock() {
+            all.extend_from_slice(&converted);
         }
         if let Ok(mut guard) = self.queue.lock() {
             guard.extend(converted);
@@ -625,6 +679,19 @@ impl RealtimeAudioPlayer {
         let _ = self.stream.pause();
     }
 
+    /// Set client-side playback speed.  Values >1.0 play faster (higher pitch),
+    /// <1.0 play slower (lower pitch).  Simple resampling — no pitch preservation.
+    pub(crate) fn set_playback_speed(&self, speed: f32) {
+        let clamped = speed.clamp(0.25, 4.0);
+        self.speed_factor
+            .store(f32::to_bits(clamped), Ordering::Relaxed);
+    }
+
+    /// Returns the current playback speed factor (1.0 = normal).
+    pub(crate) fn playback_speed(&self) -> f32 {
+        f32::from_bits(self.speed_factor.load(Ordering::Relaxed))
+    }
+
     /// Resume audio output from where it was paused.
     pub(crate) fn resume(&self) {
         // Clear the flag FIRST so callbacks can drain the queue
@@ -645,16 +712,21 @@ fn build_output_stream(
     queue: Arc<Mutex<VecDeque<i16>>>,
     samples_played: Arc<AtomicUsize>,
     paused: Arc<AtomicBool>,
+    speed: Arc<AtomicU32>,
 ) -> Result<cpal::Stream, String> {
     let config_any: cpal::StreamConfig = config.clone().into();
     match config.sample_format() {
         cpal::SampleFormat::F32 => {
             let sp = Arc::clone(&samples_played);
             let p = Arc::clone(&paused);
+            let s = Arc::clone(&speed);
+            let mut frac_pos: f64 = 0.0;
             device
                 .build_output_stream(
                     &config_any,
-                    move |output: &mut [f32], _| fill_output_f32(output, &queue, &sp, &p),
+                    move |output: &mut [f32], _| {
+                        fill_output_f32(output, &queue, &sp, &p, &s, &mut frac_pos);
+                    },
                     move |err| error!("audio output error: {err}"),
                     None,
                 )
@@ -663,10 +735,14 @@ fn build_output_stream(
         cpal::SampleFormat::I16 => {
             let sp = Arc::clone(&samples_played);
             let p = Arc::clone(&paused);
+            let s = Arc::clone(&speed);
+            let mut frac_pos: f64 = 0.0;
             device
                 .build_output_stream(
                     &config_any,
-                    move |output: &mut [i16], _| fill_output_i16(output, &queue, &sp, &p),
+                    move |output: &mut [i16], _| {
+                        fill_output_i16(output, &queue, &sp, &p, &s, &mut frac_pos);
+                    },
                     move |err| error!("audio output error: {err}"),
                     None,
                 )
@@ -675,10 +751,14 @@ fn build_output_stream(
         cpal::SampleFormat::U16 => {
             let sp = Arc::clone(&samples_played);
             let p = Arc::clone(&paused);
+            let s = Arc::clone(&speed);
+            let mut frac_pos: f64 = 0.0;
             device
                 .build_output_stream(
                     &config_any,
-                    move |output: &mut [u16], _| fill_output_u16(output, &queue, &sp, &p),
+                    move |output: &mut [u16], _| {
+                        fill_output_u16(output, &queue, &sp, &p, &s, &mut frac_pos);
+                    },
                     move |err| error!("audio output error: {err}"),
                     None,
                 )
@@ -688,29 +768,47 @@ fn build_output_stream(
     }
 }
 
+/// Read an interpolated i16 sample from the queue at fractional position `pos`.
+/// Returns 0 (silence) when the queue is exhausted.
+#[inline]
+fn interpolated_sample(queue: &VecDeque<i16>, pos: f64) -> i16 {
+    let idx = pos as usize;
+    if idx + 1 < queue.len() {
+        let frac = pos - idx as f64;
+        let s0 = queue[idx] as f64;
+        let s1 = queue[idx + 1] as f64;
+        (s0 + frac * (s1 - s0)) as i16
+    } else if idx < queue.len() {
+        queue[idx]
+    } else {
+        0
+    }
+}
+
 fn fill_output_i16(
     output: &mut [i16],
     queue: &Arc<Mutex<VecDeque<i16>>>,
     samples_played: &Arc<AtomicUsize>,
     paused: &AtomicBool,
+    speed: &AtomicU32,
+    frac_pos: &mut f64,
 ) {
     if paused.load(Ordering::Acquire) {
         output.fill(0);
         return;
     }
     if let Ok(mut guard) = queue.lock() {
-        let mut consumed = 0usize;
-        for sample in output {
-            if let Some(v) = guard.pop_front() {
-                *sample = v;
-                consumed += 1;
-            } else {
-                *sample = 0;
-            }
+        let step = f32::from_bits(speed.load(Ordering::Relaxed)) as f64;
+        for sample in output.iter_mut() {
+            *sample = interpolated_sample(&guard, *frac_pos);
+            *frac_pos += step;
         }
+        let consumed = (*frac_pos as usize).min(guard.len());
         if consumed > 0 {
+            guard.drain(..consumed);
             samples_played.fetch_add(consumed, Ordering::Relaxed);
         }
+        *frac_pos -= consumed as f64;
         return;
     }
     output.fill(0);
@@ -721,24 +819,25 @@ fn fill_output_f32(
     queue: &Arc<Mutex<VecDeque<i16>>>,
     samples_played: &Arc<AtomicUsize>,
     paused: &AtomicBool,
+    speed: &AtomicU32,
+    frac_pos: &mut f64,
 ) {
     if paused.load(Ordering::Acquire) {
         output.fill(0.0);
         return;
     }
     if let Ok(mut guard) = queue.lock() {
-        let mut consumed = 0usize;
-        for sample in output {
-            if let Some(v) = guard.pop_front() {
-                *sample = (v as f32) / (i16::MAX as f32);
-                consumed += 1;
-            } else {
-                *sample = 0.0;
-            }
+        let step = f32::from_bits(speed.load(Ordering::Relaxed)) as f64;
+        for sample in output.iter_mut() {
+            *sample = interpolated_sample(&guard, *frac_pos) as f32 / i16::MAX as f32;
+            *frac_pos += step;
         }
+        let consumed = (*frac_pos as usize).min(guard.len());
         if consumed > 0 {
+            guard.drain(..consumed);
             samples_played.fetch_add(consumed, Ordering::Relaxed);
         }
+        *frac_pos -= consumed as f64;
         return;
     }
     output.fill(0.0);
@@ -749,24 +848,26 @@ fn fill_output_u16(
     queue: &Arc<Mutex<VecDeque<i16>>>,
     samples_played: &Arc<AtomicUsize>,
     paused: &AtomicBool,
+    speed: &AtomicU32,
+    frac_pos: &mut f64,
 ) {
     if paused.load(Ordering::Acquire) {
         output.fill(32768);
         return;
     }
     if let Ok(mut guard) = queue.lock() {
-        let mut consumed = 0usize;
-        for sample in output {
-            if let Some(v) = guard.pop_front() {
-                *sample = (v as i32 + 32768).clamp(0, u16::MAX as i32) as u16;
-                consumed += 1;
-            } else {
-                *sample = 32768;
-            }
+        let step = f32::from_bits(speed.load(Ordering::Relaxed)) as f64;
+        for sample in output.iter_mut() {
+            let v = interpolated_sample(&guard, *frac_pos);
+            *sample = (v as i32 + 32768).clamp(0, u16::MAX as i32) as u16;
+            *frac_pos += step;
         }
+        let consumed = (*frac_pos as usize).min(guard.len());
         if consumed > 0 {
+            guard.drain(..consumed);
             samples_played.fetch_add(consumed, Ordering::Relaxed);
         }
+        *frac_pos -= consumed as f64;
         return;
     }
     output.fill(32768);
