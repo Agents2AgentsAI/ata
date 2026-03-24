@@ -4,7 +4,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_research_tools::config::ResearchConfig;
 use codex_research_tools::error::ResearchError;
 use codex_research_tools::types::HnGetThreadParams;
@@ -14,11 +13,16 @@ use codex_research_tools::types::PaperRecommendationParams;
 use codex_research_tools::types::PaperSearchParams;
 use codex_research_tools::types::PatentGetParams;
 use codex_research_tools::types::PatentSearchParams;
+use codex_research_tools::types::ZoteroAddItemsToCollectionParams;
 use codex_research_tools::types::ZoteroAdvancedSearchParams;
 use codex_research_tools::types::ZoteroAnnotationsParams;
 use codex_research_tools::types::ZoteroCitationParams;
 use codex_research_tools::types::ZoteroCollectionItemsParams;
 use codex_research_tools::types::ZoteroCollectionsParams;
+use codex_research_tools::types::ZoteroCreateAttachmentLinkParams;
+use codex_research_tools::types::ZoteroCreateCollectionParams;
+use codex_research_tools::types::ZoteroCreateItemsParams;
+use codex_research_tools::types::ZoteroFindOrCreateCollectionParams;
 use codex_research_tools::types::ZoteroGrepParams;
 use codex_research_tools::types::ZoteroItemParams;
 use codex_research_tools::types::ZoteroListGroupsParams;
@@ -26,6 +30,7 @@ use codex_research_tools::types::ZoteroRecentParams;
 use codex_research_tools::types::ZoteroSearchNotesParams;
 use codex_research_tools::types::ZoteroSearchParams;
 use codex_research_tools::types::ZoteroTagsParams;
+use codex_research_tools::types::ZoteroUpdateItemsParams;
 use codex_secrets::SecretName;
 use codex_secrets::SecretScope;
 use codex_secrets::SecretsBackendKind;
@@ -37,8 +42,8 @@ use serde::Serialize;
 
 use crate::config::ResearchToolsToml;
 use crate::function_tool::FunctionCallError;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
@@ -57,7 +62,7 @@ impl ResearchBridgeHandler {
         &self,
         tool_name: &str,
         arguments: &str,
-    ) -> Result<ToolOutput, FunctionCallError> {
+    ) -> Result<FunctionToolOutput, FunctionCallError> {
         let fut = self.dispatch_tool_call(tool_name, arguments);
         let guarded = AssertUnwindSafe(fut).catch_unwind().await;
         match guarded {
@@ -81,7 +86,7 @@ impl ResearchBridgeHandler {
         &self,
         tool_name: &str,
         arguments: &str,
-    ) -> Result<ToolOutput, FunctionCallError> {
+    ) -> Result<FunctionToolOutput, FunctionCallError> {
         macro_rules! dispatch_with_params {
             ($params_ty:ty, |$params:ident| $tool_call:expr) => {{
                 let $params: $params_ty = parse_arguments(arguments)?;
@@ -179,6 +184,32 @@ impl ResearchBridgeHandler {
                     .toolkit
                     .zotero_get_collection_items(params))
             }
+            "zotero_create_collection" => {
+                dispatch_with_params!(ZoteroCreateCollectionParams, |params| self
+                    .toolkit
+                    .zotero_create_collection(params))
+            }
+            "zotero_find_or_create_collection" => {
+                dispatch_with_params!(ZoteroFindOrCreateCollectionParams, |params| self
+                    .toolkit
+                    .zotero_find_or_create_collection(params))
+            }
+            "zotero_create_items" => dispatch_with_params!(ZoteroCreateItemsParams, |params| self
+                .toolkit
+                .zotero_create_items(params)),
+            "zotero_update_items" => dispatch_with_params!(ZoteroUpdateItemsParams, |params| self
+                .toolkit
+                .zotero_update_items(params)),
+            "zotero_add_items_to_collection" => {
+                dispatch_with_params!(ZoteroAddItemsToCollectionParams, |params| self
+                    .toolkit
+                    .zotero_add_items_to_collection(params))
+            }
+            "zotero_create_attachment_link" => {
+                dispatch_with_params!(ZoteroCreateAttachmentLinkParams, |params| self
+                    .toolkit
+                    .zotero_create_attachment_link(params))
+            }
             "hn_search" => {
                 dispatch_with_params!(HnSearchParams, |params| self.toolkit.hn_search(params))
             }
@@ -241,11 +272,13 @@ impl ResearchBridgeHandler {
 
 #[async_trait]
 impl ToolHandler for ResearchBridgeHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             tool_name, payload, ..
         } = invocation;
@@ -264,7 +297,7 @@ impl ToolHandler for ResearchBridgeHandler {
     }
 }
 
-pub(crate) fn build_research_config(
+pub fn build_research_config(
     toml: Option<&ResearchToolsToml>,
     codex_home: &Path,
     cwd: &Path,
@@ -276,21 +309,49 @@ pub(crate) fn build_research_config(
     apply_secret_overrides(&mut config, |name| secret_resolver.resolve(name));
 
     if let Some(toml) = toml {
-        if config.zotero_user_id.is_none() {
-            config.zotero_user_id = toml.zotero_user_id.clone();
-        }
-        if config.openalex_email.is_none() {
-            config.openalex_email = toml.openalex_email.clone();
-        }
-        if config.zotero_library_type.is_none() {
-            config.zotero_library_type = toml.zotero_library_type.clone();
-        }
-        if config.zotero_group_id.is_none() {
-            config.zotero_group_id = toml.zotero_group_id.clone();
-        }
+        apply_toml_research_overrides(&mut config, toml);
     }
 
     config
+}
+
+fn apply_toml_research_overrides(config: &mut ResearchConfig, toml: &ResearchToolsToml) {
+    fn normalized_option_override(value: Option<&String>) -> Option<Option<String>> {
+        value.map(|raw| {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+    }
+
+    fn apply_option_override(target: &mut Option<String>, override_value: Option<&String>) {
+        if let Some(value) = normalized_option_override(override_value) {
+            *target = value;
+        }
+    }
+
+    fn apply_string_override(target: &mut String, override_value: Option<&String>) {
+        if let Some(Some(value)) = normalized_option_override(override_value) {
+            *target = value;
+        }
+    }
+
+    apply_option_override(&mut config.zotero_api_key, toml.zotero_api_key.as_ref());
+    apply_option_override(&mut config.zotero_user_id, toml.zotero_user_id.as_ref());
+    apply_option_override(&mut config.openalex_email, toml.openalex_email.as_ref());
+    apply_option_override(
+        &mut config.zotero_library_type,
+        toml.zotero_library_type.as_ref(),
+    );
+    apply_option_override(&mut config.zotero_group_id, toml.zotero_group_id.as_ref());
+    apply_option_override(
+        &mut config.zotero_storage_dir,
+        toml.zotero_storage_dir.as_ref(),
+    );
+    apply_string_override(&mut config.zotero_base_url, toml.zotero_base_url.as_ref());
 }
 
 fn apply_secret_overrides<F>(config: &mut ResearchConfig, mut resolve_secret: F)
@@ -370,20 +431,15 @@ fn panic_payload_to_message(payload: &(dyn Any + Send)) -> String {
     "non-string panic payload".to_string()
 }
 
-fn serialize_tool_output<T>(value: &T) -> Result<ToolOutput, FunctionCallError>
+fn serialize_tool_output<T>(value: &T) -> Result<FunctionToolOutput, FunctionCallError>
 where
     T: Serialize,
 {
-    let body = serde_json::to_string(value)
-        .map(FunctionCallOutputBody::Text)
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to serialize research output: {err}"))
-        })?;
+    let text = serde_json::to_string(value).map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to serialize research output: {err}"))
+    })?;
 
-    Ok(ToolOutput::Function {
-        body,
-        success: Some(true),
-    })
+    Ok(FunctionToolOutput::from_text(text, Some(true)))
 }
 
 #[derive(Deserialize)]
@@ -506,10 +562,7 @@ mod tests {
             .await
             .expect("paper_get should succeed");
 
-        let ToolOutput::Function { body, .. } = output else {
-            panic!("expected function output");
-        };
-        let text = body.to_text().expect("expected text body");
+        let text = output.into_text();
         let parsed: PaperDetail = serde_json::from_str(&text).expect("parse paper detail json");
         assert_eq!(parsed.paper.title, "Main Paper");
         assert_eq!(parsed.references.len(), 1);
@@ -548,6 +601,45 @@ mod tests {
         assert_eq!(config.semantic_scholar_api_key, Some("env-s2".to_string()));
         assert_eq!(config.zotero_api_key, Some("secret-zotero".to_string()));
         assert_eq!(config.github_token, Some("secret-gh".to_string()));
+    }
+
+    #[test]
+    fn apply_toml_research_overrides_replace_existing_values_and_can_clear_api_key() {
+        let mut config = ResearchConfig {
+            zotero_api_key: Some("env-zotero".to_string()),
+            zotero_user_id: Some("env-user".to_string()),
+            openalex_email: Some("env@example.com".to_string()),
+            zotero_library_type: Some("user".to_string()),
+            zotero_group_id: Some("123".to_string()),
+            zotero_storage_dir: Some("/tmp/env-zotero".to_string()),
+            zotero_base_url: "https://api.zotero.org".to_string(),
+            ..ResearchConfig::default()
+        };
+        let toml = ResearchToolsToml {
+            zotero_api_key: Some("".to_string()),
+            zotero_user_id: Some("cfg-user".to_string()),
+            openalex_email: Some("cfg@example.com".to_string()),
+            zotero_library_type: Some("group".to_string()),
+            zotero_group_id: Some("6416955".to_string()),
+            zotero_base_url: Some("http://localhost:23119/api".to_string()),
+            zotero_storage_dir: Some("/Users/nima/Zotero".to_string()),
+        };
+
+        apply_toml_research_overrides(&mut config, &toml);
+
+        assert_eq!(config.zotero_api_key, None);
+        assert_eq!(config.zotero_user_id, Some("cfg-user".to_string()));
+        assert_eq!(config.openalex_email, Some("cfg@example.com".to_string()));
+        assert_eq!(config.zotero_library_type, Some("group".to_string()));
+        assert_eq!(config.zotero_group_id, Some("6416955".to_string()));
+        assert_eq!(
+            config.zotero_storage_dir,
+            Some("/Users/nima/Zotero".to_string())
+        );
+        assert_eq!(
+            config.zotero_base_url,
+            "http://localhost:23119/api".to_string()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

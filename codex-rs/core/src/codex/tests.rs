@@ -1839,6 +1839,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
         state_db: None,
+        plus: Box::new(crate::plus_provider::NoopPlusProvider),
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
             conversation_id,
@@ -1885,7 +1886,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         active_turn: Mutex::new(None),
         services,
         js_repl,
-        document_cache: crate::tools::handlers::DocumentCache::new(),
+        document_cache: crate::tools::handlers::DocumentCache::with_display_mode(
+            crate::tools::handlers::ReadingViewDisplayMode::Tui,
+        ),
         next_internal_sub_id: AtomicU64::new(0),
     };
 
@@ -2217,6 +2220,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
         state_db: None,
+        plus: Box::new(crate::plus_provider::NoopPlusProvider),
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
             conversation_id,
@@ -2263,7 +2267,9 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         active_turn: Mutex::new(None),
         services,
         js_repl,
-        document_cache: crate::tools::handlers::DocumentCache::new(),
+        document_cache: crate::tools::handlers::DocumentCache::with_display_mode(
+            crate::tools::handlers::ReadingViewDisplayMode::Tui,
+        ),
         next_internal_sub_id: AtomicU64::new(0),
     });
 
@@ -2604,6 +2610,44 @@ async fn build_initial_context_uses_previous_turn_settings_for_realtime_end() {
 }
 
 #[tokio::test]
+async fn build_initial_context_includes_reading_view_display_mode_state() {
+    let (session, turn_context) = make_session_and_context().await;
+    session
+        .document_cache
+        .set_display_mode(crate::tools::handlers::ReadingViewDisplayMode::Browser);
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context);
+    assert!(
+        developer_texts.iter().any(|text| {
+            text.contains("Current reading view display mode: Browser")
+                && text.contains("Browser formatting rules")
+        }),
+        "expected initial context to include the reading view display mode state, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_settings_update_items_include_reading_view_display_mode_state() {
+    let (session, turn_context) = make_session_and_context().await;
+    session
+        .document_cache
+        .set_display_mode(crate::tools::handlers::ReadingViewDisplayMode::Browser);
+
+    let update_items = session
+        .build_settings_update_items(Some(&turn_context.to_turn_context_item()), &turn_context)
+        .await;
+    let developer_texts = developer_input_texts(&update_items);
+    assert!(
+        developer_texts.iter().any(|text| {
+            text.contains("Current reading view display mode: Browser")
+                && text.contains("Browser formatting rules")
+        }),
+        "expected settings updates to include the reading view display mode state, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
 async fn build_initial_context_restates_realtime_start_when_reference_context_is_missing() {
     let (session, mut turn_context) = make_session_and_context().await;
     turn_context.realtime_active = true;
@@ -2723,15 +2767,26 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
     let update_items = session
         .build_settings_update_items(Some(&previous_context_item), &turn_context)
         .await;
-    assert_eq!(update_items, Vec::new());
+    let developer_texts = developer_input_texts(&update_items);
+    assert_eq!(update_items.len(), 1);
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains("Current reading view display mode: Tui")),
+        "expected only the reading view mode update, got {developer_texts:?}"
+    );
 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
         .await;
 
-    assert_eq!(
-        session.clone_history().await.raw_items().to_vec(),
-        Vec::new()
+    let history = session.clone_history().await;
+    let developer_texts = developer_input_texts(history.raw_items());
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains("Current reading view display mode: Tui")),
+        "expected recorded history to include the reading view mode state, got {developer_texts:?}"
     );
     assert_eq!(
         serde_json::to_value(session.reference_context_item().await)
@@ -2781,6 +2836,63 @@ async fn build_initial_context_prepends_model_switch_message() {
         panic!("expected developer text");
     };
     assert!(text.contains("<model_switch>"));
+}
+
+#[tokio::test]
+async fn build_initial_context_includes_updated_zotero_developer_prompt() {
+    let (mut session, mut turn_context) = make_session_and_context().await;
+    let research_config = codex_research_tools::config::ResearchConfig {
+        zotero_api_key: Some("test-key".to_string()),
+        ..Default::default()
+    };
+    let mut features = crate::features::Features::with_defaults();
+    features.enable(crate::features::Feature::ResearchZotero);
+    let features: crate::config::ManagedFeatures = features.into();
+    session.features = features.clone();
+    turn_context.features = features;
+    session.services.research_toolkit = Some(Arc::new(codex_research_tools::ResearchToolkit::new(
+        reqwest::Client::new(),
+        research_config,
+    )));
+    assert!(
+        turn_context
+            .features
+            .enabled(crate::features::Feature::ResearchZotero)
+    );
+    assert!(
+        session
+            .services
+            .research_toolkit
+            .as_ref()
+            .is_some_and(|toolkit| toolkit.is_tool_configured("zotero_search"))
+    );
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+
+    let ResponseItem::Message { role, content, .. } = &initial_context[0] else {
+        panic!("expected developer message");
+    };
+    assert_eq!(role, "developer");
+    let text = content
+        .iter()
+        .filter_map(|item| match item {
+            ContentItem::InputText { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text.contains("You have access to the user's Zotero library through the `ata zotero ...` CLI namespace."),
+        "updated Zotero developer instructions should be injected"
+    );
+    assert!(
+        text.contains("`ata zotero find-repos --query \"...\"`"),
+        "developer prompt should steer the model toward the task-oriented Zotero commands"
+    );
+    assert!(
+        text.contains("If `ata zotero collection items --collection-key ... --compact` prints `No items.`, treat that collection as empty"),
+        "developer prompt should tell the model to stop retrying empty collections"
+    );
 }
 
 #[tokio::test]
@@ -3624,13 +3736,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         })
         .await;
 
-    let output = match resp2.expect("expected Ok result") {
-        ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
-            ..
-        } => content,
-        _ => panic!("unexpected tool output"),
-    };
+    let output = resp2.expect("expected Ok result").into_text();
 
     #[derive(Deserialize, PartialEq, Eq, Debug)]
     struct ResponseExecMetadata {

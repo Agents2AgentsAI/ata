@@ -2,8 +2,8 @@ use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::function_tool::FunctionCallError;
 use crate::provider_transport_capabilities::provider_transport_capabilities;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::file_injection::FileInjectionContext;
 use crate::tools::file_injection::resolve_and_prepare_local_files_for_injection;
@@ -23,7 +23,6 @@ use crate::tools::url_validation::validate_url_strict;
 use async_trait::async_trait;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -35,6 +34,7 @@ const TOOL_NAME: &str = "attach_url_files";
 const MAX_URLS_PER_CALL: usize = 10;
 const MAX_URLS_PER_TURN: usize = 20;
 
+// @agent-facing
 pub(crate) static ATTACH_URL_FILES_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut file_props = BTreeMap::new();
     file_props.insert(
@@ -71,11 +71,13 @@ pub(crate) static ATTACH_URL_FILES_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         name: TOOL_NAME.to_string(),
         description: "Attach PDF files from URLs so you can read and analyze their contents. Use this tool whenever you need to read a PDF — always prefer this over downloading PDFs via shell commands. Each URL must point directly to a PDF file (e.g., https://arxiv.org/pdf/2512.04538.pdf). For arXiv, convert abstract URLs to PDF URLs: change /abs/<id> to /pdf/<id>.pdf. Supports up to 10 URLs per call.".to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["files".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 });
 
@@ -117,11 +119,13 @@ pub(crate) fn register_attach_url_files(builder: &mut ToolRegistryBuilder, confi
 
 #[async_trait]
 impl ToolHandler for AttachUrlFilesHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -344,10 +348,10 @@ impl ToolHandler for AttachUrlFilesHandler {
         }
 
         let summary = render_summary(success_count, &failures, &warnings);
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(summary),
-            success: Some(success_count > 0),
-        })
+        Ok(FunctionToolOutput::from_text(
+            summary,
+            Some(success_count > 0),
+        ))
     }
 }
 
@@ -491,7 +495,7 @@ mod tests {
     #[tokio::test]
     async fn provider_path_injects_url_files() {
         let (session, mut turn_context) = make_session_and_context().await;
-        turn_context.provider = crate::ModelProviderInfo::create_openai_provider();
+        turn_context.provider = crate::ModelProviderInfo::create_openai_provider(None);
         let session = Arc::new(session);
         *session.active_turn.lock().await = Some(ActiveTurn::default());
 
@@ -506,6 +510,7 @@ mod tests {
                 tracker: Arc::new(Mutex::new(crate::turn_diff_tracker::TurnDiffTracker::new())),
                 call_id: "call-1".to_string(),
                 tool_name: TOOL_NAME.to_string(),
+                tool_namespace: None,
                 payload: ToolPayload::Function {
                     arguments: r#"{"files":[{"url":"https://example.com/doc.pdf"}]}"#.to_string(),
                 },
@@ -513,13 +518,8 @@ mod tests {
             .await
             .expect("tool call should succeed");
 
-        let ToolOutput::Function { body, .. } = output else {
-            panic!("expected function output");
-        };
-        assert!(
-            body.to_text()
-                .is_some_and(|text| text.contains("Attached 1 URL file(s)."))
-        );
+        let text = output.into_text();
+        assert!(text.contains("Attached 1 URL file(s)."));
 
         let pending = session.get_pending_input().await;
         assert_eq!(pending.len(), 1);
@@ -548,6 +548,7 @@ mod tests {
                 tracker: Arc::new(Mutex::new(crate::turn_diff_tracker::TurnDiffTracker::new())),
                 call_id: "call-2".to_string(),
                 tool_name: TOOL_NAME.to_string(),
+                tool_namespace: None,
                 payload: ToolPayload::Function { arguments: args },
             })
             .await;
@@ -558,7 +559,7 @@ mod tests {
     #[tokio::test]
     async fn duplicate_urls_emit_warning_and_attach_once() {
         let (session, mut turn_context) = make_session_and_context().await;
-        turn_context.provider = crate::ModelProviderInfo::create_openai_provider();
+        turn_context.provider = crate::ModelProviderInfo::create_openai_provider(None);
         let session = Arc::new(session);
         *session.active_turn.lock().await = Some(ActiveTurn::default());
 
@@ -573,6 +574,7 @@ mod tests {
                 tracker: Arc::new(Mutex::new(crate::turn_diff_tracker::TurnDiffTracker::new())),
                 call_id: "call-3".to_string(),
                 tool_name: TOOL_NAME.to_string(),
+                tool_namespace: None,
                 payload: ToolPayload::Function {
                     arguments: r#"{"files":[{"url":"https://example.com/doc.pdf"},{"url":"https://example.com/doc.pdf"}]}"#.to_string(),
                 },
@@ -580,13 +582,9 @@ mod tests {
             .await
             .expect("tool call should succeed");
 
-        let ToolOutput::Function { body, success } = output else {
-            panic!("expected function output");
-        };
-        let text = body.to_text().expect("text body");
+        let text = output.into_text();
         assert!(text.contains("Attached 1 URL file(s)."));
         assert!(text.contains("Skipped duplicate URL: https://example.com/doc.pdf"));
-        assert_eq!(success, Some(true));
     }
 
     #[tokio::test]
@@ -612,6 +610,7 @@ mod tests {
                 tracker: Arc::new(Mutex::new(crate::turn_diff_tracker::TurnDiffTracker::new())),
                 call_id: "call-4".to_string(),
                 tool_name: TOOL_NAME.to_string(),
+                tool_namespace: None,
                 payload: ToolPayload::Function {
                     arguments: r#"{"files":[{"url":"https://example.com/doc.pdf"}]}"#.to_string(),
                 },
@@ -627,7 +626,7 @@ mod tests {
     #[tokio::test]
     async fn all_invalid_urls_produce_failure_only_summary() {
         let (session, mut turn_context) = make_session_and_context().await;
-        turn_context.provider = crate::ModelProviderInfo::create_openai_provider();
+        turn_context.provider = crate::ModelProviderInfo::create_openai_provider(None);
         let session = Arc::new(session);
         *session.active_turn.lock().await = Some(ActiveTurn::default());
 
@@ -639,6 +638,7 @@ mod tests {
                 tracker: Arc::new(Mutex::new(crate::turn_diff_tracker::TurnDiffTracker::new())),
                 call_id: "call-5".to_string(),
                 tool_name: TOOL_NAME.to_string(),
+                tool_namespace: None,
                 payload: ToolPayload::Function {
                     arguments: r#"{"files":[{"url":"ftp://example.com/a.pdf"},{"url":"http://example.com/b.pdf"}]}"#.to_string(),
                 },
@@ -664,7 +664,7 @@ mod tests {
     #[tokio::test]
     async fn mixed_valid_and_invalid_urls_partial_success() {
         let (session, mut turn_context) = make_session_and_context().await;
-        turn_context.provider = crate::ModelProviderInfo::create_openai_provider();
+        turn_context.provider = crate::ModelProviderInfo::create_openai_provider(None);
         let session = Arc::new(session);
         *session.active_turn.lock().await = Some(ActiveTurn::default());
 
@@ -679,6 +679,7 @@ mod tests {
                 tracker: Arc::new(Mutex::new(crate::turn_diff_tracker::TurnDiffTracker::new())),
                 call_id: "call-6".to_string(),
                 tool_name: TOOL_NAME.to_string(),
+                tool_namespace: None,
                 payload: ToolPayload::Function {
                     arguments: r#"{"files":[{"url":"https://example.com/valid.pdf"},{"url":"ftp://bad.com/invalid.pdf"}]}"#.to_string(),
                 },
@@ -686,10 +687,7 @@ mod tests {
             .await
             .expect("mixed URLs should succeed overall");
 
-        let ToolOutput::Function { body, success } = output else {
-            panic!("expected function output");
-        };
-        let text = body.to_text().expect("text body");
+        let text = output.into_text();
         assert!(
             text.contains("Attached 1 URL file(s)."),
             "expected 1 attachment, got: {text}"
@@ -698,7 +696,6 @@ mod tests {
             text.contains("Failures:"),
             "expected failures section, got: {text}"
         );
-        assert_eq!(success, Some(true));
 
         let pending = session.get_pending_input().await;
         assert_eq!(pending.len(), 1);
@@ -740,7 +737,7 @@ mod tests {
     #[tokio::test]
     async fn url_ingestion_path_rejects_non_pdf_downloads() {
         let (session, mut turn_context) = make_session_and_context().await;
-        turn_context.provider = crate::ModelProviderInfo::create_openai_provider();
+        turn_context.provider = crate::ModelProviderInfo::create_openai_provider(None);
         let session = Arc::new(session);
         *session.active_turn.lock().await = Some(ActiveTurn::default());
 
@@ -761,6 +758,7 @@ mod tests {
                 tracker: Arc::new(Mutex::new(crate::turn_diff_tracker::TurnDiffTracker::new())),
                 call_id: "call-7".to_string(),
                 tool_name: TOOL_NAME.to_string(),
+                tool_namespace: None,
                 payload: ToolPayload::Function {
                     arguments: r#"{"files":[{"url":"https://example.com/blocked.pdf"}]}"#
                         .to_string(),
@@ -797,9 +795,12 @@ mod tests {
         let features = crate::features::Features::with_defaults();
         ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &vec![],
             features: &features,
             web_search_mode,
             session_source: SessionSource::Cli,
+            sandbox_policy: &codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+            windows_sandbox_level: Default::default(),
         })
     }
 }

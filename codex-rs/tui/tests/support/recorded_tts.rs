@@ -74,6 +74,31 @@ pub fn fixture_to_timeline(fixture: &RecordedFixture) -> Vec<AlignmentEntry> {
     timeline
 }
 
+/// Encode raw PCM i16 samples (24kHz mono) into a WAV byte buffer for STT.
+#[allow(dead_code)]
+pub fn pcm_to_wav(pcm: &[i16], sample_rate: u32) -> Vec<u8> {
+    let data_len = (pcm.len() * 2) as u32;
+    let file_len = 36 + data_len;
+    let mut buf = Vec::with_capacity(file_len as usize + 8);
+    buf.extend_from_slice(b"RIFF");
+    buf.extend_from_slice(&file_len.to_le_bytes());
+    buf.extend_from_slice(b"WAVE");
+    buf.extend_from_slice(b"fmt ");
+    buf.extend_from_slice(&16u32.to_le_bytes());
+    buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    buf.extend_from_slice(&1u16.to_le_bytes()); // mono
+    buf.extend_from_slice(&sample_rate.to_le_bytes());
+    buf.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+    buf.extend_from_slice(&2u16.to_le_bytes());
+    buf.extend_from_slice(&16u16.to_le_bytes());
+    buf.extend_from_slice(b"data");
+    buf.extend_from_slice(&data_len.to_le_bytes());
+    for &sample in pcm {
+        buf.extend_from_slice(&sample.to_le_bytes());
+    }
+    buf
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

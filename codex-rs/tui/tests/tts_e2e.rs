@@ -12,6 +12,7 @@
 #![cfg(not(target_os = "linux"))]
 #![allow(clippy::expect_used)]
 
+#[allow(dead_code)]
 mod support;
 
 use codex_elevenlabs::ElevenLabsConfig;

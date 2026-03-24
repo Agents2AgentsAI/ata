@@ -215,6 +215,10 @@ mod tests {
             model: "gpt-4o",
             input: &items,
             instructions: "summarize",
+            tools: vec![],
+            parallel_tool_calls: false,
+            reasoning: None,
+            text: None,
         };
 
         client

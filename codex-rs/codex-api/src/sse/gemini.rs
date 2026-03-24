@@ -381,6 +381,7 @@ pub fn parse_gemini_chunk(
                             name: function_call.name.clone(),
                             arguments,
                             thought_signature: part.thought_signature.clone(),
+                            namespace: None,
                         }));
                     }
                 }

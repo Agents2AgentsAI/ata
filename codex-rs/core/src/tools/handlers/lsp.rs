@@ -26,15 +26,14 @@ use codex_lsp_client::lsp_types::PrepareRenameResponse;
 use codex_lsp_client::lsp_types::Range;
 use codex_lsp_client::lsp_types::SymbolInformation;
 use codex_lsp_client::lsp_types::request::GotoImplementationResponse;
-use codex_protocol::models::FunctionCallOutputBody;
 use serde::Deserialize;
 
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::function_tool::FunctionCallError;
 use crate::state::MultiRootState;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::handlers::HANDLER_DEFAULT_LIMIT;
 use crate::tools::handlers::HANDLER_MAX_RESULT_BYTES;
 use crate::tools::handlers::HANDLER_MAX_RESULTS;
@@ -167,6 +166,8 @@ enum LspOperation {
 
 #[async_trait]
 impl ToolHandler for LspToolHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -175,7 +176,7 @@ impl ToolHandler for LspToolHandler {
         false
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let turn_cwd = invocation.turn.cwd.clone();
         let payload = invocation.payload;
 
@@ -596,10 +597,7 @@ impl ToolHandler for LspToolHandler {
             }
         };
 
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(out),
-            success: Some(true),
-        })
+        Ok(FunctionToolOutput::from_text(out, Some(true)))
     }
 }
 
@@ -1091,10 +1089,12 @@ pub(crate) fn create_lsp_tool() -> ToolSpec {
         name: "lsp".to_string(),
         description: LSP_TOOL_DESCRIPTION.to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["operation".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }

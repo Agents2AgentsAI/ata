@@ -1203,7 +1203,9 @@ async fn find_thread_path_by_id_str_in_subdir(
             "state db returned stale rollout path for thread {id_str}: {}",
             db_path.display()
         );
-        state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "stale_db_path");
+        tracing::warn!(
+            "state db discrepancy during find_thread_path_by_id_str_in_subdir: stale_db_path"
+        );
     }
 
     let mut root = codex_home.to_path_buf();
@@ -1213,7 +1215,7 @@ async fn find_thread_path_by_id_str_in_subdir(
     }
     // This is safe because we know the values are valid.
     #[allow(clippy::unwrap_used)]
-    let limit = NonZero::new(1).unwrap();
+    let limit = NonZero::new(5).unwrap();
     let options = file_search::FileSearchOptions {
         limit,
         compute_indices: false,
@@ -1224,10 +1226,20 @@ async fn find_thread_path_by_id_str_in_subdir(
     let results = file_search::run(id_str, vec![root], options, None)
         .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
 
-    let found = results.matches.into_iter().next().map(|m| m.full_path());
+    let found = results
+        .matches
+        .into_iter()
+        .map(|m| m.full_path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("rollout-"))
+        });
     if let Some(found_path) = found.as_ref() {
         tracing::debug!("state db missing rollout path for thread {id_str}");
-        state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "falling_back");
+        tracing::warn!(
+            "state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back"
+        );
         state_db::read_repair_rollout_path(
             state_db_ctx.as_deref(),
             thread_id,

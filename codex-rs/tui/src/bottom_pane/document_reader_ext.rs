@@ -198,6 +198,12 @@ impl BottomPane {
             .is_some_and(|v| v.voice_tts_paused())
     }
 
+    /// Query the voice status text of the active document reader.
+    #[cfg(all(test, not(target_os = "linux"), feature = "voice-input"))]
+    pub(crate) fn document_reader_voice_status(&self) -> Option<String> {
+        self.view_stack.last().and_then(|v| v.voice_status())
+    }
+
     /// Mark a section as pending a voice question answer (same inline
     /// indicator as text questions).
     #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]

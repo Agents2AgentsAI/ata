@@ -4,6 +4,7 @@ members = [
     "ansi-escape",
     "async-utils",
     "app-server",
+    "app-server-client",
     "app-server-protocol",
     "app-server-test-client",
     "debug-client",
@@ -15,6 +16,7 @@ members = [
     "cloud-tasks",
     "cloud-tasks-client",
     "cli",
+    "connectors",
     "config",
     "shell-command",
     "shell-escalation",
@@ -95,6 +97,7 @@ codex-api = { path = "codex-api" }
 codex-artifacts = { path = "artifacts" }
 codex-package-manager = { path = "package-manager" }
 codex-app-server = { path = "app-server" }
+codex-app-server-client = { path = "app-server-client" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-app-server-test-client = { path = "app-server-test-client" }
 codex-apply-patch = { path = "apply-patch" }
@@ -105,6 +108,7 @@ codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli" }
 codex-client = { path = "codex-client" }
 codex-cloud-requirements = { path = "cloud-requirements" }
+codex-connectors = { path = "connectors" }
 codex-config = { path = "config" }
 codex-core = { path = "core" }
 codex-data-tools = { path = "codex-data-tools" }
@@ -250,6 +254,7 @@ rand = "0.9"
 ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
 regex = "1.12.3"
+redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
 regex-lite = "0.1.8"
 reqwest = "0.12"
 rmcp = { version = "0.15.0", default-features = false }
@@ -258,6 +263,8 @@ rustls = { version = "0.23", default-features = false, features = [
     "ring",
     "std",
 ] }
+rustls-native-certs = "0.8.3"
+rustls-pki-types = "1.14.0"
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 semver = "1.0"
@@ -290,7 +297,7 @@ supports-color = "3.0.2"
 syntect = "5"
 sys-locale = "0.3.2"
 tempfile = "3.23.0"
-tar = "0.4.44"
+tar = "0.4.45"
 test-log = "0.2.19"
 textwrap = "0.16.2"
 thiserror = "2.0.17"
@@ -376,9 +383,7 @@ unwrap_used = "deny"
 [workspace.metadata.cargo-shear]
 ignored = [
     "icu_provider",
-    "openssl-sys",
-    "codex-utils-readiness",
-    "codex-secrets"
+    "openssl-sys"
 ]
 
 [profile.release]

@@ -15,9 +15,12 @@ use crate::truncate::approx_bytes_for_tokens;
 use tracing::warn;
 
 pub const BASE_INSTRUCTIONS: &str = include_str!("../../prompt.md");
+// @agent-facing
 const DEFAULT_PERSONALITY_HEADER: &str = "You are Ata, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
+// @agent-facing
 const LOCAL_FRIENDLY_TEMPLATE: &str =
     "You optimize for team morale and being a supportive teammate as much as code quality.";
+// @agent-facing
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 
@@ -90,6 +93,7 @@ pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
         input_modalities: default_input_modalities(),
         prefer_websockets: false,
         used_fallback_model_metadata: true, // this is the fallback model metadata
+        supports_search_tool: false,
     }
 }
 
@@ -110,44 +114,5 @@ fn local_personality_messages_for_slug(slug: &str) -> Option<ModelMessages> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::test_config;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn reasoning_summaries_override_true_enables_support() {
-        let model = model_info_from_slug("unknown-model");
-        let mut config = test_config();
-        config.model_supports_reasoning_summaries = Some(true);
-
-        let updated = with_config_overrides(model.clone(), &config);
-        let mut expected = model;
-        expected.supports_reasoning_summaries = true;
-
-        assert_eq!(updated, expected);
-    }
-
-    #[test]
-    fn reasoning_summaries_override_false_does_not_disable_support() {
-        let mut model = model_info_from_slug("unknown-model");
-        model.supports_reasoning_summaries = true;
-        let mut config = test_config();
-        config.model_supports_reasoning_summaries = Some(false);
-
-        let updated = with_config_overrides(model.clone(), &config);
-
-        assert_eq!(updated, model);
-    }
-
-    #[test]
-    fn reasoning_summaries_override_false_is_noop_when_model_is_false() {
-        let model = model_info_from_slug("unknown-model");
-        let mut config = test_config();
-        config.model_supports_reasoning_summaries = Some(false);
-
-        let updated = with_config_overrides(model.clone(), &config);
-
-        assert_eq!(updated, model);
-    }
-}
+#[path = "model_info_tests.rs"]
+mod tests;

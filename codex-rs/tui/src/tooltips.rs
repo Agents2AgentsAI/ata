@@ -17,7 +17,7 @@ const OTHER_TOOLTIP: &str =
     "*New* Build faster with the **Ata App**. Run 'ata app' or visit https://agents2agents.ai/ata";
 const OTHER_TOOLTIP_NON_MAC: &str = "*New* Build faster with Ata.";
 const FREE_GO_TOOLTIP: &str =
-    "*New* Ata is included in your plan for free through *March 2nd* – let's build together.";
+    "*New* Ata is included in your plan for free through *March 2nd* – let’s build together.";
 
 const RAW_TOOLTIPS: &str = include_str!("../tooltips.txt");
 

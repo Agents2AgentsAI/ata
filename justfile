@@ -71,6 +71,12 @@ test-karaoke:
 test-tts-live:
     cargo test -p codex-tui --test tts_e2e -- --ignored
 
+# TTS/karaoke sync report (requires ELEVENLABS_API_KEY env var)
+# Produces /tmp/tts-sync-report.md for agent-driven verification
+test-tts-sync:
+    cargo test -p codex-tui --features voice-input --test tts_sync_report -- --ignored --nocapture
+    @echo "Report: /tmp/tts-sync-report.md"
+
 # Build and run Codex from source using Bazel.
 # Note we have to use the combination of `[no-cd]` and `--run_under="cd $PWD &&"`
 # to ensure that Bazel runs the command in the current working directory.
@@ -107,6 +113,15 @@ write-config-schema:
 write-app-server-schema *args:
     cargo run -p codex-app-server-protocol --bin write_schema_fixtures -- "$@"
 
+[no-cd]
+write-hooks-schema:
+    cargo run --manifest-path ./codex-rs/Cargo.toml -p codex-hooks --bin write_hooks_schema_fixtures
+
+# Run the argument-comment Dylint checks across codex-rs.
+[no-cd]
+argument-comment-lint *args:
+    ./tools/argument-comment-lint/run.sh "$@"
+
 # Tail logs from the state SQLite database
 log *args:
     if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p codex-state --bin logs_client -- "$@"
@@ -136,3 +151,109 @@ verify-openai-model-override release_version="0.1.0-rc.1":
       --pack-output "${out_tgz}"
 
     echo "PASS: OpenAI model override verification and npm package staging complete"
+
+# Launch prompt inspector in neovim
+prompts:
+    nvim --clean --cmd "set rtp+=tools/prompt-inspector/plugin" -c "lua require('prompt-inspector').setup({codex_root=vim.fn.getcwd()})" -c "PromptInspector"
+
+# Validate prompt registry and @agent-facing annotations
+check-prompts:
+    python3 tools/prompt-inspector/validate.py --codex-root .
+
+# Dump full assembled agent context to terminal
+dump-context:
+    cargo run -p codex-cli -- debug dump-initial-context
+
+# ---------------------------------------------------------------------------
+# Release branch sync
+# ---------------------------------------------------------------------------
+
+# Private directories to strip when syncing main -> release.
+_release_private_paths := "codex-rs/ata-plus codex-rs/supabase codex-rs/coordination codex-rs/coordination-relay codex-rs/core/templates/coordination codex-rs/skills/src/assets/remote-exec"
+
+# Sync main -> release (safe: copies files, no history link).
+# 1. Copies all files from main (no merge, no history connection)
+# 2. Removes private directories
+# 3. Patches Cargo.toml files to remove references to private crates
+# 4. Verifies workspace compiles
+# 5. Commits
+#
+# Shared .rs files keep their #[cfg(feature = "ata-plus")] blocks — those
+# are dead code on release since the feature and crates don't exist.
+sync-release:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{justfile_directory()}}"
+
+    # Must be on release branch
+    current=$(git branch --show-current)
+    if [ "$current" != "release" ]; then
+        echo "ERROR: must be on release branch (currently on $current)"
+        echo "Run: git checkout release"
+        exit 1
+    fi
+
+    echo "==> Copying all files from main..."
+    git checkout main -- .
+
+    echo "==> Removing private directories..."
+    for p in {{_release_private_paths}}; do
+        git rm -rf "$p" 2>/dev/null || true
+    done
+
+    echo "==> Patching Cargo.toml files (removing private crate references)..."
+
+    # --- Workspace Cargo.toml: remove private members and deps ---
+    sed -i '' \
+        -e '/"ata-plus",/d' \
+        -e '/"coordination",/d' \
+        -e '/"coordination-relay",/d' \
+        codex-rs/Cargo.toml
+    sed -i '' \
+        -e '/^ata-plus = { path = "ata-plus" }/d' \
+        -e '/^codex-coordination-relay = { path = "coordination-relay" }/d' \
+        -e '/^codex-coordination = { path = "coordination" }/d' \
+        codex-rs/Cargo.toml
+
+    # --- cli/Cargo.toml ---
+    sed -i '' \
+        -e '/^ata-plus = { workspace = true, optional = true }/d' \
+        -e '/^ata-plus = \[/d' \
+        -e '/^relay = \["codex-core\/relay"/d' \
+        codex-rs/cli/Cargo.toml
+
+    # --- tui/Cargo.toml ---
+    sed -i '' \
+        -e '/^ata-plus = { workspace = true, optional = true }/d' \
+        -e '/^ata-plus = \[/d' \
+        -e '/^relay = \[\]/d' \
+        codex-rs/tui/Cargo.toml
+
+    # --- exec/Cargo.toml ---
+    sed -i '' \
+        -e '/^ata-plus = { workspace = true, optional = true }/d' \
+        -e '/^codex-coordination = { workspace = true, optional = true }/d' \
+        -e '/^ata-plus = \[/d' \
+        -e '/^relay = \[\]/d' \
+        codex-rs/exec/Cargo.toml
+
+    # --- core/Cargo.toml ---
+    sed -i '' \
+        -e '/^codex-coordination = { workspace = true, optional = true }/d' \
+        -e '/^ata-plus = \[/d' \
+        -e '/^relay = \["codex-coordination/d' \
+        codex-rs/core/Cargo.toml
+
+    echo "==> Verifying workspace compiles..."
+    cd codex-rs && cargo check --workspace 2>&1 | tail -10
+    cd ..
+
+    echo "==> Staging and committing..."
+    git add -A
+    if git diff --cached --quiet; then
+        echo "Nothing to sync — release is up to date with main."
+    else
+        git commit -m "sync: merge public-safe changes from main"
+        echo "==> Done. Review with: git log --oneline -1"
+        echo "    Push with: git push public release:main"
+    fi

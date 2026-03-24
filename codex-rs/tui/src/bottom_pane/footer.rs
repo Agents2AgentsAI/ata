@@ -9,6 +9,15 @@
 //! hint. The owning widgets schedule redraws so time-based hints can expire even if the UI is
 //! otherwise idle.
 //!
+//! Terminology used in this module:
+//! - "status line" means the configurable contextual row built from `/statusline` items such as
+//!   model, git branch, and context usage.
+//! - "instructional footer" means a row that tells the user what to do next, such as quit
+//!   confirmation, shortcut help, or queue hints.
+//! - "contextual footer" means the footer is free to show ambient context instead of an
+//!   instruction. In that state, the footer may render the configured status line, the active
+//!   agent label, or both combined.
+//!
 //! Single-line collapse overview:
 //! 1. The composer decides the current `FooterMode` and hint flags, then calls
 //!    `single_line_footer_layout` for the base single-line modes.
@@ -74,6 +83,12 @@ pub(crate) struct FooterProps {
     pub(crate) scheduler_enabled: bool,
     pub(crate) mobile_available: bool,
     pub(crate) research_enabled: bool,
+    /// Active thread label shown when the footer is rendering contextual information instead of an
+    /// instructional hint.
+    ///
+    /// When both this label and the configured status line are available, they are rendered on the
+    /// same row separated by ` · `.
+    pub(crate) active_agent_label: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -567,20 +582,10 @@ fn footer_from_props_lines(
     show_shortcuts_hint: bool,
     show_queue_hint: bool,
 ) -> Vec<Line<'static>> {
-    // If status line content is present, show it for passive composer states.
-    // Active draft states still prefer the queue hint over the passive status
-    // line so the footer stays actionable while a task is running.
-    if props.status_line_enabled
-        && let Some(status_line) = &props.status_line_value
-        && match props.mode {
-            FooterMode::ComposerEmpty => true,
-            FooterMode::ComposerHasDraft => !props.is_task_running,
-            FooterMode::QuitShortcutReminder
-            | FooterMode::ShortcutOverlay
-            | FooterMode::EscHint => false,
-        }
-    {
-        return vec![status_line.clone().dim()];
+    // Passive footer context can come from the configurable status line, the
+    // active agent label, or both combined.
+    if let Some(status_line) = passive_footer_status_line(props) {
+        return vec![status_line.dim()];
     }
     match props.mode {
         FooterMode::QuitShortcutReminder => {
@@ -625,6 +630,57 @@ fn footer_from_props_lines(
             vec![left_side_line(collaboration_mode_indicator, state)]
         }
     }
+}
+
+/// Returns the contextual footer row when the footer is not busy showing an instructional hint.
+///
+/// The returned line may contain the configured status line, the currently viewed agent label, or
+/// both combined. Active instructional states such as quit reminders, shortcut overlays, and queue
+/// prompts deliberately return `None` so those call-to-action hints stay visible.
+pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<Line<'static>> {
+    if !shows_passive_footer_line(props) {
+        return None;
+    }
+
+    let mut line = if props.status_line_enabled {
+        props.status_line_value.clone()
+    } else {
+        None
+    };
+
+    if let Some(active_agent_label) = props.active_agent_label.as_ref() {
+        if let Some(existing) = line.as_mut() {
+            existing.spans.push(" · ".into());
+            existing.spans.push(active_agent_label.clone().into());
+        } else {
+            line = Some(Line::from(active_agent_label.clone()));
+        }
+    }
+
+    line
+}
+
+/// Whether the current footer mode allows contextual information to replace instructional hints.
+///
+/// In practice this means the composer is idle, or it has a draft but is not currently running a
+/// task, so the footer can spend the row on ambient context instead of "what to do next" text.
+pub(crate) fn shows_passive_footer_line(props: &FooterProps) -> bool {
+    match props.mode {
+        FooterMode::ComposerEmpty => true,
+        FooterMode::ComposerHasDraft => !props.is_task_running,
+        FooterMode::QuitShortcutReminder | FooterMode::ShortcutOverlay | FooterMode::EscHint => {
+            false
+        }
+    }
+}
+
+/// Whether callers should reserve the dedicated status-line layout for a contextual footer row.
+///
+/// The dedicated layout exists for the configurable `/statusline` row. An agent label by itself
+/// can be rendered by the standard footer flow, so this only becomes `true` when the status line
+/// feature is enabled and the current mode allows contextual footer content.
+pub(crate) fn uses_passive_footer_status_layout(props: &FooterProps) -> bool {
+    props.status_line_enabled && shows_passive_footer_line(props)
 }
 
 pub(crate) fn footer_line_width(
@@ -1085,14 +1141,12 @@ mod tests {
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint => false,
                 };
-                let status_line_active = props.status_line_enabled
-                    && match props.mode {
-                        FooterMode::ComposerEmpty => true,
-                        FooterMode::ComposerHasDraft => !props.is_task_running,
-                        FooterMode::QuitShortcutReminder
-                        | FooterMode::ShortcutOverlay
-                        | FooterMode::EscHint => false,
-                    };
+                let status_line_active = uses_passive_footer_status_layout(props);
+                let passive_status_line = if status_line_active {
+                    passive_footer_status_line(props)
+                } else {
+                    None
+                };
                 let left_mode_indicator = if status_line_active {
                     None
                 } else {
@@ -1104,8 +1158,7 @@ mod tests {
                         props.mode,
                         FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
                     ) {
-                    props
-                        .status_line_value
+                    passive_status_line
                         .as_ref()
                         .map(|line| line.clone().dim())
                         .map(|line| truncate_line_with_ellipsis_if_overflow(line, available_width))
@@ -1148,8 +1201,7 @@ mod tests {
                 if status_line_active
                     && let Some(max_left) = max_left_width_for_right(area, right_width)
                     && left_width > max_left
-                    && let Some(line) = props
-                        .status_line_value
+                    && let Some(line) = passive_status_line
                         .as_ref()
                         .map(|line| line.clone().dim())
                         .map(|line| {
@@ -1270,6 +1322,7 @@ mod tests {
                 scheduler_enabled: false,
                 mobile_available: false,
                 research_enabled: false,
+                active_agent_label: None,
             },
         );
 
@@ -1291,6 +1344,7 @@ mod tests {
                 scheduler_enabled: false,
                 mobile_available: false,
                 research_enabled: false,
+                active_agent_label: None,
             },
         );
 
@@ -1312,6 +1366,7 @@ mod tests {
                 scheduler_enabled: false,
                 mobile_available: false,
                 research_enabled: false,
+                active_agent_label: None,
             },
         );
 
@@ -1333,6 +1388,7 @@ mod tests {
                 scheduler_enabled: false,
                 mobile_available: false,
                 research_enabled: false,
+                active_agent_label: None,
             },
         );
 
@@ -1354,6 +1410,7 @@ mod tests {
                 scheduler_enabled: false,
                 mobile_available: false,
                 research_enabled: false,
+                active_agent_label: None,
             },
         );
 
@@ -1375,6 +1432,7 @@ mod tests {
                 scheduler_enabled: false,
                 mobile_available: false,
                 research_enabled: false,
+                active_agent_label: None,
             },
         );
 
@@ -1396,6 +1454,7 @@ mod tests {
                 scheduler_enabled: false,
                 mobile_available: false,
                 research_enabled: false,
+                active_agent_label: None,
             },
         );
 
@@ -1417,6 +1476,7 @@ mod tests {
                 scheduler_enabled: false,
                 mobile_available: false,
                 research_enabled: false,
+                active_agent_label: None,
             },
         );
 
@@ -1438,6 +1498,7 @@ mod tests {
                 scheduler_enabled: false,
                 mobile_available: false,
                 research_enabled: false,
+                active_agent_label: None,
             },
         );
 
@@ -1459,6 +1520,7 @@ mod tests {
                 scheduler_enabled: false,
                 mobile_available: false,
                 research_enabled: false,
+                active_agent_label: None,
             },
         );
 
@@ -1478,6 +1540,7 @@ mod tests {
             scheduler_enabled: false,
             mobile_available: false,
             research_enabled: false,
+            active_agent_label: None,
         };
 
         snapshot_footer_with_mode_indicator(
@@ -1510,6 +1573,7 @@ mod tests {
             scheduler_enabled: false,
             mobile_available: false,
             research_enabled: false,
+            active_agent_label: None,
         };
 
         snapshot_footer_with_mode_indicator(
@@ -1535,6 +1599,7 @@ mod tests {
             scheduler_enabled: false,
             mobile_available: false,
             research_enabled: false,
+            active_agent_label: None,
         };
 
         snapshot_footer("footer_status_line_overrides_shortcuts", props);
@@ -1555,6 +1620,7 @@ mod tests {
             scheduler_enabled: false,
             mobile_available: false,
             research_enabled: false,
+            active_agent_label: None,
         };
 
         snapshot_footer("footer_status_line_yields_to_queue_hint", props);
@@ -1575,6 +1641,7 @@ mod tests {
             scheduler_enabled: false,
             mobile_available: false,
             research_enabled: false,
+            active_agent_label: None,
         };
 
         snapshot_footer("footer_status_line_overrides_draft_idle", props);
@@ -1595,6 +1662,7 @@ mod tests {
             scheduler_enabled: false,
             mobile_available: false,
             research_enabled: false,
+            active_agent_label: None,
         };
 
         snapshot_footer_with_mode_indicator(
@@ -1620,6 +1688,7 @@ mod tests {
             scheduler_enabled: false,
             mobile_available: false,
             research_enabled: false,
+            active_agent_label: None,
         };
 
         snapshot_footer_with_mode_indicator(
@@ -1645,6 +1714,7 @@ mod tests {
             scheduler_enabled: false,
             mobile_available: false,
             research_enabled: false,
+            active_agent_label: None,
         };
 
         // has status line and no collaboration mode
@@ -1673,6 +1743,7 @@ mod tests {
             scheduler_enabled: false,
             mobile_available: false,
             research_enabled: false,
+            active_agent_label: None,
         };
 
         snapshot_footer_with_mode_indicator(
@@ -1681,6 +1752,48 @@ mod tests {
             &props,
             Some(CollaborationModeIndicator::Plan),
         );
+
+        let props = FooterProps {
+            mode: FooterMode::ComposerEmpty,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: false,
+            collaboration_modes_enabled: false,
+            is_wsl: false,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            context_window_percent: None,
+            context_window_used_tokens: None,
+            status_line_value: None,
+            status_line_enabled: false,
+            voice_mode_available: false,
+            scheduler_enabled: false,
+            mobile_available: false,
+            research_enabled: false,
+            active_agent_label: Some("Robie [explorer]".to_string()),
+        };
+
+        snapshot_footer("footer_active_agent_label", props);
+
+        let props = FooterProps {
+            mode: FooterMode::ComposerEmpty,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: false,
+            collaboration_modes_enabled: false,
+            is_wsl: false,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            context_window_percent: None,
+            context_window_used_tokens: None,
+            status_line_value: Some(Line::from("Status line content".to_string())),
+            status_line_enabled: true,
+            voice_mode_available: false,
+            scheduler_enabled: false,
+            mobile_available: false,
+            research_enabled: false,
+            active_agent_label: Some("Robie [explorer]".to_string()),
+        };
+
+        snapshot_footer("footer_status_line_with_active_agent_label", props);
     }
 
     #[test]
@@ -1704,6 +1817,7 @@ mod tests {
             scheduler_enabled: false,
             mobile_available: false,
             research_enabled: false,
+            active_agent_label: None,
         };
 
         let screen =

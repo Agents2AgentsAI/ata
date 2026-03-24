@@ -41,12 +41,39 @@ fn normalize_lsp_extensions(extensions: Vec<String>) -> Vec<String> {
 }
 
 #[cfg(feature = "lsp")]
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum LspConfig {
+    Enabled(bool),
+    Servers(std::collections::HashMap<String, LspServerConfigToml>),
+}
+
+#[cfg(feature = "lsp")]
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum LspServerConfigToml {
+    DisabledOnly {
+        disabled: bool,
+    },
+    Full {
+        command: Vec<String>,
+        #[serde(default)]
+        extensions: Vec<String>,
+        #[serde(default)]
+        root_markers: Vec<String>,
+        #[serde(default)]
+        env: std::collections::HashMap<String, String>,
+        #[serde(default)]
+        initialization_options: Option<serde_json::Value>,
+        #[serde(default)]
+        disabled: bool,
+    },
+}
+
+#[cfg(feature = "lsp")]
 pub(super) fn build_lsp_server_configs(
     config: &Config,
 ) -> std::collections::HashMap<String, codex_lsp_client::LspServerConfig> {
-    use crate::config::types::LspConfig;
-    use crate::config::types::LspServerConfigToml;
-
     let builtins = codex_lsp_client::builtin_servers::builtin_servers();
     let mut overrides = std::collections::HashMap::new();
 
@@ -104,12 +131,36 @@ pub(super) fn build_lsp_server_configs(
 }
 
 #[cfg(feature = "treesitter")]
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum TreeSitterConfig {
+    Enabled(bool),
+    Config(TreeSitterConfigMap),
+}
+
+#[cfg(feature = "treesitter")]
+#[derive(Default, serde::Deserialize)]
+struct TreeSitterConfigMap {
+    #[serde(default)]
+    pub max_file_size: Option<u64>,
+    #[serde(default)]
+    pub ignore_patterns: Vec<String>,
+    #[serde(default)]
+    pub ignore_extensions: Vec<String>,
+    #[serde(default)]
+    pub disabled_languages: Vec<String>,
+    #[serde(default)]
+    pub annotation_store_path: Option<String>,
+    #[serde(default)]
+    pub watch: bool,
+    #[serde(default)]
+    pub persist_annotations: bool,
+}
+
+#[cfg(feature = "treesitter")]
 pub(super) fn build_treesitter_index_config(
     config: &Config,
 ) -> Option<codex_treesitter::ProjectIndexConfig> {
-    use crate::config::types::TreeSitterConfig;
-    use crate::config::types::TreeSitterConfigMap;
-
     let treesitter_config = config
         .config_layer_stack
         .effective_config()
@@ -147,8 +198,11 @@ pub(super) fn build_treesitter_index_config(
         })
         .collect::<Vec<_>>();
 
+    let default_config = codex_treesitter::ProjectIndexConfig::default();
     let mut treesitter_config = codex_treesitter::ProjectIndexConfig {
-        max_file_size: config_map.max_file_size,
+        max_file_size: config_map
+            .max_file_size
+            .unwrap_or(default_config.max_file_size),
         ignore_patterns: config_map.ignore_patterns.clone(),
         annotation_store_path: config_map.annotation_store_path.clone().map(Into::into),
         watch: config_map.watch,
@@ -424,13 +478,13 @@ pub(super) async fn setup_lsp_install_callback(sess: &Arc<super::Session>) {
 
                         let mut response = tokio::select! {
                             _ = cancellation_token.cancelled() => {
-                                sess.services.unified_exec_manager.release_process_id(&process_id).await;
+                                sess.services.unified_exec_manager.release_process_id(process_id).await;
                                 return false;
                             }
                             result = sess.services.unified_exec_manager.exec_command(
                                 crate::unified_exec::ExecCommandRequest {
                                     command: command.clone(),
-                                    process_id: process_id.clone(),
+                                    process_id,
                                     yield_time_ms: 10_000,
                                     max_output_tokens: None,
                                     workdir: None,
@@ -438,6 +492,7 @@ pub(super) async fn setup_lsp_install_callback(sess: &Arc<super::Session>) {
                                     tty: false,
                                     sandbox_permissions: crate::sandboxing::SandboxPermissions::RequireEscalated,
                                     additional_permissions: None,
+                                    additional_permissions_preapproved: false,
                                     justification,
                                     prefix_rule,
                                 },
@@ -463,7 +518,7 @@ pub(super) async fn setup_lsp_install_callback(sess: &Arc<super::Session>) {
                                 _ = cancellation_token.cancelled() => break,
                                 poll = sess.services.unified_exec_manager.write_stdin(
                                     crate::unified_exec::WriteStdinRequest {
-                                        process_id: process_id.as_str(),
+                                        process_id,
                                         input: "",
                                         yield_time_ms: 10_000,
                                         max_output_tokens: None,
@@ -481,7 +536,7 @@ pub(super) async fn setup_lsp_install_callback(sess: &Arc<super::Session>) {
 
                         // If the process exited during polling, the unified exec manager
                         // will have removed it from the store; release_process_id is a no-op.
-                        sess.services.unified_exec_manager.release_process_id(&process_id).await;
+                        sess.services.unified_exec_manager.release_process_id(process_id).await;
 
                         response.exit_code == Some(0)
                     })
@@ -507,10 +562,12 @@ pub(super) async fn shutdown_code_intel(services: &SessionServices) {
 // ---------------------------------------------------------------------------
 
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
-pub(super) fn inject_multi_root_state(tools_config: &mut ToolsConfig, services: &SessionServices) {
-    if let Some(ref multi_root_state) = services.multi_root_state {
-        tools_config.multi_root_state = Some(Arc::clone(multi_root_state));
-    }
+pub(super) fn inject_multi_root_state(
+    _tools_config: &mut ToolsConfig,
+    _services: &SessionServices,
+) {
+    // multi_root_state is now accessed directly from SessionServices
+    // rather than being stored on ToolsConfig.
 }
 
 #[cfg(all(test, feature = "lsp"))]

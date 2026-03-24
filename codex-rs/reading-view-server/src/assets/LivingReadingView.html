@@ -10,27 +10,74 @@
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
 <!-- marked.js 12.0.0 -->
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
-<!-- Prism.js 1.29.0 (tomorrow theme + autoloader) -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
+<!-- Prism.js 1.29.0 (light/dark themes + autoloader) -->
+<link rel="stylesheet" id="prism-light-theme" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism.min.css">
+<link rel="stylesheet" id="prism-dark-theme" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
 <!-- Mermaid.js 11 -->
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <style>
 /* ===================================================================
-   CSS Variables — Dark theme
+   CSS Variables — Theme aware
    =================================================================== */
 :root {
+  color-scheme: light dark;
+  --bg: #f6f7fb;
+  --bg-surface: #ffffff;
+  --bg-elevated: #eef2f8;
+  --text: #1f2937;
+  --text-muted: #6b7280;
+  --text-heading: #111827;
+  --accent: #6C8EEF;
+  --accent-dim: #6C8EEF20;
+  --border: rgba(15, 23, 42, 0.08);
+  --code-bg: #f3f5fa;
+  --shadow: rgba(15, 23, 42, 0.08);
+  --selection-surface: rgba(255, 255, 255, 0.94);
+  --selection-border: rgba(15, 23, 42, 0.08);
+  --selection-text: #111827;
+  --selection-muted: #6b7280;
+  --now-playing-bg: rgba(255, 255, 255, 0.92);
+  --now-playing-border: rgba(15, 23, 42, 0.08);
+  --now-playing-text: #111827;
+  --now-playing-muted: #6b7280;
+  --progress-gradient-end: #4f46e5;
+  --disconnected-banner-bg: rgba(255, 247, 245, 0.98);
+  --disconnected-banner-border: rgba(190, 78, 52, 0.18);
+  --disconnected-banner-shadow: rgba(146, 64, 14, 0.08);
+  --disconnected-title: #9a3412;
+  --disconnected-text: #7c2d12;
+  --disconnected-command-bg: rgba(154, 52, 18, 0.08);
+  --disconnected-command-text: #7c2d12;
+}
+
+:root[data-theme="dark"] {
   --bg: #0f1117;
   --bg-surface: #161922;
   --bg-elevated: #1c1f2b;
   --text: #c9cdd6;
   --text-muted: #6b7280;
   --text-heading: #f0f2f5;
-  --accent: #6C8EEF;
-  --accent-dim: #6C8EEF20;
-  --border: #ffffff0a;
+  --border: rgba(255, 255, 255, 0.04);
   --code-bg: #0d0f15;
+  --shadow: rgba(0, 0, 0, 0.28);
+  --selection-surface: rgba(28, 31, 43, 0.92);
+  --selection-border: rgba(255, 255, 255, 0.1);
+  --selection-text: #f0f2f5;
+  --selection-muted: #9ca3af;
+  --now-playing-bg: rgba(30, 30, 30, 0.95);
+  --now-playing-border: rgba(255, 255, 255, 0.08);
+  --now-playing-text: #e5e7eb;
+  --now-playing-muted: #9ca3af;
+  --progress-gradient-end: #a78bfa;
+  --disconnected-banner-bg: rgba(73, 29, 29, 0.96);
+  --disconnected-banner-border: rgba(255, 255, 255, 0.08);
+  --disconnected-banner-shadow: rgba(0, 0, 0, 0.18);
+  --disconnected-title: #ffd8d8;
+  --disconnected-text: rgba(255, 235, 235, 0.92);
+  --disconnected-command-bg: rgba(255, 255, 255, 0.08);
+  --disconnected-command-text: #fff6f6;
 }
 
 /* ===================================================================
@@ -68,6 +115,31 @@
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.theme-toggle {
+  margin: 14px 20px 0 0;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, opacity 0.2s;
+}
+
+.theme-toggle:hover {
+  background: var(--accent-dim);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
 }
 
 .doc-title {
@@ -172,6 +244,10 @@
   padding-bottom: 80px;
 }
 
+::highlight(ata-selection) {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
 .doc-footer {
   padding: 32px 0 64px;
   border-top: 1px solid var(--border);
@@ -213,6 +289,7 @@ body {
   background: var(--bg);
   -webkit-text-size-adjust: 100%;
   -webkit-font-smoothing: antialiased;
+  transition: background 0.25s ease, color 0.25s ease;
 }
 
 /* --- Headings --- */
@@ -502,6 +579,16 @@ details .details-content {
     display: none;
   }
 
+  .sidebar-header {
+    margin-right: 8px;
+  }
+
+  .theme-toggle {
+    margin: 0;
+    padding: 5px 9px;
+    font-size: 11px;
+  }
+
   .toc-item {
     padding: 4px 8px;
     font-size: 11px;
@@ -561,6 +648,66 @@ details .details-content {
   padding: 12px 24px;
   z-index: 100;
   display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  box-shadow: 0 -12px 30px var(--shadow);
+}
+
+.followup-selection {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+}
+
+.followup-selection.visible {
+  display: flex;
+}
+
+.followup-selection-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.followup-selection-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.followup-selection-text {
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.followup-selection-clear {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 4px;
+}
+
+.followup-selection-clear:hover {
+  color: var(--text);
+}
+
+.followup-row {
+  display: flex;
   align-items: center;
   gap: 12px;
 }
@@ -604,6 +751,56 @@ details .details-content {
 }
 
 .followup-send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.session-disconnected-banner {
+  position: fixed;
+  left: 240px;
+  right: 0;
+  bottom: 56px;
+  padding: 14px 24px;
+  background: var(--disconnected-banner-bg);
+  border-top: 1px solid var(--disconnected-banner-border);
+  display: none;
+  z-index: 1002;
+  box-shadow: 0 -10px 30px var(--disconnected-banner-shadow);
+}
+
+.session-disconnected-banner.visible {
+  display: block;
+}
+
+.session-disconnected-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--disconnected-title);
+  margin-bottom: 4px;
+}
+
+.session-disconnected-text {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--disconnected-text);
+}
+
+.session-disconnected-command {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--disconnected-command-bg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  color: var(--disconnected-command-text);
+  word-break: break-all;
+}
+
+.read-aloud-btn:disabled,
+.selection-ask-btn:disabled,
+.selection-read-btn:disabled,
+.followup-selection-clear:disabled {
   opacity: 0.4;
   cursor: default;
 }
@@ -671,10 +868,26 @@ details .details-content {
   color: var(--accent);
 }
 
+.read-aloud-btn.tts-starting {
+  color: var(--accent);
+  animation: read-aloud-pulse 1s ease-in-out infinite;
+}
+
+@keyframes read-aloud-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
 @media (max-width: 768px) {
   .followup-bar {
     left: 0;
     padding: 8px 12px;
+  }
+
+  .session-disconnected-banner {
+    left: 0;
+    bottom: 48px;
+    padding: 12px;
   }
 }
 
@@ -684,8 +897,6 @@ details .details-content {
 .kw { transition: opacity 0.3s ease-out; }
 .karaoke-active .kw {
   opacity: 0.55;
-  -webkit-user-select: none;
-  user-select: none;
   cursor: pointer;
   /* Vertical padding increases touch target without affecting layout */
   padding: 8px 2px;
@@ -693,6 +904,25 @@ details .details-content {
   -webkit-tap-highlight-color: transparent;
 }
 .karaoke-active .kw.revealed { opacity: 1.0; }
+
+/* Decorative tokens (punctuation, bullets, LaTeX fragments) dimmed
+   during karaoke — same opacity as unrevealed .kw words. */
+.kw-decor { transition: opacity 0.3s ease-out; }
+.karaoke-active .kw-decor { opacity: 0.55; }
+.karaoke-active .kw-decor.revealed { opacity: 1.0; }
+/* Dim list markers via inherited color on the <li>. */
+.karaoke-active li { color: rgba(128,128,128,0.55); transition: color 0.3s; }
+.karaoke-active li.li-revealed { color: inherit; }
+.karaoke-active li .kw, .karaoke-active li .kw-decor { color: var(--text); }
+
+body.karaoke-session-active .section {
+  opacity: 0.34;
+  transition: opacity 0.2s ease-out;
+}
+
+body.karaoke-session-active .section.karaoke-current {
+  opacity: 1.0;
+}
 
 /* During karaoke, equations follow same reveal rhythm as words.
    We use explicit dim class so active equations don't flicker dim
@@ -720,10 +950,10 @@ details .details-content {
   left: 240px; /* after sidebar */
   right: 0;
   height: 48px;
-  background: rgba(30, 30, 30, 0.95);
+  background: var(--now-playing-bg);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border-top: 1px solid rgba(255,255,255,0.08);
+  border-top: 1px solid var(--now-playing-border);
   display: none; /* hidden by default */
   align-items: center;
   padding: 0 20px;
@@ -738,7 +968,7 @@ details .details-content {
   height: 32px;
   border: none;
   background: none;
-  color: #e0e0e0;
+  color: var(--now-playing-text);
   cursor: pointer;
   font-size: 18px;
   display: flex;
@@ -747,20 +977,20 @@ details .details-content {
   border-radius: 50%;
   transition: background 0.15s;
 }
-.np-play-pause:hover { background: rgba(255,255,255,0.1); }
+.np-play-pause:hover { background: var(--accent-dim); }
 
 /* Progress bar track */
 .np-progress-container {
   flex: 1;
   height: 4px;
-  background: rgba(255,255,255,0.15);
+  background: color-mix(in srgb, var(--now-playing-text) 16%, transparent);
   border-radius: 2px;
   cursor: pointer;
   position: relative;
 }
 .np-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #6366f1, #818cf8);
+  background: linear-gradient(90deg, var(--accent), var(--progress-gradient-end));
   border-radius: 2px;
   width: 0%;
   transition: width 0.1s linear;
@@ -771,7 +1001,7 @@ details .details-content {
   transform: translate(-50%, -50%);
   width: 12px;
   height: 12px;
-  background: white;
+  background: var(--now-playing-text);
   border-radius: 50%;
   left: 0%;
   transition: left 0.1s linear;
@@ -785,7 +1015,7 @@ details .details-content {
   height: 28px;
   border: none;
   background: none;
-  color: #999;
+  color: var(--now-playing-muted);
   cursor: pointer;
   font-size: 14px;
   display: flex;
@@ -794,7 +1024,29 @@ details .details-content {
   border-radius: 50%;
   transition: background 0.15s, color 0.15s;
 }
-.np-stop:hover { background: rgba(255,255,255,0.1); color: #e0e0e0; }
+.np-stop:hover { background: var(--accent-dim); color: var(--now-playing-text); }
+
+/* Font size controls */
+.font-controls {
+  position: fixed; top: 12px; right: 20px; z-index: 1003;
+  display: flex; gap: 4px;
+}
+.font-controls button {
+  width: 32px; height: 28px; border: 1px solid var(--border);
+  background: var(--bg-surface); color: var(--text-secondary);
+  border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.font-controls button:hover { background: var(--bg-hover, #3d3d5c); color: var(--text); }
+.np-follow {
+  width: 28px; height: 28px; border: none; background: none;
+  color: var(--now-playing-text); font-size: 16px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; transition: background 0.15s, color 0.15s; opacity: 0.5;
+}
+.np-follow:hover { background: var(--accent-dim); }
+.np-follow.active { opacity: 1; color: var(--accent); }
 
 /* Read-aloud button pulsing animation when TTS is playing */
 .read-aloud-btn.tts-active {
@@ -821,13 +1073,13 @@ details .details-content {
 .selection-action-bar {
   position: fixed;
   z-index: 1100;
-  background: rgba(28, 31, 43, 0.92);
+  background: var(--selection-surface);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--selection-border);
   border-radius: 10px;
   padding: 6px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 8px 32px var(--shadow);
   display: none;
   align-items: center;
   gap: 4px;
@@ -861,89 +1113,23 @@ details .details-content {
   opacity: 0.85;
 }
 
-/* Selection question input (inline near the action bar) */
-.selection-question-wrap {
-  position: fixed;
-  z-index: 1100;
-  background: rgba(28, 31, 43, 0.95);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 10px;
-  padding: 10px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-  display: none;
-  flex-direction: column;
-  gap: 8px;
-  width: 360px;
-  max-width: calc(100vw - 32px);
-  animation: selbar-in 0.15s ease-out;
-}
-
-.selection-question-wrap.visible {
-  display: flex;
-}
-
-.selection-question-label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--accent);
-}
-
-.selection-question-preview {
-  font-size: 12px;
-  color: var(--text-muted);
-  max-height: 40px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.selection-question-row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.selection-question-input {
-  flex: 1;
+.selection-read-btn {
   background: var(--bg-elevated);
+  color: var(--selection-text);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 8px 12px;
-  font-size: 13px;
-  color: var(--text);
-  font-family: inherit;
-  outline: none;
-  transition: border-color 0.2s;
-}
-
-.selection-question-input::placeholder {
-  color: var(--text-muted);
-}
-
-.selection-question-input:focus {
-  border-color: var(--accent);
-}
-
-.selection-question-send {
-  background: var(--accent);
-  color: #fff;
-  border: none;
-  border-radius: 6px;
-  padding: 8px 14px;
+  padding: 7px 12px;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
-  transition: opacity 0.15s;
+  transition: opacity 0.15s, background 0.15s;
   font-family: inherit;
 }
 
-.selection-question-send:hover {
+.selection-read-btn:hover {
   opacity: 0.85;
+  background: var(--accent-dim);
 }
 </style>
 </head>
@@ -957,7 +1143,10 @@ details .details-content {
 <div class="layout">
   <!-- Sidebar -->
   <nav class="sidebar" id="sidebar">
-    <div class="sidebar-logo">ATA Research</div>
+    <div class="sidebar-header">
+      <div class="sidebar-logo">ATA Research</div>
+      <button class="theme-toggle" id="theme-toggle" type="button" title="Toggle light and dark mode">Theme</button>
+    </div>
     <div class="doc-title" id="sidebar-title">Document</div>
     <div class="doc-meta" id="sidebar-meta"></div>
 
@@ -992,23 +1181,39 @@ details .details-content {
 
 <!-- Follow-up question input bar (browser mode only) -->
 <div class="followup-bar" id="followup-bar" style="display:none;">
-  <input type="text" class="followup-input" id="followup-input" placeholder="Ask a follow-up question..." autocomplete="off">
-  <button class="followup-send" id="followup-send">Send</button>
+  <div class="followup-selection" id="followup-selection">
+    <div class="followup-selection-copy">
+      <div class="followup-selection-label">Selected text</div>
+      <div class="followup-selection-text" id="followup-selection-text"></div>
+    </div>
+    <button class="followup-selection-clear" id="followup-selection-clear" type="button" aria-label="Clear selected text">&times;</button>
+  </div>
+  <div class="followup-row">
+    <input type="text" class="followup-input" id="followup-input" placeholder="Ask a follow-up question..." autocomplete="off">
+    <button class="followup-send" id="followup-send">Send</button>
+  </div>
+</div>
+
+<div class="session-disconnected-banner" id="sessionDisconnectedBanner">
+  <div class="session-disconnected-title">Session ended</div>
+  <div class="session-disconnected-text">
+    This reading view was connected to a live ATA session that is no longer running.
+    Read aloud and follow-up questions will not work in this tab anymore.
+    Run this command to resume the session. ATA will reopen the reading view in a new browser tab:
+    <div class="session-disconnected-command" id="sessionDisconnectedCommand">ata --yolo resume &lt;session-id&gt;</div>
+  </div>
+</div>
+
+<!-- Font size controls (top-right corner) -->
+<div class="font-controls" id="fontControls">
+  <button onclick="_changeFontSize(-2)" title="Decrease font size">A&#x2212;</button>
+  <button onclick="_changeFontSize(2)" title="Increase font size">A+</button>
 </div>
 
 <!-- Selection action bar (floating, shown when text is selected) -->
 <div class="selection-action-bar" id="selection-action-bar">
-  <button class="selection-ask-btn" id="selection-ask-btn">Ask about this</button>
-</div>
-
-<!-- Selection question input (shown after clicking "Ask about this") -->
-<div class="selection-question-wrap" id="selection-question-wrap">
-  <div class="selection-question-label">Ask about selection</div>
-  <div class="selection-question-preview" id="selection-question-preview"></div>
-  <div class="selection-question-row">
-    <input type="text" class="selection-question-input" id="selection-question-input" placeholder="Your question (Enter to send, empty = explain)" autocomplete="off">
-    <button class="selection-question-send" id="selection-question-send">Send</button>
-  </div>
+  <button class="selection-ask-btn" id="selection-ask-btn" type="button">Ask about this</button>
+  <button class="selection-read-btn" id="selection-read-btn" type="button">Read this</button>
 </div>
 
 <!-- Now-Playing playback control bar -->
@@ -1018,6 +1223,7 @@ details .details-content {
     <div class="np-progress-fill" id="npProgressFill"></div>
     <div class="np-progress-thumb" id="npProgressThumb"></div>
   </div>
+  <button class="np-follow" id="npFollow" onclick="_toggleAutoScroll()" title="Follow reading position">&#x2193;</button>
   <button class="np-stop" onclick="_stopPlayback()">&#x2715;</button>
 </div>
 
@@ -1033,11 +1239,123 @@ var _scrollObserver = null;
 var _activeTocIndex = -1;
 var _currentVisibleSection = 0; // Tracks the section currently in view
 var _streamingNextIndex = -1;
+var _resumeCommand = 'ata --yolo resume <session-id>';
+var _sessionDisconnected = false;
+var _selectedText = '';
+var _selectedSectionIndex = null;
+var _selectionPinned = false;
+var _selectedRange = null;
+var _selectedStartWord = null;
+var _selectedWordCount = null;
+var _currentTheme = 'light';
+
+function _preferredTheme() {
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+    ? 'dark'
+    : 'light';
+}
+
+function _applyTheme(theme) {
+  _currentTheme = theme;
+  document.documentElement.setAttribute('data-theme', theme);
+
+  var prismLight = document.getElementById('prism-light-theme');
+  var prismDark = document.getElementById('prism-dark-theme');
+  if (prismLight) prismLight.disabled = theme !== 'light';
+  if (prismDark) prismDark.disabled = theme !== 'dark';
+
+  if (typeof mermaid !== 'undefined') {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: theme === 'dark' ? 'dark' : 'default'
+    });
+  }
+
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.textContent = theme === 'dark' ? 'Dark' : 'Light';
+    toggle.setAttribute('aria-label', 'Switch to ' + (theme === 'dark' ? 'light' : 'dark') + ' mode');
+  }
+}
+
+function _initializeTheme() {
+  var saved = null;
+  try {
+    saved = window.localStorage.getItem('ata-reading-view-theme');
+  } catch (_err) {}
+  _applyTheme(saved === 'light' || saved === 'dark' ? saved : _preferredTheme());
+
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function() {
+      var next = _currentTheme === 'dark' ? 'light' : 'dark';
+      try {
+        window.localStorage.setItem('ata-reading-view-theme', next);
+      } catch (_err) {}
+      _applyTheme(next);
+    });
+  }
+
+  if (window.matchMedia) {
+    var media = window.matchMedia('(prefers-color-scheme: dark)');
+    var listener = function() {
+      try {
+        if (!window.localStorage.getItem('ata-reading-view-theme')) {
+          _applyTheme(_preferredTheme());
+        }
+      } catch (_err) {
+        _applyTheme(_preferredTheme());
+      }
+    };
+    if (media.addEventListener) {
+      media.addEventListener('change', listener);
+    } else if (media.addListener) {
+      media.addListener(listener);
+    }
+  }
+}
+
+function _setReadingViewInteractiveEnabled(enabled) {
+  var followupInput = document.getElementById('followup-input');
+  if (followupInput) followupInput.disabled = !enabled;
+  var followupSend = document.getElementById('followup-send');
+  if (followupSend) followupSend.disabled = !enabled;
+  var selectionClear = document.getElementById('followup-selection-clear');
+  if (selectionClear) selectionClear.disabled = !enabled;
+  var selectionAsk = document.getElementById('selection-ask-btn');
+  if (selectionAsk) selectionAsk.disabled = !enabled;
+  var selectionRead = document.getElementById('selection-read-btn');
+  if (selectionRead) selectionRead.disabled = !enabled;
+  document.querySelectorAll('.read-aloud-btn').forEach(function(btn) {
+    btn.disabled = !enabled;
+  });
+}
+
+function _showSessionDisconnectedBanner() {
+  _sessionDisconnected = true;
+  stopKaraoke();
+  _setReadingViewInteractiveEnabled(false);
+
+  var selectionBar = document.getElementById('selection-action-bar');
+  if (selectionBar) selectionBar.classList.remove('visible');
+
+  var banner = document.getElementById('sessionDisconnectedBanner');
+  if (banner) banner.classList.add('visible');
+  var command = document.getElementById('sessionDisconnectedCommand');
+  if (command) command.textContent = _resumeCommand || 'ata --yolo resume <session-id>';
+  _updateBottomChromeLayout();
+}
+
+function _hideSessionDisconnectedBanner() {
+  _sessionDisconnected = false;
+  _setReadingViewInteractiveEnabled(true);
+  var banner = document.getElementById('sessionDisconnectedBanner');
+  if (banner) banner.classList.remove('visible');
+  _updateBottomChromeLayout();
+}
 
 // ---- Mermaid initialization ----
-if (typeof mermaid !== 'undefined') {
-  mermaid.initialize({ startOnLoad: false, theme: 'dark' });
-}
+_initializeTheme();
 
 // =====================================================================
 //  fixBrokenLatexDelimiters(text)
@@ -1311,6 +1629,11 @@ function _postProcess(sectionEl) {
   if (typeof Prism !== 'undefined') {
     Prism.highlightAllUnder(sectionEl);
   }
+  // Apply saved font size
+  if (_baseFontSize !== 16) {
+    var content = sectionEl.querySelector('.section-content') || sectionEl;
+    content.style.fontSize = _baseFontSize + 'px';
+  }
   // Mermaid diagrams: convert <pre><code class="language-mermaid"> to rendered diagrams
   if (typeof mermaid !== 'undefined') {
     var mermaidBlocks = sectionEl.querySelectorAll('pre > code.language-mermaid');
@@ -1411,7 +1734,6 @@ function _onScrollTrack() {
     var sections = document.querySelectorAll('.section');
     if (!sections.length) return;
 
-    var scrollTop = window.scrollY || document.documentElement.scrollTop;
     var viewportHeight = window.innerHeight;
     var offset = viewportHeight * 0.25; // trigger point at 25% from top
     var bestIndex = 0;
@@ -1427,8 +1749,10 @@ function _onScrollTrack() {
     }
 
     _currentVisibleSection = bestIndex;
+    _updateProgress();
     if (bestIndex !== _activeTocIndex) {
       setActiveTocItem(bestIndex);
+      _requestReadAloudPrefetch(bestIndex);
       // Notify Swift of section change
       if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.sectionChanged) {
         window.webkit.messageHandlers.sectionChanged.postMessage(bestIndex);
@@ -1461,14 +1785,19 @@ function _updateProgress() {
   var total = _sections.length;
   if (total === 0) return;
 
-  var completed = 0;
-  for (var i = 0; i < total; i++) {
-    if (_sections[i].markdown && _sections[i].markdown.trim().length > 0) {
-      completed++;
-    }
-  }
-
-  var pct = Math.round((completed / total) * 100);
+  var sectionIndex = Math.max(0, Math.min(_currentVisibleSection, total - 1));
+  var sectionEl = document.getElementById('section-' + sectionIndex);
+  var nextSectionEl = document.getElementById('section-' + (sectionIndex + 1));
+  var scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
+  var focusY = scrollTop + 96;
+  var sectionTop = sectionEl ? sectionEl.offsetTop : 0;
+  var sectionBottom = nextSectionEl
+    ? nextSectionEl.offsetTop
+    : Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+  var sectionSpan = Math.max(sectionBottom - sectionTop, 1);
+  var sectionProgress = Math.max(0, Math.min(1, (focusY - sectionTop) / sectionSpan));
+  var ratio = (sectionIndex + sectionProgress) / total;
+  var pct = Math.round(Math.min(1, Math.max(0, ratio)) * 100);
   var progressFill = document.getElementById('progress-fill');
   var progressLabel = document.getElementById('progress-label');
   var streamingFill = document.getElementById('streaming-bar-fill');
@@ -1477,12 +1806,7 @@ function _updateProgress() {
   if (streamingFill) streamingFill.style.width = pct + '%';
 
   if (progressLabel) {
-    if (pct >= 100) {
-      progressLabel.textContent = 'Complete';
-      if (streamingFill) streamingFill.style.width = '0%';
-    } else {
-      progressLabel.textContent = completed + ' / ' + total + ' sections';
-    }
+    progressLabel.textContent = 'Section ' + (sectionIndex + 1) + ' of ' + total;
   }
 }
 
@@ -1508,6 +1832,9 @@ function presentDocument(title, sectionsJson) {
 
   // Reset internal state
   _sections = [];
+  _currentVisibleSection = 0;
+  _activeTocIndex = -1;
+  _clearSelectionContext(false);
   var container = document.getElementById('sections-container');
   if (!container) return;
   container.innerHTML = '';
@@ -1534,7 +1861,7 @@ function presentDocument(title, sectionsJson) {
     numSpan.textContent = (i + 1) + '.';
     h2.appendChild(numSpan);
     h2.appendChild(document.createTextNode(' ' + heading));
-    h2.appendChild(_createReadAloudButton(i));
+    h2.appendChild(_createReadAloudButton(i, !!(content && content.trim().length)));
     div.appendChild(h2);
 
     // Section content
@@ -1563,6 +1890,7 @@ function presentDocument(title, sectionsJson) {
 
   // Update progress
   _updateProgress();
+  _requestReadAloudPrefetch(_currentVisibleSection);
 }
 
 // =====================================================================
@@ -1571,6 +1899,9 @@ function presentDocument(title, sectionsJson) {
 // =====================================================================
 function updateSection(index, markdownContent) {
   if (index < 0 || index >= _sections.length) return;
+
+  // Strip [PAUSE:N] markers — they're TTS hints, not display content.
+  markdownContent = markdownContent.replace(/\[PAUSE:\d+\] */g, '');
 
   _sections[index].markdown = markdownContent;
 
@@ -1590,6 +1921,7 @@ function updateSection(index, markdownContent) {
 
   // Render
   contentDiv.innerHTML = renderMarkdown(markdownContent);
+  _setReadAloudButtonEnabled(index, !!(markdownContent && markdownContent.trim().length));
 
   // Remove streaming states
   sectionEl.classList.remove('section-shimmer', 'section-pending');
@@ -1603,8 +1935,11 @@ function updateSection(index, markdownContent) {
   void sectionEl.offsetWidth;
   sectionEl.classList.add('section-fade-in');
 
+  _restoreActiveKaraokeAfterDomUpdate(index);
+
   // Update progress
   _updateProgress();
+  _requestReadAloudPrefetch(_currentVisibleSection);
 }
 
 // =====================================================================
@@ -1613,6 +1948,9 @@ function updateSection(index, markdownContent) {
 // =====================================================================
 function appendToSection(index, markdownContent, foldable, summary) {
   if (index < 0 || index >= _sections.length) return;
+
+  // Strip [PAUSE:N] markers — TTS hints, not display content.
+  markdownContent = markdownContent.replace(/\[PAUSE:\d+\] */g, '');
 
   // Append to stored markdown
   _sections[index].markdown = (_sections[index].markdown || '') + '\n' + markdownContent;
@@ -1654,10 +1992,15 @@ function appendToSection(index, markdownContent, foldable, summary) {
     _postProcess(contentDiv);
   }
 
+  _setReadAloudButtonEnabled(index, !!(_sections[index].markdown && _sections[index].markdown.trim().length));
+
   // Remove streaming states
   sectionEl.classList.remove('section-shimmer', 'section-pending');
 
+  _restoreActiveKaraokeAfterDomUpdate(index);
+
   _updateProgress();
+  _requestReadAloudPrefetch(_currentVisibleSection);
 }
 
 // =====================================================================
@@ -1693,7 +2036,7 @@ function addSection(afterIndex, heading, content) {
   numSpan.textContent = (newIndex + 1) + '.';
   h2.appendChild(numSpan);
   h2.appendChild(document.createTextNode(' ' + (heading || '')));
-  h2.appendChild(_createReadAloudButton(newIndex));
+  h2.appendChild(_createReadAloudButton(newIndex, !!(content && content.trim().length)));
   div.appendChild(h2);
 
   var contentDiv = document.createElement('div');
@@ -1740,6 +2083,7 @@ function addSection(afterIndex, heading, content) {
   div.classList.add('section-fade-in');
 
   _updateProgress();
+  _requestReadAloudPrefetch(_currentVisibleSection);
 }
 
 // =====================================================================
@@ -1839,6 +2183,8 @@ function updateStreamingState(nextIndex) {
 // =====================================================================
 window.addEventListener('resize', function() {
   fitDisplayedEquations();
+  _updateProgress();
+  _updateBottomChromeLayout();
 });
 
 // =====================================================================
@@ -1853,6 +2199,7 @@ if (!window.webkit) {
     // Show follow-up bar in browser mode
     var followupBar = document.getElementById('followup-bar');
     if (followupBar) followupBar.style.display = '';
+    _updateBottomChromeLayout();
 
     // Wire up follow-up input
     var followupInput = document.getElementById('followup-input');
@@ -1871,11 +2218,18 @@ if (!window.webkit) {
       });
     }
 
+    ws.onopen = function() {
+      _hideSessionDisconnectedBanner();
+      _flushPendingWsMessages();
+    };
+
     ws.onmessage = function(e) {
       try {
         var msg = JSON.parse(e.data);
         switch (msg.type) {
           case 'presentDocument':
+            _resumeCommand = msg.resumeCommand || 'ata --yolo resume <session-id>';
+            _hideSessionDisconnectedBanner();
             presentDocument(msg.title, msg.sections);
             break;
           case 'updateSection':
@@ -1894,7 +2248,7 @@ if (!window.webkit) {
             updateStreamingState(msg.nextIndex);
             break;
           case 'startKaraoke':
-            startKaraoke(msg.sectionIndex, msg.totalWords);
+            startKaraoke(msg.sectionIndex, msg.totalWords, msg.selectionWordOffset, msg.alignmentWords);
             break;
           case 'karaokeWord':
             karaokeWord(msg.sectionIndex, msg.wordIndex);
@@ -1903,7 +2257,7 @@ if (!window.webkit) {
             stopKaraoke();
             break;
           case 'ttsStateChanged':
-            ttsStateChanged(msg.state);
+            ttsStateChanged(msg.state, msg.sectionIndex);
             break;
           case 'equationHighlight':
             updateEquationHighlight(msg.activeIndex, msg.passedIndex);
@@ -1920,7 +2274,24 @@ if (!window.webkit) {
     };
 
     ws.onclose = function() {
-      // Could implement reconnection logic here
+      // Try to reconnect after a short delay — a new ATA session on the
+      // same port will replay all events and restore the reading view.
+      setTimeout(function() {
+        var retryWs = new WebSocket('ws://' + window.location.host + '/ws');
+        retryWs.onopen = function() {
+          // Reconnected to a new session — replace the old WS and hide banner.
+          window._readingViewWs = retryWs;
+          _hideSessionDisconnectedBanner();
+          // Re-attach message handler
+          retryWs.onmessage = ws.onmessage;
+          retryWs.onclose = ws.onclose;
+          _flushPendingWsMessages();
+        };
+        retryWs.onerror = function() {
+          // No new session yet — show disconnected banner.
+          _showSessionDisconnectedBanner();
+        };
+      }, 2000);
     };
   })();
 }
@@ -1951,6 +2322,11 @@ function _isLatexLikeToken(token) {
   if (!token) return false;
   var t = token.trim();
   if (!t) return false;
+  // Standalone prose symbols (=, +, ±, ×, ÷) are spoken by TTS and need
+  // .kw spans to stay in sync. Only classify as math-like when mixed with
+  // other characters. Also preserve "17×" multiplier patterns.
+  if (/^[=+\u00B1\u00D7\u00F7\u2248\u2264\u2265\u2260]$/.test(t)) return false;
+  if (/^\d+[\u00D7x]$/.test(t)) return false;
   // Keep karaoke word indexing aligned with TTS stripping.
   // Tokens containing LaTeX markers are not spoken.
   if (/[$\\]/.test(t) || /\\[()[\]]/.test(t)) return true;
@@ -1994,14 +2370,20 @@ function _walkAndWrap(node, state) {
     for (var i = 0; i < parts.length; i++) {
       if (/^\s+$/.test(parts[i])) {
         frag.appendChild(document.createTextNode(parts[i]));
-      } else if (/^[,;:!?\u2014\u2013\u2026.\u2025()[\]{}"'\u201C\u201D\u2018\u2019\u2022\u25E6\u25AA\u2023]+$/.test(parts[i])) {
-        // Standalone punctuation — TTS treats as pause (no alignment entry).
-        // Leave as plain text to avoid word count drift.
-        frag.appendChild(document.createTextNode(parts[i]));
+      } else if (/^[,;:!?\u2014\u2013\u2026.\u2025()[\]{}"'\u201C\u201D\u2018\u2019\u2022\u25E6\u25AA\u2023\u00B1\u00D7\u00F7\u2264\u2265\u2260\u2248\u221E]+$/.test(parts[i])) {
+        // Standalone punctuation/symbols — TTS treats as pause (no alignment entry).
+        // Wrap in .kw-decor so it dims during karaoke but doesn't consume a word index.
+        var decor = document.createElement('span');
+        decor.className = 'kw-decor';
+        decor.textContent = parts[i];
+        frag.appendChild(decor);
       } else if (_isLatexLikeToken(parts[i])) {
         // LaTeX markers/commands are stripped before TTS.
-        // Keep as plain text so they don't consume karaoke indices.
-        frag.appendChild(document.createTextNode(parts[i]));
+        // Wrap in .kw-decor so it dims during karaoke.
+        var decor2 = document.createElement('span');
+        decor2.className = 'kw-decor';
+        decor2.textContent = parts[i];
+        frag.appendChild(decor2);
       } else if (parts[i].length > 0) {
         var span = document.createElement('span');
         span.className = 'kw';
@@ -2039,6 +2421,92 @@ function _walkAndWrap(node, state) {
 //  Wraps words in <span class="kw" data-wi="N"> within a specific section.
 //  Returns the total word count.
 // =====================================================================
+// Alignment-driven word wrapping: uses the TTS alignment word list
+// as the single source of truth for which tokens get .kw spans.
+// Non-equation words are matched to DOM text nodes; equation words
+// are skipped (KaTeX blocks glow instead). No _isLatexLikeToken needed.
+function _wrapWordsFromAlignment(sectionIndex, alignmentWords) {
+  if (_activeKaraokeSection >= 0 && _activeKaraokeSection !== sectionIndex) {
+    unwrapKaraoke(_activeKaraokeSection);
+  }
+  _activeKaraokeSection = sectionIndex;
+  var container = document.querySelector('#section-' + sectionIndex + ' .section-content');
+  if (!container) return 0;
+
+  _setKaraokeSectionFocus(sectionIndex);
+
+  // Unwrap previous .kw/.kw-decor spans
+  container.querySelectorAll('.kw,.kw-decor').forEach(function(span) {
+    span.replaceWith(document.createTextNode(span.textContent));
+  });
+  container.normalize();
+  container.classList.add('karaoke-active');
+
+  // Collect equation nodes for glow highlighting
+  _collectEquationNodes(container).forEach(function(node) {
+    node.classList.add('katex-eq-node');
+    node.classList.add('katex-eq-dim');
+  });
+
+  // Filter to non-equation words (these get .kw spans in the DOM)
+  var nonEqWords = alignmentWords.filter(function(w) { return !w.eq; });
+  var wordIdx = 0;
+  var skipTags = { PRE:1, SVG:1, SCRIPT:1, STYLE:1 };
+
+  function walk(node) {
+    if (wordIdx >= nonEqWords.length) return;
+    if (node.nodeType === 3) {
+      var text = node.textContent;
+      if (!text.trim()) return;
+      // Force bullet glyphs into standalone tokens
+      text = text.replace(/[\u2022\u25E6\u25AA\u2023]/g, ' $& ');
+      var parts = text.split(/(\s+)/);
+      var frag = document.createDocumentFragment();
+      for (var i = 0; i < parts.length; i++) {
+        if (/^\s+$/.test(parts[i])) {
+          frag.appendChild(document.createTextNode(parts[i]));
+        } else if (/^[,;:!?\u2014\u2013\u2026.()[\]{}"'\u201C\u201D\u2018\u2019\u2022\u25E6\u25AA\u2023]+$/.test(parts[i])) {
+          // Standalone punctuation — .kw-decor (dims but no word index)
+          var decor = document.createElement('span');
+          decor.className = 'kw-decor';
+          decor.textContent = parts[i];
+          frag.appendChild(decor);
+        } else if (parts[i].length > 0 && wordIdx < nonEqWords.length) {
+          // Alignment-driven: wrap as .kw with the alignment word's index
+          var span = document.createElement('span');
+          span.className = 'kw';
+          span.setAttribute('data-wi', nonEqWords[wordIdx].idx);
+          span.textContent = parts[i];
+          frag.appendChild(span);
+          wordIdx++;
+        } else {
+          frag.appendChild(document.createTextNode(parts[i]));
+        }
+      }
+      node.parentNode.replaceChild(frag, node);
+    } else if (node.nodeType === 1) {
+      var tag = node.tagName.toLowerCase();
+      if (skipTags[node.tagName]) return;
+      if (node.classList && (node.classList.contains('katex') || node.classList.contains('katex-display'))) return;
+      if (tag === 'a') {
+        var linkText = (node.textContent || '').trim();
+        if (/^https?:\/\//.test(linkText)) return;
+      }
+      var children = Array.from(node.childNodes);
+      for (var j = 0; j < children.length; j++) {
+        walk(children[j]);
+      }
+    }
+  }
+  walk(container);
+  _kwCounter = wordIdx;
+
+  // Install tap listener for seek-to-word
+  _addKaraokeTapListeners(container);
+
+  return wordIdx;
+}
+
 function wrapWordsForKaraoke(sectionIndex) {
   // Unwrap previous section if different
   if (_activeKaraokeSection >= 0 && _activeKaraokeSection !== sectionIndex) {
@@ -2048,6 +2516,8 @@ function wrapWordsForKaraoke(sectionIndex) {
 
   var container = document.querySelector('#section-' + sectionIndex + ' .section-content');
   if (!container) return 0;
+
+  _setKaraokeSectionFocus(sectionIndex);
 
   var previousRevealed = _lastRevealed;
 
@@ -2119,6 +2589,25 @@ function unwrapKaraoke(sectionIndex) {
   }
 }
 
+function _setKaraokeSectionFocus(sectionIndex) {
+  document.body.classList.add('karaoke-session-active');
+  document.querySelectorAll('.section.karaoke-current').forEach(function(section) {
+    section.classList.remove('karaoke-current');
+  });
+  if (typeof sectionIndex !== 'number' || isNaN(sectionIndex) || sectionIndex < 0) return;
+  var activeSection = document.getElementById('section-' + sectionIndex);
+  if (activeSection) {
+    activeSection.classList.add('karaoke-current');
+  }
+}
+
+function _clearKaraokeSectionFocus() {
+  document.body.classList.remove('karaoke-session-active');
+  document.querySelectorAll('.section.karaoke-current').forEach(function(section) {
+    section.classList.remove('karaoke-current');
+  });
+}
+
 // =====================================================================
 //  updateKaraokeReveal(upToIndex, allowBackward)
 //  Adds/removes .revealed class on .kw spans within active section.
@@ -2157,7 +2646,23 @@ function updateKaraokeReveal(upToIndex, allowBackward) {
     // Forward reveal
     for (var i = _lastRevealed + 1; i <= target; i++) {
       var el = container.querySelector('.kw[data-wi="' + i + '"]');
-      if (el) el.classList.add('revealed');
+      if (el) {
+        el.classList.add('revealed');
+        // Reveal adjacent .kw-decor siblings (punctuation before/after this word).
+        var sib = el.previousSibling;
+        while (sib && sib.nodeType === 1 && sib.classList && sib.classList.contains('kw-decor')) {
+          sib.classList.add('revealed');
+          sib = sib.previousSibling;
+        }
+        sib = el.nextSibling;
+        while (sib && sib.nodeType === 1 && sib.classList && sib.classList.contains('kw-decor')) {
+          sib.classList.add('revealed');
+          sib = sib.nextSibling;
+        }
+        // Mark parent <li> as revealed for list marker styling.
+        var li = el.closest('li');
+        if (li) li.classList.add('li-revealed');
+      }
     }
   } else {
     if (!canSeekBackward) return;
@@ -2275,6 +2780,13 @@ function _seekToKw(target) {
         var now = Date.now();
         if (now - _lastSeekTime < 300) return; // debounce
         _lastSeekTime = now;
+        if (_activeKaraokeSection >= 0) {
+          updateKaraokeReveal(idx + 1, true);
+          _currentKaraokeAbsoluteWord = idx;
+          _currentKaraokeWord = Math.max(0, idx - _karaokeWordOffset);
+          _updateNowPlayingProgress();
+          _setKaraokeSectionFocus(_activeKaraokeSection);
+        }
         if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.karaokeSeek) {
           window.webkit.messageHandlers.karaokeSeek.postMessage(idx);
         } else {
@@ -2333,23 +2845,6 @@ function _removeKaraokeTapListeners(container) {
 //  Text selection handler
 //  Ported from RichTextView.swift:1619-1625, extended for browser mode.
 // =====================================================================
-var _selectedText = '';
-var _selectedSectionIndex = null;
-
-// Find the section index for a given DOM node by walking up to the
-// nearest .section ancestor with a data-section-index attribute.
-function _sectionIndexForNode(node) {
-  var el = node;
-  if (el.nodeType === Node.TEXT_NODE) el = el.parentElement;
-  while (el && el !== document.body) {
-    if (el.classList && el.classList.contains('section') && el.hasAttribute('data-section-index')) {
-      return parseInt(el.getAttribute('data-section-index'), 10);
-    }
-    el = el.parentElement;
-  }
-  return null;
-}
-
 function _positionSelectionBar(bar, rect) {
   // Position above the selection by default; if too close to top, position below.
   var barHeight = 44;
@@ -2372,9 +2867,206 @@ function _positionSelectionBar(bar, rect) {
   bar.style.top = fixedTop + 'px';
 }
 
+function _selectionIsInChrome(node) {
+  var el = node;
+  if (el && el.nodeType === Node.TEXT_NODE) el = el.parentElement;
+  return !!(el && el.closest && (
+    el.closest('#followup-bar')
+    || el.closest('#selection-action-bar')
+    || el.closest('#nowPlayingBar')
+  ));
+}
+
+function _selectionIsInSectionContent(node) {
+  var el = node;
+  if (el && el.nodeType === Node.TEXT_NODE) el = el.parentElement;
+  return !!(el && el.closest && el.closest('.section-content'));
+}
+
+function _sectionIndexForNode(node) {
+  var el = node;
+  if (el && el.nodeType === Node.TEXT_NODE) el = el.parentElement;
+  if (!el || !el.closest) return null;
+  var section = el.closest('.section');
+  if (!section) return null;
+  var raw = section.getAttribute('data-section-index');
+  if (raw == null) return null;
+  var index = parseInt(raw, 10);
+  return isNaN(index) ? null : index;
+}
+
+function _shouldSkipSelectionTextNode(node) {
+  if (!node || node.nodeType !== Node.TEXT_NODE || !node.parentElement) return true;
+  if (!node.textContent || !node.textContent.trim()) return true;
+
+  var parent = node.parentElement;
+  if (
+    parent.closest('pre, svg, script, style')
+    || parent.closest('.katex')
+    || parent.closest('.katex-display')
+  ) {
+    return true;
+  }
+
+  var link = parent.closest('a');
+  if (link && /^https?:\/\//.test((link.textContent || '').trim())) {
+    return true;
+  }
+
+  return false;
+}
+
+function _collectSectionWordTokens(container) {
+  if (!container || !document.createTreeWalker) return [];
+
+  var walker = document.createTreeWalker(
+    container,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode: function(node) {
+        return _shouldSkipSelectionTextNode(node)
+          ? NodeFilter.FILTER_REJECT
+          : NodeFilter.FILTER_ACCEPT;
+      }
+    }
+  );
+
+  var tokens = [];
+  var punctuationOnly = /^[,;:!?\u2014\u2013\u2026.\u2025()[\]{}"'\u201C\u201D\u2018\u2019\u2022\u25E6\u25AA\u2023]+$/;
+  var textNode;
+  while ((textNode = walker.nextNode())) {
+    var text = textNode.textContent || '';
+    var match;
+    var regex = /\S+/g;
+    while ((match = regex.exec(text)) !== null) {
+      var token = match[0];
+      if (punctuationOnly.test(token) || _isLatexLikeToken(token)) {
+        continue;
+      }
+      tokens.push({
+        node: textNode,
+        start: match.index,
+        end: match.index + token.length
+      });
+    }
+  }
+
+  return tokens;
+}
+
+function _rangesIntersect(a, b) {
+  return a.compareBoundaryPoints(Range.END_TO_START, b) > 0
+    && a.compareBoundaryPoints(Range.START_TO_END, b) < 0;
+}
+
+function _expandSelectionToWordRange(range, sectionIndex) {
+  if (!range || sectionIndex === null) return null;
+
+  var container = document.querySelector('#section-' + sectionIndex + ' .section-content');
+  if (!container) return null;
+
+  var tokens = _collectSectionWordTokens(container);
+  if (tokens.length === 0) return null;
+
+  var firstIndex = null;
+  var lastIndex = null;
+
+  for (var i = 0; i < tokens.length; i++) {
+    var token = tokens[i];
+    var tokenRange = document.createRange();
+    tokenRange.setStart(token.node, token.start);
+    tokenRange.setEnd(token.node, token.end);
+    if (_rangesIntersect(range, tokenRange)) {
+      if (firstIndex === null) firstIndex = i;
+      lastIndex = i;
+    }
+  }
+
+  if (firstIndex === null || lastIndex === null) {
+    return null;
+  }
+
+  var expanded = document.createRange();
+  expanded.setStart(tokens[firstIndex].node, tokens[firstIndex].start);
+  expanded.setEnd(tokens[lastIndex].node, tokens[lastIndex].end);
+
+  return {
+    range: expanded,
+    text: expanded.toString().trim(),
+    startWord: firstIndex,
+    wordCount: lastIndex - firstIndex + 1
+  };
+}
+
+function _syncPinnedSelectionHighlight() {
+  if (!(window.CSS && CSS.highlights && typeof Highlight !== 'undefined')) return;
+  CSS.highlights.delete('ata-selection');
+  if (!_selectedRange) return;
+  var highlight = new Highlight();
+  highlight.add(_selectedRange.cloneRange());
+  CSS.highlights.set('ata-selection', highlight);
+}
+
+function _selectionPreviewText(text) {
+  if (!text) return '';
+  return text.length > 140 ? text.substring(0, 140) + '...' : text;
+}
+
+function _syncFollowUpSelectionState() {
+  var wrap = document.getElementById('followup-selection');
+  var preview = document.getElementById('followup-selection-text');
+  var input = document.getElementById('followup-input');
+  if (!wrap || !preview || !input) return;
+
+  if (_selectedText) {
+    preview.textContent = _selectionPreviewText(_selectedText);
+    wrap.classList.add('visible');
+    input.placeholder = 'Ask about the selected text...';
+  } else {
+    wrap.classList.remove('visible');
+    preview.textContent = '';
+    input.placeholder = 'Ask a follow-up question...';
+  }
+  _updateBottomChromeLayout();
+}
+
+function _clearSelectionContext(clearDomSelection) {
+  _selectedText = '';
+  _selectedSectionIndex = null;
+  _selectionPinned = false;
+  _selectedRange = null;
+  _selectedStartWord = null;
+  _selectedWordCount = null;
+  _syncPinnedSelectionHighlight();
+  _syncFollowUpSelectionState();
+  var actionBar = document.getElementById('selection-action-bar');
+  if (actionBar) actionBar.classList.remove('visible');
+  if (clearDomSelection && window.getSelection) {
+    window.getSelection().removeAllRanges();
+  }
+}
+
+function _focusFollowUpInput() {
+  var input = document.getElementById('followup-input');
+  if (!input) return;
+  _syncFollowUpSelectionState();
+  input.focus();
+}
+
 document.addEventListener('selectionchange', function() {
   var winSel = window.getSelection();
   var sel = winSel ? winSel.toString().trim() : '';
+  if (winSel && winSel.rangeCount > 0) {
+    if (_selectionIsInChrome(winSel.anchorNode) || _selectionIsInChrome(winSel.focusNode)) {
+      return;
+    }
+    if (!_selectionIsInSectionContent(winSel.anchorNode) || !_selectionIsInSectionContent(winSel.focusNode)) {
+      if (!_selectionPinned) {
+        _clearSelectionContext(false);
+      }
+      return;
+    }
+  }
 
   // WKWebView bridge (existing behavior, preserved)
   if (sel.length > 0 && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.textSelected) {
@@ -2383,30 +3075,48 @@ document.addEventListener('selectionchange', function() {
 
   // Browser mode: show/hide selection action bar
   var actionBar = document.getElementById('selection-action-bar');
-  var questionWrap = document.getElementById('selection-question-wrap');
   if (!actionBar) return;
 
   if (sel.length > 0 && winSel.rangeCount > 0) {
-    _selectedText = sel;
-    _selectedSectionIndex = _sectionIndexForNode(winSel.anchorNode);
-    // If we couldn't find a section, fall back to the currently visible one
-    if (_selectedSectionIndex === null) {
-      _selectedSectionIndex = _currentVisibleSection;
+    var anchorSectionIndex = _sectionIndexForNode(winSel.anchorNode);
+    var focusSectionIndex = _sectionIndexForNode(winSel.focusNode);
+    if (anchorSectionIndex === null || anchorSectionIndex !== focusSectionIndex) {
+      if (!_selectionPinned) {
+        _clearSelectionContext(false);
+      }
+      return;
     }
 
-    // Don't show action bar if the question input is already visible
-    if (questionWrap && questionWrap.classList.contains('visible')) return;
+    var expandedSelection = _expandSelectionToWordRange(winSel.getRangeAt(0), anchorSectionIndex);
+    if (!expandedSelection || !expandedSelection.text) {
+      if (!_selectionPinned) {
+        _clearSelectionContext(false);
+      }
+      return;
+    }
 
-    var range = winSel.getRangeAt(0);
+    _selectedText = expandedSelection.text;
+    _selectionPinned = false;
+    _selectedRange = expandedSelection.range.cloneRange();
+    _selectedSectionIndex = anchorSectionIndex;
+    _selectedStartWord = expandedSelection.startWord;
+    _selectedWordCount = expandedSelection.wordCount;
+    _syncPinnedSelectionHighlight();
+    _syncFollowUpSelectionState();
+
+    var range = expandedSelection.range;
     var rect = range.getBoundingClientRect();
     if (rect.width > 0) {
       actionBar.classList.add('visible');
       _positionSelectionBar(actionBar, rect);
     }
   } else {
-    _selectedText = '';
-    _selectedSectionIndex = null;
+    if (!_selectionPinned) {
+      _clearSelectionContext(false);
+      return;
+    }
     actionBar.classList.remove('visible');
+    _syncFollowUpSelectionState();
   }
 });
 
@@ -2417,14 +3127,12 @@ window.addEventListener('scroll', function() {
 }, { passive: true });
 
 // =====================================================================
-//  Selection action bar — "Ask about this" flow
+//  Selection action bar — ask or read current selection
 // =====================================================================
 (function() {
   var askBtn = document.getElementById('selection-ask-btn');
-  var questionWrap = document.getElementById('selection-question-wrap');
-  var questionInput = document.getElementById('selection-question-input');
-  var questionSend = document.getElementById('selection-question-send');
-  var questionPreview = document.getElementById('selection-question-preview');
+  var readBtn = document.getElementById('selection-read-btn');
+  var clearBtn = document.getElementById('followup-selection-clear');
   var actionBar = document.getElementById('selection-action-bar');
 
   if (askBtn) {
@@ -2432,90 +3140,36 @@ window.addEventListener('scroll', function() {
       e.preventDefault();
       e.stopPropagation();
       if (!_selectedText) return;
-
-      // Hide the action bar, show the question input
       if (actionBar) actionBar.classList.remove('visible');
-
-      // Show the question wrap near the selection
-      if (questionWrap && questionPreview) {
-        // Truncate preview
-        var preview = _selectedText.length > 80 ? _selectedText.substring(0, 80) + '...' : _selectedText;
-        questionPreview.textContent = '"' + preview + '"';
-
-        // Position near the selection
-        var winSel = window.getSelection();
-        if (winSel && winSel.rangeCount > 0) {
-          var rect = winSel.getRangeAt(0).getBoundingClientRect();
-          _positionSelectionBar(questionWrap, rect);
-        }
-
-        questionWrap.classList.add('visible');
-        if (questionInput) {
-          questionInput.value = '';
-          questionInput.focus();
-        }
-      }
+      _selectionPinned = true;
+      _focusFollowUpInput();
     });
   }
 
-  function _submitSelectionQuestion() {
-    if (!questionInput) return;
-    var text = questionInput.value.trim();
-    // If empty, default to "Explain this in more detail" (like TUI)
-    if (!text) text = 'Explain this in more detail';
-
-    var sectionIdx = _selectedSectionIndex !== null ? _selectedSectionIndex : _currentVisibleSection;
-
-    // Send via WebSocket
-    if (window._readingViewWs && window._readingViewWs.readyState === WebSocket.OPEN) {
-      window._readingViewWs.send(JSON.stringify({
-        type: 'followUpQuestion',
-        text: text,
-        sectionIndex: sectionIdx,
-        selectedText: _selectedText
-      }));
-    }
-
-    // Show the question inline as a card (mention the selection)
-    _showFollowUpCard(text);
-
-    // Clear state
-    questionInput.value = '';
-    if (questionWrap) questionWrap.classList.remove('visible');
-    _selectedText = '';
-    _selectedSectionIndex = null;
-
-    // Clear the browser selection
-    if (window.getSelection) window.getSelection().removeAllRanges();
-  }
-
-  if (questionInput) {
-    questionInput.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        _submitSelectionQuestion();
-      }
-      if (e.key === 'Escape') {
-        if (questionWrap) questionWrap.classList.remove('visible');
-      }
-    });
-  }
-
-  if (questionSend) {
-    questionSend.addEventListener('click', function(e) {
+  if (readBtn) {
+    readBtn.addEventListener('click', function(e) {
       e.preventDefault();
-      _submitSelectionQuestion();
+      e.stopPropagation();
+      if (!_selectedText) return;
+      if (actionBar) actionBar.classList.remove('visible');
+      _selectionPinned = true;
+      _requestSelectionReadAloud(
+        _selectedSectionIndex !== null ? _selectedSectionIndex : _currentVisibleSection,
+        _selectedText
+      );
+      readBtn.blur();
     });
   }
 
-  // Close question wrap when clicking outside
+  if (clearBtn) {
+    clearBtn.addEventListener('click', function(e) {
+      e.preventDefault();
+      _clearSelectionContext(true);
+      _focusFollowUpInput();
+    });
+  }
+
   document.addEventListener('mousedown', function(e) {
-    if (questionWrap && questionWrap.classList.contains('visible')) {
-      if (!questionWrap.contains(e.target)) {
-        questionWrap.classList.remove('visible');
-      }
-    }
-    // Also hide action bar if clicking outside it
     if (actionBar && actionBar.classList.contains('visible')) {
       if (!actionBar.contains(e.target)) {
         actionBar.classList.remove('visible');
@@ -2527,59 +3181,210 @@ window.addEventListener('scroll', function() {
 // =====================================================================
 //  Read Aloud button factory
 // =====================================================================
-function _createReadAloudButton(sectionIndex) {
+function _setReadAloudButtonEnabled(sectionIndex, enabled) {
+  var btn = document.querySelector('.read-aloud-btn[data-section-index="' + sectionIndex + '"]');
+  if (!btn) return;
+  btn.disabled = !enabled;
+}
+
+function _createReadAloudButton(sectionIndex, enabled) {
   var btn = document.createElement('button');
   btn.className = 'read-aloud-btn';
   btn.setAttribute('data-section-index', sectionIndex);
   btn.setAttribute('title', 'Read Aloud');
+  btn.disabled = !enabled;
   btn.innerHTML = '&#x1F50A;'; // speaker emoji
   btn.addEventListener('click', function(e) {
     e.preventDefault();
     e.stopPropagation();
     var idx = parseInt(btn.getAttribute('data-section-index'), 10);
     _requestReadAloud(idx);
+    btn.blur();
   });
   return btn;
 }
 
 function _requestReadAloud(sectionIndex) {
+  if (sectionIndex < 0 || sectionIndex >= _sections.length) return;
+  var markdown = _sections[sectionIndex] && _sections[sectionIndex].markdown;
+  if (!markdown || !markdown.trim()) return;
+  stopKaraoke();
+  prepareKaraokeStarting(sectionIndex);
+  ttsStateChanged('starting', sectionIndex);
   // Send via WebSocket if available
-  if (window._readingViewWs && window._readingViewWs.readyState === WebSocket.OPEN) {
-    window._readingViewWs.send(JSON.stringify({ type: 'requestReadAloud', sectionIndex: sectionIndex }));
-  }
+  _sendWsMessage({ type: 'requestReadAloud', sectionIndex: sectionIndex });
   // Send via Swift bridge if available
   if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.requestReadAloud) {
     window.webkit.messageHandlers.requestReadAloud.postMessage(sectionIndex);
   }
 }
 
+function _requestSelectionReadAloud(sectionIndex, selectedText) {
+  if (!selectedText) return;
+  stopKaraoke();
+  prepareKaraokeStarting(sectionIndex);
+  ttsStateChanged('starting', sectionIndex);
+  _sendWsMessage({
+    type: 'requestSelectionReadAloud',
+    sectionIndex: sectionIndex,
+    selectedText: selectedText,
+    selectionStartWord: _selectedStartWord,
+    selectionWordCount: _selectedWordCount
+  });
+  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.requestSelectionReadAloud) {
+    window.webkit.messageHandlers.requestSelectionReadAloud.postMessage({
+      sectionIndex: sectionIndex,
+      selectedText: selectedText,
+      selectionStartWord: _selectedStartWord,
+      selectionWordCount: _selectedWordCount
+    });
+  }
+}
+
+function _requestReadAloudPrefetch(sectionIndex) {
+  if (typeof sectionIndex !== 'number' || isNaN(sectionIndex) || sectionIndex < 0) return;
+  if (!_sections || sectionIndex >= _sections.length) return;
+  if (!window.webkit) {
+    _sendWsMessage({ type: 'visibleSectionChanged', sectionIndex: sectionIndex });
+  }
+}
+
+function _jumpToSection(index) {
+  if (index < 0 || index >= _sections.length) return;
+  var target = document.getElementById('section-' + index);
+  if (target) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+function _isTypingContext(target) {
+  if (!target) return false;
+  var el = target.nodeType === Node.TEXT_NODE ? target.parentElement : target;
+  if (!el) return false;
+  return !!(
+    el.closest('input, textarea, select, button')
+    || el.isContentEditable
+  );
+}
+
+document.addEventListener('keydown', function(e) {
+  if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (_isTypingContext(e.target)) return;
+
+  if (e.code === 'Space') {
+    if (_ttsState === 'playing' || _ttsState === 'paused') {
+      e.preventDefault();
+      _togglePlayPause();
+    }
+    return;
+  }
+
+  if (e.key === 'r' || e.key === 'R') {
+    e.preventDefault();
+    _requestReadAloud(_currentVisibleSection);
+    return;
+  }
+
+  if (e.key === 'n' || e.key === 'N') {
+    e.preventDefault();
+    _jumpToSection(Math.min(_sections.length - 1, _currentVisibleSection + 1));
+    return;
+  }
+
+  if (e.key === 'p' || e.key === 'P') {
+    e.preventDefault();
+    _jumpToSection(Math.max(0, _currentVisibleSection - 1));
+  }
+});
+
 // =====================================================================
 //  Karaoke WebSocket handlers — start, word highlight, stop
 // =====================================================================
-var _ttsState = 'stopped'; // 'playing' | 'paused' | 'stopped'
+var _ttsState = 'stopped'; // 'starting' | 'playing' | 'paused' | 'stopped'
 var _totalKaraokeWords = 0;
+var _alignmentWords = null; // alignment word list from startKaraoke (if provided)
 var _currentKaraokeWord = 0;
+var _currentKaraokeAbsoluteWord = 0;
+var _karaokeWordOffset = 0;
+var _pendingWsMessages = [];
 
-function startKaraoke(sectionIndex, totalWords) {
+function _flushPendingWsMessages() {
+  if (!(window._readingViewWs && window._readingViewWs.readyState === WebSocket.OPEN)) return;
+  while (_pendingWsMessages.length > 0) {
+    window._readingViewWs.send(_pendingWsMessages.shift());
+  }
+}
+
+function _restoreActiveKaraokeAfterDomUpdate(sectionIndex) {
+  if (_activeKaraokeSection !== sectionIndex) return;
+  if (_alignmentWords) {
+    _wrapWordsFromAlignment(sectionIndex, _alignmentWords);
+  } else {
+    wrapWordsForKaraoke(sectionIndex);
+  }
+
+  var revealCount = 0;
+  if (_currentKaraokeAbsoluteWord > 0) {
+    revealCount = _currentKaraokeAbsoluteWord + 1;
+  } else if (_karaokeWordOffset > 0) {
+    revealCount = _karaokeWordOffset;
+  }
+
+  if (revealCount > 0) {
+    updateKaraokeReveal(revealCount, false);
+  }
+}
+
+function prepareKaraokeStarting(sectionIndex) {
+  if (typeof sectionIndex !== 'number' || isNaN(sectionIndex) || sectionIndex < 0) return;
   wrapWordsForKaraoke(sectionIndex);
+  _totalKaraokeWords = _kwCounter;
+  _currentKaraokeWord = 0;
+  _currentKaraokeAbsoluteWord = 0;
+  _karaokeWordOffset = 0;
+}
+
+function startKaraoke(sectionIndex, totalWords, selectionWordOffset, alignmentWords) {
+  // Store alignment words for DOM restore after section updates
+  _alignmentWords = (alignmentWords && alignmentWords.length > 0) ? alignmentWords : null;
+  // If alignment words are provided, use alignment-driven wrapping.
+  // Otherwise fall back to heuristic _walkAndWrap for backward compat.
+  if (_alignmentWords) {
+    _wrapWordsFromAlignment(sectionIndex, _alignmentWords);
+  } else {
+    wrapWordsForKaraoke(sectionIndex);
+  }
+  _karaokeWordOffset = Math.max(0, parseInt(selectionWordOffset || 0, 10) || 0);
   _totalKaraokeWords = totalWords || _kwCounter;
   _currentKaraokeWord = 0;
+  _currentKaraokeAbsoluteWord = _karaokeWordOffset;
+  if (_karaokeWordOffset > 0) {
+    updateKaraokeReveal(_karaokeWordOffset, false);
+  }
   _ttsState = 'playing';
   _karaokeAutoScroll = true;
   _showNowPlayingBar();
+  _updateFollowButton();
   _markReadAloudActive(sectionIndex);
+  _setKaraokeSectionFocus(sectionIndex);
   // Listen for user scroll to disable auto-follow.
   window.addEventListener('touchstart', _karaokeOnUserScroll, { passive: true });
   window.addEventListener('wheel', _karaokeOnUserScroll, { passive: true });
 }
 
 function karaokeWord(sectionIndex, wordIndex) {
+  if (typeof sectionIndex !== 'number' || isNaN(sectionIndex) || sectionIndex < 0) {
+    sectionIndex = _activeKaraokeSection;
+  }
+  if (typeof sectionIndex !== 'number' || isNaN(sectionIndex) || sectionIndex < 0) return;
   // Ensure karaoke is active for the right section
   if (_activeKaraokeSection !== sectionIndex) {
     wrapWordsForKaraoke(sectionIndex);
   }
+  _setKaraokeSectionFocus(sectionIndex);
   updateKaraokeReveal(wordIndex + 1, false);
-  _currentKaraokeWord = wordIndex;
+  _currentKaraokeAbsoluteWord = wordIndex;
+  _currentKaraokeWord = Math.max(0, wordIndex - _karaokeWordOffset);
   _updateNowPlayingProgress();
   // Auto-scroll to keep the currently highlighted word visible.
   _scrollToKaraokeWord(wordIndex);
@@ -2590,9 +3395,13 @@ function stopKaraoke() {
     unwrapKaraoke(_activeKaraokeSection);
   }
   _ttsState = 'stopped';
+  _alignmentWords = null;
+  _currentKaraokeAbsoluteWord = 0;
+  _karaokeWordOffset = 0;
   _karaokeAutoScroll = true;
   _hideNowPlayingBar();
   _clearReadAloudActive();
+  _clearKaraokeSectionFocus();
   window.removeEventListener('touchstart', _karaokeOnUserScroll);
   window.removeEventListener('wheel', _karaokeOnUserScroll);
 }
@@ -2603,6 +3412,7 @@ function _karaokeOnUserScroll() {
   if (_karaokeScrollPending) return;
   if (_activeKaraokeSection >= 0) {
     _karaokeAutoScroll = false;
+    _updateFollowButton();
   }
 }
 
@@ -2624,56 +3434,108 @@ function _scrollToKaraokeWord(wordIndex) {
   setTimeout(function() { _karaokeScrollPending = false; }, 400);
 }
 
-function ttsStateChanged(state) {
+function ttsStateChanged(state, sectionIndex) {
   _ttsState = state;
+  if (typeof sectionIndex === 'number' && !isNaN(sectionIndex) && sectionIndex >= 0) {
+    _markReadAloudActive(sectionIndex);
+    if (state === 'starting' || state === 'playing' || state === 'paused') {
+      _setKaraokeSectionFocus(sectionIndex);
+    }
+  }
   _updatePlayPauseButton();
   if (state === 'stopped') {
     _hideNowPlayingBar();
     _clearReadAloudActive();
+    _clearKaraokeSectionFocus();
+  } else if (state === 'starting') {
+    _showNowPlayingBar();
   }
   // Update all read-aloud buttons
   var buttons = document.querySelectorAll('.read-aloud-btn');
   buttons.forEach(function(btn) {
-    if (state === 'playing') {
-      btn.classList.add('tts-playing');
-    } else {
-      btn.classList.remove('tts-playing');
-    }
+    btn.classList.remove('tts-playing', 'tts-starting');
   });
+  var activeBtn = document.querySelector('.read-aloud-btn.tts-active');
+  if (activeBtn) {
+    if (state === 'playing') {
+      activeBtn.classList.add('tts-playing');
+    } else if (state === 'starting') {
+      activeBtn.classList.add('tts-starting');
+    }
+  }
 }
 
 // =====================================================================
 //  Now-Playing bar helpers
 // =====================================================================
 function _sendWsMessage(obj) {
-  if (window._readingViewWs && window._readingViewWs.readyState === WebSocket.OPEN) {
-    window._readingViewWs.send(JSON.stringify(obj));
+  if (window._readingViewWs) {
+    var payload = JSON.stringify(obj);
+    if (window._readingViewWs.readyState === WebSocket.OPEN) {
+      window._readingViewWs.send(payload);
+      return true;
+    }
+    if (window._readingViewWs.readyState === WebSocket.CONNECTING) {
+      _pendingWsMessages.push(payload);
+      return true;
+    }
+  }
+  _pendingWsMessages = [];
+  _showSessionDisconnectedBanner();
+  return false;
+}
+
+function _updateBottomChromeLayout() {
+  var followupBar = document.getElementById('followup-bar');
+  var followupHeight = 0;
+  if (followupBar && followupBar.style.display !== 'none') {
+    followupHeight = followupBar.offsetHeight;
+  }
+
+  var nowPlaying = document.getElementById('nowPlayingBar');
+  var nowPlayingHeight = 0;
+  if (nowPlaying && nowPlaying.classList.contains('visible')) {
+    nowPlaying.style.bottom = followupHeight + 'px';
+    nowPlayingHeight = nowPlaying.offsetHeight;
+  }
+
+  var banner = document.getElementById('sessionDisconnectedBanner');
+  if (banner) {
+    banner.style.bottom = followupHeight + 'px';
+  }
+
+  var sc = document.querySelector('.sections-container');
+  if (sc) {
+    sc.style.paddingBottom = Math.max(80, followupHeight + nowPlayingHeight + 32) + 'px';
   }
 }
 
 function _showNowPlayingBar() {
   var bar = document.getElementById('nowPlayingBar');
   if (bar) bar.classList.add('visible');
-  // Adjust content padding to account for both bars
-  var sc = document.querySelector('.sections-container');
-  if (sc) sc.style.paddingBottom = '128px';
+  _updateBottomChromeLayout();
 }
 
 function _hideNowPlayingBar() {
   var bar = document.getElementById('nowPlayingBar');
   if (bar) bar.classList.remove('visible');
-  var sc = document.querySelector('.sections-container');
-  if (sc) sc.style.paddingBottom = '80px';
   // Reset progress
   var fill = document.getElementById('npProgressFill');
   var thumb = document.getElementById('npProgressThumb');
   if (fill) fill.style.width = '0%';
   if (thumb) thumb.style.left = '0%';
+  _updateBottomChromeLayout();
 }
 
 function _updatePlayPauseButton() {
   var btn = document.getElementById('npPlayPause');
   if (!btn) return;
+  if (_ttsState === 'starting') {
+    btn.innerHTML = '&#x231B;';
+    btn.disabled = true;
+    return;
+  }
+  btn.disabled = false;
   btn.innerHTML = _ttsState === 'playing' ? '&#x23F8;' : '&#x25B6;';
 }
 
@@ -2688,6 +3550,7 @@ function _updateNowPlayingProgress() {
 }
 
 function _togglePlayPause() {
+  if (_ttsState === 'starting') return;
   if (_ttsState === 'playing') {
     _sendWsMessage({"type": "requestPause"});
   } else {
@@ -2696,7 +3559,41 @@ function _togglePlayPause() {
 }
 
 function _stopPlayback() {
+  // Always clean up local state immediately so the UI is responsive
+  // even if the WebSocket is temporarily disconnected.
+  stopKaraoke();
   _sendWsMessage({"type": "requestStop"});
+}
+
+var _baseFontSize = 16;
+function _changeFontSize(delta) {
+  _baseFontSize = Math.max(12, Math.min(48, _baseFontSize + delta));
+  document.querySelectorAll('.section-content').forEach(function(el) {
+    el.style.fontSize = _baseFontSize + 'px';
+  });
+  // Persist in localStorage
+  try { localStorage.setItem('ata-reading-font-size', _baseFontSize); } catch(e) {}
+}
+// Restore saved font size
+try {
+  var saved = localStorage.getItem('ata-reading-font-size');
+  if (saved) { _baseFontSize = parseInt(saved, 10) || 16; }
+} catch(e) {}
+
+function _toggleAutoScroll() {
+  _karaokeAutoScroll = !_karaokeAutoScroll;
+  _updateFollowButton();
+  if (_karaokeAutoScroll && _currentKaraokeAbsoluteWord > 0) {
+    _scrollToKaraokeWord(_currentKaraokeAbsoluteWord);
+  }
+}
+
+function _updateFollowButton() {
+  var btn = document.getElementById('npFollow');
+  if (btn) {
+    btn.classList.toggle('active', _karaokeAutoScroll);
+    btn.title = _karaokeAutoScroll ? 'Auto-scroll on (click to disable)' : 'Auto-scroll off (click to follow)';
+  }
 }
 
 function _markReadAloudActive(sectionIndex) {
@@ -2776,6 +3673,9 @@ function _sendFollowUp() {
   var input = document.getElementById('followup-input');
   if (!input) return;
   var text = input.value.trim();
+  if (!text && _selectedText) {
+    text = 'Explain this in more detail';
+  }
   if (!text) return;
 
   // Build message with optional selected text
@@ -2785,9 +3685,8 @@ function _sendFollowUp() {
     msg.sectionIndex = _selectedSectionIndex !== null ? _selectedSectionIndex : _currentVisibleSection;
   }
 
-  // Send via WebSocket
-  if (window._readingViewWs && window._readingViewWs.readyState === WebSocket.OPEN) {
-    window._readingViewWs.send(JSON.stringify(msg));
+  if (!_sendWsMessage(msg)) {
+    return;
   }
 
   // Show the question inline as a card
@@ -2795,8 +3694,7 @@ function _sendFollowUp() {
 
   // Clear input and selection state
   input.value = '';
-  _selectedText = '';
-  _selectedSectionIndex = null;
+  _clearSelectionContext(true);
 }
 
 function _showFollowUpCard(questionText) {

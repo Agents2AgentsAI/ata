@@ -6,6 +6,8 @@ fn main() {
         "src/assets/samples",
         "src/assets/research",
         "src/assets/workspace",
+        "src/assets/adapt-environment",
+        "src/assets/remote-exec",
     ] {
         let dir = Path::new(dir_name);
         if !dir.exists() {

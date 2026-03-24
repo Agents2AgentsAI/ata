@@ -1,8 +1,9 @@
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
+use crate::config::Config;
 use crate::function_tool::FunctionCallError;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -18,7 +19,6 @@ use codex_protocol::document_reader::PresentDocumentArgs;
 use codex_protocol::document_reader::PresentDocumentEvent;
 use codex_protocol::document_reader::UpdateDocumentSectionArgs;
 use codex_protocol::document_reader::UpdateDocumentSectionEvent;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
 use regex_lite::Regex;
@@ -131,6 +131,100 @@ fn streaming_unfilled_reminder(doc: &CachedDocument) -> String {
     String::new()
 }
 
+fn next_streaming_section(doc: &CachedDocument) -> Option<(usize, String)> {
+    doc.streaming_next.and_then(|next| {
+        doc.sections
+            .get(next)
+            .map(|section| (next, section.heading.clone()))
+    })
+}
+
+// @agent-facing
+fn reading_view_display_mode_guidance() -> &'static str {
+    "\
+    READING VIEW DISPLAY MODES: The current turn may include a short state line like \
+    'Current reading view display mode: Tui.' or \
+    'Current reading view display mode: Browser.'.\n\
+    - Tui: terminal-safe formatting only. Do NOT use LaTeX ($...$), Mermaid, or tables. \
+    Use Unicode math symbols directly and keep formatting simple.\n\
+    - Browser: full HTML rendering is available. Mermaid diagrams, tables, blockquotes, \
+    and richer markdown are allowed. For every equation or math symbol, ALWAYS use the \
+    <eq> convention instead of raw Unicode math or raw $...$ / $$...$$ delimiters. \
+    Inline form: <eq latex=\"...\">spoken reading</eq>. Display form: \
+    <eq latex=\"...\" display=\"block\">spoken reading</eq>. Self-closing form: \
+    <eq latex=\"...\" speak=\"spoken reading\"/>. In Browser mode, the latex attribute \
+    is rendered visually and the inner text or speak attribute is what gets read aloud. \
+    The latex attribute must contain the raw LaTeX body only, with no $, $$, \\(, or \\[ delimiters. \
+    The spoken reading should describe the equation the way a lecturer would say it aloud — \
+    natural English, not literal LaTeX. Examples: \
+    latex=\"x^2 + y^2 = z^2\" → \"x squared plus y squared equals z squared\", \
+    latex=\"\\\\sum_{i=1}^n x_i\" → \"the sum of x i from 1 to n\", \
+    latex=\"A \\\\cup B \\\\subseteq C\" → \"A union B is a subset of C\", \
+    latex=\"\\\\alpha \\\\geq \\\\beta\" → \"alpha is at least beta\". \
+    Do NOT read notation literally (\"angle bracket\", \"backslash langle\", \"left paren\"). \
+    Describe meaning, not visual symbols."
+}
+
+const READING_VIEW_CONTENT_STYLE_GUIDANCE: &str = "Content style: write straight prose that continues the section's voice. \
+     Do NOT use a Q:/A: format. If the answer would be unclear without context, \
+     a short italic lead-in is fine (e.g. *On dropout:* ...), but skip it when \
+     the meaning is obvious from placement. Don't overuse it. Do NOT prefix with \
+     bold/italic topic lines like '**On the efficiency gains:**' or \
+     '*Regarding caching:*' — just write the content directly.";
+
+const READING_VIEW_SUMMARY_GUIDANCE: &str = "SUMMARY (required): Always set the `summary` parameter to a short descriptive \
+     label of your answer (5-10 words), e.g. summary=\"Role of attention heads in GPT\". \
+     This is used as a section label regardless of foldable.";
+
+const READING_VIEW_FOLDABLE_GUIDANCE: &str = "FOLDABLE CONTENT: For supplementary content (explanations, examples, deep dives), \
+     set foldable=true. Direct answers, corrections, and rewrites should NOT be foldable \
+     (foldable=false, the default).";
+
+const READING_VIEW_TOOL_CALL_ONLY_GUIDANCE: &str =
+    "Do NOT output plain text; only tool calls are visible to the user.";
+
+const READING_VIEW_REWRITE_BOUNDARY_GUIDANCE: &str =
+    "Do NOT rewrite the entire section unless the user explicitly asks for a rewrite.";
+
+pub fn reading_view_display_mode_state(mode: ReadingViewDisplayMode) -> &'static str {
+    match mode {
+        ReadingViewDisplayMode::Tui => {
+            "Current reading view display mode: Tui. Follow the Tui formatting rules in the reading view tool descriptions."
+        }
+        ReadingViewDisplayMode::Browser => {
+            "Current reading view display mode: Browser. Follow the Browser formatting rules in the reading view tool descriptions."
+        }
+    }
+}
+
+pub fn reading_view_selection_follow_up_guidance(mode: ReadingViewDisplayMode) -> String {
+    let display_mode_state = reading_view_display_mode_state(mode);
+    format!(
+        "Preferred tool: patch_document_section on the exact selected text.\n\
+         Use the selected text exactly as old_text.\n\
+         For normal follow-ups, insert your answer after the selection.\n\
+         For rewrite, simplify, or rephrase requests, replace the selection.\n\n\
+         {display_mode_state}\n\n\
+         {READING_VIEW_REWRITE_BOUNDARY_GUIDANCE}\n\
+         {READING_VIEW_TOOL_CALL_ONLY_GUIDANCE}",
+    )
+}
+
+pub fn reading_view_section_follow_up_guidance(mode: ReadingViewDisplayMode) -> String {
+    let display_mode_state = reading_view_display_mode_state(mode);
+    format!(
+        "Preferred tool: patch_document_section near the most relevant passage.\n\
+         Use old_text verbatim from the current section content.\n\
+         If the user explicitly wants the entire section rewritten, use update_document_section.\n\
+         If the question is about the section as a whole and no passage is relevant, \
+         append_to_section is acceptable.\n\
+         If the follow-up introduces a new topic, use add_document_section after this section.\n\n\
+         {display_mode_state}\n\n\
+         {READING_VIEW_REWRITE_BOUNDARY_GUIDANCE}\n\
+         {READING_VIEW_TOOL_CALL_ONLY_GUIDANCE}",
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Session-scoped cache
 // ---------------------------------------------------------------------------
@@ -164,10 +258,10 @@ pub struct DocumentCache {
 }
 
 impl DocumentCache {
-    pub fn new() -> Self {
+    pub fn with_display_mode(mode: ReadingViewDisplayMode) -> Self {
         Self {
             docs: Mutex::new(HashMap::new()),
-            display_mode: Mutex::new(ReadingViewDisplayMode::default()),
+            display_mode: Mutex::new(mode),
         }
     }
 
@@ -292,6 +386,25 @@ impl DocumentCache {
     }
 }
 
+pub(crate) fn reading_view_display_mode_from_config(config: &Config) -> ReadingViewDisplayMode {
+    match config
+        .config_layer_stack
+        .effective_config()
+        .as_table()
+        .and_then(|t| t.get("reading_view"))
+        .and_then(|v| {
+            v.clone()
+                .try_into::<crate::config::types::ReadingViewToml>()
+                .ok()
+        })
+        .and_then(|rv| rv.mode)
+        .as_deref()
+    {
+        Some("browser") => ReadingViewDisplayMode::Browser,
+        _ => ReadingViewDisplayMode::Tui,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
@@ -302,6 +415,7 @@ pub struct DocumentReaderHandler;
 // Tool specs
 // ---------------------------------------------------------------------------
 
+// @agent-facing
 pub static PRESENT_DOCUMENT_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -329,70 +443,98 @@ pub static PRESENT_DOCUMENT_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "present_reading_view".to_string(),
-        description: "Present structured content in a sectioned reading view that the user can \
-                       navigate and ask follow-up questions about. Use this instead of inline \
-                       text whenever your response is a structured explanation with multiple \
-                       sections — paper walkthroughs, deep dives, research briefings, organized \
-                       reports, or any multi-section content with ## headings. \
-                       FOLLOW-UPS: When a reading view was previously presented and the user \
-                       asks ANY follow-up about the same topic (re-explain, simplify, go deeper, \
-                       different angle, etc.), ALWAYS use the reading view tools — either \
-                       update/append to the existing document or present a fresh one. Never \
-                       fall back to plain text for follow-ups on a topic that has a reading view. \
-                       Do NOT use this for short answers, confirmations, or conversational \
-                       replies unrelated to an active document. \
-                       IMPORTANT: Never mention 'KB', 'knowledge base', 'card', or \
-                       'card ID' in the title or content — the user cares about the subject \
-                       matter, not internal storage. Use the paper/topic name as the title \
-                       (e.g. 'Cosmos Policy Walkthrough', not 'KB Walkthrough: paper-cosmos-policy'). \
-                       Write as if you understand the material directly, not as if you are \
-                       reading from a database entry. \
-                       CITATION STYLE: Never use academic citation format like \
-                       'Smith et al. (2026)' or parenthetical years '(2025)'. Reading view \
-                       content is read aloud — use natural phrasing instead: 'the authors \
-                       showed...', 'researchers found...', 'the original transformer paper \
-                       introduced...'. Reference papers by title or description, not by \
-                       author-year citation. When the method name or paper title is short \
-                       and recognizable, prefer it over a generic phrase — say 'the GRPO \
-                       method showed' or 'the Attention paper demonstrated' rather than \
-                       just 'researchers showed'. Use 'researchers showed' only when \
-                       neither the method nor the paper name is short or memorable. \
-                       FIGURES: To include figures from the paper, \
-                       call `crop_and_store_figure` with the page number and bounding box \
-                       coordinates for each figure you want to include. Then reference the \
-                       returned asset_path in your markdown as `![caption](asset_path)`. \
-                       You can also use ```mermaid code blocks for generated diagrams. \
-                       MATH: By default, use Unicode math symbols directly \
-                       (\u{03C0}, \u{03B8}, \u{03B1}, \u{2211}, \u{222B}, \u{2264}, \
-                       \u{2265}, \u{2192}, \u{00D7}, \u{207F}, \u{00B2}, \u{221A}, \
-                       \u{1D40}, etc.) instead of LaTeX. Only use LaTeX $...$ notation \
-                       if the tool result explicitly says browser mode with KaTeX \
-                       rendering is active. \
-                       NEVER use underscore subscript notation (W_Q, d_k) — write \
-                       subscripts as inline lowercase letters (Wq, Wk, Wv, dk) or use \
-                       Unicode sub/superscripts where available (\u{2080}\u{2081}\u{2082}, \
-                       \u{1D62}, \u{2096}, x\u{207F}, n\u{00B2}). \
-                       NEVER wrap math in backtick code spans or code blocks. \
-                       CRITICAL — SILENCE AFTER PRESENTING: The reading view IS your \
-                       response. After calling this tool, do NOT output any additional text \
-                       in the chat — no summary, no recap, no 'here is what I found', no \
-                       restatement of the content. The user already sees the full document \
-                       in the reading view. Any text you add after this tool call will \
-                       appear as redundant duplication. The ONLY exception is a short \
-                       follow-up question to the user (e.g. 'Would you like me to go \
-                       deeper on any section?'). If you have no question, output nothing. \
-                       To re-display a previously presented \
-                       document (with all section updates intact), pass only the document_id."
-            .to_string(),
+        description: format!(
+            "Present structured content in a sectioned reading view that the user can \
+             navigate and ask follow-up questions about. Use this instead of inline \
+             text whenever your response is a structured explanation with multiple \
+             sections — paper walkthroughs, deep dives, research briefings, organized \
+             reports, or any multi-section content with ## headings. \
+             FOLLOW-UPS: When a reading view was previously presented and the user \
+             asks ANY follow-up about the same topic (re-explain, simplify, go deeper, \
+             different angle, etc.), ALWAYS use the reading view tools — either \
+             update/append to the existing document or present a fresh one. Never \
+             fall back to plain text for follow-ups on a topic that has a reading view. \
+             Do NOT use this for short answers, confirmations, or conversational \
+             replies unrelated to an active document. \
+             IMPORTANT: Never mention 'KB', 'knowledge base', 'card', or \
+             'card ID' in the title or content — the user cares about the subject \
+             matter, not internal storage. Use the paper/topic name as the title \
+             (e.g. 'Cosmos Policy Walkthrough', not 'KB Walkthrough: paper-cosmos-policy'). \
+             Write as if you understand the material directly, not as if you are \
+             reading from a database entry. \
+             CITATION STYLE: Never use academic citation format like \
+             'Smith et al. (2026)' or parenthetical years '(2025)'. Reading view \
+             content is read aloud — use natural phrasing instead: 'the authors \
+             showed...', 'researchers found...', 'the original transformer paper \
+             introduced...'. Reference papers by title or description, not by \
+             author-year citation. When the method name or paper title is short \
+             and recognizable, prefer it over a generic phrase — say 'the GRPO \
+             method showed' or 'the Attention paper demonstrated' rather than \
+             just 'researchers showed'. Use 'researchers showed' only when \
+             neither the method nor the paper name is short or memorable. \
+             STREAMING STRUCTURE: For substantial multi-section reading views, \
+             prefer a skeleton-first flow. First call present_reading_view with \
+             the final title and all ## section headings, but leave the section \
+             bodies empty. This opens the reading view immediately as an outline \
+             or skeleton. Then immediately fill the sections in order with \
+             update_document_section calls. Do not wait for user input between \
+             those tool calls. For short or single-section reading views, \
+             presenting the full content at once is fine. \
+             FIGURES: To include figures from the paper, \
+             call `crop_and_store_figure` with the page number and bounding box \
+             coordinates for each figure you want to include. Then reference the \
+             returned asset_path in your markdown as `![caption](asset_path)`. \
+             You can also use ```mermaid code blocks for generated diagrams. \
+             MATH: In Tui mode, use Unicode math symbols directly \
+             (\u{03C0}, \u{03B8}, \u{03B1}, \u{2211}, \u{222B}, \u{2264}, \
+             \u{2265}, \u{2192}, \u{00D7}, \u{207F}, \u{00B2}, \u{221A}, \
+             \u{1D40}, etc.) instead of LaTeX. In Browser mode, ALWAYS encode \
+             equations and math symbols with the <eq> convention instead of raw \
+             Unicode math or raw $...$ / $$...$$ delimiters: inline \
+             <eq latex=\"...\">spoken reading</eq>, display \
+             <eq latex=\"...\" display=\"block\">spoken reading</eq>, or \
+             self-closing <eq latex=\"...\" speak=\"spoken reading\"/>. In each \
+             <eq>, the latex attribute is rendered visually and the inner text or \
+             speak attribute is what gets read aloud. The latex attribute must \
+             contain the raw LaTeX body only, with no $, $$, \\(, or \\[ delimiters. \
+             The spoken reading should describe the equation the way a lecturer would \
+             say it aloud — natural English, not literal LaTeX. Examples: \
+             latex=\"x^2 + y^2 = z^2\" → \"x squared plus y squared equals z squared\", \
+             latex=\"\\\\sum_{{i=1}}^n x_i\" → \"the sum of x i from 1 to n\", \
+             latex=\"A \\\\cup B \\\\subseteq C\" → \"A union B is a subset of C\", \
+             latex=\"\\\\alpha \\\\geq \\\\beta\" → \"alpha is at least beta\". \
+             Do NOT read notation literally (\"angle bracket\", \"backslash langle\", \"left paren\"). \
+             Describe meaning, not visual symbols. \
+             NEVER use underscore subscript notation (W_Q, d_k) — write \
+             subscripts as inline lowercase letters (Wq, Wk, Wv, dk) or use \
+             Unicode sub/superscripts where available (\u{2080}\u{2081}\u{2082}, \
+             \u{1D62}, \u{2096}, x\u{207F}, n\u{00B2}). \
+             NEVER wrap math in backtick code spans or code blocks. \
+             {mode_guidance} \
+             CRITICAL — SILENCE AFTER PRESENTING: The reading view IS your \
+             response. After calling this tool, do NOT output any additional text \
+             in the chat — no summary, no recap, no 'here is what I found', no \
+             restatement of the content. The user already sees the full document \
+             in the reading view. Any text you add after this tool call will \
+             appear as redundant duplication. The ONLY exception is a short \
+             follow-up question to the user (e.g. 'Would you like me to go \
+             deeper on any section?'). If you have no question, output nothing. \
+             To re-display a previously presented \
+             document (with all section updates intact), pass only the document_id.",
+            mode_guidance = reading_view_display_mode_guidance(),
+        ),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["document_id".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 });
 
+// @agent-facing
 pub static UPDATE_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -419,19 +561,19 @@ pub static UPDATE_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "update_document_section".to_string(),
-        description: "Replace the entire content of a section in a document being read by the user. \
-                       Use this to fill an empty section, or when the user explicitly asks to \
-                       rewrite/restructure/simplify the whole section. Prefer patch_document_section \
-                       for targeted edits. \
-                       Content style: write straight prose that continues the section\u{2019}s \
-                       voice. Do NOT prefix with bold/italic topic lines like \
-                       '**On the efficiency gains:**' or '*Regarding caching:*' \u{2014} \
-                       just write the content directly. \
-                       SILENCE AFTER UPDATING: The reading view already shows the updated \
-                       content. Do not repeat or summarize the changes in the chat. Only \
-                       add text if you have a follow-up question for the user."
-            .to_string(),
+        description: format!(
+            "Replace the entire content of a section in a document being read by the user. \
+             Use this to fill an empty section, or when the user explicitly asks to \
+             rewrite/restructure/simplify the whole section. Prefer patch_document_section \
+             for targeted edits. Use this only for whole-section rewrites, not for inserting \
+             an answer after one passage. \
+             {READING_VIEW_CONTENT_STYLE_GUIDANCE} \
+             SILENCE AFTER UPDATING: The reading view already shows the updated \
+             content. Do not repeat or summarize the changes in the chat. Only \
+             add text if you have a follow-up question for the user.",
+        ),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec![
@@ -441,9 +583,11 @@ pub static UPDATE_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
             ]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 });
 
+// @agent-facing
 pub static APPEND_TO_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -489,13 +633,20 @@ pub static APPEND_TO_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "append_to_section".to_string(),
-        description: "Append content to the end of a section in a document currently being read. \
-                       Use this when adding information to a section without rewriting it entirely. \
-                       SILENCE AFTER APPENDING: The reading view already shows the appended \
-                       content. Do not repeat or summarize what you added in the chat. Only \
-                       add text if you have a follow-up question for the user."
-            .to_string(),
+        description: format!(
+            "Append content to the end of a section in a document currently being read. \
+             Use this when adding information to a section without rewriting it entirely, \
+             especially when the answer applies to the section as a whole and no single \
+             passage is the right insertion point. \
+             {READING_VIEW_CONTENT_STYLE_GUIDANCE} \
+             {READING_VIEW_SUMMARY_GUIDANCE} \
+             {READING_VIEW_FOLDABLE_GUIDANCE} \
+             SILENCE AFTER APPENDING: The reading view already shows the appended \
+             content. Do not repeat or summarize what you added in the chat. Only \
+             add text if you have a follow-up question for the user.",
+        ),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec![
@@ -505,9 +656,11 @@ pub static APPEND_TO_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
             ]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 });
 
+// @agent-facing
 pub static PATCH_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -559,14 +712,23 @@ pub static PATCH_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "patch_document_section".to_string(),
-        description: "Find and replace specific text within a section of a document currently \
-                       being read. Use this for targeted edits like fixing a sentence or updating \
-                       a specific paragraph without rewriting the entire section. \
-                       SILENCE AFTER PATCHING: The reading view already shows the patched \
-                       content. Do not repeat or summarize the changes in the chat. Only \
-                       add text if you have a follow-up question for the user."
-            .to_string(),
+        description: format!(
+            "Find and replace specific text within a section of a document currently \
+             being read. Use this for targeted edits like fixing a sentence or updating \
+             a specific paragraph without rewriting the entire section. To insert an \
+             answer after an existing passage, set old_text to that exact passage and \
+             set new_text to '<that same passage>\\n\\n<your answer>'. To rewrite a \
+             passage, set old_text to the exact passage and set new_text to only the \
+             rewritten replacement text, without including the old_text again. \
+             {READING_VIEW_CONTENT_STYLE_GUIDANCE} \
+             {READING_VIEW_SUMMARY_GUIDANCE} \
+             {READING_VIEW_FOLDABLE_GUIDANCE} \
+             SILENCE AFTER PATCHING: The reading view already shows the patched \
+             content. Do not repeat or summarize the changes in the chat. Only \
+             add text if you have a follow-up question for the user.",
+        ),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec![
@@ -577,6 +739,7 @@ pub static PATCH_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
             ]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 });
 
@@ -634,16 +797,21 @@ pub static ADD_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "add_document_section".to_string(),
-        description: "Add a new section to a document currently being read by the user. \
-                       Use this when a follow-up question introduces a new topic that deserves \
-                       its own section, rather than cramming new content into existing sections \
-                       via append. Do NOT use this to rewrite existing content \u{2014} use \
-                       update_document_section for that. \
-                       SILENCE AFTER ADDING: The reading view already shows the new section. \
-                       Do not repeat or summarize the content in the chat. Only add text if \
-                       you have a follow-up question for the user."
-            .to_string(),
+        description: format!(
+            "Add a new section to a document currently being read by the user. \
+             Use this when a follow-up question introduces a new topic that deserves \
+             its own section, rather than cramming new content into existing sections \
+             via append. Do NOT use this to rewrite existing content \u{2014} use \
+             update_document_section for that. \
+             {READING_VIEW_CONTENT_STYLE_GUIDANCE} \
+             {READING_VIEW_SUMMARY_GUIDANCE} \
+             {READING_VIEW_FOLDABLE_GUIDANCE} \
+             SILENCE AFTER ADDING: The reading view already shows the new section. \
+             Do not repeat or summarize the content in the chat. Only add text if \
+             you have a follow-up question for the user.",
+        ),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec![
@@ -654,6 +822,7 @@ pub static ADD_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
             ]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 });
 
@@ -663,11 +832,13 @@ pub static ADD_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
 
 #[async_trait]
 impl ToolHandler for DocumentReaderHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -761,65 +932,33 @@ impl ToolHandler for DocumentReaderHandler {
                     // agent receives it through the normal wait() path.
                     format!("# {title}\n\n{doc_content}")
                 } else {
-                    let display_mode_instructions = match doc_cache.display_mode() {
-                        ReadingViewDisplayMode::Tui => {
-                            "\n\
-                            \n\
-                            DISPLAY FORMAT: The reading view is displayed in a terminal (TUI) \
-                            with no LaTeX or HTML rendering.\n\
-                            - Do NOT use LaTeX ($...$). Instead use Unicode math symbols \
-                            directly: \u{03C0}, \u{03B8}, \u{03B1}, \u{03B2}, \u{2211}, \
-                            \u{222B}, \u{2264}, \u{2265}, \u{2192}, \u{00D7}, etc.\n\
-                            - Do NOT use Mermaid diagrams. Describe visual concepts in text \
-                            or use simple ASCII diagrams.\n\
-                            - Keep formatting simple: headers, bullet lists, bold, italic. \
-                            No tables (they render poorly in terminals)."
-                        }
-                        ReadingViewDisplayMode::Browser => {
-                            "\n\
-                            \n\
-                            DISPLAY FORMAT: The reading view is displayed in a web browser \
-                            with full HTML rendering support. You can use:\n\
-                            - LaTeX math: wrap equations in $...$ (inline) or $$...$$ (display)\n\
-                            - Mermaid diagrams: use ```mermaid code blocks for flowcharts, \
-                            sequence diagrams, etc.\n\
-                            - Rich markdown formatting including tables, blockquotes, etc."
-                        }
-                    };
-                    format!(
-                        "Document displayed in reading mode. The user can now navigate sections \
-                         and ask follow-up questions. For ANY follow-up about this topic \u{2014} \
-                         whether about a specific section or a broad request like 'explain more \
-                         intuitively' or 'simplify this' \u{2014} use the reading view tools:\n\
-                         \n\
-                         Placement rule: before inserting content, determine its SCOPE. If the \
-                         content spans or references multiple items in a list/sequence (e.g. a \
-                         walkthrough of steps 1\u{2013}6), place it AFTER the entire list, not \
-                         after the first item it mentions. Match placement to the scope of the \
-                         content, not to the first keyword match.\n\
-                         \n\
-                         Tool choice for follow-ups:\n\
-                         - `append_to_section` with `foldable=true` \u{2014} preferred for \
-                         elaborations, examples, and walkthroughs. Adds a collapsible block at \
-                         the end of the section. Use a clear `fold_summary`.\n\
-                         - `update_document_section` \u{2014} for rewriting or restructuring a \
-                         section. When inserting new content, respect the placement rule above: \
-                         put elaborations after the full structure they reference, never in the \
-                         middle of a numbered list or multi-step sequence.\n\
-                         - `patch_document_section` \u{2014} for small targeted fixes like \
-                         correcting a sentence or updating a specific paragraph.\n\
-                         - `add_document_section` \u{2014} when a follow-up introduces a new \
-                         topic that doesn\u{2019}t fit in any existing section. Creates a brand \
-                         new section. Set after_section_index to the section the user is \
-                         reading so it appears right after.\n\
-                         \n\
-                         Do NOT output plain text responses \u{2014} always \
-                         use reading view tools for follow-ups on this topic. \
-                         Content style: write straight prose that continues the section\u{2019}s \
-                         voice. Never prefix with bold/italic topic lines like \
-                         '**On the efficiency gains:**' \u{2014} just write the content directly.\
-                         {display_mode_instructions}"
-                    )
+                    let display_mode_state =
+                        reading_view_display_mode_state(doc_cache.display_mode());
+                    if let Some(next_section) = doc_cache
+                        .lock()
+                        .get(&doc_id)
+                        .and_then(next_streaming_section)
+                    {
+                        let (next_index, next_heading) = next_section;
+                        format!(
+                            "Document outline displayed in reading mode. The user can now see the \
+                             skeleton immediately. NOW call update_document_section with \
+                             section_index={next_index} ('{next_heading}') to fill the first \
+                             section. After each update_document_section result, continue filling \
+                             the next section until all sections are complete. Do not output plain \
+                             text between these tool calls.\n\
+                             \n\
+                             {display_mode_state}"
+                        )
+                    } else {
+                        format!(
+                            "Document displayed in reading mode. The user can now navigate sections \
+                             and ask follow-up questions. For ANY follow-up about this topic, use the \
+                             reading view tools rather than a plain text answer.\n\
+                             \n\
+                             {display_mode_state}"
+                        )
+                    }
                 }
             }
             "update_document_section" => {
@@ -876,16 +1015,19 @@ impl ToolHandler for DocumentReaderHandler {
                         if let Some(next) = doc.streaming_next {
                             let new_next = next.max(args.section_index) + 1;
                             if new_next < doc.sections.len() {
-                                let next_heading = doc.sections[new_next].heading.clone();
                                 doc.streaming_next = Some(new_next);
-                                msg = Some(format!(
-                                    "Section {idx} updated. NOW call \
-                                     update_document_section with \
-                                     section_index={new_next} ('{next_heading}'). \
-                                     Do not output text \u{2014} make the tool call \
-                                     immediately.",
-                                    idx = args.section_index,
-                                ));
+                                if let Some((next_index, next_heading)) =
+                                    next_streaming_section(doc)
+                                {
+                                    msg = Some(format!(
+                                        "Section {idx} updated. NOW call \
+                                         update_document_section with \
+                                         section_index={next_index} ('{next_heading}'). \
+                                         Do not output text \u{2014} make the tool call \
+                                         immediately.",
+                                        idx = args.section_index,
+                                    ));
+                                }
                             } else {
                                 doc.streaming_next = None;
                                 msg = Some(
@@ -1248,10 +1390,7 @@ impl ToolHandler for DocumentReaderHandler {
             }
         };
 
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
-            success: Some(true),
-        })
+        Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
 
@@ -1275,5 +1414,46 @@ mod tests {
             "mixed"
         );
         assert_eq!(strip_citation_markers("no markers"), "no markers");
+    }
+
+    #[test]
+    fn next_streaming_section_returns_next_index_and_heading() {
+        let doc = CachedDocument {
+            title: "Doc".to_string(),
+            sections: vec![
+                CachedSection {
+                    heading: "Overview".to_string(),
+                    content: String::new(),
+                },
+                CachedSection {
+                    heading: "Method".to_string(),
+                    content: String::new(),
+                },
+            ],
+            streaming_next: Some(1),
+        };
+
+        assert_eq!(
+            next_streaming_section(&doc),
+            Some((1, "Method".to_string()))
+        );
+    }
+
+    #[test]
+    fn present_reading_view_tool_description_mentions_skeleton_first_flow() {
+        let ToolSpec::Function(tool) = &*PRESENT_DOCUMENT_TOOL else {
+            panic!("present_reading_view should be a function tool");
+        };
+
+        assert!(
+            tool.description.contains("prefer a skeleton-first flow"),
+            "tool description should instruct the model to present an outline first for substantial documents"
+        );
+        assert!(
+            tool.description.contains(
+                "Then immediately fill the sections in order with update_document_section calls"
+            ),
+            "tool description should explain the follow-up section fill sequence"
+        );
     }
 }

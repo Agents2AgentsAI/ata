@@ -1,0 +1,11 @@
+---
+source: tui/src/app.rs
+assertion_line: 6868
+expression: rendered
+---
+╭────────────────────────────────────────────────────╮
+│ >_ Agents2Agents Ata (v<VERSION>)                  │
+│                                                    │
+│ model:     gpt-5.4 xhigh   fast   /model to change │
+│ directory: /tmp/project                            │
+╰────────────────────────────────────────────────────╯

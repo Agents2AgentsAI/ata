@@ -69,16 +69,33 @@ pub(crate) struct AccountView {
 
 impl AccountView {
     pub(crate) fn new(frame_requester: FrameRequester, codex_home: PathBuf) -> Self {
-        let initial_step = match codex_core::supabase::load_ata_session(&codex_home) {
-            Ok(Some(session)) if !codex_core::supabase::is_session_expired(&session) => {
-                AtaLoginStep::AlreadySigned {
-                    email: session.user.email,
-                }
-            }
-            _ => AtaLoginStep::EmailInput {
+        // Check for session-expired marker written by the daemon when the
+        // refresh token is rejected by Supabase (HTTP 400/401/403).
+        let marker_path = codex_home.join("session_expired");
+        let session_was_expired = marker_path.exists();
+        if session_was_expired {
+            // Remove the marker so we don't show this message again.
+            let _ = std::fs::remove_file(&marker_path);
+        }
+
+        let initial_step = if session_was_expired {
+            // The daemon detected an expired refresh token — force re-login.
+            AtaLoginStep::EmailInput {
                 email: String::new(),
-                error: None,
-            },
+                error: Some("Your ATA session has expired. Please sign in again.".to_string()),
+            }
+        } else {
+            match codex_core::supabase::load_ata_session(&codex_home) {
+                Ok(Some(session)) if !codex_core::supabase::is_session_expired(&session) => {
+                    AtaLoginStep::AlreadySigned {
+                        email: session.user.email,
+                    }
+                }
+                _ => AtaLoginStep::EmailInput {
+                    email: String::new(),
+                    error: None,
+                },
+            }
         };
         Self {
             step: Arc::new(RwLock::new(initial_step)),

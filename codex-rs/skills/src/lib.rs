@@ -11,22 +11,73 @@ use thiserror::Error;
 
 const SYSTEM_SKILLS_DIR: Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/assets/samples");
 
+// ============================================================================
+// Custom skill categories (ours, not upstream)
+//
+// To add a new skill category:
+// 1. Create the directory under src/assets/<name>/SKILL.md
+// 2. Add an include_dir!() const below
+// 3. Add an entry to CUSTOM_SKILL_CATEGORIES
+// 4. Add "src/assets/<name>" to build.rs
+// That's it — no other Rust changes needed.
+// ============================================================================
+
 const RESEARCH_SKILLS_DIR: Dir =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/assets/research");
 
 const WORKSPACE_SKILLS_DIR: Dir =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/assets/workspace");
 
+const ADAPT_ENVIRONMENT_SKILLS_DIR: Dir =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/assets/adapt-environment");
+
+const REMOTE_EXEC_SKILLS_DIR: Dir =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/assets/remote-exec");
+
+/// A custom skill category embedded at compile time.
+struct CustomSkillCategory {
+    /// The embedded directory contents.
+    dir: &'static Dir<'static>,
+    /// Subdirectory name under `CODEX_HOME/skills/` (e.g. ".system-adapt-environment").
+    cache_dir_name: &'static str,
+    /// Salt for fingerprinting (must be unique per category).
+    fingerprint_salt: &'static str,
+}
+
+/// Registry of all custom (non-upstream) skill categories.
+/// Adding a new category only requires adding an entry here
+/// (plus the `include_dir!()` const and `build.rs` entry above).
+const CUSTOM_SKILL_CATEGORIES: &[CustomSkillCategory] = &[
+    CustomSkillCategory {
+        dir: &RESEARCH_SKILLS_DIR,
+        cache_dir_name: ".system-research",
+        fingerprint_salt: "v1-research",
+    },
+    CustomSkillCategory {
+        dir: &WORKSPACE_SKILLS_DIR,
+        cache_dir_name: ".system-workspace",
+        fingerprint_salt: "v1-workspace",
+    },
+    CustomSkillCategory {
+        dir: &ADAPT_ENVIRONMENT_SKILLS_DIR,
+        cache_dir_name: ".system-adapt-environment",
+        fingerprint_salt: "v1-adapt-environment",
+    },
+    CustomSkillCategory {
+        dir: &REMOTE_EXEC_SKILLS_DIR,
+        cache_dir_name: ".system-remote-exec",
+        fingerprint_salt: "v1-remote-exec",
+    },
+];
+
+// ============================================================================
+// Upstream skill category (system/samples only)
+// ============================================================================
+
 const SYSTEM_SKILLS_DIR_NAME: &str = ".system";
-const RESEARCH_SKILLS_DIR_NAME: &str = ".system-research";
-const WORKSPACE_SKILLS_DIR_NAME: &str = ".system-workspace";
 const SKILLS_DIR_NAME: &str = "skills";
 const SYSTEM_SKILLS_MARKER_FILENAME: &str = ".codex-system-skills.marker";
 const SYSTEM_SKILLS_MARKER_SALT: &str = "v1";
-const RESEARCH_SKILLS_MARKER_FILENAME: &str = ".codex-research-skills.marker";
-const RESEARCH_SKILLS_MARKER_SALT: &str = "v1-research";
-const WORKSPACE_SKILLS_MARKER_FILENAME: &str = ".codex-workspace-skills.marker";
-const WORKSPACE_SKILLS_MARKER_SALT: &str = "v1-workspace";
 
 /// Returns the on-disk cache location for embedded system skills.
 ///
@@ -71,7 +122,7 @@ pub fn install_system_skills(codex_home: &Path) -> Result<(), SystemSkillsError>
     let marker_path = dest_system
         .join(SYSTEM_SKILLS_MARKER_FILENAME)
         .map_err(|source| SystemSkillsError::io("resolve system skills marker path", source))?;
-    let expected_fingerprint = embedded_system_skills_fingerprint();
+    let expected_fingerprint = fingerprint_dir(&SYSTEM_SKILLS_DIR, SYSTEM_SKILLS_MARKER_SALT);
     if dest_system.as_path().is_dir()
         && read_marker(&marker_path).is_ok_and(|marker| marker == expected_fingerprint)
     {
@@ -89,92 +140,68 @@ pub fn install_system_skills(codex_home: &Path) -> Result<(), SystemSkillsError>
     Ok(())
 }
 
+// ============================================================================
+// Backward-compatible public functions for research/workspace
+// These delegate to the custom category system but preserve the existing API
+// so that upstream callers (system.rs, manager.rs, loader.rs) don't break.
+// ============================================================================
+
 /// Returns the on-disk cache location for embedded research skills.
-///
-/// This is typically located at `CODEX_HOME/skills/.system-research`.
-/// Always available so that the loader can add the path to skill roots
-/// unconditionally (non-existent directories are skipped at discovery time).
 pub fn research_cache_root_dir(codex_home: &Path) -> PathBuf {
-    AbsolutePathBuf::try_from(codex_home)
-        .and_then(|codex_home| research_cache_root_dir_abs(&codex_home))
-        .map(AbsolutePathBuf::into_path_buf)
-        .unwrap_or_else(|_| {
-            codex_home
-                .join(SKILLS_DIR_NAME)
-                .join(RESEARCH_SKILLS_DIR_NAME)
-        })
+    custom_category_cache_root_dir(codex_home, ".system-research")
 }
 
-fn research_cache_root_dir_abs(codex_home: &AbsolutePathBuf) -> std::io::Result<AbsolutePathBuf> {
-    codex_home
-        .join(SKILLS_DIR_NAME)?
-        .join(RESEARCH_SKILLS_DIR_NAME)
-}
-
-/// Installs embedded research skills into `CODEX_HOME/skills/.system-research`.
-///
-/// Same caching strategy as [`install_system_skills`] but for research-feature-gated skills.
+/// Installs embedded research skills.
 pub fn install_research_skills(codex_home: &Path) -> Result<(), SystemSkillsError> {
-    let codex_home = AbsolutePathBuf::try_from(codex_home)
-        .map_err(|source| SystemSkillsError::io("normalize codex home dir", source))?;
-    let skills_root_dir = codex_home
-        .join(SKILLS_DIR_NAME)
-        .map_err(|source| SystemSkillsError::io("resolve skills root dir", source))?;
-    fs::create_dir_all(skills_root_dir.as_path())
-        .map_err(|source| SystemSkillsError::io("create skills root dir", source))?;
-
-    let dest_research = research_cache_root_dir_abs(&codex_home).map_err(|source| {
-        SystemSkillsError::io("resolve research skills cache root dir", source)
-    })?;
-
-    let marker_path = dest_research
-        .join(RESEARCH_SKILLS_MARKER_FILENAME)
-        .map_err(|source| SystemSkillsError::io("resolve research skills marker path", source))?;
-    let expected_fingerprint = embedded_research_skills_fingerprint();
-    if dest_research.as_path().is_dir()
-        && read_marker(&marker_path).is_ok_and(|marker| marker == expected_fingerprint)
-    {
-        return Ok(());
-    }
-
-    if dest_research.as_path().exists() {
-        fs::remove_dir_all(dest_research.as_path()).map_err(|source| {
-            SystemSkillsError::io("remove existing research skills dir", source)
-        })?;
-    }
-
-    write_embedded_dir(&RESEARCH_SKILLS_DIR, &dest_research)?;
-    fs::write(marker_path.as_path(), format!("{expected_fingerprint}\n"))
-        .map_err(|source| SystemSkillsError::io("write research skills marker", source))?;
-    Ok(())
+    install_skill_category(codex_home, &CUSTOM_SKILL_CATEGORIES[0])
 }
 
 /// Returns the on-disk cache location for embedded workspace skills.
-///
-/// This is typically located at `CODEX_HOME/skills/.system-workspace`.
-/// Always available so that the loader can add the path to skill roots
-/// unconditionally (non-existent directories are skipped at discovery time).
 pub fn workspace_cache_root_dir(codex_home: &Path) -> PathBuf {
-    AbsolutePathBuf::try_from(codex_home)
-        .and_then(|codex_home| workspace_cache_root_dir_abs(&codex_home))
-        .map(AbsolutePathBuf::into_path_buf)
-        .unwrap_or_else(|_| {
-            codex_home
-                .join(SKILLS_DIR_NAME)
-                .join(WORKSPACE_SKILLS_DIR_NAME)
-        })
+    custom_category_cache_root_dir(codex_home, ".system-workspace")
 }
 
-fn workspace_cache_root_dir_abs(codex_home: &AbsolutePathBuf) -> std::io::Result<AbsolutePathBuf> {
-    codex_home
-        .join(SKILLS_DIR_NAME)?
-        .join(WORKSPACE_SKILLS_DIR_NAME)
-}
-
-/// Installs embedded workspace skills into `CODEX_HOME/skills/.system-workspace`.
-///
-/// Same caching strategy as [`install_system_skills`] but for workspace-management skills.
+/// Installs embedded workspace skills.
 pub fn install_workspace_skills(codex_home: &Path) -> Result<(), SystemSkillsError> {
+    install_skill_category(codex_home, &CUSTOM_SKILL_CATEGORIES[1])
+}
+
+// ============================================================================
+// Custom skill categories — generic install and discovery
+// ============================================================================
+
+/// Installs all custom (non-upstream) skill categories.
+/// Called once at startup alongside the upstream install_system_skills().
+pub fn install_custom_skills(codex_home: &Path) -> Result<(), SystemSkillsError> {
+    for cat in CUSTOM_SKILL_CATEGORIES {
+        install_skill_category(codex_home, cat)?;
+    }
+    Ok(())
+}
+
+/// Returns cache root directories for all custom skill categories.
+/// The loader adds these as skill roots so they get discovered automatically.
+pub fn custom_skill_cache_root_dirs(codex_home: &Path) -> Vec<PathBuf> {
+    CUSTOM_SKILL_CATEGORIES
+        .iter()
+        .map(|cat| custom_category_cache_root_dir(codex_home, cat.cache_dir_name))
+        .collect()
+}
+
+fn custom_category_cache_root_dir(codex_home: &Path, cache_dir_name: &str) -> PathBuf {
+    AbsolutePathBuf::try_from(codex_home)
+        .and_then(|ch| {
+            ch.join(SKILLS_DIR_NAME)?
+                .join(cache_dir_name)
+                .map(AbsolutePathBuf::into_path_buf)
+        })
+        .unwrap_or_else(|_| codex_home.join(SKILLS_DIR_NAME).join(cache_dir_name))
+}
+
+fn install_skill_category(
+    codex_home: &Path,
+    cat: &CustomSkillCategory,
+) -> Result<(), SystemSkillsError> {
     let codex_home = AbsolutePathBuf::try_from(codex_home)
         .map_err(|source| SystemSkillsError::io("normalize codex home dir", source))?;
     let skills_root_dir = codex_home
@@ -183,31 +210,37 @@ pub fn install_workspace_skills(codex_home: &Path) -> Result<(), SystemSkillsErr
     fs::create_dir_all(skills_root_dir.as_path())
         .map_err(|source| SystemSkillsError::io("create skills root dir", source))?;
 
-    let dest_workspace = workspace_cache_root_dir_abs(&codex_home).map_err(|source| {
-        SystemSkillsError::io("resolve workspace skills cache root dir", source)
-    })?;
+    let dest = codex_home
+        .join(SKILLS_DIR_NAME)
+        .map_err(|source| SystemSkillsError::io("resolve custom skills dir", source))?
+        .join(cat.cache_dir_name)
+        .map_err(|source| SystemSkillsError::io("resolve custom skills cache dir", source))?;
 
-    let marker_path = dest_workspace
-        .join(WORKSPACE_SKILLS_MARKER_FILENAME)
-        .map_err(|source| SystemSkillsError::io("resolve workspace skills marker path", source))?;
-    let expected_fingerprint = embedded_workspace_skills_fingerprint();
-    if dest_workspace.as_path().is_dir()
+    let marker_filename = format!(".codex-{}.marker", cat.cache_dir_name);
+    let marker_path = dest
+        .join(&marker_filename)
+        .map_err(|source| SystemSkillsError::io("resolve custom skills marker path", source))?;
+    let expected_fingerprint = fingerprint_dir(cat.dir, cat.fingerprint_salt);
+    if dest.as_path().is_dir()
         && read_marker(&marker_path).is_ok_and(|marker| marker == expected_fingerprint)
     {
         return Ok(());
     }
 
-    if dest_workspace.as_path().exists() {
-        fs::remove_dir_all(dest_workspace.as_path()).map_err(|source| {
-            SystemSkillsError::io("remove existing workspace skills dir", source)
-        })?;
+    if dest.as_path().exists() {
+        fs::remove_dir_all(dest.as_path())
+            .map_err(|source| SystemSkillsError::io("remove existing custom skills dir", source))?;
     }
 
-    write_embedded_dir(&WORKSPACE_SKILLS_DIR, &dest_workspace)?;
+    write_embedded_dir(cat.dir, &dest)?;
     fs::write(marker_path.as_path(), format!("{expected_fingerprint}\n"))
-        .map_err(|source| SystemSkillsError::io("write workspace skills marker", source))?;
+        .map_err(|source| SystemSkillsError::io("write custom skills marker", source))?;
     Ok(())
 }
+
+// ============================================================================
+// Shared internals
+// ============================================================================
 
 fn read_marker(path: &AbsolutePathBuf) -> Result<String, SystemSkillsError> {
     Ok(fs::read_to_string(path.as_path())
@@ -216,41 +249,13 @@ fn read_marker(path: &AbsolutePathBuf) -> Result<String, SystemSkillsError> {
         .to_string())
 }
 
-fn embedded_system_skills_fingerprint() -> String {
+fn fingerprint_dir(dir: &Dir<'_>, salt: &str) -> String {
     let mut items = Vec::new();
-    collect_fingerprint_items(&SYSTEM_SKILLS_DIR, &mut items);
+    collect_fingerprint_items(dir, &mut items);
     items.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
     let mut hasher = DefaultHasher::new();
-    SYSTEM_SKILLS_MARKER_SALT.hash(&mut hasher);
-    for (path, contents_hash) in items {
-        path.hash(&mut hasher);
-        contents_hash.hash(&mut hasher);
-    }
-    format!("{:x}", hasher.finish())
-}
-
-fn embedded_research_skills_fingerprint() -> String {
-    let mut items = Vec::new();
-    collect_fingerprint_items(&RESEARCH_SKILLS_DIR, &mut items);
-    items.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
-
-    let mut hasher = DefaultHasher::new();
-    RESEARCH_SKILLS_MARKER_SALT.hash(&mut hasher);
-    for (path, contents_hash) in items {
-        path.hash(&mut hasher);
-        contents_hash.hash(&mut hasher);
-    }
-    format!("{:x}", hasher.finish())
-}
-
-fn embedded_workspace_skills_fingerprint() -> String {
-    let mut items = Vec::new();
-    collect_fingerprint_items(&WORKSPACE_SKILLS_DIR, &mut items);
-    items.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
-
-    let mut hasher = DefaultHasher::new();
-    WORKSPACE_SKILLS_MARKER_SALT.hash(&mut hasher);
+    salt.hash(&mut hasher);
     for (path, contents_hash) in items {
         path.hash(&mut hasher);
         contents_hash.hash(&mut hasher);
@@ -389,8 +394,23 @@ mod tests {
 
         assert!(
             paths
-                .binary_search_by(|probe| probe.as_str().cmp("research-briefing/SKILL.md"))
+                .binary_search_by(|probe| probe.as_str().cmp("cross-paper-report/SKILL.md"))
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn custom_skill_categories_install_and_discover() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        super::install_custom_skills(codex_home.path()).expect("install custom skills");
+
+        let dirs = super::custom_skill_cache_root_dirs(codex_home.path());
+        assert!(
+            dirs.len() >= 4,
+            "should have at least 4 custom categories (research, workspace, adapt-environment, remote-exec)"
+        );
+        for dir in &dirs {
+            assert!(dir.is_dir(), "custom skill cache dir should exist: {dir:?}");
+        }
     }
 }

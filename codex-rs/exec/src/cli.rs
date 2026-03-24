@@ -108,6 +108,21 @@ pub struct Cli {
     )]
     pub last_message_file: Option<PathBuf>,
 
+    /// Run in worker mode: stay alive after initial prompt, wait for directed
+    /// messages from the coordination relay and process them as new turns.
+    #[arg(long, default_value_t = false, global = true)]
+    pub worker: bool,
+
+    #[arg(
+        long,
+        global = true,
+        help = "Session ID of the lead agent (for worker mode)"
+    )]
+    pub lead_session_id: Option<String>,
+
+    #[arg(long, global = true, help = "Workspace ID to use for this session")]
+    pub workspace: Option<String>,
+
     /// Initial instructions for the agent. If not provided as an argument (or
     /// if `-` is used), instructions are read from stdin.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]

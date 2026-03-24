@@ -643,7 +643,7 @@ mod tests {
         let model_client = crate::ModelClient::new(
             None,
             ThreadId::new(),
-            built_in_model_providers()["gemini"].clone(),
+            built_in_model_providers(None)["gemini"].clone(),
             SessionSource::Cli,
             None,
             false,

@@ -13,6 +13,21 @@ use std::time::Instant;
 
 use codex_core::supabase::SupabaseClient;
 use codex_core::supabase::SupabaseSession;
+
+/// Decode a JWT payload and extract the `sub` claim (user ID).
+/// Only decodes — does NOT verify the signature.
+fn decode_jwt_sub(token: &str) -> Option<String> {
+    use base64::Engine;
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .ok()?;
+    let claims: serde_json::Value = serde_json::from_slice(&payload).ok()?;
+    claims.get("sub")?.as_str().map(String::from)
+}
 use serde::Deserialize;
 use serde::Serialize;
 use tiny_http::Header;
@@ -393,13 +408,18 @@ fn build_session_from_tokens(
     use chrono::Duration;
     use chrono::Utc;
 
+    // Extract the real user ID from the JWT's `sub` claim.
+    let user_id = decode_jwt_sub(&access_token)
+        .and_then(|s| uuid::Uuid::parse_str(&s).ok())
+        .unwrap_or_else(uuid::Uuid::nil);
+
     let expires_at = Utc::now() + Duration::seconds(expires_in);
     SupabaseSession {
         access_token,
         refresh_token,
         expires_at,
         user: codex_core::supabase::SupabaseUser {
-            id: uuid::Uuid::nil(),
+            id: user_id,
             email: email.unwrap_or_default(),
             display_name: None,
         },

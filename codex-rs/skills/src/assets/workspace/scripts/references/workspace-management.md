@@ -38,6 +38,21 @@ error.
 For mutating workspace operations (`repo-clone`, `repo-pin`, `run-setup`,
 `add-entry`, etc.), always pass `--workspace "$WID"` explicitly.
 
+## Create And Seed A Workspace
+
+When the user explicitly wants a new workspace populated with repositories,
+skip `ata workspace search-commands` and run the direct flow:
+
+```bash
+WID=$(ata workspace init "My Project")
+ata workspace select "$WID"
+ata workspace repo-clone "https://github.com/org/repo.git" repo-a --workspace "$WID"
+ata workspace repo-clone "https://github.com/org/other.git" repo-b --workspace "$WID"
+```
+
+Use `ata workspace check-host "$URL" --workspace "$WID"` before manual clone
+logic, but prefer the thick `repo-clone` command whenever possible.
+
 ## Delete Workspace
 
 ```bash

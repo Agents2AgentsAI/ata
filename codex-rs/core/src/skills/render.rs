@@ -1,5 +1,8 @@
 use crate::skills::model::SkillMetadata;
+use codex_protocol::protocol::SKILLS_INSTRUCTIONS_CLOSE_TAG;
+use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 
+// @agent-facing
 pub fn render_skills_section(skills: &[SkillMetadata]) -> Option<String> {
     if skills.is_empty() {
         return None;
@@ -40,5 +43,8 @@ pub fn render_skills_section(skills: &[SkillMetadata]) -> Option<String> {
             .to_string(),
     );
 
-    Some(lines.join("\n"))
+    let body = lines.join("\n");
+    Some(format!(
+        "{SKILLS_INSTRUCTIONS_OPEN_TAG}\n{body}\n{SKILLS_INSTRUCTIONS_CLOSE_TAG}"
+    ))
 }

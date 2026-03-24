@@ -61,6 +61,14 @@ pub fn zsh_fork_runtime(test_name: &str) -> Result<Option<ZshForkRuntime>> {
         );
         return Ok(None);
     }
+    // Check env vars before calling cargo_bin to avoid assert_cmd panicking
+    // when CARGO_BIN_EXE_* is unset (e.g. in unit test binaries).
+    if std::env::var_os("CARGO_BIN_EXE_codex-execve-wrapper").is_none()
+        && std::env::var_os("CARGO_BIN_EXE_codex_execve_wrapper").is_none()
+    {
+        eprintln!("skipping {test_name}: CARGO_BIN_EXE_codex-execve-wrapper not set");
+        return Ok(None);
+    }
     let Ok(main_execve_wrapper_exe) = codex_utils_cargo_bin::cargo_bin("codex-execve-wrapper")
     else {
         eprintln!("skipping {test_name}: unable to resolve `codex-execve-wrapper` binary");

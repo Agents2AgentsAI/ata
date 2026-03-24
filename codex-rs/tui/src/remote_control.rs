@@ -10,16 +10,19 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use codex_app_server::EmbeddedWebSocketConfig;
+use codex_app_server::device_registration::DeviceRegistrar;
 use codex_app_server::run_embedded_websocket;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
+use codex_core::config::find_codex_home;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
 use codex_feedback::CodexFeedback;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 /// Settings parsed from CLI flags for the embedded remote-control server.
 #[derive(Clone, Debug)]
@@ -80,6 +83,45 @@ pub(crate) fn generate_auth_token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Read the persisted auth token from `<codex_home>/mobile-server.token`, or
+/// generate a new one and write it to that path if it does not exist yet.
+///
+/// This ensures the same token is reused across TUI sessions so that mobile
+/// clients configured with a QR code from a previous session still work.
+pub(crate) fn read_or_create_token() -> String {
+    fn token_file_path() -> Option<std::path::PathBuf> {
+        std::env::var("CODEX_HOME")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                #[allow(deprecated)]
+                std::env::home_dir().map(|h| h.join(".ata"))
+            })
+            .map(|h| h.join("mobile-server.token"))
+    }
+
+    // Try to read an existing token.
+    if let Some(ref path) = token_file_path()
+        && let Ok(contents) = std::fs::read_to_string(path)
+    {
+        let trimmed = contents.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+
+    // Generate a new token and persist it.
+    let token = generate_auth_token();
+    if let Some(ref path) = token_file_path() {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(path, &token);
+    }
+    token
+}
+
 /// Detect the machine's LAN IP address (first non-loopback IPv4).
 pub(crate) fn local_lan_ip() -> IpAddr {
     // Use a UDP socket trick: connect to a public IP (doesn't send data),
@@ -104,7 +146,7 @@ pub(crate) fn spawn_remote_control_server(
     cli_overrides: Vec<(String, toml::Value)>,
     feedback: CodexFeedback,
 ) -> RemoteControlHandle {
-    let auth_token = settings.token.clone().unwrap_or_else(generate_auth_token);
+    let auth_token = settings.token.clone().unwrap_or_else(read_or_create_token);
 
     let lan_ip = local_lan_ip();
     let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), settings.port);
@@ -129,6 +171,7 @@ pub(crate) fn spawn_remote_control_server(
         cloud_requirements: CloudRequirementsLoader::default(),
         feedback,
         auth_token: Some(auth_token.clone()),
+        owner_user_id: None,
     };
 
     tokio::spawn(async move {
@@ -141,6 +184,36 @@ pub(crate) fn spawn_remote_control_server(
     // Start mDNS/Bonjour advertisement so mobile clients can discover us.
     let discovery =
         crate::remote_discovery::advertise_remote_service(settings.port, &auth_token, lan_ip);
+
+    // Start Supabase device registration so the TUI is discoverable via
+    // Account Devices on the iOS app. Registration is best-effort: if it
+    // fails (e.g. no ATA session) we log a warning and continue.
+    // The spawned task owns the DeviceRegistrar and deregisters when the
+    // shutdown token is cancelled (i.e. when RemoteControlHandle is dropped).
+    {
+        let registrar_port = settings.port;
+        let registrar_shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            let codex_home = match find_codex_home() {
+                Ok(h) => h.to_path_buf(),
+                Err(e) => {
+                    warn!("device registration skipped: cannot find codex home: {e}");
+                    return;
+                }
+            };
+            match DeviceRegistrar::start(&codex_home, None, Some(registrar_port)).await {
+                Ok(registrar) => {
+                    info!("device registered with Supabase for TUI remote-control");
+                    // Wait for shutdown, then deregister.
+                    registrar_shutdown.cancelled().await;
+                    registrar.stop().await;
+                }
+                Err(e) => {
+                    warn!("device registration failed (non-fatal): {e}");
+                }
+            }
+        });
+    }
 
     RemoteControlHandle {
         shutdown,

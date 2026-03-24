@@ -45,8 +45,10 @@ mod mcp_cmd;
 mod mobile_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
+mod zotero_cmd;
 
 use crate::mcp_cmd::McpCli;
+use crate::zotero_cmd::ZoteroCli;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -164,6 +166,12 @@ enum Subcommand {
     /// Manage workspaces (repos, runs, artifacts, audit).
     #[clap(visible_alias = "ws")]
     Workspace(WorkspaceCli),
+
+    /// Manage Zotero libraries, collections, items, and attachments.
+    Zotero(ZoteroCli),
+
+    #[cfg(feature = "ata-plus")]
+    Plus(ata_plus::SubcommandCli),
 }
 
 #[derive(Debug, Parser)]
@@ -187,6 +195,9 @@ enum DebugSubcommand {
     /// Internal: reset local memory state for a fresh start.
     #[clap(hide = true)]
     ClearMemories,
+
+    /// Dump the fully assembled initial context sent to the model on startup.
+    DumpInitialContext,
 }
 
 #[derive(Debug, Parser)]
@@ -257,7 +268,7 @@ enum SandboxCommand {
     #[clap(visible_alias = "seatbelt")]
     Macos(SeatbeltCommand),
 
-    /// Run a command under Landlock+seccomp (Linux only).
+    /// Run a command under the Linux sandbox (bubblewrap by default).
     #[clap(visible_alias = "landlock")]
     Linux(LandlockCommand),
 
@@ -636,6 +647,8 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     codex_core::config_loader::LoaderOverrides::default(),
                     app_server_cli.analytics_default_enabled,
                     transport,
+                    None,
+                    None,
                 )
                 .await?;
             }
@@ -788,6 +801,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             DebugSubcommand::ClearMemories => {
                 run_debug_clear_memories_command(&root_config_overrides, &interactive).await?;
             }
+            DebugSubcommand::DumpInitialContext => {
+                run_debug_dump_initial_context(&root_config_overrides, &interactive).await?;
+            }
         },
         Some(Subcommand::Execpolicy(ExecpolicyCommand { sub })) => match sub {
             ExecpolicySubcommand::Check(cmd) => run_execpolicycheck(cmd)?,
@@ -807,6 +823,10 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             let socket_path = cmd.socket_path;
             tokio::task::spawn_blocking(move || codex_stdio_to_uds::run(socket_path.as_path()))
                 .await??;
+        }
+        #[cfg(feature = "ata-plus")]
+        Some(Subcommand::Plus(cli)) => {
+            ata_plus::run_subcommand(cli).await?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
@@ -874,6 +894,13 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 std::process::exit(code);
             }
         }
+        Some(Subcommand::Zotero(mut zotero_cli)) => {
+            prepend_config_flags(
+                &mut zotero_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            zotero_cmd::run_zotero_command(zotero_cli).await?;
+        }
     }
 
     Ok(())
@@ -903,6 +930,8 @@ async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyho
     println!("Disabled feature `{feature}` in config.toml.");
     Ok(())
 }
+
+// run_team_command and coordination_agent_name have been moved to ata_plus::team_command
 
 fn maybe_print_under_development_feature_warning(
     codex_home: &std::path::Path,
@@ -947,12 +976,9 @@ async fn run_debug_clear_memories_command(
     let state_path = state_db_path(config.sqlite_home.as_path());
     let mut cleared_state_db = false;
     if tokio::fs::try_exists(&state_path).await? {
-        let state_db = StateRuntime::init(
-            config.sqlite_home.clone(),
-            config.model_provider_id.clone(),
-            None,
-        )
-        .await?;
+        let state_db =
+            StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone())
+                .await?;
         state_db.reset_memory_data_for_fresh_start().await?;
         cleared_state_db = true;
     }
@@ -980,6 +1006,27 @@ async fn run_debug_clear_memories_command(
     }
 
     println!("{message}");
+
+    Ok(())
+}
+
+async fn run_debug_dump_initial_context(
+    root_config_overrides: &CliConfigOverrides,
+    interactive: &TuiCli,
+) -> anyhow::Result<()> {
+    let cli_kv_overrides = root_config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    let overrides = ConfigOverrides {
+        config_profile: interactive.config_profile.clone(),
+        ..Default::default()
+    };
+    let config =
+        Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+
+    let result = codex_core::dump_context::dump_initial_context(&config).await?;
+    let output = codex_core::dump_context::format_dump_result(&result);
+    println!("{output}");
 
     Ok(())
 }
@@ -1022,7 +1069,12 @@ async fn run_interactive_tui(
         }
     }
 
-    codex_tui::run_main(interactive, arg0_paths).await
+    codex_tui::run_main(
+        interactive,
+        arg0_paths,
+        codex_core::config_loader::LoaderOverrides::default(),
+    )
+    .await
 }
 
 fn confirm(prompt: &str) -> std::io::Result<bool> {
@@ -1567,6 +1619,19 @@ mod tests {
                 "features.web_search_request=true".to_string(),
                 "features.unified_exec=false".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn feature_toggles_accept_legacy_linux_sandbox_flag() {
+        let toggles = FeatureToggles {
+            enable: vec!["use_linux_sandbox_bwrap".to_string()],
+            disable: Vec::new(),
+        };
+        let overrides = toggles.to_overrides().expect("valid features");
+        assert_eq!(
+            overrides,
+            vec!["features.use_linux_sandbox_bwrap=true".to_string(),]
         );
     }
 

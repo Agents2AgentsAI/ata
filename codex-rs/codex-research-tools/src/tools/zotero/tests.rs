@@ -12,6 +12,7 @@ use crate::error::ResearchError;
 use crate::tools::test_helpers::build_test_toolkit_with_config;
 use crate::types::DocumentResolution;
 use crate::types::DocumentSourceKind;
+use crate::types::ZoteroAddItemsToCollectionParams;
 use crate::types::ZoteroAdvancedCandidateStrategy;
 use crate::types::ZoteroAdvancedCompleteness;
 use crate::types::ZoteroAdvancedSearchParams;
@@ -24,13 +25,18 @@ use crate::types::ZoteroCitationGenerator;
 use crate::types::ZoteroCitationParams;
 use crate::types::ZoteroCollectionItemsParams;
 use crate::types::ZoteroCollectionsParams;
+use crate::types::ZoteroCreateAttachmentLinkParams;
+use crate::types::ZoteroCreateCollectionParams;
+use crate::types::ZoteroFindOrCreateCollectionParams;
 use crate::types::ZoteroGrepCandidateStrategy;
 use crate::types::ZoteroGrepField;
 use crate::types::ZoteroGrepMatchMode;
 use crate::types::ZoteroGrepParams;
 use crate::types::ZoteroItemDetail;
 use crate::types::ZoteroItemParams;
+use crate::types::ZoteroItemUpdatePayload;
 use crate::types::ZoteroListGroupsParams;
+use crate::types::ZoteroQuickSearchMode;
 use crate::types::ZoteroRecentParams;
 use crate::types::ZoteroRecentSortBy;
 use crate::types::ZoteroSearchCondition;
@@ -41,6 +47,7 @@ use crate::types::ZoteroSearchParams;
 use crate::types::ZoteroSortDirection;
 use crate::types::ZoteroTagSearchParams;
 use crate::types::ZoteroTagsParams;
+use crate::types::ZoteroUpdateItemsParams;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn zotero_search_and_get_item_use_user_scope() {
@@ -100,6 +107,7 @@ async fn zotero_search_and_get_item_use_user_scope() {
             offset: Some(0),
             limit: Some(20),
             item_type: None,
+            qmode: None,
             max_chars_per_item: None,
         })
         .await
@@ -131,6 +139,47 @@ async fn zotero_search_and_get_item_use_user_scope() {
     assert_eq!(item.tags, vec!["vision", "diffusion"]);
     assert_eq!(item.linked_items.len(), 1);
     assert_eq!(item.linked_items[0].item_key, Some("PAPER1".to_string()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn zotero_search_supports_explicit_qmode() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/users/123/items"))
+        .and(query_param("q", "agent"))
+        .and(query_param("qmode", "everything"))
+        .and(query_param("itemType", "webpage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {
+                "key": "ITEM_QMODE",
+                "data": {
+                    "itemType": "webpage",
+                    "title": "AgentNet",
+                    "url": "https://github.com/zoe-yyx/AgentNet"
+                }
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    let toolkit = build_test_toolkit(server.uri());
+    let result = toolkit
+        .zotero_search(ZoteroSearchParams {
+            query: "agent".to_string(),
+            library_type: None,
+            library_id: None,
+            offset: Some(0),
+            limit: Some(10),
+            item_type: Some("webpage".to_string()),
+            qmode: Some(ZoteroQuickSearchMode::Everything),
+            max_chars_per_item: None,
+        })
+        .await
+        .expect("zotero_search with qmode should succeed");
+
+    assert_eq!(result.items.len(), 1);
+    assert_eq!(result.items[0].key, "ITEM_QMODE");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1761,6 +1810,7 @@ async fn zotero_local_mode_defaults_to_user_zero_without_api_key() {
             offset: Some(0),
             limit: Some(10),
             item_type: None,
+            qmode: None,
             max_chars_per_item: None,
         })
         .await
@@ -2776,6 +2826,7 @@ async fn multi_scope_search_merges_user_and_group_results() {
             offset: Some(0),
             limit: Some(20),
             item_type: None,
+            qmode: None,
             max_chars_per_item: None,
         })
         .await
@@ -2878,6 +2929,7 @@ async fn explicit_scope_queries_only_that_scope() {
             offset: Some(0),
             limit: Some(10),
             item_type: None,
+            qmode: None,
             max_chars_per_item: None,
         })
         .await
@@ -2927,6 +2979,7 @@ async fn group_discovery_failure_falls_back_to_configured_scopes() {
             offset: Some(0),
             limit: Some(10),
             item_type: None,
+            qmode: None,
             max_chars_per_item: None,
         })
         .await
@@ -3366,6 +3419,246 @@ async fn resolve_document_sources_rejects_unsafe_local_paths() {
                     .to_string()
             ],
         }
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn zotero_create_collection_uses_write_api_and_returns_collection() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/users/123/collections"))
+        .and(|request: &wiremock::Request| {
+            let body: serde_json::Value = request.body_json().expect("request body should be json");
+            body == serde_json::json!([
+                {
+                    "name": "multi-agent",
+                    "parentCollection": "PARENT1"
+                }
+            ])
+        })
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "successful": {
+                "0": {
+                    "key": "COLL1",
+                    "version": 7
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let toolkit = build_test_toolkit(server.uri());
+    let result = toolkit
+        .zotero_create_collection(ZoteroCreateCollectionParams {
+            name: "multi-agent".to_string(),
+            parent_collection_key: Some("PARENT1".to_string()),
+            library_type: Some("user".to_string()),
+            library_id: Some("123".to_string()),
+        })
+        .await
+        .expect("create collection should succeed");
+
+    assert_eq!(result.created, true);
+    assert_eq!(result.collection.key, "COLL1");
+    assert_eq!(result.collection.name, "multi-agent");
+    assert_eq!(
+        result.collection.parent_collection,
+        Some("PARENT1".to_string())
+    );
+    assert_eq!(
+        result
+            .collection
+            .source_meta
+            .as_ref()
+            .and_then(|meta| meta.canonical_id.clone()),
+        Some("zotero:user/123/collection/COLL1".to_string())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn zotero_find_or_create_collection_checks_multiple_pages() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/users/123/collections"))
+        .and(query_param("start", "0"))
+        .and(query_param("limit", "100"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Total-Results", "201")
+                .set_body_json(serde_json::json!([])),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/users/123/collections"))
+        .and(query_param("start", "100"))
+        .and(query_param("limit", "100"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Total-Results", "201")
+                .set_body_json(serde_json::json!([
+                    {
+                        "key": "COLL2",
+                        "data": {
+                            "name": "multi-agent",
+                            "parentCollection": "PARENT1"
+                        }
+                    }
+                ])),
+        )
+        .mount(&server)
+        .await;
+
+    let toolkit = build_test_toolkit(server.uri());
+    let result = toolkit
+        .zotero_find_or_create_collection(ZoteroFindOrCreateCollectionParams {
+            name: "multi-agent".to_string(),
+            parent_collection_key: Some("PARENT1".to_string()),
+            library_type: Some("user".to_string()),
+            library_id: Some("123".to_string()),
+        })
+        .await
+        .expect("find or create should succeed");
+
+    assert_eq!(result.created, false);
+    assert_eq!(result.collection.key, "COLL2");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn zotero_add_items_to_collection_preserves_existing_memberships() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/users/123/items/ITEM1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "key": "ITEM1",
+            "version": 10,
+            "data": {
+                "itemType": "journalArticle",
+                "title": "Existing Item",
+                "collections": ["EXISTING1"]
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/users/123/items/ITEM1"))
+        .and(|request: &wiremock::Request| {
+            let body: serde_json::Value = request.body_json().expect("request body should be json");
+            body["collections"] == serde_json::json!(["EXISTING1", "TARGET1"])
+        })
+        .respond_with(ResponseTemplate::new(200).insert_header("Last-Modified-Version", "11"))
+        .mount(&server)
+        .await;
+
+    let toolkit = build_test_toolkit(server.uri());
+    let result = toolkit
+        .zotero_add_items_to_collection(ZoteroAddItemsToCollectionParams {
+            collection_key: "TARGET1".to_string(),
+            item_keys: vec!["ITEM1".to_string()],
+            library_type: Some("user".to_string()),
+            library_id: Some("123".to_string()),
+        })
+        .await
+        .expect("add items to collection should succeed");
+
+    assert_eq!(result.records.len(), 1);
+    assert_eq!(
+        result.records[0].collection_keys,
+        vec!["EXISTING1".to_string(), "TARGET1".to_string()]
+    );
+    assert_eq!(result.records[0].version, Some(11));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn zotero_create_attachment_link_creates_linked_url_attachment() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/users/123/items"))
+        .and(|request: &wiremock::Request| {
+            let body: serde_json::Value = request.body_json().expect("request body should be json");
+            body == serde_json::json!([
+                {
+                    "itemType": "attachment",
+                    "parentItem": "ITEM1",
+                    "linkMode": "linked_url",
+                    "title": "Paper PDF",
+                    "url": "https://arxiv.org/pdf/2603.12229.pdf",
+                    "contentType": "application/pdf",
+                    "collections": ["COLL1"],
+                    "tags": [{"tag": "pdf"}]
+                }
+            ])
+        })
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "successful": {
+                "0": {
+                    "key": "ATT1",
+                    "version": 4
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let toolkit = build_test_toolkit(server.uri());
+    let result = toolkit
+        .zotero_create_attachment_link(ZoteroCreateAttachmentLinkParams {
+            parent_item_key: "ITEM1".to_string(),
+            title: "Paper PDF".to_string(),
+            url: "https://arxiv.org/pdf/2603.12229.pdf".to_string(),
+            content_type: Some("application/pdf".to_string()),
+            collections: Some(vec!["COLL1".to_string()]),
+            tags: Some(vec!["pdf".to_string()]),
+            library_type: Some("user".to_string()),
+            library_id: Some("123".to_string()),
+        })
+        .await
+        .expect("create attachment link should succeed");
+
+    assert_eq!(result.records.len(), 1);
+    assert_eq!(result.records[0].key, "ATT1");
+    assert_eq!(result.records[0].parent_item, Some("ITEM1".to_string()));
+    assert_eq!(result.records[0].item_type, Some("attachment".to_string()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires local Zotero installation"]
+async fn zotero_update_items_requires_write_access() {
+    let toolkit = build_test_toolkit_with_config(ResearchConfig {
+        zotero_api_key: None,
+        zotero_user_id: None,
+        zotero_group_id: None,
+        zotero_base_url: "http://127.0.0.1:23119/api/".to_string(),
+        ..ResearchConfig::default()
+    });
+
+    let error = toolkit
+        .zotero_update_items(ZoteroUpdateItemsParams {
+            items: vec![ZoteroItemUpdatePayload {
+                item_key: "ITEM1".to_string(),
+                patch: serde_json::json!({ "url": "https://example.com/paper.pdf" }),
+            }],
+            library_type: Some("user".to_string()),
+            library_id: Some("123".to_string()),
+        })
+        .await
+        .expect_err("write tool should require api key");
+
+    assert!(
+        matches!(
+            error,
+            ResearchError::NotConfigured {
+                tool: "zotero_update_items",
+                ..
+            }
+        ),
+        "unexpected error: {error}"
     );
 }
 

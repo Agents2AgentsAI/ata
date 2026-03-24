@@ -72,25 +72,20 @@ Use sub-agents when available. Each sub-agent should write one artifact to \
     phase = phase.replace("{output_path}", params.output_path.as_str());
 
     if params.has_zotero {
-        phase.push_str(&format!(
-            "- Discover accessible Zotero groups via `{list_groups}`.\n\
-- Search items via `{search}`, AND scan collection names via `{collections}` for topic matches.\n\
-- When a collection matches the topic, retrieve its items via `{collection_items}` — this catches papers keyword search misses.\n\
-- When Zotero items expose linked relations, use those linked item keys/IDs to connect related records across collections or item types before falling back to title matching.\n\
-- Use `{advanced_search}` for precise metadata filters and `{search_notes}` when evidence likely lives in notes/annotations.\n\
-- For papers you need to read deeply, call `{get_item}` with `include_attachments=true` and `include_fulltext_resolution=true`.\n\
-- If `document_resolution.preferred_url` is present, fetch it with `attach_url_files` and treat that attached document as the primary source.\n\
-- If `document_resolution.local_path` is present and no URL is available, use that local PDF path as the primary source.\n\
-- Generate references via `{get_item_citation}` when outputs require BibTeX/APA/CSL citations.\n",
-            list_groups = tool.zotero_list_groups,
-            search = tool.zotero_search,
-            collections = tool.zotero_get_collections,
-            collection_items = tool.zotero_get_collection_items,
-            advanced_search = tool.zotero_advanced_search,
-            search_notes = tool.zotero_search_notes,
-            get_item = tool.zotero_get_item,
-            get_item_citation = tool.zotero_get_item_citation,
-        ));
+        phase.push_str(
+            "- When Zotero is relevant, use the `ata zotero ...` CLI namespace instead of guessing shell commands.\n\
+- Start with `ata zotero status` when backend behavior is unclear; it reports the effective Zotero mode, scope, and fallback path.\n\
+- For curated buckets, folders, or repo sets, always list collections first with `ata zotero collections --compact`, then inspect the chosen collection via `ata zotero collection items --collection-key ... --compact`.\n\
+- When one collection clearly matches, stay with that collection instead of launching multiple synonymous repo searches in parallel.\n\
+- For implementation and GitHub discovery, prefer one bounded pass with `ata zotero find-repos --collection \"...\"` when a collection is the source of truth, otherwise `ata zotero find-repos --query \"...\"` before broad keyword search.\n\
+- If `ata zotero collection items --collection-key ... --compact` prints `No items.`, treat that collection as empty and stop retrying it unless the library scope changes.\n\
+- Only broaden repo discovery once if the first bounded pass returns too few usable repos.\n\
+- For paper resolution, prefer `ata zotero resolve-paper --query \"...\"` or `ata zotero resolve-paper --item-key ...`.\n\
+- Only use `ata zotero search-commands \"...\"` when the right subcommand is still unclear after considering `status`, `collections`, `collection items`, `find-repos`, `resolve-paper`, `search`, and direct item inspection.\n\
+- When using low-level read commands, prefer compact discovery output first (`--compact`) and only fall back to full JSON when you need exact fields.\n\
+- For papers you need to read deeply, call `ata zotero item get --item-key ... --include-attachments --include-fulltext-resolution`, then use `attach_url_files` on `document_resolution.preferred_url` when available.\n\
+- Prefer linked Zotero relations and explicit repo/PDF URLs over fuzzy title matching.\n",
+        );
     }
     if params.has_paper_search {
         phase.push_str(&format!(
@@ -244,7 +239,7 @@ mod tests {
             generate_code: true,
             output_path: "./research-output".to_string(),
             tool_names: ResearchToolNames::default(),
-            has_zotero: true,
+            has_zotero: false,
             has_paper_search: true,
             has_repo_analysis: true,
             has_hackernews: true,
@@ -260,15 +255,27 @@ mod tests {
     #[test]
     fn prompt_includes_selected_tools_and_phases() {
         let rendered = build_research_prompt(&params());
-        assert!(rendered.contains("`zotero_search`"));
-        assert!(rendered.contains("`zotero_list_groups`"));
-        assert!(rendered.contains("`zotero_get_item_citation`"));
+        assert!(!rendered.contains("`zotero_search`"));
+        assert!(!rendered.contains("`zotero_list_groups`"));
         assert!(rendered.contains("`paper_search`"));
         assert!(rendered.contains("`repo_find_entrypoints`"));
-        assert!(rendered.contains("include_attachments=true"));
         assert!(rendered.contains("### Phase 4: Reproducible Pipeline Scaffolding"));
         assert!(rendered.contains("### Phase 3b: Skeptic Pass"));
         assert!(rendered.contains(".research_state/subfinding_N.json"));
+    }
+
+    #[test]
+    fn prompt_includes_ata_zotero_guidance_when_available() {
+        let mut p = params();
+        p.has_zotero = true;
+        let rendered = build_research_prompt(&p);
+        assert!(rendered.contains("`ata zotero status`"));
+        assert!(rendered.contains("`ata zotero find-repos --query \"...\"`"));
+        assert!(rendered.contains("`ata zotero resolve-paper --query \"...\"`"));
+        assert!(rendered.contains("`ata zotero search-commands \"...\"`"));
+        assert!(rendered.contains("stay with that collection"));
+        assert!(rendered.contains("prints `No items.`, treat that collection as empty"));
+        assert!(rendered.contains("--include-attachments"));
     }
 
     #[test]

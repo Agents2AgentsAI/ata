@@ -43,6 +43,7 @@ use types::RepoRequirements;
 use types::RepoSummary;
 use types::RequirementsDiff;
 use types::SearchResult;
+use types::ZoteroAddItemsToCollectionParams;
 use types::ZoteroAdvancedSearchParams;
 use types::ZoteroAdvancedSearchResult;
 use types::ZoteroAnnotationsParams;
@@ -53,6 +54,11 @@ use types::ZoteroCitationResult;
 use types::ZoteroCollectionItemsParams;
 use types::ZoteroCollectionsParams;
 use types::ZoteroCollectionsResult;
+use types::ZoteroCreateAttachmentLinkParams;
+use types::ZoteroCreateCollectionParams;
+use types::ZoteroCreateCollectionResult;
+use types::ZoteroCreateItemsParams;
+use types::ZoteroFindOrCreateCollectionParams;
 use types::ZoteroFullTextResult;
 use types::ZoteroGrepParams;
 use types::ZoteroGrepResult;
@@ -60,6 +66,7 @@ use types::ZoteroGroupsResult;
 use types::ZoteroItemDetail;
 use types::ZoteroItemParams;
 use types::ZoteroListGroupsParams;
+use types::ZoteroMutationResult;
 use types::ZoteroNotesResult;
 use types::ZoteroRecentParams;
 use types::ZoteroSearchNotesParams;
@@ -69,6 +76,7 @@ use types::ZoteroSearchResult;
 use types::ZoteroTagSearchParams;
 use types::ZoteroTagsParams;
 use types::ZoteroTagsResult;
+use types::ZoteroUpdateItemsParams;
 
 #[derive(Debug)]
 pub struct ResearchToolkit {
@@ -112,6 +120,11 @@ impl ResearchToolkit {
     }
 
     #[must_use]
+    pub fn from_config(config: ResearchConfig) -> Self {
+        Self::new(reqwest::Client::new(), config)
+    }
+
+    #[must_use]
     pub fn config(&self) -> &ResearchConfig {
         &self.config
     }
@@ -145,8 +158,20 @@ impl ResearchToolkit {
 
     #[must_use]
     pub fn is_tool_configured(&self, tool_id: &str) -> bool {
+        if matches!(
+            tool_id,
+            "zotero_create_collection"
+                | "zotero_find_or_create_collection"
+                | "zotero_create_items"
+                | "zotero_update_items"
+                | "zotero_add_items_to_collection"
+                | "zotero_create_attachment_link"
+        ) {
+            return self.config.has_zotero_api_key();
+        }
+
         if tool_id.starts_with("zotero_") {
-            return self.config.zotero_api_key.is_some() || self.config.uses_local_zotero_api();
+            return self.config.has_zotero_api_key() || self.config.uses_local_zotero_api();
         }
 
         if tool_id == "repo_get_health" {
@@ -290,6 +315,48 @@ impl ResearchToolkit {
         params: ZoteroCollectionItemsParams,
     ) -> Result<ZoteroSearchResult> {
         tools::zotero::zotero_get_collection_items(self, params).await
+    }
+
+    pub async fn zotero_create_collection(
+        &self,
+        params: ZoteroCreateCollectionParams,
+    ) -> Result<ZoteroCreateCollectionResult> {
+        tools::zotero::zotero_create_collection(self, params).await
+    }
+
+    pub async fn zotero_find_or_create_collection(
+        &self,
+        params: ZoteroFindOrCreateCollectionParams,
+    ) -> Result<ZoteroCreateCollectionResult> {
+        tools::zotero::zotero_find_or_create_collection(self, params).await
+    }
+
+    pub async fn zotero_create_items(
+        &self,
+        params: ZoteroCreateItemsParams,
+    ) -> Result<ZoteroMutationResult> {
+        tools::zotero::zotero_create_items(self, params).await
+    }
+
+    pub async fn zotero_update_items(
+        &self,
+        params: ZoteroUpdateItemsParams,
+    ) -> Result<ZoteroMutationResult> {
+        tools::zotero::zotero_update_items(self, params).await
+    }
+
+    pub async fn zotero_add_items_to_collection(
+        &self,
+        params: ZoteroAddItemsToCollectionParams,
+    ) -> Result<ZoteroMutationResult> {
+        tools::zotero::zotero_add_items_to_collection(self, params).await
+    }
+
+    pub async fn zotero_create_attachment_link(
+        &self,
+        params: ZoteroCreateAttachmentLinkParams,
+    ) -> Result<ZoteroMutationResult> {
+        tools::zotero::zotero_create_attachment_link(self, params).await
     }
 
     pub async fn repo_clone_and_summarize(

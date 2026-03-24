@@ -7,6 +7,7 @@ pub(crate) const CODEX_KB_PATH_ENV_VAR: &str = "CODEX_KB_PATH";
 
 pub(crate) struct ResolvedKbEnv {
     pub kb_path: String,
+    #[allow(dead_code)]
     pub workspace_kb_root: Option<AbsolutePathBuf>,
 }
 

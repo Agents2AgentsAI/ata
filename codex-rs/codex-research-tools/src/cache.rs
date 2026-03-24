@@ -212,6 +212,11 @@ impl ResponseCache {
         );
     }
 
+    pub async fn clear(&self) {
+        self.inner.lock().await.clear();
+        self.in_flight.clear();
+    }
+
     pub async fn get_or_fetch<F, Fut>(
         &self,
         key: CacheKey,

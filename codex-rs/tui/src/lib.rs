@@ -7,6 +7,10 @@ use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
 pub use app::ExitReason;
+use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
+use codex_app_server_client::InProcessAppServerClient;
+use codex_app_server_client::InProcessClientStartArgs;
+use codex_app_server_protocol::ConfigWarningNotification;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AuthManager;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
@@ -23,6 +27,7 @@ use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLoadError;
+use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::format_config_error_with_source;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::find_thread_path_by_id_str;
@@ -44,10 +49,12 @@ use codex_state::log_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
+use color_eyre::eyre::WrapErr;
 use cwd_prompt::CwdPromptAction;
 use cwd_prompt::CwdPromptOutcome;
 use cwd_prompt::CwdSelection;
 use std::fs::OpenOptions;
+use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -71,13 +78,31 @@ mod chatwidget;
 // Re-export for integration tests.
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 #[doc(hidden)]
+pub use chatwidget::browser_read_aloud_markup;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[doc(hidden)]
 pub use chatwidget::voice_mode::AlignmentEntry;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[doc(hidden)]
+pub use chatwidget::voice_mode::SentenceBuffer;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 #[doc(hidden)]
 pub use chatwidget::voice_mode::build_alignment_entries;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 #[doc(hidden)]
+pub use chatwidget::voice_mode::clean_for_tts_preserving_equation_markers;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[doc(hidden)]
 pub use chatwidget::voice_mode::find_active_word;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[doc(hidden)]
+pub use chatwidget::voice_mode::parse_equation_markers;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[doc(hidden)]
+pub use chatwidget::voice_mode::repair_timeline_monotonicity;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[doc(hidden)]
+pub use chatwidget::voice_mode::strip_pause_markers;
 mod cli;
 mod clipboard_paste;
 mod clipboard_text;
@@ -205,11 +230,11 @@ mod voice {
 
     impl RealtimeAudioPlayer {
         pub(crate) fn start(_config: &Config) -> Result<Self, String> {
-            Err("voice output is unavailable in this build".to_string())
+            Ok(Self)
         }
 
         pub(crate) fn enqueue_frame(&self, _frame: &RealtimeAudioFrame) -> Result<(), String> {
-            Err("voice output is unavailable in this build".to_string())
+            Ok(())
         }
 
         pub(crate) fn clear(&self) {}
@@ -256,6 +281,7 @@ mod voice {
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 #[allow(dead_code)]
 mod vad;
+
 mod wrapping;
 
 #[cfg(test)]
@@ -271,7 +297,75 @@ pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
-pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::Result<AppExitInfo> {
+async fn start_embedded_app_server(
+    arg0_paths: Arg0DispatchPaths,
+    config: Config,
+    cli_kv_overrides: Vec<(String, toml::Value)>,
+    loader_overrides: LoaderOverrides,
+    cloud_requirements: CloudRequirementsLoader,
+    feedback: codex_feedback::CodexFeedback,
+) -> color_eyre::Result<InProcessAppServerClient> {
+    start_embedded_app_server_with(
+        arg0_paths,
+        config,
+        cli_kv_overrides,
+        loader_overrides,
+        cloud_requirements,
+        feedback,
+        InProcessAppServerClient::start,
+    )
+    .await
+}
+
+async fn start_embedded_app_server_with<F, Fut>(
+    arg0_paths: Arg0DispatchPaths,
+    config: Config,
+    cli_kv_overrides: Vec<(String, toml::Value)>,
+    loader_overrides: LoaderOverrides,
+    cloud_requirements: CloudRequirementsLoader,
+    feedback: codex_feedback::CodexFeedback,
+    start_client: F,
+) -> color_eyre::Result<InProcessAppServerClient>
+where
+    F: FnOnce(InProcessClientStartArgs) -> Fut,
+    Fut: Future<Output = std::io::Result<InProcessAppServerClient>>,
+{
+    let config_warnings = config
+        .startup_warnings
+        .iter()
+        .map(|warning| ConfigWarningNotification {
+            summary: warning.clone(),
+            details: None,
+            path: None,
+            range: None,
+        })
+        .collect();
+    let client = start_client(InProcessClientStartArgs {
+        arg0_paths,
+        config: Arc::new(config),
+        cli_overrides: cli_kv_overrides,
+        loader_overrides,
+        cloud_requirements,
+        feedback,
+        config_warnings,
+        session_source: codex_protocol::protocol::SessionSource::Cli,
+        enable_codex_api_key_env: false,
+        client_name: "codex-tui".to_string(),
+        client_version: env!("CARGO_PKG_VERSION").to_string(),
+        experimental_api: true,
+        opt_out_notification_methods: Vec::new(),
+        channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+    })
+    .await
+    .wrap_err("failed to start embedded app server")?;
+    Ok(client)
+}
+
+pub async fn run_main(
+    mut cli: Cli,
+    arg0_paths: Arg0DispatchPaths,
+    loader_overrides: LoaderOverrides,
+) -> std::io::Result<AppExitInfo> {
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
             Some(SandboxMode::WorkspaceWrite),
@@ -548,7 +642,7 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let log_db_layer = codex_core::state_db::get_state_db(&config, None)
+    let log_db_layer = codex_core::state_db::get_state_db(&config)
         .await
         .map(|db| log_db::start(db).with_filter(env_filter()));
 
@@ -563,6 +657,8 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
 
     run_ratatui_app(
         cli,
+        arg0_paths,
+        loader_overrides,
         config,
         overrides,
         cli_kv_overrides,
@@ -574,8 +670,11 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
     .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_ratatui_app(
     cli: Cli,
+    arg0_paths: Arg0DispatchPaths,
+    loader_overrides: LoaderOverrides,
     initial_config: Config,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
@@ -962,10 +1061,27 @@ async fn run_ratatui_app(
 
     let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);
+    let app_server = match start_embedded_app_server(
+        arg0_paths,
+        config.clone(),
+        cli_kv_overrides.clone(),
+        loader_overrides,
+        cloud_requirements.clone(),
+        feedback.clone(),
+    )
+    .await
+    {
+        Ok(app_server) => app_server,
+        Err(err) => {
+            restore();
+            session_log::log_session_end();
+            return Err(err);
+        }
+    };
 
     let app_result = App::run(
         &mut tui,
-        auth_manager,
+        app_server,
         config,
         cli_kv_overrides.clone(),
         overrides.clone(),
@@ -1009,7 +1125,7 @@ pub(crate) async fn read_session_cwd(
     thread_id: ThreadId,
     path: &Path,
 ) -> Option<PathBuf> {
-    if let Some(state_db_ctx) = get_state_db(config, None).await
+    if let Some(state_db_ctx) = get_state_db(config).await
         && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
     {
         return Some(metadata.cwd);
@@ -1191,15 +1307,8 @@ async fn load_config_or_exit_with_fallback_cwd(
     }
 }
 
-/// Determine if user has configured a sandbox / approval policy,
-/// or if the current cwd project is already trusted. If not, we need to
-/// show the trust screen.
+/// Determine if the user has decided whether to trust the current directory.
 fn should_show_trust_screen(config: &Config) -> bool {
-    if config.did_user_set_custom_approval_policy_or_sandbox_mode {
-        // Respect explicit approval/sandbox overrides made by the user.
-        return false;
-    }
-    // otherwise, show only if no trust decision has been made
     config.active_project.trust_level.is_none()
 }
 
@@ -1242,7 +1351,6 @@ mod tests {
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ProjectConfig;
     use codex_core::features::Feature;
-    use codex_protocol::ThreadId;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
@@ -1260,12 +1368,25 @@ mod tests {
             .await
     }
 
+    async fn start_test_embedded_app_server(
+        config: Config,
+    ) -> color_eyre::Result<InProcessAppServerClient> {
+        start_embedded_app_server(
+            Arg0DispatchPaths::default(),
+            config,
+            Vec::new(),
+            LoaderOverrides::default(),
+            CloudRequirementsLoader::default(),
+            codex_feedback::CodexFeedback::new(),
+        )
+        .await
+    }
+
     #[tokio::test]
     #[serial]
     async fn windows_shows_trust_prompt_without_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
-        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
         config.set_windows_sandbox_enabled(false);
 
@@ -1276,12 +1397,57 @@ mod tests {
         );
         Ok(())
     }
+
+    #[tokio::test]
+    async fn embedded_app_server_exposes_client_manager_accessors() -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+        let app_server = start_test_embedded_app_server(config).await?;
+
+        assert!(Arc::ptr_eq(
+            &app_server.auth_manager(),
+            &app_server.auth_manager()
+        ));
+        assert!(Arc::ptr_eq(
+            &app_server.thread_manager(),
+            &app_server.thread_manager()
+        ));
+
+        app_server.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn embedded_app_server_start_failure_is_returned() -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+        let result = start_embedded_app_server_with(
+            Arg0DispatchPaths::default(),
+            config,
+            Vec::new(),
+            LoaderOverrides::default(),
+            CloudRequirementsLoader::default(),
+            codex_feedback::CodexFeedback::new(),
+            |_args| async { Err(std::io::Error::other("boom")) },
+        )
+        .await;
+        let err = match result {
+            Ok(_) => panic!("startup failure should be returned"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("failed to start embedded app server"),
+            "error should preserve the embedded app server startup context"
+        );
+        Ok(())
+    }
     #[tokio::test]
     #[serial]
     async fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
-        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
         config.set_windows_sandbox_enabled(true);
 
@@ -1304,7 +1470,6 @@ mod tests {
         use codex_protocol::config_types::TrustLevel;
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
-        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig {
             trust_level: Some(TrustLevel::Untrusted),
         };
@@ -1324,6 +1489,7 @@ mod tests {
             .unwrap_or_else(|| "gpt-5.1".to_string());
         TurnContextItem {
             turn_id: None,
+            trace_id: None,
             cwd,
             current_date: None,
             timezone: None,
@@ -1638,7 +1804,6 @@ trust_level = "untrusted"
         let runtime = codex_state::StateRuntime::init(
             config.codex_home.clone(),
             config.model_provider_id.clone(),
-            None,
         )
         .await
         .map_err(std::io::Error::other)?;

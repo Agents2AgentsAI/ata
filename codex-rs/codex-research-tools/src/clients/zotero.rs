@@ -1,6 +1,8 @@
 use chrono::Utc;
+use reqwest::Method;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -20,8 +22,10 @@ use crate::types::ZoteroGroupsResult;
 use crate::types::ZoteroItem;
 use crate::types::ZoteroItemDetail;
 use crate::types::ZoteroLinkedItem;
+use crate::types::ZoteroMutationRecord;
 use crate::types::ZoteroNote;
 use crate::types::ZoteroNotesResult;
+use crate::types::ZoteroQuickSearchMode;
 use crate::types::ZoteroSearchResult;
 use crate::types::ZoteroTagsResult;
 
@@ -73,6 +77,7 @@ pub(crate) struct ZoteroSearchRequest<'a> {
     pub offset: u32,
     pub limit: u32,
     pub item_type: Option<&'a str>,
+    pub qmode: Option<ZoteroQuickSearchMode>,
     pub sort: Option<&'a str>,
     pub direction: Option<&'a str>,
 }
@@ -169,6 +174,15 @@ pub(crate) async fn search_items(
         url.push_str(&format!("&q={}", urlencoding::encode(query)));
     }
 
+    if let Some(qmode) = request.qmode {
+        let qmode = match qmode {
+            ZoteroQuickSearchMode::TitleCreatorYear => "titleCreatorYear",
+            ZoteroQuickSearchMode::TitleCreatorYearNote => "titleCreatorYearNote",
+            ZoteroQuickSearchMode::Everything => "everything",
+        };
+        url.push_str(&format!("&qmode={qmode}"));
+    }
+
     if let Some(tag) = request.tag {
         url.push_str(&format!("&tag={}", urlencoding::encode(tag)));
     }
@@ -179,7 +193,7 @@ pub(crate) async fn search_items(
 
     if let Some(sort) = request.sort {
         url.push_str(&format!("&sort={}", urlencoding::encode(sort)));
-    } else if request.query.is_some() && config.api_key.is_some() {
+    } else if request.query.is_some() && config.api_key.is_some_and(|key| !key.trim().is_empty()) {
         // The remote Zotero API supports sort=relevance for keyword
         // searches, but the local Zotero API rejects it with 400.
         url.push_str("&sort=relevance");
@@ -611,12 +625,129 @@ pub(crate) async fn get_collection_items(
     })
 }
 
+pub(crate) async fn get_item_raw(
+    http: &HttpClient,
+    config: ZoteroConfig<'_>,
+    scope: &ZoteroLibraryScope,
+    item_key: &str,
+) -> Result<Value> {
+    let url = format!(
+        "{root}/items/{item_key}?format=json",
+        root = scope.root_url(config.base_url),
+        item_key = urlencoding::encode(item_key),
+    );
+
+    http.execute_json(ResearchApi::Zotero, || {
+        zotero_request_with_method(http, config, Method::GET, &url)
+    })
+    .await
+}
+
+pub(crate) async fn create_collection(
+    http: &HttpClient,
+    config: ZoteroConfig<'_>,
+    scope: &ZoteroLibraryScope,
+    name: &str,
+    parent_collection_key: Option<&str>,
+) -> Result<ZoteroCollection> {
+    let url = format!("{}/collections", scope.root_url(config.base_url));
+    let mut payload = serde_json::Map::new();
+    payload.insert("name".to_string(), Value::String(name.to_string()));
+    if let Some(parent_collection_key) = parent_collection_key {
+        payload.insert(
+            "parentCollection".to_string(),
+            Value::String(parent_collection_key.to_string()),
+        );
+    }
+    let response = execute_json_body(
+        http,
+        config,
+        Method::POST,
+        &url,
+        &Value::Array(vec![Value::Object(payload)]),
+    )
+    .await?;
+
+    let record = extract_write_response_record(&response, 0)?;
+    let key = record.key;
+    Ok(ZoteroCollection {
+        key: key.clone(),
+        name: name.to_string(),
+        parent_collection: parent_collection_key.map(ToString::to_string),
+        source_meta: Some(SourceMeta {
+            source: "zotero".to_string(),
+            api_url: url,
+            fetched_at: Utc::now(),
+            canonical_id: Some(scope.canonical_collection_id(&key)),
+        }),
+    })
+}
+
+pub(crate) async fn create_item(
+    http: &HttpClient,
+    config: ZoteroConfig<'_>,
+    scope: &ZoteroLibraryScope,
+    item: &Value,
+) -> Result<ZoteroMutationRecord> {
+    let url = format!("{}/items", scope.root_url(config.base_url));
+    let response = execute_json_body(
+        http,
+        config,
+        Method::POST,
+        &url,
+        &Value::Array(vec![item.clone()]),
+    )
+    .await?;
+    let mut record = extract_write_response_record(&response, 0)?;
+    hydrate_record_from_item_value(&mut record, item);
+    Ok(record)
+}
+
+pub(crate) async fn update_item_data(
+    http: &HttpClient,
+    config: ZoteroConfig<'_>,
+    scope: &ZoteroLibraryScope,
+    item_key: &str,
+    version: u64,
+    data: &Value,
+) -> Result<Option<u64>> {
+    let url = format!(
+        "{root}/items/{item_key}",
+        root = scope.root_url(config.base_url),
+        item_key = urlencoding::encode(item_key),
+    );
+    let response = http
+        .execute_response(ResearchApi::Zotero, || {
+            zotero_request_with_method(http, config, Method::PUT, &url)
+                .header("If-Unmodified-Since-Version", version.to_string())
+                .json(data)
+        })
+        .await?;
+    Ok(response
+        .headers()
+        .get("Last-Modified-Version")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok()))
+}
+
 fn zotero_request(
     http: &HttpClient,
     config: ZoteroConfig<'_>,
     url: &str,
 ) -> reqwest::RequestBuilder {
-    let mut request = http.client().get(url).header("Zotero-API-Version", "3");
+    zotero_request_with_method(http, config, Method::GET, url)
+}
+
+fn zotero_request_with_method(
+    http: &HttpClient,
+    config: ZoteroConfig<'_>,
+    method: Method,
+    url: &str,
+) -> reqwest::RequestBuilder {
+    let mut request = http
+        .client()
+        .request(method, url)
+        .header("Zotero-API-Version", "3");
     if let Some(api_key) = config.api_key.filter(|value| !value.trim().is_empty()) {
         request = request.header("Zotero-API-Key", api_key);
     } else {
@@ -624,6 +755,19 @@ fn zotero_request(
         request = request.header("Zotero-Allowed-Request", "1");
     }
     request
+}
+
+async fn execute_json_body(
+    http: &HttpClient,
+    config: ZoteroConfig<'_>,
+    method: Method,
+    url: &str,
+    body: &Value,
+) -> Result<Value> {
+    http.execute_json(ResearchApi::Zotero, || {
+        zotero_request_with_method(http, config, method.clone(), url).json(body)
+    })
+    .await
 }
 
 async fn execute_json_with_total_results<T>(
@@ -689,6 +833,71 @@ fn compute_has_more(
     }
 
     u32::try_from(page_len).unwrap_or(0) == limit
+}
+
+fn extract_write_response_record(response: &Value, index: usize) -> Result<ZoteroMutationRecord> {
+    let index = index.to_string();
+    let success = response
+        .get("successful")
+        .and_then(Value::as_object)
+        .and_then(|successful| successful.get(&index))
+        .ok_or_else(|| {
+            let failure_message = response
+                .get("failed")
+                .and_then(Value::as_object)
+                .and_then(|failed| failed.get(&index))
+                .map(Value::to_string)
+                .unwrap_or_else(|| "missing success entry".to_string());
+            ResearchError::Upstream {
+                api: ResearchApi::Zotero,
+                status: reqwest::StatusCode::BAD_GATEWAY,
+                message: format!(
+                    "zotero write did not return success for item {index}: {failure_message}"
+                ),
+            }
+        })?;
+
+    let key = success
+        .get("key")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ResearchError::Parse {
+            api: ResearchApi::Zotero,
+            message: "zotero write response missing key".to_string(),
+        })?
+        .to_string();
+    let version = success.get("version").and_then(Value::as_u64);
+
+    Ok(ZoteroMutationRecord {
+        key,
+        version,
+        title: None,
+        item_type: None,
+        url: None,
+        parent_item: None,
+        collection_keys: Vec::new(),
+    })
+}
+
+fn hydrate_record_from_item_value(record: &mut ZoteroMutationRecord, item: &Value) {
+    if let Some(item_type) = item.get("itemType").and_then(Value::as_str) {
+        record.item_type = Some(item_type.to_string());
+    }
+    if let Some(title) = item.get("title").and_then(Value::as_str) {
+        record.title = Some(title.to_string());
+    }
+    if let Some(url) = item.get("url").and_then(Value::as_str) {
+        record.url = Some(url.to_string());
+    }
+    if let Some(parent_item) = item.get("parentItem").and_then(Value::as_str) {
+        record.parent_item = Some(parent_item.to_string());
+    }
+    if let Some(collections) = item.get("collections").and_then(Value::as_array) {
+        record.collection_keys = collections
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToString::to_string)
+            .collect();
+    }
 }
 
 fn extract_linked_items(relations: &HashMap<String, Vec<String>>) -> Vec<ZoteroLinkedItem> {

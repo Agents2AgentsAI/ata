@@ -113,8 +113,19 @@ impl ReadingViewServer {
             }
         };
 
-        let addr = SocketAddr::from(([127, 0, 0, 1], 0));
-        let listener = tokio::net::TcpListener::bind(addr).await?;
+        // Use a fixed port so browser tabs from previous sessions can reconnect
+        // via WebSocket without needing a new tab. Fall back to random if busy.
+        let listener = {
+            let fixed = SocketAddr::from(([127, 0, 0, 1], 14_523));
+            match tokio::net::TcpListener::bind(fixed).await {
+                Ok(l) => l,
+                Err(_) => {
+                    // Fixed port busy (another ATA session?) — use random.
+                    let random = SocketAddr::from(([127, 0, 0, 1], 0));
+                    tokio::net::TcpListener::bind(random).await?
+                }
+            }
+        };
         let port = listener.local_addr()?.port();
 
         tokio::spawn(async move {

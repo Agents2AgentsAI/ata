@@ -24,6 +24,10 @@ async fn slash_logout_resets_provider_selection_in_config() -> anyhow::Result<()
 model = "claude-sonnet-4-20250514"
 model_provider = "anthropic"
 
+[features]
+lsp = false
+treesitter = false
+
 [projects]
 "{cwd}" = {{ trust_level = "trusted" }}
 "#,
@@ -58,17 +62,31 @@ model_provider = "anthropic"
     env.insert("ANTHROPIC_API_KEY".to_string(), "sk-ant-env".to_string());
 
     let args = vec!["-c".to_string(), "analytics.enabled=false".to_string()];
-    let spawned =
-        codex_utils_pty::spawn_pty_process(&ata_bin.to_string_lossy(), &args, &cwd, &env, &None)
-            .await?;
-    let mut output_rx = spawned.output_rx;
-    let mut exit_rx = spawned.exit_rx;
-    let writer_tx = spawned.session.writer_sender();
+    let spawned = codex_utils_pty::spawn_pty_process(
+        &ata_bin.to_string_lossy(),
+        &args,
+        &cwd,
+        &env,
+        &None,
+        codex_utils_pty::TerminalSize::default(),
+    )
+    .await?;
+    let codex_utils_pty::SpawnedProcess {
+        session,
+        stdout_rx,
+        stderr_rx,
+        exit_rx,
+    } = spawned;
+    let mut output_rx = codex_utils_pty::combine_output_receivers(stdout_rx, stderr_rx);
+    let mut exit_rx = exit_rx;
+    let writer_tx = session.writer_sender();
     let captured_output = Arc::new(Mutex::new(Vec::<u8>::new()));
     let captured_output_for_loop = Arc::clone(&captured_output);
 
     let exit_code_result = timeout(Duration::from_secs(20), async {
-        let ready_marker = b"for shortcuts";
+        // The TUI renders the model name in the header after initialization.
+        // Match the model slug from the config to detect readiness.
+        let ready_marker = b"claude-sonnet-4-20250514";
         let mut sent_logout = false;
         let mut logout_retries = 0_u8;
         let mut chunk_count = 0_u32;
@@ -94,8 +112,14 @@ model_provider = "anthropic"
                         if chunk.windows(4).any(|window| window == b"\x1b[6n") {
                             let _ = writer_tx.send(b"\x1b[1;1R".to_vec()).await;
                         }
-                        if sent_logout && logout_retries < 5 {
-                            let _ = writer_tx.send(b"/logout\r".to_vec()).await;
+                        if sent_logout && logout_retries < 10 {
+                            // Small delay between retries so the TUI has time to
+                            // process the previous input/rendering cycle.
+                            tokio::time::sleep(Duration::from_millis(200)).await;
+                            // Send Ctrl+U to clear any text in the composer before
+                            // typing /logout. The TUI may show placeholder text that
+                            // visually overlaps the input area.
+                            let _ = writer_tx.send(b"\x15/logout\r".to_vec()).await;
                             logout_retries += 1;
                         }
                     }
@@ -112,7 +136,7 @@ model_provider = "anthropic"
         Ok(Ok(code)) => code,
         Ok(Err(err)) => return Err(err.into()),
         Err(_) => {
-            spawned.session.terminate();
+            session.terminate();
             let output = captured_output.lock().expect("captured output lock");
             let output_text = String::from_utf8_lossy(&output);
             anyhow::bail!(

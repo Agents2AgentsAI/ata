@@ -166,6 +166,7 @@ impl ThreadHistoryBuilder {
             EventMsg::ExitedReviewMode(payload) => self.handle_exited_review_mode(payload),
             EventMsg::ItemStarted(payload) => self.handle_item_started(payload),
             EventMsg::ItemCompleted(payload) => self.handle_item_completed(payload),
+            EventMsg::HookStarted(_) | EventMsg::HookCompleted(_) => {}
             EventMsg::Error(payload) => self.handle_error(payload),
             EventMsg::TokenCount(_) => {}
             EventMsg::ThreadRolledBack(payload) => self.handle_thread_rollback(payload),
@@ -181,9 +182,83 @@ impl ThreadHistoryBuilder {
         match item {
             RolloutItem::EventMsg(event) => self.handle_event(event),
             RolloutItem::Compacted(payload) => self.handle_compacted(payload),
-            RolloutItem::TurnContext(_)
-            | RolloutItem::SessionMeta(_)
-            | RolloutItem::ResponseItem(_) => {}
+            RolloutItem::TurnContext(_) | RolloutItem::SessionMeta(_) => {}
+            RolloutItem::ResponseItem(resp) => self.handle_response_item(resp),
+        }
+    }
+
+    fn handle_response_item(&mut self, resp: &codex_protocol::models::ResponseItem) {
+        match resp {
+            codex_protocol::models::ResponseItem::FunctionCall {
+                name,
+                arguments,
+                call_id,
+                ..
+            } => {
+                let arguments = serde_json::from_str(arguments)
+                    .unwrap_or(serde_json::Value::String(arguments.clone()));
+                let item = ThreadItem::DynamicToolCall {
+                    id: call_id.clone(),
+                    tool: name.clone(),
+                    arguments,
+                    status: DynamicToolCallStatus::InProgress,
+                    content_items: None,
+                    success: None,
+                    duration_ms: None,
+                };
+                self.upsert_item_in_current_turn(item);
+            }
+            codex_protocol::models::ResponseItem::FunctionCallOutput { call_id, output } => {
+                let content_items: Vec<DynamicToolCallOutputContentItem> = match &output.body {
+                    codex_protocol::models::FunctionCallOutputBody::Text(text) => {
+                        vec![DynamicToolCallOutputContentItem::InputText { text: text.clone() }]
+                    }
+                    codex_protocol::models::FunctionCallOutputBody::ContentItems(items) => items
+                        .iter()
+                        .map(|item| match item {
+                            codex_protocol::models::FunctionCallOutputContentItem::InputText {
+                                text,
+                            } => DynamicToolCallOutputContentItem::InputText { text: text.clone() },
+                            codex_protocol::models::FunctionCallOutputContentItem::InputImage {
+                                image_url,
+                                ..
+                            } => DynamicToolCallOutputContentItem::InputImage {
+                                image_url: image_url.clone(),
+                            },
+                        })
+                        .collect(),
+                };
+                // Try to find and update existing DynamicToolCall by call_id.
+                if let Some(turn) = self.current_turn.as_mut() {
+                    if let Some(existing) = turn.items.iter_mut().find(
+                        |i| matches!(i, ThreadItem::DynamicToolCall { id, .. } if id == call_id),
+                    ) {
+                        if let ThreadItem::DynamicToolCall {
+                            status,
+                            content_items: ci,
+                            success,
+                            ..
+                        } = existing
+                        {
+                            *status = DynamicToolCallStatus::Completed;
+                            *ci = Some(content_items);
+                            *success = Some(output.success.unwrap_or(true));
+                        }
+                    } else {
+                        // No matching request found; insert a completed call.
+                        turn.items.push(ThreadItem::DynamicToolCall {
+                            id: call_id.clone(),
+                            tool: String::new(),
+                            arguments: serde_json::Value::Null,
+                            status: DynamicToolCallStatus::Completed,
+                            content_items: Some(content_items),
+                            success: Some(output.success.unwrap_or(true)),
+                            duration_ms: None,
+                        });
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -553,6 +628,8 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids: Vec::new(),
             prompt: Some(payload.prompt.clone()),
+            model: Some(payload.model.clone()),
+            reasoning_effort: Some(payload.reasoning_effort),
             agents_states: HashMap::new(),
         };
         self.upsert_item_in_current_turn(item);
@@ -586,6 +663,8 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids,
             prompt: Some(payload.prompt.clone()),
+            model: Some(payload.model.clone()),
+            reasoning_effort: Some(payload.reasoning_effort),
             agents_states,
         });
     }
@@ -601,6 +680,8 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids: vec![payload.receiver_thread_id.to_string()],
             prompt: Some(payload.prompt.clone()),
+            model: None,
+            reasoning_effort: None,
             agents_states: HashMap::new(),
         };
         self.upsert_item_in_current_turn(item);
@@ -623,6 +704,8 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids: vec![receiver_id.clone()],
             prompt: Some(payload.prompt.clone()),
+            model: None,
+            reasoning_effort: None,
             agents_states: [(receiver_id, received_status)].into_iter().collect(),
         });
     }
@@ -642,6 +725,8 @@ impl ThreadHistoryBuilder {
                 .map(ToString::to_string)
                 .collect(),
             prompt: None,
+            model: None,
+            reasoning_effort: None,
             agents_states: HashMap::new(),
         };
         self.upsert_item_in_current_turn(item);
@@ -675,6 +760,8 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids,
             prompt: None,
+            model: None,
+            reasoning_effort: None,
             agents_states,
         });
     }
@@ -690,6 +777,8 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids: vec![payload.receiver_thread_id.to_string()],
             prompt: None,
+            model: None,
+            reasoning_effort: None,
             agents_states: HashMap::new(),
         };
         self.upsert_item_in_current_turn(item);
@@ -714,6 +803,8 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids: vec![receiver_id],
             prompt: None,
+            model: None,
+            reasoning_effort: None,
             agents_states,
         });
     }
@@ -729,6 +820,8 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids: vec![payload.receiver_thread_id.to_string()],
             prompt: None,
+            model: None,
+            reasoning_effort: None,
             agents_states: HashMap::new(),
         };
         self.upsert_item_in_current_turn(item);
@@ -756,6 +849,8 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids: vec![receiver_id],
             prompt: None,
+            model: None,
+            reasoning_effort: None,
             agents_states,
         });
     }
@@ -2324,10 +2419,137 @@ mod tests {
                 sender_thread_id: "00000000-0000-0000-0000-000000000001".into(),
                 receiver_thread_ids: vec!["00000000-0000-0000-0000-000000000002".into()],
                 prompt: None,
+                model: None,
+                reasoning_effort: None,
                 agents_states: [(
                     "00000000-0000-0000-0000-000000000002".into(),
                     CollabAgentState {
                         status: crate::protocol::v2::CollabAgentStatus::Completed,
+                        message: None,
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }
+        );
+    }
+
+    #[test]
+    fn reconstructs_collab_spawn_end_item_with_model_metadata() {
+        let sender_thread_id = ThreadId::try_from("00000000-0000-0000-0000-000000000001")
+            .expect("valid sender thread id");
+        let spawned_thread_id = ThreadId::try_from("00000000-0000-0000-0000-000000000002")
+            .expect("valid receiver thread id");
+        let events = vec![
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "spawn agent".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+            EventMsg::CollabAgentSpawnEnd(codex_protocol::protocol::CollabAgentSpawnEndEvent {
+                call_id: "spawn-1".into(),
+                sender_thread_id,
+                new_thread_id: Some(spawned_thread_id),
+                new_agent_nickname: Some("Scout".into()),
+                new_agent_role: Some("explorer".into()),
+                prompt: "inspect the repo".into(),
+                model: "gpt-5.4-mini".into(),
+                reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Medium,
+                status: AgentStatus::Running,
+            }),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].items.len(), 2);
+        assert_eq!(
+            turns[0].items[1],
+            ThreadItem::CollabAgentToolCall {
+                id: "spawn-1".into(),
+                tool: CollabAgentTool::SpawnAgent,
+                status: CollabAgentToolCallStatus::Completed,
+                sender_thread_id: "00000000-0000-0000-0000-000000000001".into(),
+                receiver_thread_ids: vec!["00000000-0000-0000-0000-000000000002".into()],
+                prompt: Some("inspect the repo".into()),
+                model: Some("gpt-5.4-mini".into()),
+                reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium),
+                agents_states: [(
+                    "00000000-0000-0000-0000-000000000002".into(),
+                    CollabAgentState {
+                        status: crate::protocol::v2::CollabAgentStatus::Running,
+                        message: None,
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }
+        );
+    }
+
+    #[test]
+    fn reconstructs_interrupted_send_input_as_completed_collab_call() {
+        // `send_input(interrupt=true)` first stops the child's active turn, then redirects it with
+        // new input. The transient interrupted status should remain visible in agent state, but the
+        // collab tool call itself is still a successful redirect rather than a failed operation.
+        let sender = ThreadId::try_from("00000000-0000-0000-0000-000000000001")
+            .expect("valid sender thread id");
+        let receiver = ThreadId::try_from("00000000-0000-0000-0000-000000000002")
+            .expect("valid receiver thread id");
+        let events = vec![
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "redirect".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+            EventMsg::CollabAgentInteractionBegin(
+                codex_protocol::protocol::CollabAgentInteractionBeginEvent {
+                    call_id: "send-1".into(),
+                    sender_thread_id: sender,
+                    receiver_thread_id: receiver,
+                    prompt: "new task".into(),
+                },
+            ),
+            EventMsg::CollabAgentInteractionEnd(
+                codex_protocol::protocol::CollabAgentInteractionEndEvent {
+                    call_id: "send-1".into(),
+                    sender_thread_id: sender,
+                    receiver_thread_id: receiver,
+                    receiver_agent_nickname: None,
+                    receiver_agent_role: None,
+                    prompt: "new task".into(),
+                    status: AgentStatus::Interrupted,
+                },
+            ),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].items.len(), 2);
+        assert_eq!(
+            turns[0].items[1],
+            ThreadItem::CollabAgentToolCall {
+                id: "send-1".into(),
+                tool: CollabAgentTool::SendInput,
+                status: CollabAgentToolCallStatus::Completed,
+                sender_thread_id: sender.to_string(),
+                receiver_thread_ids: vec![receiver.to_string()],
+                prompt: Some("new task".into()),
+                model: None,
+                reasoning_effort: None,
+                agents_states: [(
+                    receiver.to_string(),
+                    CollabAgentState {
+                        status: crate::protocol::v2::CollabAgentStatus::Interrupted,
                         message: None,
                     },
                 )]
