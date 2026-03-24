@@ -21,6 +21,16 @@ struct AppServerArgs {
         default_value = AppServerTransport::DEFAULT_LISTEN_URL
     )]
     listen: AppServerTransport,
+
+    /// Optional auth token for WebSocket connections. When set, clients must
+    /// provide `?token=<value>` on the upgrade request.
+    #[arg(long = "token", value_name = "TOKEN")]
+    token: Option<String>,
+
+    /// Public URL for this server (e.g. ngrok URL). Used for device registration
+    /// so remote clients can discover and connect to this node.
+    #[arg(long = "public-url", value_name = "URL")]
+    public_url: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -39,6 +49,8 @@ fn main() -> anyhow::Result<()> {
             loader_overrides,
             false,
             transport,
+            args.token,
+            None, // owner_user_id — device registration handled separately
         )
         .await?;
         Ok(())

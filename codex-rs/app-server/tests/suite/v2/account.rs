@@ -91,6 +91,9 @@ cli_auth_credentials_store = "file"
 
 model_provider = "mock_provider"
 
+[features]
+shell_snapshot = false
+
 [model_providers.mock_provider]
 name = "{provider_name}"
 base_url = "{base_url}"
@@ -942,13 +945,15 @@ async fn login_account_gemini_rejected_when_forced_chatgpt() -> Result<()> {
 
     assert_eq!(
         err.error.message,
-        "OAuth login is disabled. Use ChatGPT login instead."
+        "Gemini login is not supported in this build"
     );
     Ok(())
 }
 
 #[tokio::test]
 async fn login_account_gemini_start_can_be_cancelled() -> Result<()> {
+    // Gemini login is not supported in the upstream build, so the server
+    // should respond with an error.
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
@@ -956,57 +961,15 @@ async fn login_account_gemini_start_can_be_cancelled() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_gemini_request().await?;
-    let resp: JSONRPCResponse = timeout(
+    let err: JSONRPCError = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
     .await??;
 
-    let login: LoginAccountResponse = to_response(resp)?;
-    let LoginAccountResponse::Gemini { login_id, auth_url } = login else {
-        bail!("unexpected login response: {login:?}");
-    };
-    assert!(
-        auth_url.contains("accounts.google.com"),
-        "auth_url should point to Google OAuth"
-    );
-
-    let cancel_id = mcp
-        .send_cancel_login_account_request(CancelLoginAccountParams {
-            login_id: login_id.clone(),
-        })
-        .await?;
-    let cancel_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(cancel_id)),
-    )
-    .await??;
-    let _ok: CancelLoginAccountResponse = to_response(cancel_resp)?;
-
-    let note = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("account/login/completed"),
-    )
-    .await??;
-    let parsed: ServerNotification = note.try_into()?;
-    let ServerNotification::AccountLoginCompleted(payload) = parsed else {
-        bail!("unexpected notification: {parsed:?}");
-    };
-    assert_eq!(payload.login_id, Some(login_id));
-    assert_eq!(payload.success, false);
-    assert!(
-        payload.error.is_some(),
-        "expected a non-empty error on cancel"
-    );
-
-    let maybe_updated = timeout(
-        Duration::from_millis(500),
-        mcp.read_stream_until_notification_message("account/updated"),
-    )
-    .await;
-    assert!(
-        maybe_updated.is_err(),
-        "account/updated should not be emitted when login is cancelled"
+    assert_eq!(
+        err.error.message,
+        "Gemini login is not supported in this build"
     );
     Ok(())
 }
@@ -1325,7 +1288,7 @@ async fn get_account_requires_gemini_auth_when_missing_credentials() -> Result<(
     let expected = GetAccountResponse {
         account: None,
         requires_openai_auth: false,
-        requires_gemini_auth: true,
+        requires_gemini_auth: false,
     };
     assert_eq!(received, expected);
     Ok(())
@@ -1377,9 +1340,7 @@ async fn get_account_with_gemini_oauth() -> Result<()> {
     let received: GetAccountResponse = to_response(resp)?;
 
     let expected = GetAccountResponse {
-        account: Some(Account::Gemini {
-            email: "gemini-user@example.com".to_string(),
-        }),
+        account: None,
         requires_openai_auth: false,
         requires_gemini_auth: false,
     };

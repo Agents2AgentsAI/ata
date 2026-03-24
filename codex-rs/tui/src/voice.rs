@@ -1,6 +1,7 @@
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use base64::Engine;
+use codex_client::build_reqwest_client_with_custom_ca;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::config::Config;
 use codex_core::config::find_codex_home;
@@ -23,8 +24,11 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU16;
 use std::sync::atomic::AtomicU32;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::time::Instant;
 use tracing::error;
 use tracing::info;
 use tracing::trace;
@@ -489,9 +493,11 @@ pub(crate) struct RealtimeAudioPlayer {
     queue: Arc<Mutex<VecDeque<i16>>>,
     output_sample_rate: u32,
     output_channels: u16,
-    /// Number of samples consumed from the queue by the audio callback.
-    /// Tracks actual playback position (not buffered position).
+    /// Source samples handed off to the audio callback so far.
+    /// This is used to construct timestamped playback segments; it is not
+    /// itself treated as the speaker playback cursor.
     samples_played: Arc<AtomicUsize>,
+    playback_clock: Arc<PlaybackClock>,
     /// Whether audio output is currently paused.  Shared with the audio
     /// callback so it outputs silence instead of draining the queue.
     paused: Arc<AtomicBool>,
@@ -499,8 +505,134 @@ pub(crate) struct RealtimeAudioPlayer {
     /// >1.0 skips input samples (faster, higher pitch);
     /// > <1.0 repeats/interpolates (slower, lower pitch).
     speed_factor: Arc<AtomicU32>,
+    /// Fractional resampler cursor carried across output callbacks.
+    /// Reset this whenever playback is cleared or repositioned so new turns
+    /// do not inherit stale sub-sample state from earlier audio.
+    fractional_cursor: Arc<AtomicU64>,
     /// All samples ever enqueued, kept so we can seek back to any position.
     all_samples: Arc<Mutex<Vec<i16>>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PlaybackSegment {
+    playback_started_at: Instant,
+    sample_start: usize,
+    sample_end: usize,
+}
+
+#[derive(Default)]
+struct PlaybackClockState {
+    active: Option<PlaybackSegment>,
+    future: VecDeque<PlaybackSegment>,
+}
+
+#[derive(Default)]
+struct PlaybackClock {
+    state: Mutex<PlaybackClockState>,
+}
+
+impl PlaybackClock {
+    fn clear(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            *state = PlaybackClockState::default();
+        }
+    }
+
+    fn reset_to_sample(&self, sample_offset: usize) {
+        if let Ok(mut state) = self.state.lock() {
+            state.active = Some(PlaybackSegment {
+                playback_started_at: Instant::now(),
+                sample_start: sample_offset,
+                sample_end: sample_offset,
+            });
+            state.future.clear();
+        }
+    }
+
+    fn register_output_buffer(
+        &self,
+        callback_started_at: Instant,
+        info: &cpal::OutputCallbackInfo,
+        sample_start: usize,
+        sample_end: usize,
+    ) {
+        if sample_end <= sample_start {
+            return;
+        }
+        let Some(playback_started_at) =
+            playback_started_at_from_callback(callback_started_at, info)
+        else {
+            return;
+        };
+
+        if let Ok(mut state) = self.state.lock() {
+            Self::promote_due_segments_locked(&mut state, callback_started_at);
+            state.future.push_back(PlaybackSegment {
+                playback_started_at,
+                sample_start,
+                sample_end,
+            });
+            Self::promote_due_segments_locked(&mut state, callback_started_at);
+        }
+    }
+
+    fn position_samples(
+        &self,
+        now: Instant,
+        output_sample_rate: u32,
+        output_channels: u16,
+    ) -> Option<usize> {
+        let mut state = self.state.lock().ok()?;
+        Self::promote_due_segments_locked(&mut state, now);
+        let Some(active) = state.active else {
+            return Some(0);
+        };
+
+        if now <= active.playback_started_at {
+            return Some(active.sample_start);
+        }
+
+        let elapsed = now.duration_since(active.playback_started_at);
+        let elapsed_samples =
+            duration_to_output_samples(elapsed, output_sample_rate, output_channels);
+        let segment_samples = active.sample_end.saturating_sub(active.sample_start);
+        Some(active.sample_start + elapsed_samples.min(segment_samples))
+    }
+
+    fn promote_due_segments_locked(state: &mut PlaybackClockState, now: Instant) {
+        while state
+            .future
+            .front()
+            .is_some_and(|segment| segment.playback_started_at <= now)
+        {
+            state.active = state.future.pop_front();
+        }
+    }
+}
+
+fn duration_to_output_samples(
+    duration: Duration,
+    output_sample_rate: u32,
+    output_channels: u16,
+) -> usize {
+    let nanos = duration.as_nanos();
+    let rate = u128::from(output_sample_rate.max(1));
+    let channels = u128::from(output_channels.max(1));
+    ((nanos * rate * channels) / 1_000_000_000u128) as usize
+}
+
+fn playback_started_at_from_callback(
+    callback_started_at: Instant,
+    info: &cpal::OutputCallbackInfo,
+) -> Option<Instant> {
+    let timestamp = info.timestamp();
+    if let Some(delay) = timestamp.playback.duration_since(&timestamp.callback) {
+        return callback_started_at.checked_add(delay);
+    }
+    timestamp
+        .callback
+        .duration_since(&timestamp.playback)
+        .and_then(|delay| callback_started_at.checked_sub(delay))
 }
 
 impl RealtimeAudioPlayer {
@@ -511,16 +643,20 @@ impl RealtimeAudioPlayer {
         let output_channels = config.channels();
         let queue = Arc::new(Mutex::new(VecDeque::new()));
         let samples_played = Arc::new(AtomicUsize::new(0));
+        let playback_clock = Arc::new(PlaybackClock::default());
         let paused = Arc::new(AtomicBool::new(false));
         let speed_factor = Arc::new(AtomicU32::new(f32::to_bits(1.0)));
+        let fractional_cursor = Arc::new(AtomicU64::new(f64::to_bits(0.0)));
         let all_samples = Arc::new(Mutex::new(Vec::new()));
         let stream = build_output_stream(
             &device,
             &config,
             Arc::clone(&queue),
             Arc::clone(&samples_played),
+            Arc::clone(&playback_clock),
             Arc::clone(&paused),
             Arc::clone(&speed_factor),
+            Arc::clone(&fractional_cursor),
         )?;
         stream
             .play()
@@ -531,8 +667,10 @@ impl RealtimeAudioPlayer {
             output_sample_rate,
             output_channels,
             samples_played,
+            playback_clock,
             paused,
             speed_factor,
+            fractional_cursor,
             all_samples,
         })
     }
@@ -583,6 +721,9 @@ impl RealtimeAudioPlayer {
         // Reset playback position so karaoke sync starts fresh.
         self.samples_played
             .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.playback_clock.clear();
+        self.fractional_cursor
+            .store(f64::to_bits(0.0), Ordering::Relaxed);
     }
 
     /// Seek to a specific sample offset. Clears the current playback queue
@@ -604,6 +745,9 @@ impl RealtimeAudioPlayer {
 
         // Reset samples_played to reflect the new position
         self.samples_played.store(clamped, Ordering::Relaxed);
+        self.playback_clock.reset_to_sample(clamped);
+        self.fractional_cursor
+            .store(f64::to_bits(0.0), Ordering::Relaxed);
     }
 
     /// Seek to a specific time in milliseconds. Converts to a sample offset
@@ -657,11 +801,15 @@ impl RealtimeAudioPlayer {
     }
 
     /// Current playback position in milliseconds.
-    ///
-    /// Based on the number of output samples actually consumed by the audio
-    /// callback, converted using the output device's sample rate and channel count.
     pub(crate) fn playback_position_ms(&self) -> u64 {
-        let samples = self.samples_played.load(Ordering::Relaxed) as u64;
+        let samples =
+            self.playback_clock
+                .position_samples(
+                    Instant::now(),
+                    self.output_sample_rate,
+                    self.output_channels,
+                )
+                .unwrap_or_else(|| self.samples_played.load(Ordering::Relaxed)) as u64;
         let frames = samples / self.output_channels.max(1) as u64;
         frames * 1000 / self.output_sample_rate.max(1) as u64
     }
@@ -669,6 +817,9 @@ impl RealtimeAudioPlayer {
     /// Reset the playback position counter (call when starting a new voice turn).
     pub(crate) fn reset_playback_position(&self) {
         self.samples_played.store(0, Ordering::Relaxed);
+        self.playback_clock.clear();
+        self.fractional_cursor
+            .store(f64::to_bits(0.0), Ordering::Relaxed);
     }
 
     /// Pause audio output. The queue retains its data; playback position freezes.
@@ -706,26 +857,30 @@ impl RealtimeAudioPlayer {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_output_stream(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
     queue: Arc<Mutex<VecDeque<i16>>>,
     samples_played: Arc<AtomicUsize>,
+    playback_clock: Arc<PlaybackClock>,
     paused: Arc<AtomicBool>,
     speed: Arc<AtomicU32>,
+    fractional_cursor: Arc<AtomicU64>,
 ) -> Result<cpal::Stream, String> {
     let config_any: cpal::StreamConfig = config.clone().into();
     match config.sample_format() {
         cpal::SampleFormat::F32 => {
             let sp = Arc::clone(&samples_played);
+            let pc = Arc::clone(&playback_clock);
             let p = Arc::clone(&paused);
             let s = Arc::clone(&speed);
-            let mut frac_pos: f64 = 0.0;
+            let frac = Arc::clone(&fractional_cursor);
             device
                 .build_output_stream(
                     &config_any,
-                    move |output: &mut [f32], _| {
-                        fill_output_f32(output, &queue, &sp, &p, &s, &mut frac_pos);
+                    move |output: &mut [f32], info| {
+                        fill_output_f32(output, &queue, &sp, &pc, &p, &s, &frac, info);
                     },
                     move |err| error!("audio output error: {err}"),
                     None,
@@ -734,14 +889,15 @@ fn build_output_stream(
         }
         cpal::SampleFormat::I16 => {
             let sp = Arc::clone(&samples_played);
+            let pc = Arc::clone(&playback_clock);
             let p = Arc::clone(&paused);
             let s = Arc::clone(&speed);
-            let mut frac_pos: f64 = 0.0;
+            let frac = Arc::clone(&fractional_cursor);
             device
                 .build_output_stream(
                     &config_any,
-                    move |output: &mut [i16], _| {
-                        fill_output_i16(output, &queue, &sp, &p, &s, &mut frac_pos);
+                    move |output: &mut [i16], info| {
+                        fill_output_i16(output, &queue, &sp, &pc, &p, &s, &frac, info);
                     },
                     move |err| error!("audio output error: {err}"),
                     None,
@@ -750,14 +906,15 @@ fn build_output_stream(
         }
         cpal::SampleFormat::U16 => {
             let sp = Arc::clone(&samples_played);
+            let pc = Arc::clone(&playback_clock);
             let p = Arc::clone(&paused);
             let s = Arc::clone(&speed);
-            let mut frac_pos: f64 = 0.0;
+            let frac = Arc::clone(&fractional_cursor);
             device
                 .build_output_stream(
                     &config_any,
-                    move |output: &mut [u16], _| {
-                        fill_output_u16(output, &queue, &sp, &p, &s, &mut frac_pos);
+                    move |output: &mut [u16], info| {
+                        fill_output_u16(output, &queue, &sp, &pc, &p, &s, &frac, info);
                     },
                     move |err| error!("audio output error: {err}"),
                     None,
@@ -785,89 +942,128 @@ fn interpolated_sample(queue: &VecDeque<i16>, pos: f64) -> i16 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fill_output_i16(
     output: &mut [i16],
     queue: &Arc<Mutex<VecDeque<i16>>>,
     samples_played: &Arc<AtomicUsize>,
+    playback_clock: &Arc<PlaybackClock>,
     paused: &AtomicBool,
     speed: &AtomicU32,
-    frac_pos: &mut f64,
+    fractional_cursor: &Arc<AtomicU64>,
+    info: &cpal::OutputCallbackInfo,
 ) {
     if paused.load(Ordering::Acquire) {
         output.fill(0);
         return;
     }
     if let Ok(mut guard) = queue.lock() {
+        let callback_started_at = Instant::now();
+        let sample_start = samples_played.load(Ordering::Relaxed);
         let step = f32::from_bits(speed.load(Ordering::Relaxed)) as f64;
+        let mut frac_pos = f64::from_bits(fractional_cursor.load(Ordering::Relaxed));
         for sample in output.iter_mut() {
-            *sample = interpolated_sample(&guard, *frac_pos);
-            *frac_pos += step;
+            *sample = interpolated_sample(&guard, frac_pos);
+            frac_pos += step;
         }
-        let consumed = (*frac_pos as usize).min(guard.len());
+        let consumed = (frac_pos as usize).min(guard.len());
         if consumed > 0 {
             guard.drain(..consumed);
             samples_played.fetch_add(consumed, Ordering::Relaxed);
+            playback_clock.register_output_buffer(
+                callback_started_at,
+                info,
+                sample_start,
+                sample_start + consumed,
+            );
         }
-        *frac_pos -= consumed as f64;
+        frac_pos -= consumed as f64;
+        fractional_cursor.store(f64::to_bits(frac_pos), Ordering::Relaxed);
         return;
     }
     output.fill(0);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fill_output_f32(
     output: &mut [f32],
     queue: &Arc<Mutex<VecDeque<i16>>>,
     samples_played: &Arc<AtomicUsize>,
+    playback_clock: &Arc<PlaybackClock>,
     paused: &AtomicBool,
     speed: &AtomicU32,
-    frac_pos: &mut f64,
+    fractional_cursor: &Arc<AtomicU64>,
+    info: &cpal::OutputCallbackInfo,
 ) {
     if paused.load(Ordering::Acquire) {
         output.fill(0.0);
         return;
     }
     if let Ok(mut guard) = queue.lock() {
+        let callback_started_at = Instant::now();
+        let sample_start = samples_played.load(Ordering::Relaxed);
         let step = f32::from_bits(speed.load(Ordering::Relaxed)) as f64;
+        let mut frac_pos = f64::from_bits(fractional_cursor.load(Ordering::Relaxed));
         for sample in output.iter_mut() {
-            *sample = interpolated_sample(&guard, *frac_pos) as f32 / i16::MAX as f32;
-            *frac_pos += step;
+            *sample = interpolated_sample(&guard, frac_pos) as f32 / i16::MAX as f32;
+            frac_pos += step;
         }
-        let consumed = (*frac_pos as usize).min(guard.len());
+        let consumed = (frac_pos as usize).min(guard.len());
         if consumed > 0 {
             guard.drain(..consumed);
             samples_played.fetch_add(consumed, Ordering::Relaxed);
+            playback_clock.register_output_buffer(
+                callback_started_at,
+                info,
+                sample_start,
+                sample_start + consumed,
+            );
         }
-        *frac_pos -= consumed as f64;
+        frac_pos -= consumed as f64;
+        fractional_cursor.store(f64::to_bits(frac_pos), Ordering::Relaxed);
         return;
     }
     output.fill(0.0);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fill_output_u16(
     output: &mut [u16],
     queue: &Arc<Mutex<VecDeque<i16>>>,
     samples_played: &Arc<AtomicUsize>,
+    playback_clock: &Arc<PlaybackClock>,
     paused: &AtomicBool,
     speed: &AtomicU32,
-    frac_pos: &mut f64,
+    fractional_cursor: &Arc<AtomicU64>,
+    info: &cpal::OutputCallbackInfo,
 ) {
     if paused.load(Ordering::Acquire) {
         output.fill(32768);
         return;
     }
     if let Ok(mut guard) = queue.lock() {
+        let callback_started_at = Instant::now();
+        let sample_start = samples_played.load(Ordering::Relaxed);
         let step = f32::from_bits(speed.load(Ordering::Relaxed)) as f64;
+        let mut frac_pos = f64::from_bits(fractional_cursor.load(Ordering::Relaxed));
         for sample in output.iter_mut() {
-            let v = interpolated_sample(&guard, *frac_pos);
+            let v = interpolated_sample(&guard, frac_pos);
             *sample = (v as i32 + 32768).clamp(0, u16::MAX as i32) as u16;
-            *frac_pos += step;
+            frac_pos += step;
         }
-        let consumed = (*frac_pos as usize).min(guard.len());
+        let consumed = (frac_pos as usize).min(guard.len());
         if consumed > 0 {
             guard.drain(..consumed);
             samples_played.fetch_add(consumed, Ordering::Relaxed);
+            playback_clock.register_output_buffer(
+                callback_started_at,
+                info,
+                sample_start,
+                sample_start + consumed,
+            );
         }
-        *frac_pos -= consumed as f64;
+        frac_pos -= consumed as f64;
+        fractional_cursor.store(f64::to_bits(frac_pos), Ordering::Relaxed);
         return;
     }
     output.fill(32768);
@@ -1054,7 +1250,8 @@ async fn transcribe_bytes(
     duration_seconds: f32,
 ) -> Result<String, String> {
     let auth = resolve_auth().await?;
-    let client = reqwest::Client::new();
+    let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())
+        .map_err(|error| format!("failed to build transcription HTTP client: {error}"))?;
     let audio_bytes = wav_bytes.len();
     let prompt_for_log = context.as_deref().unwrap_or("").to_string();
     let (endpoint, request) =
@@ -1135,11 +1332,15 @@ async fn transcribe_bytes(
 
 #[cfg(test)]
 mod tests {
+    use super::PlaybackClock;
+    use super::PlaybackSegment;
     use super::RecordedAudio;
     use super::convert_pcm16;
     use super::encode_wav_normalized;
     use pretty_assertions::assert_eq;
     use std::io::Cursor;
+    use std::time::Duration;
+    use std::time::Instant;
 
     #[test]
     fn convert_pcm16_downmixes_and_resamples_for_model_input() {
@@ -1167,5 +1368,57 @@ mod tests {
         assert_eq!(spec.channels, 1);
         assert_eq!(spec.sample_rate, 24_000);
         assert_eq!(samples, vec![8_426, 29_490]);
+    }
+
+    #[test]
+    fn playback_clock_waits_for_predicted_playback_start() {
+        let clock = PlaybackClock::default();
+        let start = Instant::now();
+
+        if let Ok(mut state) = clock.state.lock() {
+            state.future.push_back(PlaybackSegment {
+                playback_started_at: start + Duration::from_millis(120),
+                sample_start: 0,
+                sample_end: 2_400,
+            });
+        }
+
+        assert_eq!(clock.position_samples(start, 24_000, 1), Some(0));
+        assert_eq!(
+            clock.position_samples(start + Duration::from_millis(60), 24_000, 1),
+            Some(0)
+        );
+        assert_eq!(
+            clock.position_samples(start + Duration::from_millis(170), 24_000, 1),
+            Some(1_200)
+        );
+    }
+
+    #[test]
+    fn playback_clock_promotes_future_segments_in_order() {
+        let clock = PlaybackClock::default();
+        let start = Instant::now();
+
+        if let Ok(mut state) = clock.state.lock() {
+            state.future.push_back(PlaybackSegment {
+                playback_started_at: start + Duration::from_millis(100),
+                sample_start: 0,
+                sample_end: 2_400,
+            });
+            state.future.push_back(PlaybackSegment {
+                playback_started_at: start + Duration::from_millis(200),
+                sample_start: 2_400,
+                sample_end: 4_800,
+            });
+        }
+
+        assert_eq!(
+            clock.position_samples(start + Duration::from_millis(150), 24_000, 1),
+            Some(1_200)
+        );
+        assert_eq!(
+            clock.position_samples(start + Duration::from_millis(230), 24_000, 1),
+            Some(3_120)
+        );
     }
 }

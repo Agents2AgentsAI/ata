@@ -14,17 +14,29 @@ pub struct SourceMeta {
 pub struct Paper {
     pub title: String,
     pub authors: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub year: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub venue: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub citation_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub abstract_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub doi: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub arxiv_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub s2_paper_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub openalex_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pdf_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub code_url: Option<String>,
+    #[serde(skip_serializing, default)]
     pub source_meta: Option<SourceMeta>,
 }
 
@@ -44,8 +56,11 @@ pub struct SourceStatus {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SearchResult {
     pub papers: Vec<Paper>,
+    #[serde(skip_serializing, default)]
     pub per_source_status: Vec<SourceStatus>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_available: Option<u64>,
     pub has_more: bool,
 }
@@ -59,6 +74,7 @@ pub struct PaperDetail {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct CitationResult {
     pub papers: Vec<Paper>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_available: Option<u64>,
     pub has_more: bool,
 }
@@ -67,7 +83,9 @@ pub struct CitationResult {
 pub struct ZoteroLinkedItem {
     pub relation: String,
     pub raw_uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub item_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub canonical_id: Option<String>,
 }
 
@@ -76,12 +94,16 @@ pub struct ZoteroItem {
     pub key: String,
     pub title: String,
     pub authors: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub year: Option<String>,
     pub item_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub doi: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub abstract_snippet: Option<String>,
     pub tags: Vec<String>,
     pub linked_items: Vec<ZoteroLinkedItem>,
+    #[serde(skip_serializing, default)]
     pub source_meta: Option<SourceMeta>,
 }
 
@@ -90,23 +112,33 @@ pub struct ZoteroItemDetail {
     pub key: String,
     pub title: String,
     pub authors: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub abstract_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub doi: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub publication: Option<String>,
     pub item_type: String,
     pub tags: Vec<String>,
     pub linked_items: Vec<ZoteroLinkedItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub extra: Option<String>,
+    #[serde(skip_serializing, default)]
     pub source_meta: Option<SourceMeta>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<ZoteroAttachment>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub document_resolution: Option<DocumentResolution>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroSearchResult {
     pub items: Vec<ZoteroItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_available: Option<u64>,
     pub has_more: bool,
 }
@@ -205,7 +237,9 @@ pub struct ZoteroAdvancedSearchResult {
     pub completeness: ZoteroAdvancedCompleteness,
     pub candidate_strategy: ZoteroAdvancedCandidateStrategy,
     pub scanned_items: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hints: Vec<String>,
     pub results: ZoteroSearchResult,
 }
@@ -243,7 +277,9 @@ pub struct ZoteroGrepMatch {
     pub field: String,
     pub match_text: String,
     pub snippet: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_item_key: Option<String>,
+    #[serde(skip_serializing, default)]
     pub source_meta: Option<SourceMeta>,
 }
 
@@ -253,7 +289,9 @@ pub struct ZoteroGrepResult {
     pub scanned_items: usize,
     pub returned_matches: usize,
     pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hints: Vec<String>,
     pub matches: Vec<ZoteroGrepMatch>,
 }
@@ -261,9 +299,11 @@ pub struct ZoteroGrepResult {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroSearchNotesMatch {
     pub item_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_item: Option<String>,
     pub field: String,
     pub snippet: String,
+    #[serde(skip_serializing, default)]
     pub source_meta: Option<SourceMeta>,
 }
 
@@ -273,9 +313,12 @@ pub struct ZoteroSearchNotesResult {
     pub candidate_strategy: ZoteroGrepCandidateStrategy,
     pub scanned_items: usize,
     pub notes: Vec<ZoteroSearchNotesMatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_available: Option<u64>,
     pub has_more: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hints: Vec<String>,
 }
 
@@ -291,8 +334,10 @@ pub enum DocumentSourceKind {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct DocumentResolution {
     pub source_kind: DocumentSourceKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub preferred_url: Option<String>,
     pub fallback_urls: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub local_path: Option<String>,
     pub trace: Vec<String>,
 }
@@ -301,16 +346,22 @@ pub struct DocumentResolution {
 pub struct ZoteroFullTextResult {
     pub item_key: String,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub resolution: Option<DocumentResolution>,
+    #[serde(skip_serializing, default)]
     pub source_meta: Option<SourceMeta>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroNote {
     pub key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_item: Option<String>,
+    #[serde(skip_serializing, default)]
     pub source_meta: Option<SourceMeta>,
 }
 
@@ -318,6 +369,7 @@ pub struct ZoteroNote {
 pub struct ZoteroNotesResult {
     pub item_key: String,
     pub notes: Vec<ZoteroNote>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_available: Option<u64>,
     pub has_more: bool,
 }
@@ -325,21 +377,31 @@ pub struct ZoteroNotesResult {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroAnnotation {
     pub key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_item: Option<String>,
     pub annotation_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub annotation_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub annotation_comment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub annotation_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub annotation_page_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub annotation_sort_index: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_item_title: Option<String>,
+    #[serde(skip_serializing, default)]
     pub source_meta: Option<SourceMeta>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroAnnotationsResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub item_key: Option<String>,
     pub annotations: Vec<ZoteroAnnotation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_available: Option<u64>,
     pub has_more: bool,
 }
@@ -347,13 +409,21 @@ pub struct ZoteroAnnotationsResult {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroAttachment {
     pub key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub filename: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub content_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub link_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_item: Option<String>,
+    #[serde(skip_serializing, default)]
     pub source_meta: Option<SourceMeta>,
 }
 
@@ -361,6 +431,7 @@ pub struct ZoteroAttachment {
 pub struct ZoteroAttachmentsResult {
     pub item_key: String,
     pub attachments: Vec<ZoteroAttachment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_available: Option<u64>,
     pub has_more: bool,
 }
@@ -369,13 +440,16 @@ pub struct ZoteroAttachmentsResult {
 pub struct ZoteroCollection {
     pub key: String,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_collection: Option<String>,
+    #[serde(skip_serializing, default)]
     pub source_meta: Option<SourceMeta>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroCollectionsResult {
     pub collections: Vec<ZoteroCollection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_available: Option<u64>,
     pub has_more: bool,
 }
@@ -384,32 +458,71 @@ pub struct ZoteroCollectionsResult {
 pub struct ZoteroGroup {
     pub id: String,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(skip_serializing, default)]
     pub source_meta: Option<SourceMeta>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroGroupsResult {
     pub groups: Vec<ZoteroGroup>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_available: Option<u64>,
     pub has_more: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroMutationRecord {
+    pub key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_item: Option<String>,
+    pub collection_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroMutationResult {
+    pub records: Vec<ZoteroMutationRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroCreateCollectionResult {
+    pub collection: ZoteroCollection,
+    pub created: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct RepoHealth {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_commit_date: Option<String>,
     pub stars: u32,
     pub open_issues: u32,
     pub releases_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ci_passing: Option<bool>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct RepoSummary {
     pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub commit_sha: Option<String>,
     pub directory_tree: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub readme_snippet: Option<String>,
     pub key_files: Vec<String>,
     pub total_files: usize,
@@ -434,14 +547,19 @@ pub struct RepoRequirements {
 pub struct RepoEntrypoint {
     pub file_path: String,
     pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cli_args_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub config_file: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct RepoIoShape {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub input_shapes: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub output_shapes: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dtype: Option<String>,
     pub source_file: String,
     pub source_line: usize,
@@ -451,13 +569,16 @@ pub struct RepoIoShape {
 pub struct RepoExportPath {
     pub file_path: String,
     pub target_format: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub framework_version: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ConfigParam {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
 
@@ -490,6 +611,7 @@ pub struct PaperRecommendationParams {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct RecommendationResult {
     pub papers: Vec<Paper>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
 }
 
@@ -516,6 +638,14 @@ pub struct PaginationParams {
     pub max_chars_per_item: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ZoteroQuickSearchMode {
+    TitleCreatorYear,
+    TitleCreatorYearNote,
+    Everything,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ZoteroSearchParams {
     pub query: String,
@@ -524,6 +654,7 @@ pub struct ZoteroSearchParams {
     pub offset: Option<u32>,
     pub limit: Option<u32>,
     pub item_type: Option<String>,
+    pub qmode: Option<ZoteroQuickSearchMode>,
     pub max_chars_per_item: Option<u32>,
 }
 
@@ -596,9 +727,12 @@ pub struct ZoteroCitationResult {
     pub item_key: String,
     pub format: ZoteroCitationFormat,
     pub citation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub citation_key: Option<String>,
     pub generator: ZoteroCitationGenerator,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    #[serde(skip_serializing, default)]
     pub source_meta: Option<SourceMeta>,
 }
 
@@ -682,6 +816,62 @@ pub struct ZoteroCollectionItemsParams {
     pub max_chars_per_item: Option<u32>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroCreateCollectionParams {
+    pub name: String,
+    pub parent_collection_key: Option<String>,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroFindOrCreateCollectionParams {
+    pub name: String,
+    pub parent_collection_key: Option<String>,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroCreateItemsParams {
+    pub items: Vec<serde_json::Value>,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroItemUpdatePayload {
+    pub item_key: String,
+    pub patch: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroUpdateItemsParams {
+    pub items: Vec<ZoteroItemUpdatePayload>,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroAddItemsToCollectionParams {
+    pub collection_key: String,
+    pub item_keys: Vec<String>,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroCreateAttachmentLinkParams {
+    pub parent_item_key: String,
+    pub title: String,
+    pub url: String,
+    pub content_type: Option<String>,
+    pub collections: Option<Vec<String>>,
+    pub tags: Option<Vec<String>>,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Hacker News types
 // ---------------------------------------------------------------------------
@@ -689,15 +879,24 @@ pub struct ZoteroCollectionItemsParams {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct HnItem {
     pub id: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub points: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub num_comments: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<DateTime<Utc>>,
     pub item_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub story_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub story_url: Option<String>,
     pub hn_url: String,
 }
@@ -727,8 +926,11 @@ pub struct HnSearchParams {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct HnComment {
     pub id: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<DateTime<Utc>>,
     pub children: Vec<HnComment>,
 }
@@ -768,11 +970,14 @@ pub struct PatentSearchParams {
 pub struct PatentItem {
     pub patent_id: String,
     pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub abstract_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub grant_date: Option<String>,
     pub inventors: Vec<String>,
     pub assignees: Vec<String>,
     pub cpc_codes: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub citation_count: Option<u32>,
     pub url: String,
 }
@@ -782,6 +987,7 @@ pub struct PatentSearchResult {
     pub patents: Vec<PatentItem>,
     pub total_hits: u64,
     pub has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
 }
 
@@ -794,14 +1000,20 @@ pub struct PatentGetParams {
 pub struct PatentDetail {
     pub patent_id: String,
     pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub abstract_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub grant_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub filing_date: Option<String>,
     pub inventors: Vec<String>,
     pub assignees: Vec<String>,
     pub cpc_codes: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub claims_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub citation_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cited_by_count: Option<u32>,
     pub url: String,
 }

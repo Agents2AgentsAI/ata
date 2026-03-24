@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::config::ResearchToolsToml;
+use crate::features::Feature;
 use crate::features::Features;
 
 use rmcp::model::Tool;
@@ -14,21 +15,6 @@ macro_rules! set_tool_name_for_id {
             "paper_citations" => $self.paper_citations = $resolved_name,
             "paper_references" => $self.paper_references = $resolved_name,
             "paper_recommendations" => $self.paper_recommendations = $resolved_name,
-            "zotero_search" => $self.zotero_search = $resolved_name,
-            "zotero_get_tags" => $self.zotero_get_tags = $resolved_name,
-            "zotero_get_recent" => $self.zotero_get_recent = $resolved_name,
-            "zotero_advanced_search" => $self.zotero_advanced_search = $resolved_name,
-            "zotero_grep_text" => $self.zotero_grep_text = $resolved_name,
-            "zotero_search_notes" => $self.zotero_search_notes = $resolved_name,
-            "zotero_get_item" => $self.zotero_get_item = $resolved_name,
-            "zotero_get_item_citation" => $self.zotero_get_item_citation = $resolved_name,
-            "zotero_get_fulltext" => $self.zotero_get_fulltext = $resolved_name,
-            "zotero_get_notes" => $self.zotero_get_notes = $resolved_name,
-            "zotero_get_annotations" => $self.zotero_get_annotations = $resolved_name,
-            "zotero_get_attachments" => $self.zotero_get_attachments = $resolved_name,
-            "zotero_get_collections" => $self.zotero_get_collections = $resolved_name,
-            "zotero_list_groups" => $self.zotero_list_groups = $resolved_name,
-            "zotero_get_collection_items" => $self.zotero_get_collection_items = $resolved_name,
             "repo_clone_and_summarize" => $self.repo_clone_and_summarize = $resolved_name,
             "repo_find_models" => $self.repo_find_models = $resolved_name,
             "repo_extract_requirements" => $self.repo_extract_requirements = $resolved_name,
@@ -66,21 +52,6 @@ pub struct ResearchToolNames {
     pub paper_citations: String,
     pub paper_references: String,
     pub paper_recommendations: String,
-    pub zotero_search: String,
-    pub zotero_get_tags: String,
-    pub zotero_get_recent: String,
-    pub zotero_advanced_search: String,
-    pub zotero_grep_text: String,
-    pub zotero_search_notes: String,
-    pub zotero_get_item: String,
-    pub zotero_get_item_citation: String,
-    pub zotero_get_fulltext: String,
-    pub zotero_get_notes: String,
-    pub zotero_get_annotations: String,
-    pub zotero_get_attachments: String,
-    pub zotero_get_collections: String,
-    pub zotero_list_groups: String,
-    pub zotero_get_collection_items: String,
     pub repo_clone_and_summarize: String,
     pub repo_find_models: String,
     pub repo_extract_requirements: String,
@@ -102,21 +73,6 @@ impl Default for ResearchToolNames {
             paper_citations: "paper_citations".to_string(),
             paper_references: "paper_references".to_string(),
             paper_recommendations: "paper_recommendations".to_string(),
-            zotero_search: "zotero_search".to_string(),
-            zotero_get_tags: "zotero_get_tags".to_string(),
-            zotero_get_recent: "zotero_get_recent".to_string(),
-            zotero_advanced_search: "zotero_advanced_search".to_string(),
-            zotero_grep_text: "zotero_grep_text".to_string(),
-            zotero_search_notes: "zotero_search_notes".to_string(),
-            zotero_get_item: "zotero_get_item".to_string(),
-            zotero_get_item_citation: "zotero_get_item_citation".to_string(),
-            zotero_get_fulltext: "zotero_get_fulltext".to_string(),
-            zotero_get_notes: "zotero_get_notes".to_string(),
-            zotero_get_annotations: "zotero_get_annotations".to_string(),
-            zotero_get_attachments: "zotero_get_attachments".to_string(),
-            zotero_get_collections: "zotero_get_collections".to_string(),
-            zotero_list_groups: "zotero_list_groups".to_string(),
-            zotero_get_collection_items: "zotero_get_collection_items".to_string(),
             repo_clone_and_summarize: "repo_clone_and_summarize".to_string(),
             repo_find_models: "repo_find_models".to_string(),
             repo_extract_requirements: "repo_extract_requirements".to_string(),
@@ -177,12 +133,11 @@ impl ResearchToolNames {
 pub fn native_tool_availability() -> ResearchToolAvailability {
     let defs = codex_research_tools::tool_specs::all_tool_defs();
     let has_paper_search = defs.iter().any(|def| def.id == "paper_search");
-    let has_zotero = defs.iter().any(|def| def.id == "zotero_search");
     let has_repo_analysis = defs.iter().any(|def| def.id == "repo_find_entrypoints");
     let has_hackernews = defs.iter().any(|def| def.id == "hn_search");
     ResearchToolAvailability {
         has_paper_search,
-        has_zotero,
+        has_zotero: false,
         has_repo_analysis,
         has_hackernews,
     }
@@ -204,6 +159,10 @@ pub fn configured_native_tool_context(
     let mut names = ResearchToolNames::default();
     let mut availability = ResearchToolAvailability::default();
 
+    if features.enabled(Feature::ResearchZotero) && toolkit.is_tool_configured("zotero_search") {
+        availability.has_zotero = true;
+    }
+
     for def in defs {
         if !toolkit.is_tool_configured(def.id) {
             continue;
@@ -215,7 +174,6 @@ pub fn configured_native_tool_context(
         names.set_name_for_id(def.id, def.native_name.to_string());
         match def.id {
             "paper_search" => availability.has_paper_search = true,
-            "zotero_search" => availability.has_zotero = true,
             "repo_find_entrypoints" => availability.has_repo_analysis = true,
             "hn_search" => availability.has_hackernews = true,
             _ => {}
@@ -242,11 +200,14 @@ pub(crate) fn find_mcp_tool_matches(
 }
 
 #[must_use]
+#[allow(dead_code)]
 pub(crate) fn should_suppress_research_mcp_tool(qualified_name: &str, features: &Features) -> bool {
     let tool_name = qualified_name.rsplit("__").next().unwrap_or(qualified_name);
+    if tool_name.starts_with("zotero_") {
+        return true;
+    }
     let tool_id = match tool_name {
         _ if tool_name.starts_with("paper_") => Some("paper_search"),
-        _ if tool_name.starts_with("zotero_") => Some("zotero_search"),
         _ if tool_name.starts_with("hn_") => Some("hn_search"),
         _ if tool_name.starts_with("patent_") => Some("patent_search"),
         _ if tool_name.starts_with("repo_") => Some("repo_clone_and_summarize"),
@@ -278,6 +239,7 @@ mod tests {
     use crate::features::Feature;
     use codex_research_tools::tool_specs::all_tool_defs;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     fn mcp_tool(name: &str) -> Tool {
         Tool {
@@ -301,7 +263,7 @@ mod tests {
         let defs = all_tool_defs();
         let names = ResearchToolNames::from_native(&defs);
         assert_eq!(names.paper_search, "paper_search");
-        assert_eq!(names.zotero_search, "zotero_search");
+        assert_eq!(names.repo_find_entrypoints, "repo_find_entrypoints");
     }
 
     #[test]
@@ -314,7 +276,7 @@ mod tests {
 
         let names = ResearchToolNames::from_mcp_tools(&defs, &mcp_tools);
         assert_eq!(names.paper_search, "mcp__my_paper_search__search_papers");
-        assert_eq!(names.zotero_search, "zotero_search");
+        assert_eq!(names.repo_find_entrypoints, "repo_find_entrypoints");
     }
 
     #[test]
@@ -359,11 +321,6 @@ mod tests {
                 Feature::ResearchPaperSearch,
             ),
             (
-                "mcp__zotero_server__zotero_search",
-                "mcp__zotero_server__zotero_search",
-                Feature::ResearchZotero,
-            ),
-            (
                 "mcp__hn_server__hn_search",
                 "mcp__hn_server__search_hackernews",
                 Feature::ResearchHackerNews,
@@ -406,6 +363,17 @@ mod tests {
     }
 
     #[test]
+    fn should_suppress_zotero_mcp_tools_even_when_feature_is_enabled() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::ResearchZotero);
+        features.enable(Feature::Research);
+        assert!(should_suppress_research_mcp_tool(
+            "mcp__zotero_server__zotero_search",
+            &features
+        ));
+    }
+
+    #[test]
     fn should_suppress_research_mcp_tool_leaves_unknown_names_unsuppressed() {
         let features = Features::with_defaults();
         assert!(!should_suppress_research_mcp_tool(
@@ -418,7 +386,6 @@ mod tests {
     fn should_suppress_research_mcp_tool_respects_master_research_toggle() {
         let cases = [
             "mcp__paper_server__search_papers",
-            "mcp__zotero_server__zotero_search",
             "mcp__hn_server__search_hackernews",
             "mcp__patent_server__search_patents",
             "mcp__repo_server__clone_and_summarize",
@@ -432,6 +399,20 @@ mod tests {
                 "{name} should be allowed when Research is enabled"
             );
         }
+    }
+
+    #[test]
+    fn configured_native_tool_context_marks_zotero_available_when_feature_enabled() {
+        let codex_home = TempDir::new().expect("temp dir");
+        let cwd = TempDir::new().expect("temp dir");
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Research);
+        features.enable(Feature::ResearchZotero);
+
+        let context =
+            configured_native_tool_context(None, codex_home.path(), cwd.path(), &features);
+
+        assert!(context.availability.has_zotero);
     }
 }
 
@@ -450,6 +431,6 @@ mod always_tests {
     fn native_tool_availability_matches_build_features() {
         let availability = native_tool_availability();
         assert!(availability.has_paper_search);
-        assert!(availability.has_zotero);
+        assert!(!availability.has_zotero);
     }
 }

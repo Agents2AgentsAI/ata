@@ -1,4 +1,5 @@
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
+#[allow(dead_code)]
 mod multi_root;
 mod service;
 mod session;

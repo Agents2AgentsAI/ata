@@ -223,12 +223,11 @@ impl TestCodexBuilder {
         resume_from: Option<PathBuf>,
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
-        let thread_manager = if let Some(model_catalog) = config.model_catalog.clone() {
+        let thread_manager = if config.model_catalog.is_some() {
             ThreadManager::new(
-                config.codex_home.clone(),
+                &config,
                 codex_core::test_support::auth_manager_from_auth(auth.clone()),
                 SessionSource::Exec,
-                Some(model_catalog),
                 CollaborationModesConfig::default(),
             )
         } else {
@@ -247,6 +246,7 @@ impl TestCodexBuilder {
                     config.clone(),
                     path,
                     auth_manager,
+                    None,
                 ))
                 .await?
             }
@@ -270,7 +270,7 @@ impl TestCodexBuilder {
     ) -> anyhow::Result<(Config, Arc<TempDir>)> {
         let model_provider = ModelProviderInfo {
             base_url: Some(base_url),
-            ..built_in_model_providers()["openai"].clone()
+            ..built_in_model_providers(/* openai_base_url */ None)["openai"].clone()
         };
         let cwd = Arc::new(TempDir::new()?);
         let mut config = load_default_config_for_test(home).await;

@@ -43,8 +43,11 @@ pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
             return resolve_bin_from_env(key, value);
         }
     }
-    match assert_cmd::Command::cargo_bin(name) {
-        Ok(cmd) => {
+    // assert_cmd::Command::cargo_bin may panic when CARGO_BIN_EXE_* is unset
+    // (e.g. in unit tests or cross-crate test binaries). Catch the panic and
+    // convert it to an Err so callers can handle it gracefully.
+    match std::panic::catch_unwind(|| assert_cmd::Command::cargo_bin(name)) {
+        Ok(Ok(cmd)) => {
             let mut path = PathBuf::from(cmd.get_program());
             if !path.is_absolute() {
                 path = std::env::current_dir()
@@ -60,10 +63,15 @@ pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
                 })
             }
         }
-        Err(err) => Err(CargoBinError::NotFound {
+        Ok(Err(err)) => Err(CargoBinError::NotFound {
             name: name.to_owned(),
             env_keys,
             fallback: format!("assert_cmd fallback failed: {err}"),
+        }),
+        Err(_panic) => Err(CargoBinError::NotFound {
+            name: name.to_owned(),
+            env_keys,
+            fallback: "assert_cmd panicked (CARGO_BIN_EXE_* likely unset)".to_owned(),
         }),
     }
 }

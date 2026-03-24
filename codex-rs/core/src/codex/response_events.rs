@@ -96,8 +96,13 @@ impl StreamingResponseState {
         item: ResponseItem,
     ) {
         let plan_mode = self.plan_mode_state.is_some();
-        if let Some(turn_item) =
-            crate::stream_events_utils::handle_non_tool_response_item(&item, plan_mode)
+        if let Some(turn_item) = crate::stream_events_utils::handle_non_tool_response_item(
+            sess,
+            turn_context,
+            &item,
+            plan_mode,
+        )
+        .await
         {
             let mut turn_item = turn_item;
             let mut seeded_parsed: Option<ParsedAssistantTextDelta> = None;
@@ -657,8 +662,13 @@ async fn handle_assistant_item_done_in_plan_mode(
     {
         maybe_complete_plan_item_from_message(sess, turn_context, state, item).await;
 
-        if let Some(turn_item) =
-            crate::stream_events_utils::handle_non_tool_response_item(item, true)
+        if let Some(turn_item) = crate::stream_events_utils::handle_non_tool_response_item(
+            sess,
+            turn_context,
+            item,
+            true,
+        )
+        .await
         {
             emit_turn_item_in_plan_mode(
                 sess,

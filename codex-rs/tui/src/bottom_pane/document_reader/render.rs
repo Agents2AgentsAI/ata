@@ -38,7 +38,7 @@ pub(super) fn render_section(
         ));
         let spaced = ensure_paragraph_spacing(&clean);
         let wrap_width = width.saturating_sub(2).max(1) as usize;
-        append_markdown(&spaced, Some(wrap_width), &mut lines);
+        append_markdown(&spaced, Some(wrap_width), None, &mut lines);
 
         // macOS Terminal.app renders ANSI italic (SGR 3) as reverse video,
         // producing white-bg/black-text on dark terminals.  Replace italic
@@ -66,7 +66,7 @@ pub(super) fn rendered_body_line_count(content: &str, width: u16) -> usize {
     let spaced = ensure_paragraph_spacing(&clean);
     let wrap_width = width.saturating_sub(2).max(1) as usize;
     let mut lines: Vec<Line<'static>> = Vec::new();
-    append_markdown(&spaced, Some(wrap_width), &mut lines);
+    append_markdown(&spaced, Some(wrap_width), None, &mut lines);
     replace_italic_with_underline(&mut lines);
     lines.len()
 }
@@ -566,9 +566,10 @@ pub(super) fn apply_word_highlight(
                     base_style,
                 ));
             }
+            let highlight_style = base_style.add_modifier(hl);
             new_spans.push(Span::styled(
                 span_text[local_start..local_end].to_string(),
-                base_style.add_modifier(hl),
+                highlight_style,
             ));
             if local_end < span_text.len() {
                 new_spans.push(Span::styled(span_text[local_end..].to_string(), base_style));
@@ -1212,9 +1213,12 @@ pub(super) fn toc_overlay_lines(
 }
 
 fn replace_italic_with_underline(lines: &mut [Line<'static>]) {
-    fn fix_modifiers(add: &mut Modifier, sub: &mut Modifier) {
+    fn fix_modifiers(add: &mut Modifier, sub: &mut Modifier, preserve_heading_style: bool) {
         if add.contains(Modifier::ITALIC) {
-            *add = add.difference(Modifier::ITALIC).union(Modifier::UNDERLINED);
+            *add = add.difference(Modifier::ITALIC);
+            if !preserve_heading_style {
+                *add = add.union(Modifier::UNDERLINED);
+            }
         }
         // Also clear italic from sub_modifier so we don't accidentally
         // remove the replacement that we just added.
@@ -1222,9 +1226,23 @@ fn replace_italic_with_underline(lines: &mut [Line<'static>]) {
     }
 
     for line in lines.iter_mut() {
-        fix_modifiers(&mut line.style.add_modifier, &mut line.style.sub_modifier);
+        let line_text: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        let preserve_heading_style = line_text.trim_start().starts_with('#');
+        fix_modifiers(
+            &mut line.style.add_modifier,
+            &mut line.style.sub_modifier,
+            preserve_heading_style,
+        );
         for span in &mut line.spans {
-            fix_modifiers(&mut span.style.add_modifier, &mut span.style.sub_modifier);
+            fix_modifiers(
+                &mut span.style.add_modifier,
+                &mut span.style.sub_modifier,
+                preserve_heading_style,
+            );
         }
     }
 }
@@ -1313,7 +1331,8 @@ mod tests {
 
     #[test]
     fn highlight_preserves_styles() {
-        // Span with cyan + bold — after highlight, should be cyan + bold + underline.
+        // Styled lines preserve their base style while adding karaoke
+        // emphasis in the same way as normal body text.
         let style = Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD);
@@ -1329,8 +1348,49 @@ mod tests {
         );
         assert!(
             s.add_modifier.contains(Modifier::UNDERLINED),
-            "UNDERLINED should be added"
+            "highlighted text should use underline rather than reverse video"
         );
+    }
+
+    #[test]
+    fn section_heading_is_not_underlined_without_karaoke() {
+        let lines = render_section("The Main States", "", 80, false);
+        assert_eq!(lines.len(), 2);
+
+        let heading = &lines[0];
+        assert_eq!(heading.spans.len(), 1);
+        let style = heading.spans[0].style;
+
+        assert_eq!(heading.spans[0].content.as_ref(), "The Main States");
+        assert_eq!(style.fg, Some(Color::Cyan));
+        assert!(style.add_modifier.contains(Modifier::BOLD));
+        assert!(
+            !style.add_modifier.contains(Modifier::UNDERLINED),
+            "plain section headings should not be underlined"
+        );
+    }
+
+    #[test]
+    fn markdown_subheading_is_not_underlined_in_reading_view() {
+        let lines = render_section("", "### Forget Gate", 80, false);
+        let heading = lines
+            .iter()
+            .find(|line| {
+                let text: String = line
+                    .spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect();
+                text.contains("Forget Gate")
+            })
+            .expect("subheading line");
+
+        for span in &heading.spans {
+            assert!(
+                !span.style.add_modifier.contains(Modifier::UNDERLINED),
+                "markdown subheadings should not be underlined in the reading view"
+            );
+        }
     }
 
     #[test]
@@ -1482,7 +1542,6 @@ mod tests {
 
         assert_eq!(result.spans.len(), 1);
         let s = &result.spans[0].style;
-        // Should still have bold + underlined (idempotent).
         assert!(s.add_modifier.contains(Modifier::BOLD));
         assert!(s.add_modifier.contains(Modifier::UNDERLINED));
         assert_eq!(s.fg, Some(Color::Red));

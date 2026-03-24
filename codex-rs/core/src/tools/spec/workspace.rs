@@ -1,5 +1,6 @@
 use super::*;
 
+// @agent-facing
 pub(super) fn create_crop_and_store_figure_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -87,6 +88,7 @@ pub(super) fn create_crop_and_store_figure_tool() -> ToolSpec {
              as ![caption](asset_path)."
             .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec![
@@ -101,27 +103,41 @@ pub(super) fn create_crop_and_store_figure_tool() -> ToolSpec {
             ]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
-pub(super) fn create_view_image_tool() -> ToolSpec {
-    let properties = BTreeMap::from([(
+// @agent-facing
+pub(super) fn create_view_image_tool(can_request_original_image_detail: bool) -> ToolSpec {
+    let mut properties = BTreeMap::from([(
         "path".to_string(),
         JsonSchema::String {
             description: Some("Local filesystem path to an image file".to_string()),
         },
     )]);
+    if can_request_original_image_detail {
+        properties.insert(
+            "detail".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional detail override. The only supported value is `original`; omit this field for default resized behavior. Use `original` to preserve the file's original resolution instead of resizing to fit. This is important when high-fidelity image perception or precise localization is needed, especially for CUA agents.".to_string(),
+                ),
+            },
+        );
+    }
 
     ToolSpec::Function(ResponsesApiTool {
         name: VIEW_IMAGE_TOOL_NAME.to_string(),
         description: "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags)."
             .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["path".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -184,14 +200,17 @@ pub(super) fn create_test_sync_tool() -> ToolSpec {
         name: "test_sync_tool".to_string(),
         description: "Internal synchronization helper used by Codex integration tests.".to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: None,
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
+// @agent-facing
 pub(super) fn create_grep_files_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -235,14 +254,17 @@ pub(super) fn create_grep_files_tool() -> ToolSpec {
                       time."
             .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["pattern".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
+// @agent-facing
 pub(super) fn create_read_file_tool() -> ToolSpec {
     let indentation_properties = BTreeMap::from([
         (
@@ -338,14 +360,17 @@ pub(super) fn create_read_file_tool() -> ToolSpec {
             "Reads a local file with 1-indexed line numbers, supporting slice and indentation-aware block modes."
                 .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["file_path".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
+// @agent-facing
 pub(super) fn create_list_dir_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -384,10 +409,12 @@ pub(super) fn create_list_dir_tool() -> ToolSpec {
             "Lists entries in a local directory with 1-indexed entry numbers and simple type labels."
                 .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["dir_path".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }

@@ -22,6 +22,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::history_cell::HistoryCell;
 
+use codex_core::config::types::ApprovalsReviewer;
 use codex_core::features::Feature;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
@@ -138,6 +139,19 @@ pub(crate) enum AppEvent {
 
     /// Result of computing a `/diff` command.
     DiffResult(String),
+
+    /// Result of a `/team` command query.
+    #[allow(dead_code)]
+    TeamResult(Vec<ratatui::text::Line<'static>>),
+
+    /// Push notification of new coordination messages from peer agents.
+    /// Contains display lines for chat history + raw text for agent submission.
+    #[allow(dead_code)]
+    CoordinationNotification {
+        lines: Vec<ratatui::text::Line<'static>>,
+        agent_name: String,
+        message: String,
+    },
 
     /// Open the app link view in the bottom pane.
     OpenAppLink {
@@ -315,6 +329,9 @@ pub(crate) enum AppEvent {
     /// Update the current sandbox policy in the running app and widget.
     UpdateSandboxPolicy(SandboxPolicy),
 
+    /// Update the current approvals reviewer in the running app and widget.
+    UpdateApprovalsReviewer(ApprovalsReviewer),
+
     /// Update feature flags and persist them to the top-level config.
     UpdateFeatureFlags {
         updates: Vec<(Feature, bool)>,
@@ -484,9 +501,8 @@ pub(crate) enum AppEvent {
     /// Apply TTS/STT toggle settings from the voice setup popup.
     #[cfg(not(target_os = "linux"))]
     UpdateVoiceSettings {
-        /// When `Some(true)`, turn on voice mode; `Some(false)`, turn it off.
-        /// `None` means don't change voice mode on/off state.
-        voice_enabled: Option<bool>,
+        /// When true, new ATA sessions start with `/voice` already enabled.
+        startup_enabled: bool,
         tts_enabled: bool,
         stt_enabled: bool,
         elevenlabs_api_key: Option<String>,
@@ -507,6 +523,14 @@ pub(crate) enum AppEvent {
     VoiceModeTtsAudioChunk {
         pcm: Vec<i16>,
         alignment: Option<codex_elevenlabs::TtsAlignment>,
+    },
+
+    /// Silence PCM from a [PAUSE:N] marker. Enqueued to the audio player
+    /// but tracked separately so alignment lookup can compensate.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeTtsPauseSilence {
+        pcm: Vec<i16>,
+        pause_ms: u64,
     },
 
     /// Live volume meter tick during PTT recording.
@@ -541,10 +565,6 @@ pub(crate) enum AppEvent {
     VoiceModeTranscriptionFailed {
         error: String,
     },
-
-    /// Persist voice mode enabled state to config file.
-    #[cfg(not(target_os = "linux"))]
-    PersistVoiceModeEnabled(bool),
 
     /// Interrupt TTS playback (e.g. user navigated away in reading view).
     #[cfg(not(target_os = "linux"))]

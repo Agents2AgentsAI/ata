@@ -15,7 +15,7 @@ use std::collections::HashMap;
 async fn list_models_returns_api_key_models() -> Result<()> {
     let manager = thread_manager_with_models_provider(
         CodexAuth::from_api_key("sk-test"),
-        built_in_model_providers()["openai"].clone(),
+        built_in_model_providers(None)["openai"].clone(),
     );
     let models = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
 
@@ -29,7 +29,7 @@ async fn list_models_returns_api_key_models() -> Result<()> {
 async fn list_models_returns_chatgpt_models() -> Result<()> {
     let manager = thread_manager_with_models_provider(
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-        built_in_model_providers()["openai"].clone(),
+        built_in_model_providers(None)["openai"].clone(),
     );
     let models = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
 

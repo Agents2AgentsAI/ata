@@ -509,6 +509,7 @@ async fn load_advanced_candidates(
             offset,
             limit: page_limit,
             item_type: normalized.item_type.as_deref(),
+            qmode: None,
             sort: if normalized.candidate_strategy
                 == ZoteroAdvancedCandidateStrategy::RecentModifiedFallback
             {

@@ -235,6 +235,7 @@ async fn skills_reload_reflects_skill_change_even_if_watcher_notification_is_mis
             service_tier: None,
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox: None,
             config: None,
             service_name: None,

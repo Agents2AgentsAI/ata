@@ -29,7 +29,7 @@ mod tests {
 
     #[test]
     fn openai_supports_url_file_ingestion() {
-        let provider = ModelProviderInfo::create_openai_provider();
+        let provider = ModelProviderInfo::create_openai_provider(None);
         let caps = provider_transport_capabilities(&provider);
         assert_eq!(caps.supports_file_url_ingestion, true);
     }

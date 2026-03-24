@@ -8,6 +8,13 @@ use crate::rate_limiter::ResearchApi;
 pub const DEFAULT_REMOTE_ZOTERO_BASE_URL: &str = "https://api.zotero.org";
 pub const DEFAULT_LOCAL_ZOTERO_BASE_URL: &str = "http://localhost:23119/api";
 
+fn read_optional_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
+}
+
 #[derive(Clone)]
 pub struct ResearchConfig {
     pub semantic_scholar_api_key: Option<String>,
@@ -130,8 +137,15 @@ impl Default for ResearchConfig {
 
 impl ResearchConfig {
     #[must_use]
+    pub fn has_zotero_api_key(&self) -> bool {
+        self.zotero_api_key
+            .as_deref()
+            .is_some_and(|key| !key.trim().is_empty())
+    }
+
+    #[must_use]
     pub fn uses_local_zotero_api(&self) -> bool {
-        if self.zotero_api_key.is_some() {
+        if self.has_zotero_api_key() {
             return false;
         }
 
@@ -147,8 +161,8 @@ impl ResearchConfig {
 
     #[must_use]
     pub fn from_env() -> Self {
-        let zotero_api_key = std::env::var("ZOTERO_API_KEY").ok();
-        let zotero_base_url = std::env::var("ZOTERO_BASE_URL").unwrap_or_else(|_| {
+        let zotero_api_key = read_optional_env("ZOTERO_API_KEY");
+        let zotero_base_url = read_optional_env("ZOTERO_BASE_URL").unwrap_or_else(|| {
             if zotero_api_key.is_some() {
                 DEFAULT_REMOTE_ZOTERO_BASE_URL.to_string()
             } else {
@@ -157,16 +171,16 @@ impl ResearchConfig {
         });
 
         let mut config = Self {
-            semantic_scholar_api_key: std::env::var("SEMANTIC_SCHOLAR_API_KEY").ok(),
+            semantic_scholar_api_key: read_optional_env("SEMANTIC_SCHOLAR_API_KEY"),
             zotero_api_key,
-            zotero_user_id: std::env::var("ZOTERO_USER_ID").ok(),
-            openalex_email: std::env::var("OPENALEX_EMAIL").ok(),
-            github_token: std::env::var("GITHUB_TOKEN").ok(),
-            epo_consumer_key: std::env::var("EPO_CONSUMER_KEY").ok(),
-            epo_consumer_secret: std::env::var("EPO_CONSUMER_SECRET").ok(),
-            zotero_library_type: std::env::var("ZOTERO_LIBRARY_TYPE").ok(),
-            zotero_group_id: std::env::var("ZOTERO_GROUP_ID").ok(),
-            zotero_storage_dir: std::env::var("ZOTERO_STORAGE_DIR").ok(),
+            zotero_user_id: read_optional_env("ZOTERO_USER_ID"),
+            openalex_email: read_optional_env("OPENALEX_EMAIL"),
+            github_token: read_optional_env("GITHUB_TOKEN"),
+            epo_consumer_key: read_optional_env("EPO_CONSUMER_KEY"),
+            epo_consumer_secret: read_optional_env("EPO_CONSUMER_SECRET"),
+            zotero_library_type: read_optional_env("ZOTERO_LIBRARY_TYPE"),
+            zotero_group_id: read_optional_env("ZOTERO_GROUP_ID"),
+            zotero_storage_dir: read_optional_env("ZOTERO_STORAGE_DIR"),
             semantic_scholar_base_url: std::env::var("SEMANTIC_SCHOLAR_BASE_URL")
                 .unwrap_or_else(|_| "https://api.semanticscholar.org/graph/v1".to_string()),
             arxiv_base_url: std::env::var("ARXIV_BASE_URL")
@@ -300,5 +314,33 @@ fn redact(value: &Option<String>) -> &'static str {
         "<redacted>"
     } else {
         "<unset>"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DEFAULT_LOCAL_ZOTERO_BASE_URL;
+    use super::ResearchConfig;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn has_zotero_api_key_ignores_blank_strings() {
+        let config = ResearchConfig {
+            zotero_api_key: Some("   ".to_string()),
+            ..ResearchConfig::default()
+        };
+
+        assert_eq!(config.has_zotero_api_key(), false);
+    }
+
+    #[test]
+    fn uses_local_zotero_api_treats_blank_api_key_as_unset() {
+        let config = ResearchConfig {
+            zotero_api_key: Some(String::new()),
+            zotero_base_url: DEFAULT_LOCAL_ZOTERO_BASE_URL.to_string(),
+            ..ResearchConfig::default()
+        };
+
+        assert_eq!(config.uses_local_zotero_api(), true);
     }
 }

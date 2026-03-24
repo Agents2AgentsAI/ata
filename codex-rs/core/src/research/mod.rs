@@ -4,6 +4,7 @@ pub mod researcher_prompt;
 pub mod tool_names;
 pub mod types;
 
+pub use crate::tools::handlers::research::build_research_config;
 pub use output_schema::research_output_schema;
 pub use prompt::ResearchPromptParams;
 pub use prompt::build_research_prompt;

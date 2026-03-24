@@ -1,5 +1,8 @@
 use super::*;
+use crate::tools::handlers::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
+use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
 
+#[allow(dead_code)]
 pub(super) fn create_search_tool_bm25_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -32,11 +35,13 @@ pub(super) fn create_search_tool_bm25_tool(app_tools: &HashMap<String, ToolInfo>
         name: SEARCH_TOOL_BM25_TOOL_NAME.to_string(),
         description,
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["query".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -66,11 +71,13 @@ pub(super) fn create_list_mcp_resources_tool() -> ToolSpec {
         name: "list_mcp_resources".to_string(),
         description: "Lists resources provided by MCP servers. Resources allow servers to share data that provides context to language models, such as files, database schemas, or application-specific information. Prefer resources over web search when possible.".to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: None,
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -100,11 +107,13 @@ pub(super) fn create_list_mcp_resource_templates_tool() -> ToolSpec {
         name: "list_mcp_resource_templates".to_string(),
         description: "Lists resource templates provided by MCP servers. Parameterized resource templates allow servers to share data that takes parameters and provides context to language models, such as files, database schemas, or application-specific information. Prefer resource templates over web search when possible.".to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: None,
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -136,10 +145,12 @@ pub(super) fn create_read_mcp_resource_tool() -> ToolSpec {
             "IMPORTANT: Always call list_mcp_resources first to discover available servers and URIs. Read a specific resource from an MCP server given the server name and resource URI."
                 .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["server".to_string(), "uri".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }

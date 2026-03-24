@@ -376,14 +376,19 @@ impl HistoryCell for UserHistoryCell {
 pub(crate) struct ReasoningSummaryCell {
     _header: String,
     content: String,
+    /// Session cwd used to render local file links inside the reasoning body.
+    cwd: PathBuf,
     transcript_only: bool,
 }
 
 impl ReasoningSummaryCell {
-    pub(crate) fn new(header: String, content: String, transcript_only: bool) -> Self {
+    /// Create a reasoning summary cell that will render local file links relative to the session
+    /// cwd active when the summary was recorded.
+    pub(crate) fn new(header: String, content: String, cwd: &Path, transcript_only: bool) -> Self {
         Self {
             _header: header,
             content,
+            cwd: cwd.to_path_buf(),
             transcript_only,
         }
     }
@@ -393,6 +398,7 @@ impl ReasoningSummaryCell {
         append_markdown(
             &self.content,
             Some((width as usize).saturating_sub(2)),
+            Some(self.cwd.as_path()),
             &mut lines,
         );
         let summary_style = Style::default().dim().italic();
@@ -789,6 +795,7 @@ fn exec_snippet(command: &[String]) -> String {
 pub fn new_approval_decision_cell(
     command: Vec<String>,
     decision: codex_protocol::protocol::ReviewDecision,
+    actor: ApprovalDecisionActor,
 ) -> Box<dyn HistoryCell> {
     use codex_protocol::protocol::NetworkPolicyRuleAction;
     use codex_protocol::protocol::ReviewDecision::*;
@@ -799,7 +806,7 @@ pub fn new_approval_decision_cell(
             (
                 "✔ ".green(),
                 vec![
-                    "You ".into(),
+                    actor.subject().into(),
                     "approved".bold(),
                     " codex to run ".into(),
                     snippet,
@@ -814,7 +821,7 @@ pub fn new_approval_decision_cell(
             (
                 "✔ ".green(),
                 vec![
-                    "You ".into(),
+                    actor.subject().into(),
                     "approved".bold(),
                     " codex to always run commands that start with ".into(),
                     snippet,
@@ -826,7 +833,7 @@ pub fn new_approval_decision_cell(
             (
                 "✔ ".green(),
                 vec![
-                    "You ".into(),
+                    actor.subject().into(),
                     "approved".bold(),
                     " codex to run ".into(),
                     snippet,
@@ -840,7 +847,7 @@ pub fn new_approval_decision_cell(
             NetworkPolicyRuleAction::Allow => (
                 "✔ ".green(),
                 vec![
-                    "You ".into(),
+                    actor.subject().into(),
                     "persisted".bold(),
                     " Codex network access to ".into(),
                     Span::from(network_policy_amendment.host).dim(),
@@ -849,7 +856,7 @@ pub fn new_approval_decision_cell(
             NetworkPolicyRuleAction::Deny => (
                 "✗ ".red(),
                 vec![
-                    "You ".into(),
+                    actor.subject().into(),
                     "denied".bold(),
                     " codex network access to ".into(),
                     Span::from(network_policy_amendment.host).dim(),
@@ -859,22 +866,28 @@ pub fn new_approval_decision_cell(
         },
         Denied => {
             let snippet = Span::from(exec_snippet(&command)).dim();
-            (
-                "✗ ".red(),
-                vec![
-                    "You ".into(),
+            let summary = match actor {
+                ApprovalDecisionActor::User => vec![
+                    actor.subject().into(),
                     "did not approve".bold(),
                     " codex to run ".into(),
                     snippet,
                 ],
-            )
+                ApprovalDecisionActor::Guardian => vec![
+                    "Request ".into(),
+                    "denied".bold(),
+                    " for codex to run ".into(),
+                    snippet,
+                ],
+            };
+            ("✗ ".red(), summary)
         }
         Abort => {
             let snippet = Span::from(exec_snippet(&command)).dim();
             (
                 "✗ ".red(),
                 vec![
-                    "You ".into(),
+                    actor.subject().into(),
                     "canceled".bold(),
                     " the request to run ".into(),
                     snippet,
@@ -888,6 +901,66 @@ pub fn new_approval_decision_cell(
         symbol,
         "  ",
     ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalDecisionActor {
+    User,
+    Guardian,
+}
+
+impl ApprovalDecisionActor {
+    fn subject(self) -> &'static str {
+        match self {
+            Self::User => "You ",
+            Self::Guardian => "Auto-reviewer ",
+        }
+    }
+}
+
+pub fn new_guardian_denied_patch_request(
+    files: Vec<String>,
+    change_count: usize,
+) -> Box<dyn HistoryCell> {
+    let mut summary = vec![
+        "Request ".into(),
+        "denied".bold(),
+        " for codex to apply ".into(),
+    ];
+    if files.len() == 1 {
+        summary.push("a patch touching ".into());
+        summary.push(Span::from(files[0].clone()).dim());
+    } else {
+        summary.push(format!("a patch touching {change_count} changes across ").into());
+        summary.push(Span::from(files.len().to_string()).dim());
+        summary.push(" files".into());
+    }
+
+    Box::new(PrefixedWrappedHistoryCell::new(
+        Line::from(summary),
+        "✗ ".red(),
+        "  ",
+    ))
+}
+
+pub fn new_guardian_denied_action_request(summary: String) -> Box<dyn HistoryCell> {
+    let line = Line::from(vec![
+        "Request ".into(),
+        "denied".bold(),
+        " for ".into(),
+        Span::from(summary).dim(),
+    ]);
+    Box::new(PrefixedWrappedHistoryCell::new(line, "✗ ".red(), "  "))
+}
+
+pub fn new_guardian_approved_action_request(summary: String) -> Box<dyn HistoryCell> {
+    let line = Line::from(vec![
+        "Request ".into(),
+        "approved".bold(),
+        " for ".into(),
+        Span::from(summary).dim(),
+    ]);
+    Box::new(PrefixedWrappedHistoryCell::new(line, "✔ ".green(), "  "))
 }
 
 /// Cyan history cell line showing the current review status.
@@ -998,11 +1071,15 @@ pub(crate) fn padded_emoji(emoji: &str) -> String {
 #[derive(Debug)]
 struct TooltipHistoryCell {
     tip: String,
+    cwd: PathBuf,
 }
 
 impl TooltipHistoryCell {
-    fn new(tip: String) -> Self {
-        Self { tip }
+    fn new(tip: String, cwd: &Path) -> Self {
+        Self {
+            tip,
+            cwd: cwd.to_path_buf(),
+        }
     }
 }
 
@@ -1017,6 +1094,7 @@ impl HistoryCell for TooltipHistoryCell {
         append_markdown(
             &format!("**Tip:** {}", self.tip),
             Some(wrap_width),
+            Some(self.cwd.as_path()),
             &mut lines,
         );
 
@@ -1116,7 +1194,7 @@ pub(crate) fn new_session_info(
                         &disabled_announcements,
                     )
                 })
-                .map(TooltipHistoryCell::new)
+                .map(|tip| TooltipHistoryCell::new(tip, &config.cwd))
         {
             parts.push(Box::new(tooltips));
         }
@@ -2055,8 +2133,12 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     PlanUpdateCell { explanation, plan }
 }
 
-pub(crate) fn new_proposed_plan(plan_markdown: String) -> ProposedPlanCell {
-    ProposedPlanCell { plan_markdown }
+/// Create a proposed-plan cell that snapshots the session cwd for later markdown rendering.
+pub(crate) fn new_proposed_plan(plan_markdown: String, cwd: &Path) -> ProposedPlanCell {
+    ProposedPlanCell {
+        plan_markdown,
+        cwd: cwd.to_path_buf(),
+    }
 }
 
 pub(crate) fn new_proposed_plan_stream(
@@ -2072,6 +2154,8 @@ pub(crate) fn new_proposed_plan_stream(
 #[derive(Debug)]
 pub(crate) struct ProposedPlanCell {
     plan_markdown: String,
+    /// Session cwd used to keep local file-link display aligned with live streamed plan rendering.
+    cwd: PathBuf,
 }
 
 #[derive(Debug)]
@@ -2090,7 +2174,12 @@ impl HistoryCell for ProposedPlanCell {
         let plan_style = proposed_plan_style();
         let wrap_width = width.saturating_sub(4).max(1) as usize;
         let mut body: Vec<Line<'static>> = Vec::new();
-        append_markdown(&self.plan_markdown, Some(wrap_width), &mut body);
+        append_markdown(
+            &self.plan_markdown,
+            Some(wrap_width),
+            Some(self.cwd.as_path()),
+            &mut body,
+        );
         if body.is_empty() {
             body.push(Line::from("(empty)".dim().italic()));
         }
@@ -2224,20 +2313,31 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
 
 pub(crate) fn new_image_generation_call(
     call_id: String,
-    status: String,
     revised_prompt: Option<String>,
+    saved_to: Option<String>,
 ) -> PlainHistoryCell {
     let detail = revised_prompt.unwrap_or_else(|| call_id.clone());
 
-    let lines: Vec<Line<'static>> = vec![
-        vec!["• ".dim(), "Generated Image".bold()].into(),
-        vec!["  └ ".dim(), format!("{status}: {detail}").dim()].into(),
+    let mut lines: Vec<Line<'static>> = vec![
+        vec!["• ".dim(), "Generated Image:".bold()].into(),
+        vec!["  └ ".dim(), detail.dim()].into(),
     ];
+    if let Some(saved_to) = saved_to {
+        lines.push(vec!["  └ ".dim(), format!("Saved to: {saved_to}").dim()].into());
+    }
 
     PlainHistoryCell { lines }
 }
 
-pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<dyn HistoryCell> {
+/// Create the reasoning history cell emitted at the end of a reasoning block.
+///
+/// The helper snapshots `cwd` into the returned cell so local file links render the same way they
+/// did while the turn was live, even if rendering happens after other app state has advanced.
+pub(crate) fn new_reasoning_summary_block(
+    full_reasoning_buffer: String,
+    cwd: &Path,
+) -> Box<dyn HistoryCell> {
+    let cwd = cwd.to_path_buf();
     let full_reasoning_buffer = full_reasoning_buffer.trim();
     if let Some(open) = full_reasoning_buffer.find("**") {
         let after_open = &full_reasoning_buffer[(open + 2)..];
@@ -2248,9 +2348,12 @@ pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<
             if after_close_idx < full_reasoning_buffer.len() {
                 let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
                 let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
+                // Preserve the session cwd so local file links render the same way in the
+                // collapsed reasoning block as they did while streaming live content.
                 return Box::new(ReasoningSummaryCell::new(
                     header_buffer,
                     summary_buffer,
+                    &cwd,
                     false,
                 ));
             }
@@ -2259,6 +2362,7 @@ pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<
     Box::new(ReasoningSummaryCell::new(
         "".to_string(),
         full_reasoning_buffer.to_string(),
+        &cwd,
         true,
     ))
 }
@@ -2478,7 +2582,7 @@ impl HistoryCell for DocumentCell {
         let mut lines = self.display_lines(width);
         lines.push(Line::from(""));
         let wrap_width = width.saturating_sub(2).max(1) as usize;
-        append_markdown(&self.final_content, Some(wrap_width), &mut lines);
+        append_markdown(&self.final_content, Some(wrap_width), None, &mut lines);
         lines
     }
 }
@@ -2522,6 +2626,12 @@ mod tests {
             .build()
             .await
             .expect("config")
+    }
+
+    fn test_cwd() -> PathBuf {
+        // These tests only need a stable absolute cwd; using temp_dir() avoids baking Unix- or
+        // Windows-specific root semantics into the fixtures.
+        std::env::temp_dir()
     }
 
     fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
@@ -2577,6 +2687,7 @@ mod tests {
             model_provider_id: "test-provider".to_string(),
             service_tier: None,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/tmp/project"),
             reasoning_effort: None,
@@ -2639,6 +2750,8 @@ mod tests {
             responses_api_engine_service_ttft_ms: 460,
             responses_api_engine_iapi_tbt_ms: 1_180,
             responses_api_engine_service_tbt_ms: 1_240,
+            turn_ttft_ms: 0,
+            turn_ttfm_ms: 0,
         };
         let cell = FinalMessageSeparator::new(Some(12), Some(summary));
         let rendered = render_lines(&cell.display_lines(600));
@@ -4053,6 +4166,7 @@ mod tests {
     fn reasoning_summary_block() {
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
+            &test_cwd(),
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
@@ -4068,6 +4182,7 @@ mod tests {
         let cell: Box<dyn HistoryCell> = Box::new(ReasoningSummaryCell::new(
             "High level reasoning".to_string(),
             summary.to_string(),
+            &test_cwd(),
             false,
         ));
         let width: u16 = 24;
@@ -4108,7 +4223,8 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_returns_reasoning_cell_when_feature_disabled() {
-        let cell = new_reasoning_summary_block("Detailed reasoning goes here.".to_string());
+        let cell =
+            new_reasoning_summary_block("Detailed reasoning goes here.".to_string(), &test_cwd());
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• Detailed reasoning goes here."]);
@@ -4121,6 +4237,7 @@ mod tests {
         config.model_supports_reasoning_summaries = Some(true);
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
+            &test_cwd(),
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
@@ -4129,8 +4246,10 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_falls_back_when_header_is_missing() {
-        let cell =
-            new_reasoning_summary_block("**High level reasoning without closing".to_string());
+        let cell = new_reasoning_summary_block(
+            "**High level reasoning without closing".to_string(),
+            &test_cwd(),
+        );
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• **High level reasoning without closing"]);
@@ -4138,14 +4257,17 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_falls_back_when_summary_is_missing() {
-        let cell =
-            new_reasoning_summary_block("**High level reasoning without closing**".to_string());
+        let cell = new_reasoning_summary_block(
+            "**High level reasoning without closing**".to_string(),
+            &test_cwd(),
+        );
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• High level reasoning without closing"]);
 
         let cell = new_reasoning_summary_block(
             "**High level reasoning without closing**\n\n  ".to_string(),
+            &test_cwd(),
         );
 
         let rendered = render_transcript(cell.as_ref());
@@ -4156,6 +4278,7 @@ mod tests {
     fn reasoning_summary_block_splits_header_and_summary_when_present() {
         let cell = new_reasoning_summary_block(
             "**High level plan**\n\nWe should fix the bug next.".to_string(),
+            &test_cwd(),
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));

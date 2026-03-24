@@ -83,10 +83,13 @@ mod match_engine;
 mod query_endpoints;
 #[path = "zotero/search_notes.rs"]
 mod search_notes;
+#[path = "zotero/write_endpoints.rs"]
+mod write_endpoints;
 
 use core::*;
 pub(crate) use item_endpoints::*;
 pub(crate) use query_endpoints::*;
+pub(crate) use write_endpoints::*;
 
 use budget::apply_annotations_budget;
 use budget::apply_attachments_budget;

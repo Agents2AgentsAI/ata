@@ -1,6 +1,14 @@
 use serde::Serialize;
 
 use super::*;
+use crate::types::ZoteroAddItemsToCollectionParams;
+use crate::types::ZoteroCreateAttachmentLinkParams;
+use crate::types::ZoteroCreateCollectionParams;
+use crate::types::ZoteroCreateItemsParams;
+use crate::types::ZoteroFindOrCreateCollectionParams;
+use crate::types::ZoteroItemUpdatePayload;
+use crate::types::ZoteroQuickSearchMode;
+use crate::types::ZoteroUpdateItemsParams;
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct NormalizedScope {
@@ -27,6 +35,7 @@ pub(super) struct NormalizedSearchParams {
     pub(super) offset: u32,
     pub(super) limit: u32,
     pub(super) item_type: Option<String>,
+    pub(super) qmode: Option<ZoteroQuickSearchMode>,
     pub(super) max_chars_per_item: Option<u32>,
 }
 
@@ -106,6 +115,48 @@ pub(super) struct NormalizedCollectionItemsParams {
     pub(super) item_type: Option<String>,
     pub(super) max_chars_per_item: Option<u32>,
 }
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct NormalizedWriteScopeParams {
+    pub(super) scope: NormalizedScope,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct NormalizedCreateCollectionParams {
+    pub(super) name: String,
+    pub(super) parent_collection_key: Option<String>,
+    pub(super) scope: NormalizedScope,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct NormalizedCreateItemsParams {
+    pub(super) items: Vec<serde_json::Value>,
+    pub(super) scope: NormalizedScope,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct NormalizedUpdateItemsParams {
+    pub(super) items: Vec<ZoteroItemUpdatePayload>,
+    pub(super) scope: NormalizedScope,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct NormalizedAddItemsToCollectionParams {
+    pub(super) collection_key: String,
+    pub(super) item_keys: Vec<String>,
+    pub(super) scope: NormalizedScope,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct NormalizedCreateAttachmentLinkParams {
+    pub(super) parent_item_key: String,
+    pub(super) title: String,
+    pub(super) url: String,
+    pub(super) content_type: Option<String>,
+    pub(super) collections: Vec<String>,
+    pub(super) tags: Vec<String>,
+    pub(super) scope: NormalizedScope,
+}
 pub(super) fn normalize_tags_params(
     toolkit: &ResearchToolkit,
     params: ZoteroTagsParams,
@@ -121,6 +172,25 @@ pub(super) fn normalize_tags_params(
         scope: to_normalized_scope(&scope),
         offset: params.offset.unwrap_or(0),
         limit: params.limit.unwrap_or(DEFAULT_TAGS_LIMIT).clamp(1, 200),
+    })
+}
+
+pub(super) fn normalize_write_scope_params(
+    toolkit: &ResearchToolkit,
+    library_type: Option<&str>,
+    library_id: Option<&str>,
+    tool_name: &'static str,
+) -> Result<NormalizedWriteScopeParams> {
+    if !toolkit.config().has_zotero_api_key() {
+        return Err(ResearchError::NotConfigured {
+            tool: tool_name,
+            reason: "requires Zotero web API write access (`zotero_api_key`)".to_string(),
+        });
+    }
+
+    let scope = resolve_scope(toolkit, library_type, library_id, tool_name)?;
+    Ok(NormalizedWriteScopeParams {
+        scope: to_normalized_scope(&scope),
     })
 }
 
@@ -173,6 +243,7 @@ pub(super) async fn normalize_search_params(
         offset: params.offset.unwrap_or(0),
         limit: params.limit.unwrap_or(DEFAULT_SEARCH_LIMIT).clamp(1, 100),
         item_type: normalize_optional_string(params.item_type),
+        qmode: params.qmode,
         max_chars_per_item: params.max_chars_per_item,
     })
 }
@@ -203,6 +274,198 @@ pub(super) async fn normalize_item_params(
         max_chars_per_item: params.max_chars_per_item,
         include_attachments: params.include_attachments.unwrap_or(false),
         include_fulltext_resolution: params.include_fulltext_resolution.unwrap_or(false),
+    })
+}
+
+pub(super) fn normalize_create_collection_params(
+    toolkit: &ResearchToolkit,
+    params: ZoteroCreateCollectionParams,
+    tool_name: &'static str,
+) -> Result<NormalizedCreateCollectionParams> {
+    let normalized_scope = normalize_write_scope_params(
+        toolkit,
+        params.library_type.as_deref(),
+        params.library_id.as_deref(),
+        tool_name,
+    )?;
+    let name = params.name.trim().to_string();
+    if name.is_empty() {
+        return Err(ResearchError::InvalidInput(format!(
+            "{tool_name} name must not be empty"
+        )));
+    }
+    let parent_collection_key = normalize_optional_string(params.parent_collection_key);
+    Ok(NormalizedCreateCollectionParams {
+        name,
+        parent_collection_key,
+        scope: normalized_scope.scope,
+    })
+}
+
+pub(super) fn normalize_find_or_create_collection_params(
+    toolkit: &ResearchToolkit,
+    params: ZoteroFindOrCreateCollectionParams,
+    tool_name: &'static str,
+) -> Result<NormalizedCreateCollectionParams> {
+    normalize_create_collection_params(
+        toolkit,
+        ZoteroCreateCollectionParams {
+            name: params.name,
+            parent_collection_key: params.parent_collection_key,
+            library_type: params.library_type,
+            library_id: params.library_id,
+        },
+        tool_name,
+    )
+}
+
+pub(super) fn normalize_create_items_params(
+    toolkit: &ResearchToolkit,
+    params: ZoteroCreateItemsParams,
+    tool_name: &'static str,
+) -> Result<NormalizedCreateItemsParams> {
+    let normalized_scope = normalize_write_scope_params(
+        toolkit,
+        params.library_type.as_deref(),
+        params.library_id.as_deref(),
+        tool_name,
+    )?;
+    if params.items.is_empty() {
+        return Err(ResearchError::InvalidInput(format!(
+            "{tool_name} items must not be empty"
+        )));
+    }
+    for (index, item) in params.items.iter().enumerate() {
+        if !item.is_object() {
+            return Err(ResearchError::InvalidInput(format!(
+                "{tool_name} items[{index}] must be an object"
+            )));
+        }
+    }
+    Ok(NormalizedCreateItemsParams {
+        items: params.items,
+        scope: normalized_scope.scope,
+    })
+}
+
+pub(super) fn normalize_update_items_params(
+    toolkit: &ResearchToolkit,
+    params: ZoteroUpdateItemsParams,
+    tool_name: &'static str,
+) -> Result<NormalizedUpdateItemsParams> {
+    let normalized_scope = normalize_write_scope_params(
+        toolkit,
+        params.library_type.as_deref(),
+        params.library_id.as_deref(),
+        tool_name,
+    )?;
+    if params.items.is_empty() {
+        return Err(ResearchError::InvalidInput(format!(
+            "{tool_name} items must not be empty"
+        )));
+    }
+    for (index, item) in params.items.iter().enumerate() {
+        if item.item_key.trim().is_empty() {
+            return Err(ResearchError::InvalidInput(format!(
+                "{tool_name} items[{index}].item_key must not be empty"
+            )));
+        }
+        if !item.patch.is_object() {
+            return Err(ResearchError::InvalidInput(format!(
+                "{tool_name} items[{index}].patch must be an object"
+            )));
+        }
+    }
+    Ok(NormalizedUpdateItemsParams {
+        items: params.items,
+        scope: normalized_scope.scope,
+    })
+}
+
+pub(super) fn normalize_add_items_to_collection_params(
+    toolkit: &ResearchToolkit,
+    params: ZoteroAddItemsToCollectionParams,
+    tool_name: &'static str,
+) -> Result<NormalizedAddItemsToCollectionParams> {
+    let normalized_scope = normalize_write_scope_params(
+        toolkit,
+        params.library_type.as_deref(),
+        params.library_id.as_deref(),
+        tool_name,
+    )?;
+    let collection_key = params.collection_key.trim().to_string();
+    if collection_key.is_empty() {
+        return Err(ResearchError::InvalidInput(format!(
+            "{tool_name} collection_key must not be empty"
+        )));
+    }
+    let item_keys = params
+        .item_keys
+        .into_iter()
+        .map(|item_key| item_key.trim().to_string())
+        .filter(|item_key| !item_key.is_empty())
+        .collect::<Vec<_>>();
+    if item_keys.is_empty() {
+        return Err(ResearchError::InvalidInput(format!(
+            "{tool_name} item_keys must contain at least one non-empty key"
+        )));
+    }
+    Ok(NormalizedAddItemsToCollectionParams {
+        collection_key,
+        item_keys,
+        scope: normalized_scope.scope,
+    })
+}
+
+pub(super) fn normalize_create_attachment_link_params(
+    toolkit: &ResearchToolkit,
+    params: ZoteroCreateAttachmentLinkParams,
+    tool_name: &'static str,
+) -> Result<NormalizedCreateAttachmentLinkParams> {
+    let normalized_scope = normalize_write_scope_params(
+        toolkit,
+        params.library_type.as_deref(),
+        params.library_id.as_deref(),
+        tool_name,
+    )?;
+    let parent_item_key = params.parent_item_key.trim().to_string();
+    let title = params.title.trim().to_string();
+    let url = params.url.trim().to_string();
+    if parent_item_key.is_empty() {
+        return Err(ResearchError::InvalidInput(format!(
+            "{tool_name} parent_item_key must not be empty"
+        )));
+    }
+    if title.is_empty() {
+        return Err(ResearchError::InvalidInput(format!(
+            "{tool_name} title must not be empty"
+        )));
+    }
+    if url.is_empty() {
+        return Err(ResearchError::InvalidInput(format!(
+            "{tool_name} url must not be empty"
+        )));
+    }
+    Ok(NormalizedCreateAttachmentLinkParams {
+        parent_item_key,
+        title,
+        url,
+        content_type: normalize_optional_string(params.content_type),
+        collections: params
+            .collections
+            .unwrap_or_default()
+            .into_iter()
+            .map(|collection| collection.trim().to_string())
+            .filter(|collection| !collection.is_empty())
+            .collect(),
+        tags: params
+            .tags
+            .unwrap_or_default()
+            .into_iter()
+            .map(|tag| tag.trim().to_string())
+            .filter(|tag| !tag.is_empty())
+            .collect(),
+        scope: normalized_scope.scope,
     })
 }
 

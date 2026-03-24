@@ -91,7 +91,7 @@ const LANGUAGE_OPTIONS: &[(&str, &str)] = &[
 impl VoiceSetupView {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        voice_enabled: bool,
+        startup_enabled: bool,
         tts_enabled: bool,
         stt_enabled: bool,
         verbosity: VoiceVerbosity,
@@ -133,10 +133,10 @@ impl VoiceSetupView {
 
         let items = vec![
             VoiceSetupItem {
-                name: "Voice Mode".to_string(),
-                description: "Full voice mode (STT + TTS)".to_string(),
+                name: "Auto-start".to_string(),
+                description: "Start new ATA sessions with /voice already on".to_string(),
                 kind: VoiceSetupItemKind::Toggle {
-                    enabled: voice_enabled,
+                    enabled: startup_enabled,
                 },
             },
             VoiceSetupItem {
@@ -207,7 +207,10 @@ impl VoiceSetupView {
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Voice mode setup".bold()));
         header.push(Line::from(
-            "Toggle TTS and STT independently. Changes are saved to config.toml.".dim(),
+            "Save voice defaults and apply them to this ATA session now.".dim(),
+        ));
+        header.push(Line::from(
+            "Other open ATA sessions pick up the new defaults after you reopen them.".dim(),
         ));
 
         if !self.api_key_available {
@@ -662,8 +665,8 @@ impl BottomPaneView for VoiceSetupView {
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         // Extract toggle states.
-        let voice_enabled = self.items.iter().find_map(|i| {
-            if i.name == "Voice Mode" {
+        let startup_enabled = self.items.iter().find_map(|i| {
+            if i.name == "Auto-start" {
                 if let VoiceSetupItemKind::Toggle { enabled } = &i.kind {
                     Some(*enabled)
                 } else {
@@ -709,7 +712,7 @@ impl BottomPaneView for VoiceSetupView {
         let verbosity = self.current_verbosity();
 
         self.app_event_tx.send(AppEvent::UpdateVoiceSettings {
-            voice_enabled,
+            startup_enabled: startup_enabled.unwrap_or(false),
             tts_enabled,
             stt_enabled,
             elevenlabs_api_key: api_key,
@@ -829,4 +832,51 @@ fn api_key_edit_hint_line() -> Line<'static> {
         key_hint::plain(KeyCode::Esc).into(),
         " to cancel".into(),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assert_matches::assert_matches;
+    use pretty_assertions::assert_eq;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn voice_setup_submit_sends_startup_default_and_current_settings() {
+        let (tx_raw, mut rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx_raw);
+        let mut view = VoiceSetupView::new(
+            true,
+            false,
+            true,
+            VoiceVerbosity::Concise,
+            Some("sk-test".to_string()),
+            Some("en".to_string()),
+            Some(1.1),
+            app_event_tx,
+        );
+
+        let event = view.on_ctrl_c();
+
+        assert_eq!(event, CancellationEvent::Handled);
+        assert!(view.is_complete());
+        assert_matches!(
+            rx.try_recv().expect("voice setup should submit an update"),
+            AppEvent::UpdateVoiceSettings {
+                startup_enabled,
+                tts_enabled,
+                stt_enabled,
+                elevenlabs_api_key,
+                language_code,
+                speed,
+                verbosity,
+            } if startup_enabled
+                && !tts_enabled
+                && stt_enabled
+                && elevenlabs_api_key.is_none()
+                && language_code == Some(Some("en".to_string()))
+                && speed == Some(1.1)
+                && verbosity == VoiceVerbosity::Concise
+        );
+    }
 }

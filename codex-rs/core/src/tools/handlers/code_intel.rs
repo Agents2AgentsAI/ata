@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_treesitter::FileMark;
 use codex_treesitter::GrepScope;
 use codex_treesitter::SymbolKind;
@@ -16,8 +15,8 @@ use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::function_tool::FunctionCallError;
 use crate::state::MultiRootState;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::handlers::HANDLER_DEFAULT_LIMIT;
 use crate::tools::handlers::HANDLER_MAX_RESULT_BYTES;
 use crate::tools::handlers::HANDLER_MAX_RESULTS;
@@ -110,6 +109,8 @@ enum ResponseFormat {
 
 #[async_trait]
 impl ToolHandler for CodeIntelToolHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -138,7 +139,7 @@ impl ToolHandler for CodeIntelToolHandler {
         )
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let turn_cwd = invocation.turn.cwd.clone();
         let payload = invocation.payload;
 
@@ -630,10 +631,7 @@ impl ToolHandler for CodeIntelToolHandler {
             output
         };
 
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(output),
-            success: Some(true),
-        })
+        Ok(FunctionToolOutput::from_text(output, Some(true)))
     }
 }
 
@@ -1051,10 +1049,12 @@ pub(crate) fn create_code_intel_tool() -> ToolSpec {
         name: "code_intel".to_string(),
         description: CODE_INTEL_TOOL_DESCRIPTION.to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["operation".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }

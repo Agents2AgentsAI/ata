@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use clap::Args;
+use clap::CommandFactory;
 use clap::Parser;
 
 use crate::daemon;
@@ -7,6 +9,16 @@ use crate::job::loader;
 use crate::storage::db::SchedulerDb;
 use crate::storage::jobs_repo;
 use crate::storage::runs_repo;
+
+fn parse_positive_usize(input: &str) -> std::result::Result<usize, String> {
+    let value = input
+        .parse::<usize>()
+        .map_err(|err| format!("invalid usize value '{input}': {err}"))?;
+    if value == 0 {
+        return Err("value must be at least 1".to_string());
+    }
+    Ok(value)
+}
 
 // ── Jobs subcommand ──────────────────────────────────────────────────
 
@@ -18,6 +30,8 @@ pub struct JobsCli {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum JobsCommand {
+    /// Search jobs commands and print simplified manuals for the best matches.
+    SearchCommands(SearchCommandsArgs),
     /// List all scheduled jobs with status and next run time.
     List,
     /// Show details for a specific job.
@@ -59,6 +73,15 @@ pub struct RunIdArg {
     pub run_id: String,
 }
 
+#[derive(Debug, Args)]
+pub struct SearchCommandsArgs {
+    #[arg(value_name = "QUERY", num_args = 1.., required = true)]
+    pub query: Vec<String>,
+
+    #[arg(long, default_value_t = 3, value_parser = parse_positive_usize)]
+    pub limit: usize,
+}
+
 // ── Scheduler subcommand ─────────────────────────────────────────────
 
 #[derive(Debug, Parser)]
@@ -69,6 +92,8 @@ pub struct SchedulerCli {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum SchedulerCommand {
+    /// Search scheduler commands and print simplified manuals for the best matches.
+    SearchCommands(SearchCommandsArgs),
     /// Start the scheduler daemon.
     Start(SchedulerStartArgs),
     /// Stop the running scheduler daemon.
@@ -92,6 +117,18 @@ pub struct SchedulerStartArgs {
 
 pub async fn run_jobs_command(cli: JobsCli) -> anyhow::Result<()> {
     match cli.command {
+        JobsCommand::SearchCommands(args) => {
+            let query = args.query.join(" ");
+            let matches = search_command_catalog(&query, args.limit, jobs_command_catalog());
+            if matches.is_empty() {
+                println!("No matching jobs command found for \"{}\".", query.trim());
+                return Ok(());
+            }
+            let best_match = matches[0];
+            let manual = render_command_manual(JobsCli::command(), "ata jobs", best_match)?;
+            println!("{}", render_search_results(&matches, &manual));
+            Ok(())
+        }
         JobsCommand::List => cmd_list().await,
         JobsCommand::Show(arg) => cmd_show(&arg.name).await,
         JobsCommand::Create(arg) => cmd_create(&arg.name).await,
@@ -106,6 +143,22 @@ pub async fn run_jobs_command(cli: JobsCli) -> anyhow::Result<()> {
 
 pub async fn run_scheduler_command(cli: SchedulerCli) -> anyhow::Result<()> {
     match cli.command {
+        SchedulerCommand::SearchCommands(args) => {
+            let query = args.query.join(" ");
+            let matches = search_command_catalog(&query, args.limit, scheduler_command_catalog());
+            if matches.is_empty() {
+                println!(
+                    "No matching scheduler command found for \"{}\".",
+                    query.trim()
+                );
+                return Ok(());
+            }
+            let best_match = matches[0];
+            let manual =
+                render_command_manual(SchedulerCli::command(), "ata scheduler", best_match)?;
+            println!("{}", render_search_results(&matches, &manual));
+            Ok(())
+        }
         SchedulerCommand::Start(args) => {
             if args.daemon {
                 daemon::start_daemon_background()
@@ -593,8 +646,413 @@ fn cmd_status() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+struct CommandCatalogEntry {
+    command: &'static str,
+    description: &'static str,
+    core_args: &'static [&'static str],
+    aliases: &'static [&'static str],
+    tags: &'static [&'static str],
+    examples: &'static [&'static str],
+}
+
+fn search_command_catalog(
+    query: &str,
+    limit: usize,
+    catalog: &'static [CommandCatalogEntry],
+) -> Vec<&'static CommandCatalogEntry> {
+    let normalized_query = query.trim().to_lowercase();
+    let tokens = tokenize_query(&normalized_query);
+    let mut matches = catalog
+        .iter()
+        .filter_map(|entry| {
+            let score = score_catalog_entry(entry, &normalized_query, &tokens);
+            (score > 0).then_some((score, entry))
+        })
+        .collect::<Vec<_>>();
+    matches.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| left.1.command.cmp(right.1.command))
+    });
+    matches
+        .into_iter()
+        .take(limit)
+        .map(|(_, entry)| entry)
+        .collect()
+}
+
+fn render_command_manual(
+    mut command: clap::Command,
+    root_name: &'static str,
+    entry: &CommandCatalogEntry,
+) -> anyhow::Result<String> {
+    command = command
+        .name(root_name.rsplit(' ').next().unwrap_or(root_name))
+        .bin_name(root_name)
+        .disable_help_subcommand(true);
+    let mut full_command = root_name.to_string();
+    for segment in entry.command.split(' ') {
+        full_command.push(' ');
+        full_command.push_str(segment);
+        command = command.find_subcommand(segment).cloned().ok_or_else(|| {
+            anyhow::anyhow!("missing subcommand `{segment}` for `{full_command}`")
+        })?;
+    }
+    command = command.bin_name(full_command);
+    let arg_ids = command
+        .get_arguments()
+        .map(|arg| arg.get_id().to_string())
+        .collect::<Vec<_>>();
+    for arg_id in arg_ids {
+        let keep = arg_id == "help" || entry.core_args.iter().any(|candidate| *candidate == arg_id);
+        if !keep {
+            command = command.mut_arg(&arg_id, |arg| arg.hide(true));
+        }
+    }
+    let mut buffer = Vec::new();
+    command.write_long_help(&mut buffer)?;
+    let manual = String::from_utf8_lossy(&buffer).into_owned();
+    let normalize = |line: &str| {
+        line.trim()
+            .trim_end_matches(|character: char| ['.', ':'].contains(&character))
+            .to_ascii_lowercase()
+    };
+    let mut lines = manual.lines().peekable();
+    while lines.peek().is_some_and(|line| line.trim().is_empty()) {
+        lines.next();
+    }
+    if let Some(line) = lines.peek().copied()
+        && normalize(line) == normalize(entry.description)
+    {
+        lines.next();
+        while lines.peek().is_some_and(|line| line.trim().is_empty()) {
+            lines.next();
+        }
+    }
+    let manual_body = lines.collect::<Vec<_>>().join("\n");
+    Ok(format!(
+        "Command: {}\n{}\n\n{}",
+        entry.command, entry.description, manual_body
+    ))
+}
+
+fn render_search_results(matches: &[&CommandCatalogEntry], manual: &str) -> String {
+    let shortlist = matches
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| format!("{}. {} — {}", index + 1, entry.command, entry.description))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("Matches:\n{shortlist}\n\nBest match manual:\n\n{manual}")
+}
+
+fn tokenize_query(query: &str) -> Vec<&str> {
+    query
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
+fn score_catalog_entry(
+    entry: &CommandCatalogEntry,
+    normalized_query: &str,
+    tokens: &[&str],
+) -> u32 {
+    let command = entry.command.to_lowercase();
+    let aliases = entry
+        .aliases
+        .iter()
+        .map(|alias| alias.to_lowercase())
+        .collect::<Vec<_>>();
+    let tags = entry
+        .tags
+        .iter()
+        .map(|tag| tag.to_lowercase())
+        .collect::<Vec<_>>();
+    let description = entry.description.to_lowercase();
+    let examples = entry
+        .examples
+        .iter()
+        .map(|example| example.to_lowercase())
+        .collect::<Vec<_>>();
+    let search_text = std::iter::once(command.as_str())
+        .chain(aliases.iter().map(String::as_str))
+        .chain(tags.iter().map(String::as_str))
+        .chain(std::iter::once(description.as_str()))
+        .chain(examples.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let mut score = 0;
+    if !normalized_query.is_empty() {
+        if command == normalized_query {
+            score += 500;
+        }
+        if command.contains(normalized_query) {
+            score += 220;
+        }
+        if aliases.iter().any(|alias| alias == normalized_query) {
+            score += 200;
+        }
+        if aliases.iter().any(|alias| alias.contains(normalized_query)) {
+            score += 160;
+        }
+        if tags.iter().any(|tag| tag == normalized_query) {
+            score += 140;
+        }
+        if description.contains(normalized_query) {
+            score += 120;
+        }
+        if examples
+            .iter()
+            .any(|example| example.contains(normalized_query))
+        {
+            score += 100;
+        }
+    }
+
+    let mut matched_tokens = 0_u32;
+    for token in tokens {
+        let mut token_score = 0;
+        if command
+            .split(|character: char| !character.is_ascii_alphanumeric())
+            .any(|word| word == *token)
+        {
+            token_score += 55;
+        } else if command.contains(token) {
+            token_score += 35;
+        }
+        if aliases.iter().any(|alias| {
+            alias
+                .split(|character: char| !character.is_ascii_alphanumeric())
+                .any(|word| word == *token)
+        }) {
+            token_score += 45;
+        } else if aliases.iter().any(|alias| alias.contains(token)) {
+            token_score += 25;
+        }
+        if tags.iter().any(|tag| tag == token) {
+            token_score += 35;
+        } else if tags.iter().any(|tag| tag.contains(token)) {
+            token_score += 20;
+        }
+        if description.contains(token) {
+            token_score += 18;
+        }
+        if examples.iter().any(|example| example.contains(token)) {
+            token_score += 12;
+        }
+        if token_score == 0 && search_text.contains(token) {
+            token_score += 8;
+        }
+        if token_score > 0 {
+            matched_tokens += 1;
+            score += token_score;
+        }
+    }
+
+    if !tokens.is_empty() && matched_tokens == tokens.len() as u32 {
+        score += 90;
+    }
+
+    score
+}
+
+fn jobs_command_catalog() -> &'static [CommandCatalogEntry] {
+    const CATALOG: &[CommandCatalogEntry] = &[
+        CommandCatalogEntry {
+            command: "list",
+            description: "List all scheduled jobs with status and next run time.",
+            core_args: &[],
+            aliases: &["show-jobs", "list-jobs"],
+            tags: &["jobs", "list", "status"],
+            examples: &["show all jobs"],
+        },
+        CommandCatalogEntry {
+            command: "show",
+            description: "Show details for a specific job.",
+            core_args: &["name"],
+            aliases: &["inspect-job", "job-details"],
+            tags: &["jobs", "show", "details"],
+            examples: &["show details for a job"],
+        },
+        CommandCatalogEntry {
+            command: "create",
+            description: "Create a template job TOML file.",
+            core_args: &["name"],
+            aliases: &["new-job", "create-job"],
+            tags: &["jobs", "create", "template"],
+            examples: &["create a new scheduled job"],
+        },
+        CommandCatalogEntry {
+            command: "delete",
+            description: "Delete a job and its run history.",
+            core_args: &["name"],
+            aliases: &["remove-job", "delete-job"],
+            tags: &["jobs", "delete", "remove"],
+            examples: &["delete a scheduled job"],
+        },
+        CommandCatalogEntry {
+            command: "pause",
+            description: "Pause scheduling for a job.",
+            core_args: &["name"],
+            aliases: &["disable-job"],
+            tags: &["jobs", "pause", "disable"],
+            examples: &["pause a scheduled job"],
+        },
+        CommandCatalogEntry {
+            command: "resume",
+            description: "Resume scheduling for a paused job.",
+            core_args: &["name"],
+            aliases: &["enable-job", "unpause-job"],
+            tags: &["jobs", "resume", "enable"],
+            examples: &["resume a paused job"],
+        },
+        CommandCatalogEntry {
+            command: "run",
+            description: "Trigger an immediate run of a job.",
+            core_args: &["name"],
+            aliases: &["run-job-now", "trigger-job"],
+            tags: &["jobs", "run", "execute"],
+            examples: &["run a job immediately"],
+        },
+        CommandCatalogEntry {
+            command: "history",
+            description: "Show run history for a job.",
+            core_args: &["name"],
+            aliases: &["job-history", "show-history"],
+            tags: &["jobs", "history", "runs"],
+            examples: &["show job run history"],
+        },
+        CommandCatalogEntry {
+            command: "logs",
+            description: "Show full output of a specific run.",
+            core_args: &["run_id"],
+            aliases: &["run-logs", "job-logs"],
+            tags: &["jobs", "logs", "output"],
+            examples: &["show logs for a run"],
+        },
+    ];
+
+    CATALOG
+}
+
+fn scheduler_command_catalog() -> &'static [CommandCatalogEntry] {
+    const CATALOG: &[CommandCatalogEntry] = &[
+        CommandCatalogEntry {
+            command: "start",
+            description: "Start the scheduler daemon.",
+            core_args: &["daemon"],
+            aliases: &["start-daemon", "start-scheduler"],
+            tags: &["scheduler", "daemon", "start", "background"],
+            examples: &["start the scheduler daemon in the background"],
+        },
+        CommandCatalogEntry {
+            command: "stop",
+            description: "Stop the running scheduler daemon.",
+            core_args: &[],
+            aliases: &["stop-daemon", "stop-scheduler"],
+            tags: &["scheduler", "daemon", "stop"],
+            examples: &["stop the scheduler daemon"],
+        },
+        CommandCatalogEntry {
+            command: "status",
+            description: "Show scheduler daemon status.",
+            core_args: &[],
+            aliases: &["scheduler-status", "daemon-status"],
+            tags: &["scheduler", "daemon", "status"],
+            examples: &["show whether the scheduler is running"],
+        },
+        CommandCatalogEntry {
+            command: "install",
+            description: "Install the scheduler as a launchd service (macOS).",
+            core_args: &[],
+            aliases: &["install-daemon", "setup-scheduler"],
+            tags: &["scheduler", "install", "launchd"],
+            examples: &["install the scheduler daemon"],
+        },
+        CommandCatalogEntry {
+            command: "uninstall",
+            description: "Uninstall the scheduler from launchd (macOS).",
+            core_args: &[],
+            aliases: &["remove-daemon", "uninstall-scheduler"],
+            tags: &["scheduler", "uninstall", "launchd"],
+            examples: &["remove the scheduler daemon"],
+        },
+    ];
+
+    CATALOG
+}
+
 fn format_timestamp(ts: i64) -> String {
     chrono::DateTime::from_timestamp(ts, 0)
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
         .unwrap_or_else(|| ts.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+    use pretty_assertions::assert_eq;
+
+    use super::JobsCli;
+    use super::jobs_command_catalog;
+    use super::render_command_manual;
+    use super::render_search_results;
+    use super::scheduler_command_catalog;
+    use super::search_command_catalog;
+
+    #[test]
+    fn search_commands_prefers_job_run_for_execute_queries() {
+        let result = search_command_catalog("run job now", 1, jobs_command_catalog());
+        assert_eq!(result.first().map(|entry| entry.command), Some("run"));
+    }
+
+    #[test]
+    fn render_jobs_manual_hides_optional_history_limit() {
+        let entry = search_command_catalog("job history", 1, jobs_command_catalog())
+            .into_iter()
+            .next()
+            .expect("expected history match");
+        let manual =
+            render_command_manual(JobsCli::command(), "ata jobs", entry).expect("expected manual");
+        assert!(manual.contains("Command: history"));
+        assert!(manual.contains("Show run history for a job."));
+        assert_eq!(manual.matches("Show run history for a job").count(), 1);
+        assert!(manual.contains("Usage: ata jobs history <NAME>"));
+        assert!(manual.contains("<NAME>"));
+        assert!(!manual.contains("--limit"));
+    }
+
+    #[test]
+    fn render_scheduler_manual_keeps_daemon_flag() {
+        let entry =
+            search_command_catalog("start scheduler background", 1, scheduler_command_catalog())
+                .into_iter()
+                .next()
+                .expect("expected start match");
+        let manual = render_command_manual(super::SchedulerCli::command(), "ata scheduler", entry)
+            .expect("expected manual");
+        assert!(manual.contains("Command: start"));
+        assert!(manual.contains("Start the scheduler daemon."));
+        assert_eq!(manual.matches("Start the scheduler daemon").count(), 1);
+        assert!(manual.contains("Usage: ata scheduler start"));
+        assert!(manual.contains("--daemon"));
+    }
+
+    #[test]
+    fn render_search_results_shows_shortlist_then_best_manual() {
+        let matches = search_command_catalog("run job now", 3, jobs_command_catalog());
+        let manual =
+            render_command_manual(JobsCli::command(), "ata jobs", matches[0]).expect("manual");
+        let rendered = render_search_results(&matches, &manual);
+        assert!(rendered.contains("Matches:"));
+        assert!(rendered.contains("1. run — Trigger an immediate run of a job."));
+        assert!(rendered.contains("\n2. "));
+        assert!(rendered.contains("\n3. "));
+        assert!(rendered.contains("Best match manual:"));
+        assert_eq!(rendered.matches("Usage: ata jobs").count(), 1);
+    }
 }

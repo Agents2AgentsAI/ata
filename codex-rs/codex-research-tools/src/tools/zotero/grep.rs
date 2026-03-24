@@ -342,6 +342,7 @@ async fn load_library_candidates(
             offset,
             limit: page_limit,
             item_type: normalized.item_type.as_deref(),
+            qmode: None,
             sort: if normalized.candidate_strategy == ZoteroGrepCandidateStrategy::RecentModified {
                 Some("dateModified")
             } else {

@@ -13,7 +13,6 @@ use codex_data_tools::types::DatasetSearchParams;
 use codex_data_tools::types::KaggleCompetitionDownloadParams;
 use codex_data_tools::types::KaggleCompetitionFilesParams;
 use codex_data_tools::types::KaggleCompetitionsParams;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_secrets::SecretName;
 use codex_secrets::SecretScope;
 use codex_secrets::SecretsBackendKind;
@@ -24,8 +23,8 @@ use serde::Serialize;
 
 use crate::config::DataToolsToml;
 use crate::function_tool::FunctionCallError;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
@@ -44,7 +43,7 @@ impl DataBridgeHandler {
         &self,
         tool_name: &str,
         arguments: &str,
-    ) -> Result<ToolOutput, FunctionCallError> {
+    ) -> Result<FunctionToolOutput, FunctionCallError> {
         let fut = self.dispatch_tool_call(tool_name, arguments);
         let guarded = AssertUnwindSafe(fut).catch_unwind().await;
         match guarded {
@@ -67,7 +66,7 @@ impl DataBridgeHandler {
         &self,
         tool_name: &str,
         arguments: &str,
-    ) -> Result<ToolOutput, FunctionCallError> {
+    ) -> Result<FunctionToolOutput, FunctionCallError> {
         match tool_name {
             "dataset_search" => {
                 let params: DatasetSearchParams = parse_arguments(arguments)?;
@@ -162,11 +161,13 @@ impl DataBridgeHandler {
 
 #[async_trait]
 impl ToolHandler for DataBridgeHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             tool_name, payload, ..
         } = invocation;
@@ -289,20 +290,15 @@ fn panic_payload_to_message(payload: &(dyn Any + Send)) -> String {
     "non-string panic payload".to_string()
 }
 
-fn serialize_tool_output<T>(value: &T) -> Result<ToolOutput, FunctionCallError>
+fn serialize_tool_output<T>(value: &T) -> Result<FunctionToolOutput, FunctionCallError>
 where
     T: Serialize,
 {
-    let body = serde_json::to_string(value)
-        .map(FunctionCallOutputBody::Text)
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to serialize data output: {err}"))
-        })?;
+    let text = serde_json::to_string(value).map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to serialize data output: {err}"))
+    })?;
 
-    Ok(ToolOutput::Function {
-        body,
-        success: Some(true),
-    })
+    Ok(FunctionToolOutput::from_text(text, Some(true)))
 }
 
 #[cfg(test)]
@@ -353,10 +349,7 @@ mod tests {
             .await
             .expect("dataset_search should succeed");
 
-        let ToolOutput::Function { body, .. } = output else {
-            panic!("expected function output");
-        };
-        let text = body.to_text().expect("expected text body");
+        let text = output.into_text();
         let parsed: DatasetSearchResult =
             serde_json::from_str(&text).expect("parse search result json");
         assert_eq!(parsed.datasets.len(), 1);

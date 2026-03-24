@@ -9,45 +9,37 @@ policy:
 
 # Knowledge Base (KB)
 
-The knowledge base is a directory of markdown files with YAML frontmatter, organized for research knowledge management. All operations use standard file tools (read, write, ls, grep).
+The knowledge base is a directory of markdown files with YAML frontmatter. All operations use standard file tools (read, write, ls, grep).
 
 ## KB Path
 
-Use `${CODEX_KB_PATH}` as the KB directory. The runtime injects this variable per turn.
-If `${CODEX_KB_PATH}` is missing, fall back to `~/.ata/knowledge-base`.
-The resolved KB path is referred to as `<kb_path>` throughout this document.
+Use `${CODEX_KB_PATH}` as the KB directory (fallback: `~/.ata/knowledge-base`).
+The resolved path is referred to as `<kb>` below.
 
 ## Directory Layout
 
 ```
-<kb_path>/
-  cards/              # One .md file per knowledge card
-    <card-id>.md
-    ...
-  topics/             # Per-tag overview documents
-    <tag>/
-      OVERVIEW.md
-  index.json          # Tag taxonomy and topic staleness tracking
-  research-context.md # User priorities and preferences
-  research-journal.md # Chronological session log
+<kb>/
+  cards/<card-id>.md     # One file per knowledge card
+  topics/<tag>/OVERVIEW.md  # Per-tag prose summaries
+  index.json             # Tag taxonomy + staleness tracking
+  research-context.md    # User priorities and preferences
+  research-journal.md    # Chronological session log
 ```
 
 ## Card Format
 
-Each card is a markdown file with YAML frontmatter:
+Each card is `---\n<yaml frontmatter>\n---\n\n<body>`. Example:
 
 ```markdown
 ---
 id: latent-diffusion
 title: Latent Diffusion Models
-tags:
-  - diffusion
-  - generative
+tags: [diffusion, generative]
 capsule: Diffusion in latent space for efficient image generation.
 source:
   type: paper
-  refs:
-    - "arxiv:2112.10752"
+  refs: ["arxiv:2112.10752"]
 status: current
 tensions: []
 supersedes: []
@@ -65,205 +57,74 @@ contributed_by: research-agent
 [Card body content here...]
 ```
 
-### Frontmatter Fields
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | string | yes | Kebab-case, lowercase identifier (e.g., `latent-diffusion`) |
-| `title` | string | yes | Human-readable title |
-| `tags` | string[] | no | Lowercase topic tags |
-| `capsule` | string | no | One-line summary |
-| `source` | object | no | `type` (e.g., "paper", "hackernews") and `refs` (e.g., arXiv IDs, DOIs) |
-| `status` | string | no | One of: `current`, `superseded`, `speculative`, `stub` |
-| `tensions` | string[] | no | Unresolved questions or contradictions |
-| `supersedes` | string[] | no | Card IDs this card replaces |
-| `figures` | object[] | no | Attached figures with `path`, optional `caption` and `page` |
-| `date_added` | date | no | YYYY-MM-DD when card was created |
-| `date_updated` | date | no | YYYY-MM-DD when card was last updated |
-| `contributed_by` | string | no | Who/what created this card |
-
-### Card ID Rules
-
-- Lowercase alphanumeric and hyphens only: `[a-z0-9-]+`
-- Must not start or end with a hyphen
-- Examples: `latent-diffusion`, `paper-lapa`, `hn-rust-async-runtime`
+**Field notes:** `id` (required) — kebab-case `[a-z0-9-]+`, no leading/trailing hyphens. `title` (required). All other fields optional. `status` is one of: `current`, `superseded`, `speculative`, `stub`. `source.type` examples: "paper", "hackernews". `figures` entries have `path` (required), optional `caption` and `page`.
 
 ## Operations
 
-All operations use standard file tools. Here is how to perform each KB operation:
+| Operation | Command |
+|-----------|---------|
+| Search by keyword | `grep "<query>" <kb>/cards/*.md` |
+| Search by tag | `grep "^  - <tag>" <kb>/cards/*.md` |
+| Read card | `read <kb>/cards/<card-id>.md` |
+| List cards | `ls <kb>/cards/` |
+| Delete card | `rm <kb>/cards/<card-id>.md` |
+| Read/write other files | `read/write <kb>/<relative-path>` |
+| Initialize KB | `mkdir -p <kb>/cards <kb>/topics` |
 
-### Search Cards
-
-Search card contents by keyword or tag:
-```
-grep "<query>" <kb_path>/cards/*.md
-```
-
-Search by tag in frontmatter:
-```
-grep "^  - <tag>" <kb_path>/cards/*.md
-```
-
-### Read a Card
-
-```
-read <kb_path>/cards/<card-id>.md
-```
-
-### Write a Card
-
-Write a markdown file with YAML frontmatter to `<kb_path>/cards/<card-id>.md`. Ensure the `cards/` directory exists first. The file format is `---\n<yaml>\n---\n\n<body>`.
-
-Set `date_added` on new cards. Set `date_updated` when modifying existing cards.
-
-### List Cards
-
-```
-ls <kb_path>/cards/
-```
-
-To get card summaries, read each card and extract the frontmatter.
-
-### Delete a Card
-
-```
-rm <kb_path>/cards/<card-id>.md
-```
-
-### KB Status
-
-To check KB status:
-1. Check if `<kb_path>` exists: `ls <kb_path>/`
-2. Count cards: `ls <kb_path>/cards/*.md`
-3. Read index: `read <kb_path>/index.json` (if it exists)
-
-### Read/Write Arbitrary KB Files
-
-For files like `research-context.md`, `research-journal.md`, or topic overviews:
-```
-read <kb_path>/<relative-path>
-write <kb_path>/<relative-path>
-```
-
-### Initialize KB
-
-If the KB directory doesn't exist, create the structure:
-```
-mkdir -p <kb_path>/cards
-mkdir -p <kb_path>/topics
-```
-
-Optionally create an empty `index.json`:
-```json
-{
-  "topics": {},
-  "tag_taxonomy": []
-}
-```
+**Writing a card:** Write to `<kb>/cards/<card-id>.md`. Ensure `cards/` exists. Set `date_added` on new cards, `date_updated` on modifications. After writing, update `index.json` (add tags to `tag_taxonomy`, increment `cards_since_regen` for each tag).
 
 ## Reset / Clear KB
 
-**IMMEDIATE ACTION — no clarifying questions.** When the user asks to "clear the KB", "reset the KB", "wipe the KB", or similar, execute ALL steps below without asking what they mean:
+**IMMEDIATE ACTION — no clarifying questions.** On "clear/reset/wipe the KB":
 
-1. Count existing cards first (for the confirmation message): `ls ${CODEX_KB_PATH}/cards/`
-2. Remove all card files: `exec_command("cd ${CODEX_KB_PATH} && find cards topics briefings explanations assets staging -type f -delete 2>/dev/null; find cards topics briefings explanations assets staging -mindepth 1 -type d -delete 2>/dev/null; true")`
-3. Reset `${CODEX_KB_PATH}/index.json` — write: `{"tag_taxonomy": [], "topics": {}}`
-4. Reset `${CODEX_KB_PATH}/research-journal.md` — write: `# Research Journal\n`
-5. **Keep** `research-context.md` unchanged — it contains user preferences, not card data.
+1. Count existing cards: `ls ${CODEX_KB_PATH}/cards/`
+2. Delete all content: `exec_command("cd ${CODEX_KB_PATH} && find cards topics briefings explanations assets staging -type f -delete 2>/dev/null; find cards topics briefings explanations assets staging -mindepth 1 -type d -delete 2>/dev/null; true")`
+3. Reset `index.json` to `{"tag_taxonomy": [], "topics": {}}`
+4. Reset `research-journal.md` to `# Research Journal\n`
+5. **Keep** `research-context.md` unchanged.
 
-Confirm completion: "Reset complete. Deleted N cards. research-context.md preserved."
-
-The user should NOT need to specify what "reset" means. Reset = return KB to initial empty state. Always.
+Confirm: "Reset complete. Deleted N cards. research-context.md preserved."
 
 ## index.json
 
-The index tracks tag taxonomy and topic staleness:
+Tracks tag taxonomy and topic staleness:
 
 ```json
 {
   "topics": {
-    "diffusion": {
-      "last_regen": "2025-06-01",
-      "cards_since_regen": 3
-    }
+    "diffusion": { "last_regen": "2025-06-01", "cards_since_regen": 3 }
   },
   "tag_taxonomy": ["diffusion", "generative", "robotics"]
 }
 ```
 
-- `tag_taxonomy`: Set of all known tags. Register new tags when writing cards.
-- `topics[tag].last_regen`: Date when the topic overview was last regenerated.
-- `topics[tag].cards_since_regen`: Number of cards added since last overview regeneration. When this is high, the topic overview is stale and should be regenerated.
-
-After writing a card, update the index:
-1. Read `<kb_path>/index.json`
-2. Add the card's tags to `tag_taxonomy`
-3. Increment `cards_since_regen` for each of the card's tags
-4. Write the updated index back
-
-After regenerating a topic overview, reset staleness:
-1. Set `last_regen` to today's date
-2. Set `cards_since_regen` to 0
-
-## Topic Overviews
-
-Topic overviews live at `<kb_path>/topics/<tag>/OVERVIEW.md`. They are prose summaries of all cards with a given tag, useful for orientation. Regenerate when `cards_since_regen` is high.
+- `tag_taxonomy`: all known tags — register new tags when writing cards.
+- `topics[tag].last_regen` / `cards_since_regen`: track when topic overviews need regeneration. After regenerating an overview, reset `cards_since_regen` to 0 and `last_regen` to today.
 
 ## Updating Cards with Conversation Insights
 
-Persist insights from conversation back to KB cards so the knowledge base grows with use. This is lightweight: read card, append insight, write card.
+Persist substantive insights from conversation back to KB cards.
 
-### When to Update
+**When:** (1) Q&A reveals details not in the card, (2) explicit save request, (3) cross-card connection discovered, (4) correction or refinement.
 
-1. **Follow-up Q&A produces a substantive explanation not in the card** — the user asks "how does X handle Y?" and the answer reveals mechanism details, edge cases, or intuitions not captured in the original card.
-2. **Explicit save request** — the user says "save this", "remember this", "add this to the card".
-3. **Connection discovery** — a comparison between papers reveals a relationship not recorded in either card's `## Connections` section.
-4. **Correction or refinement** — the user corrects or refines understanding of a method.
-
-### Update Protocol
-
-1. **Identify target card(s)** — determine which KB card(s) the insight applies to. Read each per the operations above.
-2. **Classify the insight** — mechanism insight, edge case, comparison, correction, or practical implication.
-3. **Append to Discussion Notes** — add under a `## Discussion Notes` section at the end of the card body with a date header. If the section exists, append under the existing date header (same day) or add a new one.
-
-Format:
+**How:** Read the card, append under `## Discussion Notes` with a date header, write it back. Do not modify original synthesis sections (Summary, Core Method, etc.) unless explicitly asked.
 
 ```markdown
 ## Discussion Notes
 
 ### YYYY-MM-DD
-**Q: [The question or topic that prompted this insight]**
-[The explanation or insight, written as clear prose. 2-6 sentences.
-Include specific details — numbers, mechanisms, comparisons.]
+**Q: [Question that prompted this insight]**
+[Clear prose explanation, 2-6 sentences with specific details.]
 
-**Connection discovered:** [If applicable, note the other card's ID or paper name.]
+**Connection discovered:** [Other card ID, if applicable.]
 ```
 
-Multiple insights on the same day go under the same date header.
+Multiple insights on the same day share the date header. If a cross-card connection is found, update both cards' `## Connections` sections. Set `date_updated` in frontmatter.
 
-4. **Update Connections** — if the insight reveals a cross-paper connection, add it to both cards' `## Connections` sections with a one-line description.
-5. **Write updated card** — card ID and frontmatter remain unchanged — only the body is modified. Set `date_updated`.
-
-### What NOT to Update
-
-- **Do not modify the original synthesis sections** (Problem & Motivation, Core Method, Results, Limitations & Connections). Those represent the original synthesis. Discussion Notes supplement, not replace.
-- Exception: if the user explicitly asks to correct a section, modify it and note the correction in Discussion Notes.
-
-### Bulk Update
-
-When the user says "save what we discussed": scan the conversation for all insights, group by card, append under today's date header, and write all updated cards. Report what was updated.
-
-### Research Context Awareness
-
-During updates, watch for signals that express research preferences (not paper-specific insights):
-- "I don't care about training cost, only inference latency" → priority
-- "I'm not interested in pure RL approaches" → exclusion
-- "I've decided to go with VQ-VAE tokenization" → key decision
-
-Offer to update `<kb_path>/research-context.md` in addition to the card update. If the file doesn't exist, create it with sections: Project, Priorities, Not Interested In, Framings That Work, Key Decisions Made.
+**Research context signals** — if the user expresses preferences ("I don't care about training cost"), offer to update `<kb>/research-context.md` (sections: Project, Priorities, Not Interested In, Framings That Work, Key Decisions Made).
 
 ## Graceful Degradation
 
-- If `<kb_path>` doesn't exist, tell the user and offer to initialize it.
-- If `index.json` doesn't exist, proceed without it — it's optional metadata.
-- If `research-context.md` doesn't exist, skip personalization steps.
+- `<kb>` missing → tell user, offer to initialize.
+- `index.json` missing → proceed without it.
+- `research-context.md` missing → skip personalization.

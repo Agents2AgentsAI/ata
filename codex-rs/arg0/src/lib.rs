@@ -45,6 +45,73 @@ impl Arg0PathEntryGuard {
     }
 }
 
+/// Handle arg0/arg1-based dispatches that should run before any other
+/// initialization (e.g., temp-dir creation).  When invoked as
+/// `--codex-run-as-apply-patch`, the process handles the patch and exits
+/// immediately.  This is safe to call from `#[ctor]` constructors where
+/// the sandbox may not permit file-system operations needed later.
+pub fn early_arg_dispatch() {
+    let mut args = std::env::args_os();
+    let argv0 = args.next().unwrap_or_default();
+    let exe_name = Path::new(&argv0)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+
+    if exe_name == APPLY_PATCH_ARG0 || exe_name == MISSPELLED_APPLY_PATCH_ARG0 {
+        codex_apply_patch::main();
+    }
+
+    if exe_name == LINUX_SANDBOX_ARG0 {
+        codex_linux_sandbox::run_main();
+    }
+
+    #[cfg(unix)]
+    if exe_name == EXECVE_WRAPPER_ARG0 {
+        let mut args = std::env::args();
+        let _ = args.next();
+        let file = match args.next() {
+            Some(file) => file,
+            None => std::process::exit(1),
+        };
+        let argv = args.collect::<Vec<_>>();
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(_) => std::process::exit(1),
+        };
+        let exit_code = runtime.block_on(
+            codex_shell_escalation::run_shell_escalation_execve_wrapper(file, argv),
+        );
+        match exit_code {
+            Ok(exit_code) => std::process::exit(exit_code),
+            Err(_) => std::process::exit(1),
+        }
+    }
+
+    let argv1 = args.next().unwrap_or_default();
+    if argv1 == CODEX_CORE_APPLY_PATCH_ARG1 {
+        let patch_arg = args.next().and_then(|s| s.to_str().map(str::to_owned));
+        let exit_code = match patch_arg {
+            Some(patch_arg) => {
+                let mut stdout = std::io::stdout();
+                let mut stderr = std::io::stderr();
+                match codex_apply_patch::apply_patch(&patch_arg, &mut stdout, &mut stderr) {
+                    Ok(()) => 0,
+                    Err(_) => 1,
+                }
+            }
+            None => {
+                eprintln!("Error: {CODEX_CORE_APPLY_PATCH_ARG1} requires a UTF-8 PATCH argument.");
+                1
+            }
+        };
+        std::process::exit(exit_code);
+    }
+}
+
 pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     // Determine if we were invoked via the special alias.
     let mut args = std::env::args_os();

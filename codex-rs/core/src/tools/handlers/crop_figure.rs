@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use codex_protocol::models::FunctionCallOutputBody;
 use image::GenericImageView;
 use image::ImageFormat;
 use pdfium_render::prelude::*;
@@ -11,8 +10,8 @@ use tokio::fs;
 use tokio::task::spawn_blocking;
 
 use crate::function_tool::FunctionCallError;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::pdfium_downloader::ensure_pdfium_available;
@@ -164,11 +163,13 @@ async fn next_figure_number(assets_dir: &std::path::Path) -> u32 {
 
 #[async_trait]
 impl ToolHandler for CropFigureHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation { turn, payload, .. } = invocation;
 
         let arguments = match payload {
@@ -296,9 +297,9 @@ impl ToolHandler for CropFigureHandler {
             "caption": args.caption,
         });
 
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(result.to_string()),
-            success: Some(true),
-        })
+        Ok(FunctionToolOutput::from_text(
+            result.to_string(),
+            Some(true),
+        ))
     }
 }

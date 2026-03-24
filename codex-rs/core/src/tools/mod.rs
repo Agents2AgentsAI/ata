@@ -1,4 +1,7 @@
+pub mod code_mode;
+pub(crate) mod code_mode_description;
 pub mod context;
+pub(crate) mod discoverable;
 pub mod events;
 pub(crate) mod file_injection;
 pub(crate) mod handlers;

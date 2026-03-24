@@ -975,30 +975,42 @@ pub(crate) fn strip_voice_tags(text: &str) -> String {
         return text.to_string();
     }
     let mut result = String::with_capacity(text.len());
-    let mut chars = text.char_indices().peekable();
-    while let Some((_, ch)) = chars.next() {
-        if ch == '<' {
-            // Accumulate the full tag.
-            let mut tag = String::from('<');
-            while let Some(&(_, next)) = chars.peek() {
-                tag.push(next);
-                chars.next();
-                if next == '>' {
-                    break;
-                }
+    let mut remaining = text;
+    while let Some(start) = remaining.find('<') {
+        result.push_str(&remaining[..start]);
+        let tag_region = &remaining[start..];
+        let tag_lower = tag_region.to_ascii_lowercase();
+
+        if tag_lower.starts_with("<voice") {
+            if let Some(end) = tag_region.find('>') {
+                remaining = &tag_region[end + 1..];
+                continue;
             }
-            let tag_lower = tag.to_ascii_lowercase();
-            // Match opening <voice> with optional attributes or closing </voice>.
-            if (tag_lower.starts_with("<voice") && tag_lower.ends_with('>'))
-                || tag_lower == "</voice>"
-            {
-                continue; // skip voice tag
-            }
-            result.push_str(&tag);
-        } else {
-            result.push(ch);
+            remaining = &tag_region["<voice".len()..];
+            continue;
         }
+
+        if tag_lower.starts_with("</voice>") {
+            remaining = &tag_region["</voice>".len()..];
+            continue;
+        }
+
+        if tag_lower.starts_with("</voice") {
+            let suffix = &tag_region["</voice".len()..];
+            let malformed_close = suffix.is_empty()
+                || suffix.chars().next().is_some_and(|ch| {
+                    ch.is_ascii_alphanumeric() || matches!(ch, '\'' | '"' | '_' | '-')
+                });
+            if malformed_close {
+                remaining = suffix;
+                continue;
+            }
+        }
+
+        result.push('<');
+        remaining = &tag_region[1..];
     }
+    result.push_str(remaining);
     strip_eq_tags(&result)
 }
 
@@ -1040,6 +1052,19 @@ mod tests {
         let text = "Hello";
         let truncated = truncate_text(text, 2);
         assert_eq!(truncated, "He");
+    }
+
+    #[test]
+    fn strip_voice_tags_tolerates_malformed_closing_prefix() {
+        assert_eq!(
+            strip_voice_tags("</voiceI checked it directly."),
+            "I checked it directly."
+        );
+    }
+
+    #[test]
+    fn strip_voice_tags_drops_dangling_closing_prefix() {
+        assert_eq!(strip_voice_tags("Hello </voice"), "Hello ");
     }
 
     #[test]

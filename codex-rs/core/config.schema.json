@@ -18,7 +18,7 @@
           "description": "Path to a role-specific config layer. Relative paths are resolved relative to the `config.toml` that defines them."
         },
         "description": {
-          "description": "Human-facing role documentation used in spawn tool guidance.",
+          "description": "Human-facing role documentation used in spawn tool guidance. Required unless supplied by the referenced agent role file.",
           "type": "string"
         },
         "nickname_candidates": {
@@ -169,6 +169,14 @@
       "description": "Tool settings for a single app.",
       "type": "object"
     },
+    "ApprovalsReviewer": {
+      "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request.",
+      "enum": [
+        "user",
+        "guardian_subagent"
+      ],
+      "type": "string"
+    },
     "AppsConfigToml": {
       "additionalProperties": {
         "$ref": "#/definitions/AppConfig"
@@ -232,14 +240,14 @@
         },
         {
           "additionalProperties": false,
-          "description": "Fine-grained rejection controls for approval prompts.\n\nWhen a field is `true`, prompts of that category are automatically rejected instead of shown to the user.",
+          "description": "Fine-grained controls for individual approval flows.\n\nWhen a field is `true`, commands in that category are allowed. When it is `false`, those requests are automatically rejected instead of shown to the user.",
           "properties": {
-            "reject": {
-              "$ref": "#/definitions/RejectConfig"
+            "granular": {
+              "$ref": "#/definitions/GranularApprovalConfig"
             }
           },
           "required": [
-            "reject"
+            "granular"
           ],
           "type": "object"
         },
@@ -285,6 +293,16 @@
         }
       ]
     },
+    "BundledSkillsConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ConfigProfile": {
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
@@ -294,6 +312,9 @@
         },
         "approval_policy": {
           "$ref": "#/definitions/AskForApproval"
+        },
+        "approvals_reviewer": {
+          "$ref": "#/definitions/ApprovalsReviewer"
         },
         "chatgpt_base_url": {
           "type": "string"
@@ -318,16 +339,22 @@
             "apps": {
               "type": "boolean"
             },
-            "apps_mcp_gateway": {
-              "type": "boolean"
-            },
             "artifact": {
               "type": "boolean"
             },
             "child_agents_md": {
               "type": "boolean"
             },
+            "code_mode": {
+              "type": "boolean"
+            },
+            "code_mode_only": {
+              "type": "boolean"
+            },
             "codex_git_commit": {
+              "type": "boolean"
+            },
+            "codex_hooks": {
               "type": "boolean"
             },
             "collab": {
@@ -337,6 +364,9 @@
               "type": "boolean"
             },
             "connectors": {
+              "type": "boolean"
+            },
+            "coordination": {
               "type": "boolean"
             },
             "data": {
@@ -351,7 +381,13 @@
             "enable_experimental_windows_sandbox": {
               "type": "boolean"
             },
+            "enable_fanout": {
+              "type": "boolean"
+            },
             "enable_request_compression": {
+              "type": "boolean"
+            },
+            "exec_permission_approvals": {
               "type": "boolean"
             },
             "experimental_use_freeform_apply_patch": {
@@ -364,6 +400,9 @@
               "type": "boolean"
             },
             "fast_mode": {
+              "type": "boolean"
+            },
+            "guardian_approval": {
               "type": "boolean"
             },
             "image_detail_original": {
@@ -415,6 +454,9 @@
               "type": "boolean"
             },
             "request_permissions": {
+              "type": "boolean"
+            },
+            "request_permissions_tool": {
               "type": "boolean"
             },
             "request_rule": {
@@ -477,6 +519,12 @@
             "steer": {
               "type": "boolean"
             },
+            "tool_call_mcp_elicitation": {
+              "type": "boolean"
+            },
+            "tool_suggest": {
+              "type": "boolean"
+            },
             "treesitter": {
               "type": "boolean"
             },
@@ -484,6 +532,9 @@
               "type": "boolean"
             },
             "unified_exec": {
+              "type": "boolean"
+            },
+            "use_legacy_landlock": {
               "type": "boolean"
             },
             "use_linux_sandbox_bwrap": {
@@ -567,10 +618,10 @@
         "service_tier": {
           "$ref": "#/definitions/ServiceTier"
         },
-        "tools_view_image": {
-          "type": "boolean"
+        "tools": {
+          "$ref": "#/definitions/ToolsToml"
         },
-        "tools_web_search": {
+        "tools_view_image": {
           "type": "boolean"
         },
         "web_search": {
@@ -591,6 +642,24 @@
             }
           ],
           "description": "Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution."
+        }
+      },
+      "type": "object"
+    },
+    "CoordinationToml": {
+      "description": "Agent coordination channel settings.",
+      "properties": {
+        "redis_url": {
+          "description": "Redis connection URL for the relay server backend.",
+          "type": "string"
+        },
+        "relay_secret": {
+          "description": "Shared secret for authenticating with the relay server.",
+          "type": "string"
+        },
+        "relay_url": {
+          "description": "URL for the relay server.",
+          "type": "string"
         }
       },
       "type": "object"
@@ -649,6 +718,31 @@
       },
       "type": "object"
     },
+    "FileSystemAccessMode": {
+      "description": "Access mode for a filesystem entry.\n\nWhen two equally specific entries target the same path, we compare these by conflict precedence rather than by capability breadth: `none` beats `write`, and `write` beats `read`.",
+      "enum": [
+        "read",
+        "write",
+        "none"
+      ],
+      "type": "string"
+    },
+    "FilesystemPermissionToml": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/FileSystemAccessMode"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/definitions/FileSystemAccessMode"
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "FilesystemPermissionsToml": {
+      "type": "object"
+    },
     "ForcedLoginMethod": {
       "enum": [
         "chatgpt",
@@ -674,6 +768,38 @@
           "type": "integer"
         }
       },
+      "type": "object"
+    },
+    "GranularApprovalConfig": {
+      "properties": {
+        "mcp_elicitations": {
+          "description": "Whether to allow MCP elicitation prompts.",
+          "type": "boolean"
+        },
+        "request_permissions": {
+          "default": false,
+          "description": "Whether to allow prompts triggered by the `request_permissions` tool.",
+          "type": "boolean"
+        },
+        "rules": {
+          "description": "Whether to allow prompts triggered by execpolicy `prompt` rules.",
+          "type": "boolean"
+        },
+        "sandbox_approval": {
+          "description": "Whether to allow shell command approval requests, including inline `with_additional_permissions` and `require_escalated` requests.",
+          "type": "boolean"
+        },
+        "skill_approval": {
+          "default": false,
+          "description": "Whether to allow approval prompts triggered by skill script execution.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mcp_elicitations",
+        "rules",
+        "sandbox_approval"
+      ],
       "type": "object"
     },
     "History": {
@@ -727,82 +853,6 @@
         }
       },
       "type": "object"
-    },
-    "LspConfig": {
-      "anyOf": [
-        {
-          "description": "Boolean enable flag from `lsp = true|false`.",
-          "type": "boolean"
-        },
-        {
-          "additionalProperties": {
-            "$ref": "#/definitions/LspServerConfigToml"
-          },
-          "description": "Per-server configuration map.",
-          "type": "object"
-        }
-      ],
-      "description": "Top-level LSP configuration: either a simple boolean (disabled) or a map of per-server overrides."
-    },
-    "LspServerConfigToml": {
-      "anyOf": [
-        {
-          "description": "`[lsp.server-name]\\ndisabled = true`",
-          "properties": {
-            "disabled": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "disabled"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Full server configuration.",
-          "properties": {
-            "command": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "disabled": {
-              "default": false,
-              "type": "boolean"
-            },
-            "env": {
-              "additionalProperties": {
-                "type": "string"
-              },
-              "default": {},
-              "type": "object"
-            },
-            "extensions": {
-              "default": [],
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "initialization_options": {
-              "default": null
-            },
-            "root_markers": {
-              "default": [],
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          },
-          "required": [
-            "command"
-          ],
-          "type": "object"
-        }
-      ],
-      "description": "Per-server override in config.toml. Either just disable or provide full config."
     },
     "MemoriesToml": {
       "additionalProperties": false,
@@ -964,9 +1014,6 @@
     "NetworkToml": {
       "additionalProperties": false,
       "properties": {
-        "admin_url": {
-          "type": "string"
-        },
         "allow_local_binding": {
           "type": "boolean"
         },
@@ -986,9 +1033,6 @@
           "type": "array"
         },
         "dangerously_allow_all_unix_sockets": {
-          "type": "boolean"
-        },
-        "dangerously_allow_non_loopback_admin": {
           "type": "boolean"
         },
         "dangerously_allow_non_loopback_proxy": {
@@ -1262,18 +1306,19 @@
       },
       "type": "object"
     },
-    "PermissionsToml": {
+    "PermissionProfileToml": {
       "additionalProperties": false,
       "properties": {
+        "filesystem": {
+          "$ref": "#/definitions/FilesystemPermissionsToml"
+        },
         "network": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/NetworkToml"
-            }
-          ],
-          "description": "Network proxy settings from `[permissions.network]`. User config can enable the proxy; managed requirements may still constrain values."
+          "$ref": "#/definitions/NetworkToml"
         }
       },
+      "type": "object"
+    },
+    "PermissionsToml": {
       "type": "object"
     },
     "Personality": {
@@ -1431,6 +1476,32 @@
       },
       "type": "object"
     },
+    "RealtimeToml": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "$ref": "#/definitions/RealtimeWsMode"
+        },
+        "version": {
+          "$ref": "#/definitions/RealtimeWsVersion"
+        }
+      },
+      "type": "object"
+    },
+    "RealtimeWsMode": {
+      "enum": [
+        "conversational",
+        "transcription"
+      ],
+      "type": "string"
+    },
+    "RealtimeWsVersion": {
+      "enum": [
+        "v1",
+        "v2"
+      ],
+      "type": "string"
+    },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
       "enum": [
@@ -1464,38 +1535,25 @@
         }
       ]
     },
-    "RejectConfig": {
-      "properties": {
-        "mcp_elicitations": {
-          "description": "Reject MCP elicitation prompts.",
-          "type": "boolean"
-        },
-        "rules": {
-          "description": "Reject prompts triggered by execpolicy `prompt` rules.",
-          "type": "boolean"
-        },
-        "sandbox_approval": {
-          "description": "Reject approval prompts related to sandbox escalation.",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "mcp_elicitations",
-        "rules",
-        "sandbox_approval"
-      ],
-      "type": "object"
-    },
     "ResearchToolsToml": {
       "additionalProperties": false,
       "properties": {
         "openalex_email": {
           "type": "string"
         },
+        "zotero_api_key": {
+          "type": "string"
+        },
+        "zotero_base_url": {
+          "type": "string"
+        },
         "zotero_group_id": {
           "type": "string"
         },
         "zotero_library_type": {
+          "type": "string"
+        },
+        "zotero_storage_dir": {
           "type": "string"
         },
         "zotero_user_id": {
@@ -1632,6 +1690,9 @@
     "SkillsConfig": {
       "additionalProperties": false,
       "properties": {
+        "bundled": {
+          "$ref": "#/definitions/BundledSkillsConfig"
+        },
         "config": {
           "items": {
             "$ref": "#/definitions/SkillConfig"
@@ -1650,78 +1711,12 @@
           "type": "boolean"
         },
         "web_search": {
-          "default": null,
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
-    "TreeSitterConfig": {
-      "anyOf": [
-        {
-          "description": "Boolean enable flag from `treesitter = true|false`.",
-          "type": "boolean"
-        },
-        {
           "allOf": [
             {
-              "$ref": "#/definitions/TreeSitterConfigMap"
+              "$ref": "#/definitions/WebSearchToolConfig"
             }
           ],
-          "description": "Detailed TreeSitter configuration map."
-        }
-      ],
-      "description": "Top-level TreeSitter configuration: either a simple boolean (disabled) or a configuration map."
-    },
-    "TreeSitterConfigMap": {
-      "additionalProperties": false,
-      "description": "TreeSitter index behavior in config.toml.",
-      "properties": {
-        "annotation_store_path": {
-          "default": null,
-          "description": "Optional annotation persistence path. Relative paths are resolved from root.",
-          "type": "string"
-        },
-        "disabled_languages": {
-          "default": [],
-          "description": "Language names to disable (e.g. \"rust\", \"python\", \"typescript\").",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "ignore_extensions": {
-          "default": [],
-          "description": "Extra ignored file extensions/suffixes (for example: \"pdf\", \"min.js\").",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "ignore_patterns": {
-          "default": [],
-          "description": "Extra ignore globs relative to the root.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "max_file_size": {
-          "default": 1048576,
-          "description": "Maximum file size for indexing (bytes).",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "persist_annotations": {
-          "default": true,
-          "description": "Reserved for future annotation persistence support.",
-          "type": "boolean"
-        },
-        "watch": {
-          "default": true,
-          "description": "Reserved for future file watching support.",
-          "type": "boolean"
+          "default": null
         }
       },
       "type": "object"
@@ -1934,6 +1929,32 @@
         }
       ]
     },
+    "WebSearchContextSize": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "WebSearchLocation": {
+      "additionalProperties": false,
+      "properties": {
+        "city": {
+          "type": "string"
+        },
+        "country": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "timezone": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "WebSearchMode": {
       "enum": [
         "disabled",
@@ -1941,6 +1962,24 @@
         "live"
       ],
       "type": "string"
+    },
+    "WebSearchToolConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "context_size": {
+          "$ref": "#/definitions/WebSearchContextSize"
+        },
+        "location": {
+          "$ref": "#/definitions/WebSearchLocation"
+        }
+      },
+      "type": "object"
     },
     "WindowsSandboxModeToml": {
       "enum": [
@@ -1954,6 +1993,10 @@
       "properties": {
         "sandbox": {
           "$ref": "#/definitions/WindowsSandboxModeToml"
+        },
+        "sandbox_private_desktop": {
+          "description": "Defaults to `true`. Set to `false` to launch the final sandboxed child process on `Winsta0\\\\Default` instead of a private desktop.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -2015,6 +2058,14 @@
       ],
       "description": "Default approval policy for executing commands."
     },
+    "approvals_reviewer": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ApprovalsReviewer"
+        }
+      ],
+      "description": "Configures who approval requests are routed to for review once they have been escalated. This does not disable separate safety checks such as ARC."
+    },
     "apps": {
       "allOf": [
         {
@@ -2064,6 +2115,15 @@
       "description": "Compact prompt used for history compaction.",
       "type": "string"
     },
+    "coordination": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/CoordinationToml"
+        }
+      ],
+      "default": null,
+      "description": "Agent coordination channel settings."
+    },
     "data": {
       "allOf": [
         {
@@ -2072,6 +2132,10 @@
       ],
       "default": null,
       "description": "Optional non-secret data tool settings."
+    },
+    "default_permissions": {
+      "description": "Default named permissions profile to apply from the `[permissions]` table.",
+      "type": "string"
     },
     "developer_instructions": {
       "default": null,
@@ -2085,6 +2149,10 @@
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
     },
+    "experimental_realtime_start_instructions": {
+      "description": "Experimental / do not use. Replaces the built-in realtime start instructions inserted into developer messages when realtime becomes active.",
+      "type": "string"
+    },
     "experimental_realtime_ws_backend_prompt": {
       "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport instructions (the `Op::RealtimeConversation` `/ws` session.update instructions) without changing normal prompts.",
       "type": "string"
@@ -2095,6 +2163,10 @@
     },
     "experimental_realtime_ws_model": {
       "description": "Experimental / do not use. Selects the realtime websocket model/snapshot used for the `Op::RealtimeConversation` connection.",
+      "type": "string"
+    },
+    "experimental_realtime_ws_startup_context": {
+      "description": "Experimental / do not use. Replaces the synthesized realtime startup context appended to websocket session instructions. An empty string disables startup context injection entirely.",
       "type": "string"
     },
     "experimental_use_freeform_apply_patch": {
@@ -2114,16 +2186,22 @@
         "apps": {
           "type": "boolean"
         },
-        "apps_mcp_gateway": {
-          "type": "boolean"
-        },
         "artifact": {
           "type": "boolean"
         },
         "child_agents_md": {
           "type": "boolean"
         },
+        "code_mode": {
+          "type": "boolean"
+        },
+        "code_mode_only": {
+          "type": "boolean"
+        },
         "codex_git_commit": {
+          "type": "boolean"
+        },
+        "codex_hooks": {
           "type": "boolean"
         },
         "collab": {
@@ -2133,6 +2211,9 @@
           "type": "boolean"
         },
         "connectors": {
+          "type": "boolean"
+        },
+        "coordination": {
           "type": "boolean"
         },
         "data": {
@@ -2147,7 +2228,13 @@
         "enable_experimental_windows_sandbox": {
           "type": "boolean"
         },
+        "enable_fanout": {
+          "type": "boolean"
+        },
         "enable_request_compression": {
+          "type": "boolean"
+        },
+        "exec_permission_approvals": {
           "type": "boolean"
         },
         "experimental_use_freeform_apply_patch": {
@@ -2160,6 +2247,9 @@
           "type": "boolean"
         },
         "fast_mode": {
+          "type": "boolean"
+        },
+        "guardian_approval": {
           "type": "boolean"
         },
         "image_detail_original": {
@@ -2211,6 +2301,9 @@
           "type": "boolean"
         },
         "request_permissions": {
+          "type": "boolean"
+        },
+        "request_permissions_tool": {
           "type": "boolean"
         },
         "request_rule": {
@@ -2273,6 +2366,12 @@
         "steer": {
           "type": "boolean"
         },
+        "tool_call_mcp_elicitation": {
+          "type": "boolean"
+        },
+        "tool_suggest": {
+          "type": "boolean"
+        },
         "treesitter": {
           "type": "boolean"
         },
@@ -2280,6 +2379,9 @@
           "type": "boolean"
         },
         "unified_exec": {
+          "type": "boolean"
+        },
+        "use_legacy_landlock": {
           "type": "boolean"
         },
         "use_linux_sandbox_bwrap": {
@@ -2392,11 +2494,6 @@
       "description": "Directory where Codex writes log files, for example `codex-tui.log`. Defaults to `$CODEX_HOME/log`."
     },
     "lsp": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/LspConfig"
-        }
-      ],
       "default": null,
       "description": "LSP server integration configuration."
     },
@@ -2474,7 +2571,7 @@
         "$ref": "#/definitions/ModelProviderInfo"
       },
       "default": {},
-      "description": "User-defined provider entries that extend/override the built-in list.",
+      "description": "User-defined provider entries that extend the built-in list. Built-in IDs cannot be overridden.",
       "type": "object"
     },
     "model_reasoning_effort": {
@@ -2511,6 +2608,10 @@
       },
       "type": "array"
     },
+    "openai_base_url": {
+      "description": "Base URL override for the built-in `openai` model provider.",
+      "type": "string"
+    },
     "oss_provider": {
       "description": "Preferred OSS provider for local models, e.g. \"lmstudio\" or \"ollama\".",
       "type": "string"
@@ -2530,7 +2631,7 @@
         }
       ],
       "default": null,
-      "description": "Nested permissions settings."
+      "description": "Named permissions profiles."
     },
     "personality": {
       "allOf": [
@@ -2598,6 +2699,15 @@
       ],
       "default": null,
       "description": "Reading view display mode settings."
+    },
+    "realtime": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RealtimeToml"
+        }
+      ],
+      "default": null,
+      "description": "Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription."
     },
     "research": {
       "allOf": [
@@ -2689,11 +2799,6 @@
       "description": "Nested tools section for feature toggles"
     },
     "treesitter": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/TreeSitterConfig"
-        }
-      ],
       "default": null,
       "description": "TreeSitter indexing configuration."
     },

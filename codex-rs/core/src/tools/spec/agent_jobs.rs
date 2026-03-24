@@ -1,5 +1,6 @@
 use super::*;
 
+// @agent-facing
 pub(super) fn create_spawn_agents_on_csv_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -68,11 +69,13 @@ pub(super) fn create_spawn_agents_on_csv_tool() -> ToolSpec {
         description: "Process a CSV by spawning one worker sub-agent per row. The instruction string is a template where `{column}` placeholders are replaced with row values. Each worker must call `report_agent_job_result` with a JSON object (matching `output_schema` when provided); missing reports are treated as failures. This call blocks until all rows finish and automatically exports results to `output_csv_path` (or a default path)."
             .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["csv_path".to_string(), "instruction".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -113,6 +116,7 @@ pub(super) fn create_report_agent_job_result_tool() -> ToolSpec {
             "Worker-only tool to report a result for an agent job item. Main agents should not call this."
                 .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec![
@@ -122,5 +126,6 @@ pub(super) fn create_report_agent_job_result_tool() -> ToolSpec {
             ]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }

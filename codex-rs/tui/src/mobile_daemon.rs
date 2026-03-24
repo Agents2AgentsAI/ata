@@ -12,18 +12,26 @@ use std::process::Stdio;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
-/// Resolve `~/.ata/mobile-server.pid`.
-fn pid_file_path() -> Option<PathBuf> {
-    // Honor CODEX_HOME env var, otherwise default to ~/.ata.
-    let codex_home = std::env::var("CODEX_HOME")
+/// Resolve the codex home directory (`~/.ata` by default).
+fn codex_home_dir() -> Option<PathBuf> {
+    std::env::var("CODEX_HOME")
         .ok()
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .or_else(|| {
             #[allow(deprecated)]
             std::env::home_dir().map(|h| h.join(".ata"))
-        })?;
-    Some(codex_home.join("mobile-server.pid"))
+        })
+}
+
+/// Resolve `~/.ata/mobile-server.pid`.
+fn pid_file_path() -> Option<PathBuf> {
+    codex_home_dir().map(|h| h.join("mobile-server.pid"))
+}
+
+/// Resolve `~/.ata/mobile-daemon.log`.
+fn log_file_path() -> Option<PathBuf> {
+    codex_home_dir().map(|h| h.join("mobile-daemon.log"))
 }
 
 /// Check if a process with the given PID is alive (Unix only).
@@ -61,6 +69,20 @@ pub(crate) fn is_daemon_running() -> Option<u32> {
     }
 }
 
+/// Resolve the token file path (`~/.ata/mobile-server.token`).
+fn token_file_path() -> Option<PathBuf> {
+    codex_home_dir().map(|h| h.join("mobile-server.token"))
+}
+
+/// Read the auth token from the persisted token file.
+fn read_token() -> Option<String> {
+    let path = token_file_path()?;
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// Start the mobile daemon. Returns a status message.
 pub(crate) fn start_daemon(port: u16) -> String {
     // Stop existing daemon first if running.
@@ -77,11 +99,38 @@ pub(crate) fn start_daemon(port: u16) -> String {
 
     let listen_url = format!("ws://0.0.0.0:{port}");
     let mut cmd = Command::new(&binary);
-    cmd.arg("--listen")
-        .arg(&listen_url)
-        .stdin(Stdio::null())
+    cmd.arg("--listen").arg(&listen_url);
+
+    // Pass the auth token so the daemon enforces the same authentication
+    // that the embedded TUI server uses.
+    if let Some(token) = read_token() {
+        cmd.arg("--token").arg(&token);
+    }
+
+    // Ensure tracing output is visible — default RUST_LOG level is error-only
+    // which makes the daemon silent. Set info level unless already overridden.
+    if std::env::var("RUST_LOG").is_err() {
+        cmd.env("RUST_LOG", "info");
+    }
+
+    // Redirect stderr to a log file so bind failures are diagnosable.
+    let stderr_target = log_file_path()
+        .and_then(|p| {
+            if let Some(parent) = p.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            std::fs::File::options()
+                .append(true)
+                .create(true)
+                .open(p)
+                .ok()
+        })
+        .map(Stdio::from)
+        .unwrap_or_else(Stdio::null);
+
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(stderr_target);
 
     // Detach the child into its own session so it survives TUI exit.
     #[cfg(unix)]
@@ -106,7 +155,19 @@ pub(crate) fn start_daemon(port: u16) -> String {
                 }
                 let _ = std::fs::write(&path, pid.to_string());
             }
-            format!("Background server started (PID {pid}) on port {port}")
+
+            // Brief pause then verify the daemon is still alive.  A bind
+            // failure (e.g. "Address already in use") causes the process to
+            // exit almost immediately.
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            if is_daemon_running().is_some() {
+                format!("Background server started (PID {pid}) on port {port}")
+            } else {
+                let hint = log_file_path()
+                    .map(|p| format!(" Check {} for details.", p.display()))
+                    .unwrap_or_default();
+                format!("Background server exited immediately (port {port} may be in use).{hint}")
+            }
         }
         Err(err) => {
             format!("Failed to start daemon: {err}")

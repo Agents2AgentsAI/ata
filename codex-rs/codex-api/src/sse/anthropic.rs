@@ -502,6 +502,7 @@ pub fn parse_anthropic_event(
                     name,
                     arguments,
                     thought_signature: None,
+                    namespace: None,
                 }));
             }
         }

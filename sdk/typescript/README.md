@@ -129,8 +129,8 @@ const ata = new Ata({
 });
 ```
 
-The SDK still injects its required variables (such as `OPENAI_BASE_URL` and `CODEX_API_KEY`) on top of the environment you
-provide.
+The SDK still injects its required variables (such as `CODEX_API_KEY`) on top of the environment you provide. If you set
+`baseUrl`, the SDK passes it as a `--config openai_base_url=...` override.
 
 ### Passing `--config` overrides
 

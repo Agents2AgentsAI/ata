@@ -1,5 +1,6 @@
 use super::*;
 
+// @agent-facing
 pub(super) fn create_js_repl_tool() -> ToolSpec {
     const JS_REPL_FREEFORM_GRAMMAR: &str = r#"
 start: pragma_source | plain_source
@@ -27,6 +28,7 @@ JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
     })
 }
 
+// @agent-facing
 pub(super) fn create_artifacts_tool() -> ToolSpec {
     const ARTIFACTS_FREEFORM_GRAMMAR: &str = r#"
 start: pragma_source | plain_source
@@ -61,10 +63,12 @@ pub(super) fn create_js_repl_reset_tool() -> ToolSpec {
             "Restarts the js_repl kernel for this run and clears persisted top-level bindings."
                 .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties: BTreeMap::new(),
             required: None,
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }

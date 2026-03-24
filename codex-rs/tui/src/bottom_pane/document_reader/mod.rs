@@ -79,7 +79,18 @@ fn is_karaoke_skip_word(word: &str) -> bool {
     if word == "\u{1F50A}"
         || word == "\u{250A}"
         || word == "\u{2713}"
+        || word == "-"
+        || word == "+"
+        || word == "\u{2022}"
         || word == "\u{2014}\u{2014}\u{2014}"
+    {
+        return true;
+    }
+    // Ordered list markers like "1." / "12." are stripped from TTS.
+    if word.ends_with('.')
+        && word[..word.len().saturating_sub(1)]
+            .chars()
+            .all(|c| c.is_ascii_digit())
     {
         return true;
     }
@@ -101,6 +112,31 @@ fn is_karaoke_skip_word(word: &str) -> bool {
         return true;
     }
     false
+}
+
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+fn append_reading_view_karaoke_debug_log(message: &str) {
+    let Some(path) = codex_home().map(|home| home.join("logs/reading-view-karaoke.log")) else {
+        return;
+    };
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    else {
+        return;
+    };
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let _ = std::io::Write::write_all(&mut file, format!("[{ts}] {message}\n").as_bytes());
 }
 
 /// Saved fold state that persists across view close/reopen cycles within a
@@ -1071,28 +1107,12 @@ impl DocumentReaderView {
             .map(|s| s.content.as_str())
             .unwrap_or("");
 
-        // Formatting guidance shared by both selection and no-selection paths.
-        // The goal: answers must be self-contained when re-read later without
-        // remembering the original question.  A short italic lead-in line
-        let formatting_guidance = "\
-            Write your answer as straight prose that continues the section's voice. \
-            Do NOT use a Q:/A: format. If the answer would be unclear without context, \
-            a short italic lead-in is fine (e.g. *On dropout:* \u{2026}), but skip it when \
-            the meaning is obvious from placement. Don't overuse it.\n\n\
-            SUMMARY (required): Always set the `summary` parameter to a short descriptive \
-            label of your answer (5-10 words), e.g. summary=\"Role of attention heads in GPT\". \
-            This is used as a section label regardless of foldable.\n\n\
-            FOLDABLE CONTENT: For supplementary content (explanations, examples, deep dives), \
-            set foldable=true. Direct answers, corrections, \
-            and rewrites should NOT be foldable (foldable=false, the default).\n\n\
-            DISPLAY FORMAT: The reading view is displayed in a terminal (TUI) with \
-            no LaTeX or HTML rendering.\n\
-            - Do NOT use LaTeX ($...$). Instead use Unicode math symbols directly: \
-            \u{03C0}, \u{03B8}, \u{03B1}, \u{03B2}, \u{2211}, \u{222B}, \u{2264}, \u{2265}, \u{2192}, \u{00D7}, etc.\n\
-            - Do NOT use Mermaid diagrams. Describe visual concepts in text or use \
-            simple ASCII diagrams.\n\
-            - Keep formatting simple: headers, bullet lists, bold, italic. No tables \
-            (they render poorly in terminals).";
+        let selection_guidance = codex_core::reading_view_selection_follow_up_guidance(
+            codex_core::ReadingViewDisplayMode::Tui,
+        );
+        let section_guidance = codex_core::reading_view_section_follow_up_guidance(
+            codex_core::ReadingViewDisplayMode::Tui,
+        );
 
         // Extract a few rendered lines around the cursor and the word under
         // the cursor so the agent knows what the user was looking at when they
@@ -1162,18 +1182,8 @@ impl DocumentReaderView {
                 "The user selected specific text from the section (shown below) and is asking about it.\n\
                  [Selected text:]\n{sel}\
                  {INSTR_SEP}\
-                 DEFAULT — insert your answer after the selection:\n\
-                 patch_section(document_id=\"{doc_id}\", section_index={idx}, \
-                 old_text=\"<the selected text exactly>\", \
-                 new_text=\"<the selected text>\\n\\n<your answer>\")\n\
-                 This inserts your answer right after the selected passage. \
-                 Reproduce the selected text verbatim as old_text so the patch matches.\n\n\
-                 REWRITE — if the user asks to rewrite, simplify, or rephrase the selection:\n\
-                 patch_section(document_id=\"{doc_id}\", section_index={idx}, \
-                 old_text=\"<the selected text exactly>\", \
-                 new_text=\"<the rewritten version that replaces it>\")\n\
-                 The new_text must NOT contain the old_text — it fully replaces it.\n\n\
-                 {formatting_guidance}",
+                 Tool target for this turn: document_id=\"{doc_id}\", section_index={idx}.\n\n\
+                 {selection_guidance}",
                 doc_id = self.document_id,
                 idx = self.current_section,
             )
@@ -1197,39 +1207,10 @@ impl DocumentReaderView {
                 .unwrap_or_default();
             format!(
                 "{INSTR_SEP}\
+                 Tool target for this turn: document_id=\"{doc_id}\", section_index={idx}.\n\n\
                  Current section content:\n---\n{section_content}\n---\n\
                  {cursor_hint}\n\
-                 PREFERRED — use patch_section to insert your answer inline:\n\
-                 patch_section(document_id=\"{doc_id}\", section_index={idx}, \
-                 old_text=\"<the passage the question is about>\", \
-                 new_text=\"<that same passage>\\n\\n<your answer>\")\n\
-                 Find the most relevant passage (paragraph, bullet list, or sentence) \
-                 and insert your answer right after it so it reads naturally in context. \
-                 Copy old_text verbatim from the section content above.\n\n\
-                 REWRITE — use patch_section to REPLACE content (not insert after) when \
-                 the user explicitly asks to rewrite, simplify, restructure, or rephrase:\n\
-                 patch_section(document_id=\"{doc_id}\", section_index={idx}, \
-                 old_text=\"<the passage to rewrite>\", \
-                 new_text=\"<the rewritten version that replaces it>\")\n\
-                 The new_text must NOT contain the old_text — it fully replaces it. \
-                 Target the specific passage the user wants rewritten; \
-                 do not rewrite the whole section unless the user asks for it.\n\n\
-                 FULL SECTION REWRITE — use update_document_section ONLY when the user \
-                 explicitly asks to rewrite, restructure, or simplify the entire section:\n\
-                 update_document_section(document_id=\"{doc_id}\", section_index={idx}, \
-                 content=\"<the complete rewritten section>\")\n\
-                 This replaces all section content. Use sparingly — it removes any \
-                 previous inline annotations. Only use when the user clearly wants \
-                 the whole section replaced.\n\n\
-                 FALLBACK — use append ONLY when the question is about the section as a whole \
-                 and no specific passage is relevant:\n\
-                 append_to_section(document_id=\"{doc_id}\", section_index={idx}, content=\"...\")\n\n\
-                 NEW SECTION — use add_document_section when the follow-up introduces a \
-                 new topic that doesn't fit in any existing section:\n\
-                 add_document_section(document_id=\"{doc_id}\", after_section_index={idx}, \
-                 heading=\"<new section heading>\", content=\"<section body>\")\n\
-                 This creates a brand new section right after the current one.\n\n\
-                 {formatting_guidance}",
+                 {section_guidance}",
                 doc_id = self.document_id,
                 idx = self.current_section,
             )
@@ -1238,9 +1219,7 @@ impl DocumentReaderView {
         let context = format!(
             "[The user is reading \"{title}\" and asked about the section titled \"{heading}\"]\n\n\
              {text}\n\n\
-             {tool_instructions}\n\
-             Do NOT rewrite the entire section unless the user explicitly asks for a rewrite. \
-             Do NOT output plain text; only tool calls are visible to the user.",
+             {tool_instructions}",
             title = self.title,
             heading = heading,
         );
@@ -2776,6 +2755,11 @@ impl BottomPaneView for DocumentReaderView {
         self.voice_tts_paused
     }
 
+    #[cfg(all(test, not(target_os = "linux"), feature = "voice-input"))]
+    fn voice_status(&self) -> Option<String> {
+        self.voice_status.clone()
+    }
+
     #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn set_pending_voice_question(&mut self, section: usize, question: String) {
         self.pending_sections
@@ -2830,9 +2814,23 @@ impl BottomPaneView for DocumentReaderView {
             self.karaoke_auto_scroll = true;
         }
 
+        let mut debug_log = None;
         let highlight = word_idx.and_then(|wi| {
-            let adj = wi.checked_sub(heading_words_to_skip)?;
+            let adj = match wi.checked_sub(heading_words_to_skip) {
+                Some(adj) => adj,
+                None => {
+                    debug_log = Some(format!(
+                        "UNDERFLOW section={} word_idx={wi} heading_skip={heading_words_to_skip}",
+                        self.sections
+                            .get(self.current_section)
+                            .map(|s| s.heading.as_str())
+                            .unwrap_or("<missing>")
+                    ));
+                    return None;
+                }
+            };
             let section = self.sections.get(self.current_section)?;
+            let section_heading = section.heading.clone();
             let inner_w = self.last_inner_width.get();
             let lines = section.rendered_lines(inner_w);
             // Walk ALL rendered lines (including heading) counting words
@@ -2853,6 +2851,9 @@ impl BottomPaneView for DocumentReaderView {
                         continue;
                     }
                     if cumulative_words == adj {
+                        debug_log = Some(format!(
+                            "MAP section={section_heading:?} word_idx={wi} adj={adj} line={i} rendered_word={word:?}"
+                        ));
                         return Some((i, word_start, word_start + word.len()));
                     }
                     cumulative_words += 1;
@@ -2862,8 +2863,16 @@ impl BottomPaneView for DocumentReaderView {
                 "Karaoke word miss: adj={adj}, total_rendered_words={cumulative_words}, lines={}",
                 lines.len()
             );
+            debug_log = Some(format!(
+                "MISS section={section_heading:?} word_idx={wi} adj={adj} total_rendered_words={cumulative_words} lines={}",
+                lines.len()
+            ));
             None
         });
+
+        if let Some(log) = debug_log {
+            append_reading_view_karaoke_debug_log(&log);
+        }
 
         self.voice_reading_highlight = highlight;
 
@@ -5196,6 +5205,46 @@ mod tests {
                 "Loop",
                 "TTS word 2 should highlight 'Loop', not the heading marker"
             );
+        }
+
+        #[test]
+        fn voice_progress_skips_list_markers() {
+            let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+            let tx = AppEventSender::new(tx_raw);
+            let content = "- Alpha item\n- Beta item";
+            let mut view = DocumentReaderView::new(
+                "list-test".to_string(),
+                "List Test".to_string(),
+                content.to_string(),
+                tx,
+                true,
+                crate::tui::FrameRequester::test_dummy(),
+            );
+            view.show_tutorial = false;
+            render_view(&view);
+
+            view.set_voice_reading_progress(Some(0), 0);
+            let hl = view.voice_reading_highlight.expect("first list word");
+            let (line_idx, start, end) = hl;
+            let section = view.sections.get(view.current_section).expect("section");
+            let inner_w = view.last_inner_width.get();
+            let lines = section.rendered_lines(inner_w);
+            let line_text: String = lines[line_idx]
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect();
+            assert_eq!(&line_text[start..end], "Alpha");
+
+            view.set_voice_reading_progress(Some(2), 0);
+            let hl = view.voice_reading_highlight.expect("second list word");
+            let (line_idx, start, end) = hl;
+            let line_text: String = lines[line_idx]
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect();
+            assert_eq!(&line_text[start..end], "Beta");
         }
     }
 

@@ -50,10 +50,9 @@ async fn start_server(token: &str) -> anyhow::Result<(u16, CancellationToken)> {
     ));
 
     let thread_manager = Arc::new(ThreadManager::new(
-        config.codex_home.clone(),
+        &config,
         auth_manager,
         SessionSource::Exec,
-        None,
         CollaborationModesConfig::default(),
     ));
 
@@ -71,6 +70,7 @@ async fn start_server(token: &str) -> anyhow::Result<(u16, CancellationToken)> {
         cloud_requirements: codex_core::config_loader::CloudRequirementsLoader::default(),
         feedback: CodexFeedback::new(),
         auth_token: Some(token.to_string()),
+        owner_user_id: None,
     };
 
     tokio::spawn(async move {

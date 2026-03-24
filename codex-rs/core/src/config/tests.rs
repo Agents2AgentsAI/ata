@@ -128,7 +128,7 @@ consolidation_model = "gpt-5"
     let config = Config::load_from_base_config_with_overrides(
         memories_cfg,
         ConfigOverrides::default(),
-        tempdir().expect("tempdir").path().to_path_buf(),
+        TempDir::new().expect("tempdir").path().to_path_buf(),
     )
     .expect("load config from memories settings");
     assert_eq!(
@@ -183,7 +183,7 @@ fn runtime_config_defaults_model_availability_nux() {
     let cfg = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides::default(),
-        tempdir().expect("tempdir").path().to_path_buf(),
+        TempDir::new().expect("tempdir").path().to_path_buf(),
     )
     .expect("load config");
 
@@ -196,7 +196,7 @@ fn runtime_config_defaults_model_availability_nux() {
 #[test]
 fn config_toml_deserializes_permissions_network() {
     let toml = r#"
-[permissions.network]
+[permissions.default.network]
 enabled = true
 proxy_url = "http://127.0.0.1:43128"
 enable_socks5 = false
@@ -208,18 +208,17 @@ allowed_domains = ["openai.com"]
 
     assert_eq!(
         cfg.permissions
-            .and_then(|permissions| permissions.network)
-            .expect("permissions.network should deserialize"),
+            .and_then(|permissions| permissions.entries.get("default").cloned())
+            .and_then(|profile| profile.network)
+            .expect("permissions.default.network should deserialize"),
         NetworkToml {
             enabled: Some(true),
             proxy_url: Some("http://127.0.0.1:43128".to_string()),
-            admin_url: None,
             enable_socks5: Some(false),
             socks_url: None,
             enable_socks5_udp: None,
             allow_upstream_proxy: Some(false),
             dangerously_allow_non_loopback_proxy: None,
-            dangerously_allow_non_loopback_admin: None,
             dangerously_allow_all_unix_sockets: None,
             mode: None,
             allowed_domains: Some(vec!["openai.com".to_string()]),
@@ -234,13 +233,20 @@ allowed_domains = ["openai.com"]
 fn permissions_network_enabled_populates_runtime_network_proxy_spec() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml {
+        default_permissions: Some("default".to_string()),
         permissions: Some(PermissionsToml {
-            network: Some(NetworkToml {
-                enabled: Some(true),
-                proxy_url: Some("http://127.0.0.1:43128".to_string()),
-                enable_socks5: Some(false),
-                ..Default::default()
-            }),
+            entries: std::collections::BTreeMap::from([(
+                "default".to_string(),
+                PermissionProfileToml {
+                    filesystem: None,
+                    network: Some(NetworkToml {
+                        enabled: Some(true),
+                        proxy_url: Some("http://127.0.0.1:43128".to_string()),
+                        enable_socks5: Some(false),
+                        ..Default::default()
+                    }),
+                },
+            )]),
         }),
         ..Default::default()
     };
@@ -265,11 +271,18 @@ fn permissions_network_enabled_populates_runtime_network_proxy_spec() -> std::io
 fn permissions_network_disabled_by_default_does_not_start_proxy() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml {
+        default_permissions: Some("default".to_string()),
         permissions: Some(PermissionsToml {
-            network: Some(NetworkToml {
-                allowed_domains: Some(vec!["openai.com".to_string()]),
-                ..Default::default()
-            }),
+            entries: std::collections::BTreeMap::from([(
+                "default".to_string(),
+                PermissionProfileToml {
+                    filesystem: None,
+                    network: Some(NetworkToml {
+                        allowed_domains: Some(vec!["openai.com".to_string()]),
+                        ..Default::default()
+                    }),
+                },
+            )]),
         }),
         ..Default::default()
     };
@@ -873,7 +886,7 @@ fn profile_legacy_toggles_override_base() -> std::io::Result<()> {
     profiles.insert(
         "work".to_string(),
         ConfigProfile {
-            tools_web_search: Some(false),
+            web_search: Some(WebSearchMode::Disabled),
             ..Default::default()
         },
     );
@@ -968,7 +981,6 @@ fn profile_sandbox_mode_overrides_base() -> std::io::Result<()> {
         config.permissions.sandbox_policy.get(),
         &SandboxPolicy::DangerFullAccess
     ));
-    assert!(config.did_user_set_custom_approval_policy_or_sandbox_mode);
 
     Ok(())
 }
@@ -2595,7 +2607,7 @@ model_verbosity = "high"
         supports_websockets: false,
     };
     let model_provider_map = {
-        let mut model_provider_map = built_in_model_providers();
+        let mut model_provider_map = built_in_model_providers(None);
         model_provider_map.insert("openai-custom".to_string(), openai_custom_provider.clone());
         model_provider_map
     };
@@ -2653,14 +2665,17 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             permissions: Permissions {
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                file_system_sandbox_policy: Default::default(),
+                network_sandbox_policy: Default::default(),
                 network: None,
                 allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
+                windows_sandbox_private_desktop: true,
                 macos_seatbelt_profile_extensions: None,
             },
+            approvals_reviewer: ApprovalsReviewer::User,
             enforce_residency: Constrained::allow_any(None),
-            did_user_set_custom_approval_policy_or_sandbox_mode: true,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -2702,9 +2717,12 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             realtime_audio: RealtimeAudioConfig::default(),
+            experimental_realtime_start_instructions: None,
             experimental_realtime_ws_base_url: None,
             experimental_realtime_ws_model: None,
+            realtime: RealtimeConfig::default(),
             experimental_realtime_ws_backend_prompt: None,
+            experimental_realtime_ws_startup_context: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -2713,12 +2731,14 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             forced_login_method: None,
             include_apply_patch_tool: false,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
+            web_search_config: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
             research: None,
             data: None,
             kb: None,
+            coordination: None,
             features: Features::with_defaults().into(),
             suppress_unstable_features_warning: false,
             active_profile: Some("o3".to_string()),
@@ -2786,14 +2806,17 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+            file_system_sandbox_policy: Default::default(),
+            network_sandbox_policy: Default::default(),
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
+            windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
+        approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
-        did_user_set_custom_approval_policy_or_sandbox_mode: true,
         user_instructions: None,
         notify: None,
         cwd: fixture.cwd(),
@@ -2835,9 +2858,12 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         realtime_audio: RealtimeAudioConfig::default(),
+        experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
+        realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
+        experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
         compact_prompt: None,
@@ -2846,12 +2872,14 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         forced_login_method: None,
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
+        web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
         research: None,
         data: None,
         kb: None,
+        coordination: None,
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
         active_profile: Some("gpt3".to_string()),
@@ -2917,14 +2945,17 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+            file_system_sandbox_policy: Default::default(),
+            network_sandbox_policy: Default::default(),
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
+            windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
+        approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
-        did_user_set_custom_approval_policy_or_sandbox_mode: true,
         user_instructions: None,
         notify: None,
         cwd: fixture.cwd(),
@@ -2966,9 +2997,12 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         realtime_audio: RealtimeAudioConfig::default(),
+        experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
+        realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
+        experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
         compact_prompt: None,
@@ -2977,12 +3011,14 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         forced_login_method: None,
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
+        web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
         research: None,
         data: None,
         kb: None,
+        coordination: None,
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
         active_profile: Some("zdr".to_string()),
@@ -3034,14 +3070,17 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+            file_system_sandbox_policy: Default::default(),
+            network_sandbox_policy: Default::default(),
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
+            windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
+        approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
-        did_user_set_custom_approval_policy_or_sandbox_mode: true,
         user_instructions: None,
         notify: None,
         cwd: fixture.cwd(),
@@ -3083,9 +3122,12 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         realtime_audio: RealtimeAudioConfig::default(),
+        experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
+        realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
+        experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
         compact_prompt: None,
@@ -3094,12 +3136,14 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         forced_login_method: None,
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
+        web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
         research: None,
         data: None,
         kb: None,
+        coordination: None,
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
         active_profile: Some("gpt5".to_string()),
@@ -3130,15 +3174,13 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
 fn test_did_user_set_custom_approval_policy_or_sandbox_mode_defaults_no() -> anyhow::Result<()> {
     let fixture = create_test_fixture()?;
 
-    let config = Config::load_from_base_config_with_overrides(
+    let _config = Config::load_from_base_config_with_overrides(
         fixture.cfg.clone(),
         ConfigOverrides {
             ..Default::default()
         },
         fixture.codex_home(),
     )?;
-
-    assert!(config.did_user_set_custom_approval_policy_or_sandbox_mode);
 
     Ok(())
 }
@@ -3155,6 +3197,7 @@ fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> any
         ]),
         feature_requirements: None,
         mcp_servers: None,
+        apps: None,
         rules: None,
         enforce_residency: None,
         network: None,
@@ -3780,6 +3823,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         allowed_web_search_modes: None,
         feature_requirements: None,
         mcp_servers: None,
+        apps: None,
         rules: None,
         enforce_residency: None,
         network: None,
@@ -4207,5 +4251,94 @@ mod notifications_tests {
         let parsed: RootTomlTest =
             toml::from_str(toml).expect("deserialize notification_method=\"bel\"");
         assert_eq!(parsed.tui.notification_method, NotificationMethod::Bel);
+    }
+
+    // ATA config tests
+
+    #[test]
+    fn ata_account_config_defaults() {
+        use crate::config::types::AtaAccountConfig;
+        use crate::config::types::DEFAULT_ATA_SUPABASE_ANON_KEY;
+        use crate::config::types::DEFAULT_ATA_SUPABASE_URL;
+        use crate::config::types::RelayMode;
+
+        let config = AtaAccountConfig::default();
+        assert_eq!(config.supabase_url, DEFAULT_ATA_SUPABASE_URL);
+        assert_eq!(config.supabase_anon_key, DEFAULT_ATA_SUPABASE_ANON_KEY);
+        assert_eq!(config.relay_mode, RelayMode::Cloud);
+    }
+
+    #[test]
+    fn ata_account_config_from_json() {
+        use crate::config::types::AtaAccountConfig;
+        use crate::config::types::RelayMode;
+
+        let json = serde_json::json!({
+            "supabase_url": "https://my-project.supabase.co",
+            "supabase_anon_key": "my-anon-key",
+            "relay_mode": { "type": "cloud" }
+        });
+        let config: AtaAccountConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(config.supabase_url, "https://my-project.supabase.co");
+        assert_eq!(config.supabase_anon_key, "my-anon-key");
+        assert_eq!(config.relay_mode, RelayMode::Cloud);
+    }
+
+    #[test]
+    fn ata_account_config_custom_relay() {
+        use crate::config::types::AtaAccountConfig;
+        use crate::config::types::RelayMode;
+
+        let json = serde_json::json!({
+            "supabase_url": "https://project.supabase.co",
+            "supabase_anon_key": "key",
+            "relay_mode": { "type": "custom", "relay_url": "https://relay.example.com" }
+        });
+        let config: AtaAccountConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            config.relay_mode,
+            RelayMode::Custom {
+                relay_url: "https://relay.example.com".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn ata_account_config_local_relay() {
+        use crate::config::types::AtaAccountConfig;
+        use crate::config::types::RelayMode;
+
+        let json = serde_json::json!({
+            "supabase_url": "https://project.supabase.co",
+            "supabase_anon_key": "key",
+            "relay_mode": { "type": "local" }
+        });
+        let config: AtaAccountConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(config.relay_mode, RelayMode::Local);
+    }
+
+    #[test]
+    fn ata_account_config_roundtrip() {
+        use crate::config::types::AtaAccountConfig;
+        use crate::config::types::RelayMode;
+
+        let config = AtaAccountConfig {
+            supabase_url: "https://example.supabase.co".to_string(),
+            supabase_anon_key: "anon-key-123".to_string(),
+            relay_mode: RelayMode::Custom {
+                relay_url: "wss://relay.ata.ai".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: AtaAccountConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(config, deserialized);
+    }
+
+    #[test]
+    fn relay_mode_default_is_cloud() {
+        use crate::config::types::RelayMode;
+
+        let mode = RelayMode::default();
+        assert_eq!(mode, RelayMode::Cloud);
     }
 }

@@ -7,6 +7,7 @@
 // Voice/TTS is only available on non-Linux platforms with the voice-input feature.
 #![cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 
+#[allow(dead_code)]
 mod support;
 
 use codex_tui::find_active_word;

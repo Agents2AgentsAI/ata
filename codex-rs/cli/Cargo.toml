@@ -34,6 +34,7 @@ codex-login = { workspace = true }
 codex-mcp-server = { workspace = true }
 codex-protocol = { workspace = true }
 codex-responses-api-proxy = { workspace = true }
+codex-research-tools = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-scheduler = { workspace = true }
 codex-state = { workspace = true }
@@ -43,6 +44,7 @@ codex-workspace = { workspace = true }
 libc = { workspace = true }
 owo-colors = { workspace = true }
 regex-lite = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 supports-color = { workspace = true }
 tempfile = { workspace = true }
@@ -55,6 +57,8 @@ tokio = { workspace = true, features = [
 ] }
 toml = { workspace = true }
 tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }

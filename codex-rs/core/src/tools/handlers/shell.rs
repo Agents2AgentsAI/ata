@@ -1,15 +1,11 @@
 use async_trait::async_trait;
 use codex_protocol::ThreadId;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
-use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
-use crate::exec_env::CODEX_SESSION_ID_ENV_VAR;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::features::Feature;
@@ -18,12 +14,14 @@ use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
 use crate::shell::Shell;
 use crate::skills::maybe_emit_implicit_skill_invocation;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
+use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
+use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
@@ -35,8 +33,6 @@ use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::spec::ShellCommandBackendConfig;
-use crate::workspace_kb::CODEX_KB_PATH_ENV_VAR;
-use crate::workspace_kb::resolve_kb_env;
 use codex_protocol::models::PermissionProfile;
 
 pub struct ShellHandler;
@@ -64,49 +60,24 @@ struct RunExecLikeArgs {
     shell_runtime_backend: ShellRuntimeBackend,
 }
 
-fn inject_kb_path_env(
-    env: &mut HashMap<String, String>,
-    turn_context: &TurnContext,
-    cwd: &Path,
-    thread_id: &str,
-) {
-    let kb_env = resolve_kb_env(
-        turn_context.config.codex_home.as_path(),
-        cwd,
-        turn_context
-            .config
-            .kb
-            .as_ref()
-            .and_then(|kb| kb.kb_path.as_deref()),
-        turn_context
-            .shell_environment_policy
-            .r#set
-            .get(CODEX_SESSION_ID_ENV_VAR)
-            .map(String::as_str),
-        Some(thread_id),
-    );
-    env.insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_env.kb_path);
-}
-
 impl ShellHandler {
     fn to_exec_params(
         params: &ShellToolCallParams,
         turn_context: &TurnContext,
         thread_id: ThreadId,
     ) -> ExecParams {
-        let cwd = turn_context.resolve_path(params.workdir.clone());
-        let mut env = create_env(&turn_context.shell_environment_policy, Some(thread_id));
-        let thread_id = thread_id.to_string();
-        inject_kb_path_env(&mut env, turn_context, cwd.as_path(), thread_id.as_str());
-
         ExecParams {
             command: params.command.clone(),
-            cwd,
+            cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
-            env,
+            env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
             network: turn_context.network.clone(),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
+            windows_sandbox_private_desktop: turn_context
+                .config
+                .permissions
+                .windows_sandbox_private_desktop,
             justification: params.justification.clone(),
             arg0: None,
         }
@@ -148,19 +119,19 @@ impl ShellCommandHandler {
         let shell = session.user_shell();
         let use_login_shell = Self::resolve_use_login_shell(params.login, allow_login_shell)?;
         let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
-        let cwd = turn_context.resolve_path(params.workdir.clone());
-        let mut env = create_env(&turn_context.shell_environment_policy, Some(thread_id));
-        let thread_id = thread_id.to_string();
-        inject_kb_path_env(&mut env, turn_context, cwd.as_path(), thread_id.as_str());
 
         Ok(ExecParams {
             command,
-            cwd,
+            cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
-            env,
+            env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
             network: turn_context.network.clone(),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
+            windows_sandbox_private_desktop: turn_context
+                .config
+                .permissions
+                .windows_sandbox_private_desktop,
             justification: params.justification.clone(),
             arg0: None,
         })
@@ -179,6 +150,8 @@ impl From<ShellCommandBackendConfig> for ShellCommandHandler {
 
 #[async_trait]
 impl ToolHandler for ShellHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -202,7 +175,7 @@ impl ToolHandler for ShellHandler {
         }
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -261,6 +234,8 @@ impl ToolHandler for ShellHandler {
 
 #[async_trait]
 impl ToolHandler for ShellCommandHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -290,7 +265,7 @@ impl ToolHandler for ShellCommandHandler {
             .unwrap_or(true)
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -342,7 +317,7 @@ impl ToolHandler for ShellCommandHandler {
 }
 
 impl ShellHandler {
-    async fn run_exec_like(args: RunExecLikeArgs) -> Result<ToolOutput, FunctionCallError> {
+    async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, FunctionCallError> {
         let RunExecLikeArgs {
             tool_name,
             exec_params,
@@ -357,10 +332,6 @@ impl ShellHandler {
         } = args;
 
         let mut exec_params = exec_params;
-        let workspace_kb_root = exec_params
-            .env
-            .get(CODEX_KB_PATH_ENV_VAR)
-            .and_then(|kb_path| crate::workspace_kb::kb_writable_root(Path::new(kb_path)));
         let dependency_env = session.dependency_env().await;
         if !dependency_env.is_empty() {
             exec_params.env.extend(dependency_env.clone());
@@ -372,28 +343,46 @@ impl ShellHandler {
                 explicit_env_overrides.insert(key.clone(), value.clone());
             }
         }
-        if let Some(kb_root) = workspace_kb_root.as_ref() {
-            let kb_path = kb_root.as_path().display().to_string();
-            exec_params
-                .env
-                .insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_path.clone());
-            explicit_env_overrides.insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_path);
-        }
 
-        let request_permission_enabled = session.features().enabled(Feature::RequestPermissions);
-        let normalized_additional_permissions = normalize_and_validate_additional_permissions(
-            request_permission_enabled,
-            turn.approval_policy.value(),
+        let exec_permission_approvals_enabled =
+            session.features().enabled(Feature::ExecPermissionApprovals);
+        let requested_additional_permissions = additional_permissions.clone();
+        let effective_additional_permissions = apply_granted_turn_permissions(
+            session.as_ref(),
             exec_params.sandbox_permissions,
             additional_permissions,
-            &exec_params.cwd,
+        )
+        .await;
+        let additional_permissions_allowed = exec_permission_approvals_enabled
+            || (session.features().enabled(Feature::RequestPermissionsTool)
+                && effective_additional_permissions.permissions_preapproved);
+        let normalized_additional_permissions = implicit_granted_permissions(
+            exec_params.sandbox_permissions,
+            requested_additional_permissions.as_ref(),
+            &effective_additional_permissions,
+        )
+        .map_or_else(
+            || {
+                normalize_and_validate_additional_permissions(
+                    additional_permissions_allowed,
+                    turn.approval_policy.value(),
+                    effective_additional_permissions.sandbox_permissions,
+                    effective_additional_permissions.additional_permissions,
+                    effective_additional_permissions.permissions_preapproved,
+                    &exec_params.cwd,
+                )
+            },
+            |permissions| Ok(Some(permissions)),
         )
         .map_err(FunctionCallError::RespondToModel)?;
 
         // Approval policy guard for explicit escalation in non-OnRequest modes.
-        if exec_params
+        // Sticky turn permissions have already been approved, so they should
+        // continue through the normal exec approval flow for the command.
+        if effective_additional_permissions
             .sandbox_permissions
-            .requires_additional_permissions()
+            .requests_sandbox_override()
+            && !effective_additional_permissions.permissions_preapproved
             && !matches!(
                 turn.approval_policy.value(),
                 codex_protocol::protocol::AskForApproval::OnRequest
@@ -438,7 +427,12 @@ impl ShellHandler {
                 command: &exec_params.command,
                 approval_policy: turn.approval_policy.value(),
                 sandbox_policy: turn.sandbox_policy.get(),
-                sandbox_permissions: exec_params.sandbox_permissions,
+                file_system_sandbox_policy: &turn.file_system_sandbox_policy,
+                sandbox_permissions: if effective_additional_permissions.permissions_preapproved {
+                    codex_protocol::models::SandboxPermissions::UseDefault
+                } else {
+                    effective_additional_permissions.sandbox_permissions
+                },
                 prefix_rule,
             })
             .await;
@@ -449,10 +443,13 @@ impl ShellHandler {
             timeout_ms: exec_params.expiration.timeout_ms(),
             env: exec_params.env.clone(),
             explicit_env_overrides,
-            workspace_kb_root,
+            workspace_kb_root: None,
             network: exec_params.network.clone(),
-            sandbox_permissions: exec_params.sandbox_permissions,
+            sandbox_permissions: effective_additional_permissions.sandbox_permissions,
             additional_permissions: normalized_additional_permissions,
+            #[cfg(unix)]
+            additional_permissions_preapproved: effective_additional_permissions
+                .permissions_preapproved,
             justification: exec_params.justification.clone(),
             exec_approval_requirement,
         };
@@ -484,216 +481,10 @@ impl ShellHandler {
             .map(|result| result.output);
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         let content = emitter.finish(event_ctx, out).await?;
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
-            success: Some(true),
-        })
+        Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-    use std::sync::Arc;
-
-    use codex_protocol::models::ShellCommandToolCallParams;
-    use pretty_assertions::assert_eq;
-
-    use crate::codex::make_session_and_context;
-    use crate::exec_env::CODEX_SESSION_ID_ENV_VAR;
-    use crate::exec_env::create_env;
-    use crate::is_safe_command::is_known_safe_command;
-    use crate::powershell::try_find_powershell_executable_blocking;
-    use crate::powershell::try_find_pwsh_executable_blocking;
-    use crate::sandboxing::SandboxPermissions;
-    use crate::shell::Shell;
-    use crate::shell::ShellType;
-    use crate::shell_snapshot::ShellSnapshot;
-    use crate::tools::handlers::ShellCommandHandler;
-    use crate::workspace_kb::CODEX_KB_PATH_ENV_VAR;
-    use crate::workspace_kb::resolve_kb_path;
-    use tokio::sync::watch;
-
-    /// The logic for is_known_safe_command() has heuristics for known shells,
-    /// so we must ensure the commands generated by [ShellCommandHandler] can be
-    /// recognized as safe if the `command` is safe.
-    #[test]
-    fn commands_generated_by_shell_command_handler_can_be_matched_by_is_known_safe_command() {
-        let bash_shell = Shell {
-            shell_type: ShellType::Bash,
-            shell_path: PathBuf::from("/bin/bash"),
-            shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
-        };
-        assert_safe(&bash_shell, "ls -la");
-
-        let zsh_shell = Shell {
-            shell_type: ShellType::Zsh,
-            shell_path: PathBuf::from("/bin/zsh"),
-            shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
-        };
-        assert_safe(&zsh_shell, "ls -la");
-
-        if let Some(path) = try_find_powershell_executable_blocking() {
-            let powershell = Shell {
-                shell_type: ShellType::PowerShell,
-                shell_path: path.to_path_buf(),
-                shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
-            };
-            assert_safe(&powershell, "ls -Name");
-        }
-
-        if let Some(path) = try_find_pwsh_executable_blocking() {
-            let pwsh = Shell {
-                shell_type: ShellType::PowerShell,
-                shell_path: path.to_path_buf(),
-                shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
-            };
-            assert_safe(&pwsh, "ls -Name");
-        }
-    }
-
-    fn assert_safe(shell: &Shell, command: &str) {
-        assert!(is_known_safe_command(
-            &shell.derive_exec_args(command, /* use_login_shell */ true)
-        ));
-        assert!(is_known_safe_command(
-            &shell.derive_exec_args(command, /* use_login_shell */ false)
-        ));
-    }
-
-    #[tokio::test]
-    async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_context() {
-        let (session, turn_context) = make_session_and_context().await;
-
-        let command = "echo hello".to_string();
-        let workdir = Some("subdir".to_string());
-        let login = None;
-        let timeout_ms = Some(1234);
-        let sandbox_permissions = SandboxPermissions::RequireEscalated;
-        let justification = Some("because tests".to_string());
-
-        let expected_command = session.user_shell().derive_exec_args(&command, true);
-        let expected_cwd = turn_context.resolve_path(workdir.clone());
-        let mut expected_env = create_env(
-            &turn_context.shell_environment_policy,
-            Some(session.conversation_id),
-        );
-        let thread_id = session.conversation_id.to_string();
-        let expected_kb_path = resolve_kb_path(
-            turn_context.config.codex_home.as_path(),
-            expected_cwd.as_path(),
-            turn_context
-                .config
-                .kb
-                .as_ref()
-                .and_then(|kb| kb.kb_path.as_deref()),
-            turn_context
-                .shell_environment_policy
-                .r#set
-                .get(CODEX_SESSION_ID_ENV_VAR)
-                .map(String::as_str),
-            Some(thread_id.as_str()),
-        );
-        expected_env.insert(
-            CODEX_KB_PATH_ENV_VAR.to_string(),
-            expected_kb_path.to_string_lossy().to_string(),
-        );
-
-        let params = ShellCommandToolCallParams {
-            command,
-            workdir,
-            login,
-            timeout_ms,
-            sandbox_permissions: Some(sandbox_permissions),
-            additional_permissions: None,
-            prefix_rule: None,
-            justification: justification.clone(),
-        };
-
-        let exec_params = ShellCommandHandler::to_exec_params(
-            &params,
-            &session,
-            &turn_context,
-            session.conversation_id,
-            true,
-        )
-        .expect("login shells should be allowed");
-
-        // ExecParams cannot derive Eq due to the CancellationToken field, so we manually compare the fields.
-        assert_eq!(exec_params.command, expected_command);
-        assert_eq!(exec_params.cwd, expected_cwd);
-        assert_eq!(exec_params.env, expected_env);
-        assert_eq!(exec_params.network, turn_context.network);
-        assert_eq!(exec_params.expiration.timeout_ms(), timeout_ms);
-        assert_eq!(exec_params.sandbox_permissions, sandbox_permissions);
-        assert_eq!(exec_params.justification, justification);
-        assert_eq!(exec_params.arg0, None);
-    }
-
-    #[test]
-    fn shell_command_handler_respects_explicit_login_flag() {
-        let (_tx, shell_snapshot) = watch::channel(Some(Arc::new(ShellSnapshot {
-            path: PathBuf::from("/tmp/snapshot.sh"),
-            cwd: PathBuf::from("/tmp"),
-        })));
-        let shell = Shell {
-            shell_type: ShellType::Bash,
-            shell_path: PathBuf::from("/bin/bash"),
-            shell_snapshot,
-        };
-
-        let login_command = ShellCommandHandler::base_command(&shell, "echo login shell", true);
-        assert_eq!(
-            login_command,
-            shell.derive_exec_args("echo login shell", true)
-        );
-
-        let non_login_command =
-            ShellCommandHandler::base_command(&shell, "echo non login shell", false);
-        assert_eq!(
-            non_login_command,
-            shell.derive_exec_args("echo non login shell", false)
-        );
-    }
-
-    #[tokio::test]
-    async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
-        let (session, turn_context) = make_session_and_context().await;
-        let params = ShellCommandToolCallParams {
-            command: "echo hello".to_string(),
-            workdir: None,
-            login: None,
-            timeout_ms: None,
-            sandbox_permissions: None,
-            additional_permissions: None,
-            prefix_rule: None,
-            justification: None,
-        };
-
-        let exec_params = ShellCommandHandler::to_exec_params(
-            &params,
-            &session,
-            &turn_context,
-            session.conversation_id,
-            false,
-        )
-        .expect("non-login shells should still be allowed");
-
-        assert_eq!(
-            exec_params.command,
-            session.user_shell().derive_exec_args("echo hello", false)
-        );
-    }
-
-    #[test]
-    fn shell_command_handler_rejects_login_when_disallowed() {
-        let err = ShellCommandHandler::resolve_use_login_shell(Some(true), false)
-            .expect_err("explicit login should be rejected");
-
-        assert!(
-            err.to_string()
-                .contains("login shell is disabled by config"),
-            "unexpected error: {err}"
-        );
-    }
-}
+#[path = "shell_tests.rs"]
+mod tests;

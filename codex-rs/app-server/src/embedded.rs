@@ -18,6 +18,7 @@ use std::sync::atomic::AtomicBool;
 
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_arg0::Arg0DispatchPaths;
+use codex_core::AuthManager;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
@@ -62,6 +63,10 @@ pub struct EmbeddedWebSocketConfig {
     /// `?token=<value>` query-string parameter on the upgrade request.
     /// When `Some`, connections without a valid token are rejected with 401.
     pub auth_token: Option<String>,
+
+    /// Owner's Supabase user_id. When set, JWT-based auth is enabled:
+    /// clients can connect with a Supabase JWT whose `sub` claim matches.
+    pub owner_user_id: Option<String>,
 }
 
 /// Extend `MessageProcessor` with an alternative constructor that accepts an
@@ -71,15 +76,21 @@ pub struct EmbeddedWebSocketConfig {
 /// `message_processor.rs` (which upstream changes frequently).
 impl MessageProcessor {
     pub(crate) fn new_with_thread_manager(
-        args: MessageProcessorArgs,
+        mut args: MessageProcessorArgs,
         thread_manager: Arc<ThreadManager>,
     ) -> Self {
-        // Build a standard processor (creates its own ThreadManager), then
-        // swap in the shared one. Reusing `new()` means we pick up any new
-        // initialisation steps that upstream adds automatically.
-        let mut processor = Self::new(args);
-        processor.set_thread_manager(thread_manager);
-        processor
+        // MessageProcessor::new() requires both auth_manager and thread_manager
+        // to be Some (or both None). Create a standalone AuthManager to pair
+        // with the shared ThreadManager.
+        let config = &args.config;
+        let auth_manager = AuthManager::shared(
+            config.codex_home.clone(),
+            args.enable_codex_api_key_env,
+            config.cli_auth_credentials_store_mode,
+        );
+        args.auth_manager = Some(auth_manager);
+        args.thread_manager = Some(thread_manager);
+        Self::new(args)
     }
 }
 
@@ -102,6 +113,7 @@ pub async fn run_embedded_websocket(ws_config: EmbeddedWebSocketConfig) -> IoRes
         cloud_requirements,
         feedback,
         auth_token,
+        owner_user_id,
     } = ws_config;
 
     let (transport_event_tx, mut transport_event_rx) =
@@ -116,6 +128,7 @@ pub async fn run_embedded_websocket(ws_config: EmbeddedWebSocketConfig) -> IoRes
         transport_event_tx.clone(),
         accept_shutdown.clone(),
         auth_token,
+        owner_user_id,
     )
     .await?;
 
@@ -134,12 +147,14 @@ pub async fn run_embedded_websocket(ws_config: EmbeddedWebSocketConfig) -> IoRes
                             connection_id, writer, disconnect_sender,
                             initialized, experimental_api_enabled,
                             opted_out_notification_methods,
+                            allow_legacy_notifications,
                         } => {
                             outbound_connections.insert(
                                 connection_id,
                                 OutboundConnectionState::new(
                                     writer, initialized, experimental_api_enabled,
-                                    opted_out_notification_methods, disconnect_sender,
+                                    opted_out_notification_methods, allow_legacy_notifications,
+                                    disconnect_sender,
                                 ),
                             );
                         }
@@ -167,7 +182,6 @@ pub async fn run_embedded_websocket(ws_config: EmbeddedWebSocketConfig) -> IoRes
         codex_state::StateRuntime::init(
             config.sqlite_home.clone(),
             config.model_provider_id.clone(),
-            None,
         )
         .await
         .ok()
@@ -187,9 +201,13 @@ pub async fn run_embedded_websocket(ws_config: EmbeddedWebSocketConfig) -> IoRes
                 cli_overrides,
                 loader_overrides,
                 cloud_requirements,
+                auth_manager: None,
+                thread_manager: None,
                 feedback,
                 log_db,
                 config_warnings: Vec::new(),
+                session_source: codex_app_server_protocol::SessionSource::default().into(),
+                enable_codex_api_key_env: false,
             },
             thread_manager,
         );
@@ -211,6 +229,7 @@ pub async fn run_embedded_websocket(ws_config: EmbeddedWebSocketConfig) -> IoRes
                         match event {
                             TransportEvent::ConnectionOpened {
                                 connection_id, writer, disconnect_sender,
+                                allow_legacy_notifications,
                             } => {
                                 let outbound_initialized = Arc::new(AtomicBool::new(false));
                                 let outbound_experimental_api_enabled =
@@ -221,6 +240,7 @@ pub async fn run_embedded_websocket(ws_config: EmbeddedWebSocketConfig) -> IoRes
                                     .send(OutboundControlEvent::Opened {
                                         connection_id,
                                         writer,
+                                        allow_legacy_notifications,
                                         disconnect_sender,
                                         initialized: Arc::clone(&outbound_initialized),
                                         experimental_api_enabled: Arc::clone(
@@ -279,7 +299,6 @@ pub async fn run_embedded_websocket(ws_config: EmbeddedWebSocketConfig) -> IoRes
                                                     bind_address,
                                                 },
                                                 &mut connection_state.session,
-                                                &connection_state.outbound_initialized,
                                             )
                                             .await;
                                         if let Ok(mut opted_out) = connection_state

@@ -4,6 +4,403 @@
 // fork-specific document reader code in a separate file, reducing merge
 // conflicts when syncing with upstream.
 
+fn browser_extract_tag_attr(tag: &str, attr: &str) -> Option<String> {
+    let tag_lower = tag.to_ascii_lowercase();
+    let attr_marker = format!("{attr}=");
+    let start = tag_lower.find(&attr_marker)? + attr_marker.len();
+    let rest = &tag[start..];
+    let quote = rest.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let value = &rest[1..];
+    let end = value.find(quote)?;
+    Some(value[..end].to_string())
+}
+
+fn browser_latex_spoken_fallback(latex: &str) -> String {
+    if latex.is_empty() {
+        String::new()
+    } else {
+        crate::text_formatting::latex_to_plain_text(&format!("${latex}$"))
+    }
+}
+
+fn browser_strip_voice_tags_only(markdown: &str) -> String {
+    if !markdown.contains('<') {
+        return markdown.to_string();
+    }
+
+    let mut result = String::with_capacity(markdown.len());
+    let mut remaining = markdown;
+
+    while let Some(start) = remaining.find('<') {
+        result.push_str(&remaining[..start]);
+        let tag_region = &remaining[start..];
+        let tag_lower = tag_region.to_ascii_lowercase();
+
+        if tag_lower.starts_with("<voice")
+            && let Some(end) = tag_region.find('>')
+        {
+            remaining = &tag_region[end + 1..];
+            continue;
+        }
+        if tag_lower.starts_with("</voice>") {
+            remaining = &tag_region["</voice>".len()..];
+            continue;
+        }
+
+        result.push('<');
+        remaining = &tag_region[1..];
+    }
+
+    result.push_str(remaining);
+    result
+}
+
+fn browser_preserve_spoken_tags(markdown: &str) -> String {
+    if !markdown.contains('<') {
+        return markdown.to_string();
+    }
+
+    let mut result = String::with_capacity(markdown.len());
+    let mut remaining = markdown;
+
+    while let Some(start) = remaining.find('<') {
+        result.push_str(&remaining[..start]);
+        let tag_region = &remaining[start..];
+        let tag_lower = tag_region.to_ascii_lowercase();
+
+        if tag_lower.starts_with("<voice")
+            && let Some(end) = tag_region.find('>')
+        {
+            remaining = &tag_region[end + 1..];
+            continue;
+        }
+        if tag_lower.starts_with("</voice>") {
+            remaining = &tag_region["</voice>".len()..];
+            continue;
+        }
+        if tag_lower.starts_with("<eq")
+            && let Some(end) = tag_region.find('>')
+        {
+            let tag = &tag_region[..=end];
+            let tag_lower = tag.to_ascii_lowercase();
+            let speak = browser_extract_tag_attr(tag, "speak");
+            let latex = browser_extract_tag_attr(tag, "latex").unwrap_or_default();
+            let is_self_closing = tag_lower.ends_with("/>");
+
+            if is_self_closing {
+                let spoken = speak.unwrap_or_else(|| browser_latex_spoken_fallback(&latex));
+                result.push_str(&spoken);
+                remaining = &tag_region[end + 1..];
+                continue;
+            }
+
+            if let Some(close) = tag_lower
+                .ends_with('>')
+                .then(|| tag_region.to_ascii_lowercase().find("</eq>"))
+                .flatten()
+            {
+                let inner = tag_region[end + 1..close].trim();
+                let spoken = speak
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| {
+                        if inner.is_empty() {
+                            browser_latex_spoken_fallback(&latex)
+                        } else {
+                            inner.to_string()
+                        }
+                    });
+                result.push_str(&spoken);
+                remaining = &tag_region[close + "</eq>".len()..];
+                continue;
+            }
+
+            remaining = &tag_region[end + 1..];
+            continue;
+        }
+        if tag_lower.starts_with("</eq>") {
+            remaining = &tag_region["</eq>".len()..];
+            continue;
+        }
+
+        result.push('<');
+        remaining = &tag_region[1..];
+    }
+
+    result.push_str(remaining);
+    result
+}
+
+fn browser_normalized_spoken_text(markdown: &str) -> String {
+    use std::sync::LazyLock;
+
+    static RE_PAUSE_MARKER: LazyLock<regex_lite::Regex> =
+        LazyLock::new(
+            || match regex_lite::Regex::new(r"\[PAUSE:\d+\]") {
+                Ok(r) => r,
+                Err(e) => panic!("invalid RE_PAUSE_MARKER regex: {e}"),
+            },
+        );
+    static RE_WHITESPACE: LazyLock<regex_lite::Regex> =
+        LazyLock::new(|| match regex_lite::Regex::new(r"\s+") {
+            Ok(r) => r,
+            Err(e) => panic!("invalid RE_WHITESPACE regex: {e}"),
+        });
+
+    let spoken = browser_read_aloud_text(markdown);
+    let without_pauses = RE_PAUSE_MARKER.replace_all(&spoken, " ");
+    RE_WHITESPACE
+        .replace_all(without_pauses.trim(), " ")
+        .trim()
+        .to_string()
+}
+
+fn browser_parse_table_row(line: &str) -> Option<Vec<String>> {
+    let trimmed = line.trim();
+    if trimmed.matches('|').count() < 2 {
+        return None;
+    }
+    let cells: Vec<String> = trimmed
+        .trim_matches('|')
+        .split('|')
+        .map(|cell| cell.trim().to_string())
+        .collect();
+    if cells.is_empty() || cells.iter().all(std::string::String::is_empty) {
+        return None;
+    }
+    Some(cells)
+}
+
+fn browser_is_table_separator(line: &str) -> bool {
+    let Some(cells) = browser_parse_table_row(line) else {
+        return false;
+    };
+    cells.iter().all(|cell| {
+        !cell.is_empty()
+            && cell
+                .chars()
+                .all(|ch| ch == '-' || ch == ':' || ch.is_whitespace())
+    })
+}
+
+fn browser_linearize_tables(markdown: &str) -> String {
+    let lines: Vec<&str> = markdown.lines().collect();
+    let mut out = Vec::with_capacity(lines.len());
+    let mut i = 0usize;
+
+    while i < lines.len() {
+        let line = lines[i];
+        let Some(header_cells) = browser_parse_table_row(line) else {
+            out.push(line.to_string());
+            i += 1;
+            continue;
+        };
+
+        if i + 1 >= lines.len() || !browser_is_table_separator(lines[i + 1]) {
+            out.push(line.to_string());
+            i += 1;
+            continue;
+        }
+
+        out.extend(
+            header_cells
+                .into_iter()
+                .filter(|cell| !cell.is_empty()),
+        );
+        i += 2;
+
+        while i < lines.len() {
+            let Some(row_cells) = browser_parse_table_row(lines[i]) else {
+                break;
+            };
+            if browser_is_table_separator(lines[i]) {
+                i += 1;
+                continue;
+            }
+            out.extend(
+                row_cells
+                    .into_iter()
+                    .filter(|cell| !cell.is_empty()),
+            );
+            i += 1;
+        }
+    }
+
+    out.join("\n")
+}
+
+fn browser_expand_image_alt_text(markdown: &str) -> String {
+    if !markdown.contains("![") {
+        return markdown.to_string();
+    }
+
+    let mut result = String::with_capacity(markdown.len());
+    let mut remaining = markdown;
+
+    while let Some(start) = remaining.find("![") {
+        result.push_str(&remaining[..start]);
+
+        let after_marker = &remaining[start + 2..];
+        let Some(alt_end) = after_marker.find(']') else {
+            result.push_str("![");
+            remaining = after_marker;
+            continue;
+        };
+
+        let alt_text = after_marker[..alt_end].trim();
+        let after_alt = &after_marker[alt_end + 1..];
+        if let Some(after_paren) = after_alt.strip_prefix('(')
+            && let Some(url_end) = after_paren.find(')')
+        {
+            if !alt_text.is_empty() {
+                result.push_str(alt_text);
+            }
+            remaining = &after_paren[url_end + 1..];
+            continue;
+        }
+
+        result.push_str("![");
+        remaining = after_marker;
+    }
+
+    result.push_str(remaining);
+    result
+}
+
+fn browser_prepare_read_aloud_markdown(markdown: &str) -> String {
+    use std::sync::LazyLock;
+
+    static RE_BLOCKQUOTE_PREFIX: LazyLock<regex_lite::Regex> =
+        LazyLock::new(|| match regex_lite::Regex::new(r"^[ \t]*(?:>\s*)+") {
+            Ok(r) => r,
+            Err(e) => panic!("invalid RE_BLOCKQUOTE_PREFIX regex: {e}"),
+        });
+    static RE_LIST_TASK_MARKER: LazyLock<regex_lite::Regex> =
+        LazyLock::new(
+            || match regex_lite::Regex::new(r"^([ \t]*(?:[-+]|\d{1,3}\.)\s*)\[(?: |x|X)\]\s+") {
+                Ok(r) => r,
+                Err(e) => panic!("invalid RE_LIST_TASK_MARKER regex: {e}"),
+            },
+        );
+    static RE_BARE_TASK_MARKER: LazyLock<regex_lite::Regex> =
+        LazyLock::new(|| match regex_lite::Regex::new(r"^[ \t]*\[(?: |x|X)\]\s+") {
+            Ok(r) => r,
+            Err(e) => panic!("invalid RE_BARE_TASK_MARKER regex: {e}"),
+        });
+
+    let expanded_images = browser_expand_image_alt_text(markdown);
+    let linearized_tables = browser_linearize_tables(&expanded_images);
+    linearized_tables
+        .lines()
+        .map(|line| {
+            let without_quote = RE_BLOCKQUOTE_PREFIX.replace(line, "");
+            let without_list_task = RE_LIST_TASK_MARKER.replace(&without_quote, "$1");
+            RE_BARE_TASK_MARKER
+                .replace(&without_list_task, "")
+                .into_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn browser_finalize_read_aloud_text(cleaned: String) -> String {
+    use std::sync::LazyLock;
+
+    static RE_LIST_PREFIX: LazyLock<regex_lite::Regex> = LazyLock::new(|| {
+        match regex_lite::Regex::new(r"^(\[PAUSE:\d+\])?[ \t]*(?:[-+]|\d{1,3}\.)\s+") {
+            Ok(r) => r,
+            Err(e) => panic!("invalid RE_LIST_PREFIX regex: {e}"),
+        }
+    });
+
+    cleaned
+        .lines()
+        .map(|line| RE_LIST_PREFIX.replace(line, "$1").into_owned())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
+fn append_browser_reading_view_debug_log(message: &str) {
+    let Ok(home) = codex_core::config::find_codex_home() else {
+        return;
+    };
+    let path = home.join("logs/browser-reading-view.log");
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    else {
+        return;
+    };
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let _ = std::io::Write::write_all(&mut file, format!("[{ts}] {message}\n").as_bytes());
+}
+
+fn browser_log_preview(text: &str) -> String {
+    const MAX_CHARS: usize = 160;
+
+    let normalized = text.replace('\n', "\\n");
+    let mut chars = normalized.chars();
+    let preview: String = chars.by_ref().take(MAX_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{preview}...")
+    } else {
+        preview
+    }
+}
+
+fn browser_selection_word_offset(section_markdown: &str, selected_text: &str) -> Option<usize> {
+    let full = browser_normalized_spoken_text(section_markdown);
+    let selected = browser_normalized_spoken_text(selected_text);
+    if full.is_empty() || selected.is_empty() {
+        return None;
+    }
+    let start = full.find(&selected)?;
+    Some(full[..start].split_whitespace().count())
+}
+
+fn browser_read_aloud_text(markdown: &str) -> String {
+    let normalized = browser_prepare_read_aloud_markdown(&browser_preserve_spoken_tags(markdown));
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    let cleaned = crate::chatwidget::voice_mode::clean_for_tts(&normalized);
+    #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
+    let cleaned = normalized;
+    browser_finalize_read_aloud_text(cleaned)
+}
+
+pub fn browser_read_aloud_markup(markdown: &str) -> String {
+    let normalized = browser_prepare_read_aloud_markdown(&browser_strip_voice_tags_only(markdown));
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    let cleaned =
+        crate::chatwidget::voice_mode::clean_for_tts_preserving_equation_markers(&normalized);
+    #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
+    let cleaned = normalized;
+    browser_finalize_read_aloud_text(cleaned)
+}
+
+fn browser_resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>) -> String {
+    if let Some(thread_id) = thread_id {
+        return format!("ata --yolo resume {thread_id}");
+    }
+
+    codex_core::util::resume_command(thread_name, None)
+        .map(|command| command.replacen("ata ", "ata --yolo ", 1))
+        .unwrap_or_else(|| "ata --yolo resume <session-id>".to_string())
+}
+
 impl ChatWidget {
     /// Returns `true` when the document reader is active and streaming output
     /// (agent messages, reasoning) should be suppressed from the chat history.
@@ -97,6 +494,9 @@ impl ChatWidget {
                     // Open in browser.
                     #[cfg(target_os = "macos")]
                     {
+                        // Use -n to open a new browser instance/tab and -g to not
+                        // bring the browser to foreground (user stays in terminal).
+                        // Fall back to plain open if -n fails (some browsers don't support it).
                         let _ = std::process::Command::new("open").arg(&url).spawn();
                     }
                     #[cfg(target_os = "linux")]
@@ -190,6 +590,9 @@ impl ChatWidget {
     ///   question about the current document, routed through the agent.
     /// - `{"type": "requestReadAloud", "sectionIndex": N}` — request TTS
     ///   narration of the specified section.
+    /// - `{"type": "requestSelectionReadAloud", "sectionIndex": N,
+    ///    "selectedText": "...", "selectionStartWord": W}` — request TTS
+    ///   narration of just the selected text within the section.
     pub(crate) fn handle_reading_view_browser_message(&mut self, json: &str) {
         let Ok(msg) = serde_json::from_str::<serde_json::Value>(json) else {
             tracing::warn!("Failed to parse browser message: {json}");
@@ -197,6 +600,10 @@ impl ChatWidget {
         };
 
         let msg_type = msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        append_browser_reading_view_debug_log(&format!(
+            "browser_message type={msg_type} payload={}",
+            browser_log_preview(json)
+        ));
         match msg_type {
             "followUpQuestion" => {
                 let text = msg
@@ -222,6 +629,36 @@ impl ChatWidget {
                     .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0) as usize;
                 self.handle_browser_request_read_aloud(section_index);
+            }
+            "visibleSectionChanged" => {
+                let section_index = msg
+                    .get("sectionIndex")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0) as usize;
+                self.handle_browser_visible_section_changed(section_index);
+            }
+            "requestSelectionReadAloud" => {
+                let section_index = msg
+                    .get("sectionIndex")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0) as usize;
+                let selection_start_word = msg
+                    .get("selectionStartWord")
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|v| v as usize);
+                let selected_text = msg
+                    .get("selectedText")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(ToString::to_string);
+                if let Some(selected_text) = selected_text {
+                    self.handle_browser_request_selection_read_aloud(
+                        section_index,
+                        selected_text,
+                        selection_start_word,
+                    );
+                }
             }
             #[cfg(not(target_os = "linux"))]
             "requestPause" => {
@@ -303,23 +740,13 @@ impl ChatWidget {
             section_content
         };
 
-        // Formatting guidance shared by both selection and no-selection paths.
-        let formatting_guidance = "\
-            Write your answer as straight prose that continues the section's voice. \
-            Do NOT use a Q:/A: format. If the answer would be unclear without context, \
-            a short italic lead-in is fine (e.g. *On dropout:* ...), but skip it when \
-            the meaning is obvious from placement. Don't overuse it.\n\n\
-            SUMMARY (required): Always set the `summary` parameter to a short descriptive \
-            label of your answer (5-10 words), e.g. summary=\"Role of attention heads in GPT\". \
-            This is used as a section label regardless of foldable.\n\n\
-            FOLDABLE CONTENT: For supplementary content (explanations, examples, deep dives), \
-            set foldable=true. Direct answers, corrections, \
-            and rewrites should NOT be foldable (foldable=false, the default).\n\n\
-            DISPLAY FORMAT: The reading view is displayed in a web browser with full \
-            HTML rendering support. You can use:\n\
-            - LaTeX math: wrap equations in $...$ (inline) or $$...$$ (display)\n\
-            - Mermaid diagrams: use ```mermaid code blocks for flowcharts, sequence diagrams, etc.\n\
-            - Rich markdown formatting including tables, blockquotes, etc.";
+        let selection_guidance = codex_core::reading_view_selection_follow_up_guidance(
+            codex_core::ReadingViewDisplayMode::Browser,
+        );
+        let section_guidance =
+            codex_core::reading_view_section_follow_up_guidance(
+                codex_core::ReadingViewDisplayMode::Browser,
+            );
 
         // Build context similar to the TUI document reader's submit_follow_up.
         // The sentinel `<!-- READER_TOOL_INSTRUCTIONS -->` separates the user-visible
@@ -337,20 +764,8 @@ impl ChatWidget {
                  [Selected text:]\n{sel}\n\n\
                  {text}\n\n\
                  <!-- READER_TOOL_INSTRUCTIONS -->\n\
-                 DEFAULT — insert your answer after the selection:\n\
-                 patch_section(document_id=\"{doc_id}\", section_index={section_idx_str}, \
-                 old_text=\"<the selected text exactly>\", \
-                 new_text=\"<the selected text>\\n\\n<your answer>\")\n\
-                 This inserts your answer right after the selected passage. \
-                 Reproduce the selected text verbatim as old_text so the patch matches.\n\n\
-                 REWRITE — if the user asks to rewrite, simplify, or rephrase the selection:\n\
-                 patch_section(document_id=\"{doc_id}\", section_index={section_idx_str}, \
-                 old_text=\"<the selected text exactly>\", \
-                 new_text=\"<the rewritten version that replaces it>\")\n\
-                 The new_text must NOT contain the old_text — it fully replaces it.\n\n\
-                 {formatting_guidance}\n\n\
-                 Do NOT rewrite the entire section unless the user explicitly asks for a rewrite.\n\
-                 Do NOT output plain text; only tool calls are visible to the user.",
+                 Tool target for this turn: document_id=\"{doc_id}\", section_index={section_idx_str}.\n\n\
+                 {selection_guidance}",
             )
         } else {
             // No selection — use the existing context format.
@@ -359,20 +774,9 @@ impl ChatWidget {
                  currently viewing the section titled \"{section_heading}\"]\n\n\
                  {text}\n\n\
                  <!-- READER_TOOL_INSTRUCTIONS -->\n\
+                 Tool target for this turn: document_id=\"{doc_id}\", section_index={section_idx_str}.\n\n\
                  Section content (for context):\n{content_preview}\n\n\
-                 Respond using document tool calls so your answer appears in the reading view.\n\
-                 PREFERRED: Use patch_section to insert your answer inline after the relevant passage:\n\
-                 patch_section(document_id=\"{doc_id}\", section_index={section_idx_str}, \
-                 old_text=\"<passage>\", new_text=\"<passage>\\n\\n<your answer>\")\n\n\
-                 ALTERNATIVE: Use append_to_section to add your answer to the end of this section:\n\
-                 append_to_section(document_id=\"{doc_id}\", section_index={section_idx_str}, \
-                 content=\"<your answer>\", foldable=true, summary=\"<short label>\")\n\n\
-                 NEW SECTION: Use add_document_section when the question introduces a new topic:\n\
-                 add_document_section(document_id=\"{doc_id}\", after_section_index={section_idx_str}, \
-                 heading=\"<heading>\", content=\"<body>\")\n\n\
-                 {formatting_guidance}\n\n\
-                 Do NOT rewrite the entire section unless the user explicitly asks for a rewrite.\n\
-                 Do NOT output plain text; only tool calls are visible to the user.",
+                 {section_guidance}",
             )
         };
 
@@ -393,37 +797,168 @@ impl ChatWidget {
         self.forward_to_reading_view_server(&ws_msg.to_string());
     }
 
+    fn browser_read_aloud_text_for_section(&self, section_index: usize) -> Option<String> {
+        let content = self.reading_view_browser_raw_sections.get(section_index)?;
+        let text = browser_read_aloud_markup(content);
+        if text.trim().is_empty() {
+            None
+        } else {
+            Some(text)
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn prefetch_browser_section_read_aloud(&mut self, section_index: usize) {
+        let Some(text) = self.browser_read_aloud_text_for_section(section_index) else {
+            append_browser_reading_view_debug_log(&format!(
+                "prefetch_read_aloud skipped_empty index={section_index}"
+            ));
+            return;
+        };
+
+        append_browser_reading_view_debug_log(&format!(
+            "prefetch_read_aloud index={section_index} spoken_len={} preview={}",
+            text.len(),
+            browser_log_preview(&text)
+        ));
+        self.app_event_tx.send(AppEvent::VoiceModePrefetchSection {
+            document_id: self.reading_view_browser_doc_id.clone(),
+            section_index,
+            text,
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    fn prefetch_browser_section_read_aloud(&mut self, _section_index: usize) {}
+
+    fn handle_browser_visible_section_changed(&mut self, section_index: usize) {
+        append_browser_reading_view_debug_log(&format!(
+            "visible_section_changed index={section_index}"
+        ));
+        self.prefetch_browser_section_read_aloud(section_index);
+        if section_index + 1 < self.reading_view_browser_raw_sections.len() {
+            self.prefetch_browser_section_read_aloud(section_index + 1);
+        }
+    }
+
     /// Handle a read-aloud request from the browser reading view.
     ///
     /// Triggers TTS narration of the specified section if voice/TTS
     /// infrastructure is available.
     fn handle_browser_request_read_aloud(&mut self, section_index: usize) {
-        let section = self.reading_view_browser_sections.get(section_index);
-        let Some((_heading, _content)) = section else {
+        let Some(content) = self.reading_view_browser_raw_sections.get(section_index) else {
             tracing::warn!(
                 "Browser requestReadAloud for section {section_index} but section not found"
             );
+            append_browser_reading_view_debug_log(&format!(
+                "request_read_aloud missing_section index={section_index}"
+            ));
+            // Clear hourglass — the browser already set _ttsState='starting'.
+            let ws_msg = serde_json::json!({
+                "type": "ttsStateChanged",
+                "state": "stopped",
+            });
+            self.forward_to_reading_view_server(&ws_msg.to_string());
             return;
         };
 
+        let Some(text) = self.browser_read_aloud_text_for_section(section_index) else {
+            append_browser_reading_view_debug_log(&format!(
+                "request_read_aloud skipped_empty index={section_index}"
+            ));
+            // Clear hourglass — the browser already set _ttsState='starting'.
+            let ws_msg = serde_json::json!({
+                "type": "ttsStateChanged",
+                "state": "stopped",
+            });
+            self.forward_to_reading_view_server(&ws_msg.to_string());
+            return;
+        };
+        append_browser_reading_view_debug_log(&format!(
+            "request_read_aloud index={section_index} raw_len={} spoken_len={} preview={}",
+            content.len(),
+            text.len(),
+            browser_log_preview(&text)
+        ));
+
+        let ws_msg = serde_json::json!({ "type": "stopKaraoke" });
+        self.forward_to_reading_view_server(&ws_msg.to_string());
+        let ws_msg = serde_json::json!({
+            "type": "ttsStateChanged",
+            "state": "starting",
+            "sectionIndex": section_index,
+        });
+        self.forward_to_reading_view_server(&ws_msg.to_string());
+
         // Send only the body content (not the heading) to TTS.
         //
-        // The browser's karaoke system (`_walkAndWrap`) wraps words only
-        // inside `.section-content`, not the heading `<h2>`.  If we
-        // included the heading in the TTS text, the heading words would
-        // be spoken and counted in the word-alignment timeline but would
-        // have no corresponding `.kw` spans in the DOM, causing the
-        // karaoke highlight to lag behind the audio by the number of
-        // heading words.  The heading is already displayed as a static
-        // element, so there is no need to narrate it.
+        // The browser's karaoke system (`_walkAndWrap`) wraps only the
+        // visible words inside `.section-content`. Structural markdown
+        // markers like headings, blockquotes, task checkboxes, and list
+        // numbers/bullets are not rendered as `.kw` spans in the DOM.
+        // If we left them in the spoken stream, the alignment timeline and
+        // progress bar would drift as soon as the section hit a list.
         // Emit a VoiceModeNarrateSection event so the existing TTS pipeline
         // handles it (with caching, alignment, etc.).
         #[cfg(not(target_os = "linux"))]
         self.app_event_tx.send(AppEvent::VoiceModeNarrateSection {
             document_id: self.reading_view_browser_doc_id.clone(),
             section_index,
-            text: _content.clone(),
+            text,
             selection_word_offset: None,
+            manual: true,
+        });
+        if section_index + 1 < self.reading_view_browser_raw_sections.len() {
+            self.prefetch_browser_section_read_aloud(section_index + 1);
+        }
+    }
+
+    /// Handle a read-aloud request for the currently selected text in the
+    /// browser reading view.
+    fn handle_browser_request_selection_read_aloud(
+        &mut self,
+        section_index: usize,
+        selected_text: String,
+        selection_start_word: Option<usize>,
+    ) {
+        let Some(section) = self.reading_view_browser_sections.get(section_index) else {
+            tracing::warn!(
+                "Browser requestSelectionReadAloud for section {section_index} but section not found"
+            );
+            return;
+        };
+
+        let selection_word_offset = selection_start_word
+            .or_else(|| browser_selection_word_offset(&section.1, &selected_text));
+        let text = browser_read_aloud_markup(&selected_text);
+        append_browser_reading_view_debug_log(&format!(
+            "request_selection_read_aloud index={section_index} selected_len={} spoken_len={} offset={selection_word_offset:?} preview={}",
+            selected_text.len(),
+            text.len(),
+            browser_log_preview(&text)
+        ));
+        if text.trim().is_empty() {
+            append_browser_reading_view_debug_log(&format!(
+                "request_selection_read_aloud skipped_empty index={section_index}"
+            ));
+            return;
+        }
+
+        let ws_msg = serde_json::json!({ "type": "stopKaraoke" });
+        self.forward_to_reading_view_server(&ws_msg.to_string());
+        let ws_msg = serde_json::json!({
+            "type": "ttsStateChanged",
+            "state": "starting",
+            "sectionIndex": section_index,
+        });
+        self.forward_to_reading_view_server(&ws_msg.to_string());
+
+        #[cfg(not(target_os = "linux"))]
+        self.app_event_tx.send(AppEvent::VoiceModeNarrateSection {
+            document_id: self.reading_view_browser_doc_id.clone(),
+            section_index,
+            text,
+            selection_word_offset,
             manual: true,
         });
     }
@@ -447,22 +982,43 @@ impl ChatWidget {
 
         // Browser mode: send outline first, then fill sections progressively.
         if self.is_reading_view_browser_mode() {
+            // Stop any active karaoke before replacing the document.
+            #[cfg(not(target_os = "linux"))]
+            self.on_voice_interrupt_tts();
             self.flush_active_cell();
 
-            let sections: Vec<(String, String)> = Self::reading_view_sections_parsed(&ev.content)
-                .into_iter()
+            let raw_sections = Self::reading_view_sections_parsed(&ev.content);
+            let sections: Vec<(String, String)> = raw_sections
+                .iter()
                 .map(|(h, c)| {
                     (
-                        crate::text_formatting::strip_voice_tags(&h),
-                        crate::text_formatting::strip_voice_tags(&c),
+                        crate::text_formatting::strip_voice_tags(h),
+                        crate::text_formatting::strip_voice_tags(c),
                     )
                 })
                 .collect();
 
-            // Store browser document state for follow-up questions and read-aloud.
+            append_browser_reading_view_debug_log(&format!(
+                "present_document title={} sections={} body_lengths={:?}",
+                browser_log_preview(&ev.title),
+                sections.len(),
+                raw_sections
+                    .iter()
+                    .map(|(_, content)| content.len())
+                    .collect::<Vec<_>>()
+            ));
+
+            // Cache the full section bodies for TTS/alignment. The browser UI
+            // keeps the read-aloud controls disabled until a section has been
+            // rendered, so the cached source text can exist before the DOM is
+            // visibly filled without exposing not-yet-visible narration.
             self.reading_view_browser_title = ev.title.clone();
             self.reading_view_browser_doc_id = ev.document_id.clone();
             self.reading_view_browser_sections = sections.clone();
+            self.reading_view_browser_raw_sections = raw_sections
+                .into_iter()
+                .map(|(_, content)| content)
+                .collect();
 
             // Send outline with empty content (shows shimmer placeholders).
             let outline_sections: Vec<serde_json::Value> = sections
@@ -475,6 +1031,10 @@ impl ChatWidget {
                 "type": "presentDocument",
                 "title": ev.title,
                 "sections": outline_sections,
+                "resumeCommand": browser_resume_command(
+                    self.thread_name.as_deref(),
+                    self.thread_id,
+                ),
             });
             self.ensure_reading_view_server();
             self.forward_to_reading_view_server(&ws_msg.to_string());
@@ -520,8 +1080,13 @@ impl ChatWidget {
                 }
             }
 
+            let url = self
+                .reading_view_server
+                .as_ref()
+                .map(codex_reading_view_server::ReadingViewServer::url)
+                .unwrap_or_default();
             self.add_info_message(
-                format!("Reading view opened in browser: {}", ev.title),
+                format!("Reading view opened in browser: {} — {}", ev.title, url),
                 None,
             );
             self.request_redraw();
@@ -569,10 +1134,22 @@ impl ChatWidget {
         // Forward to browser if in browser mode.
         if self.is_reading_view_browser_mode() {
             let clean_content = crate::text_formatting::strip_voice_tags(&ev.content);
+            append_browser_reading_view_debug_log(&format!(
+                "update_section index={} content_len={} preview={}",
+                ev.section_index,
+                ev.content.len(),
+                browser_log_preview(&clean_content)
+            ));
 
             // Keep browser section cache in sync.
             if let Some(sec) = self.reading_view_browser_sections.get_mut(ev.section_index) {
                 sec.1 = clean_content.clone();
+            }
+            if let Some(raw) = self
+                .reading_view_browser_raw_sections
+                .get_mut(ev.section_index)
+            {
+                *raw = ev.content.clone();
             }
 
             let ws_msg = serde_json::json!({
@@ -611,6 +1188,12 @@ impl ChatWidget {
         // Forward to browser if in browser mode.
         if self.is_reading_view_browser_mode() {
             let clean_content = crate::text_formatting::strip_voice_tags(&ev.content);
+            append_browser_reading_view_debug_log(&format!(
+                "append_section index={} content_len={} preview={}",
+                ev.section_index,
+                ev.content.len(),
+                browser_log_preview(&clean_content)
+            ));
 
             // Keep browser section cache in sync (append content).
             if let Some(sec) = self.reading_view_browser_sections.get_mut(ev.section_index) {
@@ -618,6 +1201,15 @@ impl ChatWidget {
                     sec.1.push_str("\n\n");
                 }
                 sec.1.push_str(&clean_content);
+            }
+            if let Some(raw) = self
+                .reading_view_browser_raw_sections
+                .get_mut(ev.section_index)
+            {
+                if !raw.is_empty() {
+                    raw.push_str("\n\n");
+                }
+                raw.push_str(&ev.content);
             }
 
             let ws_msg = serde_json::json!({
@@ -664,6 +1256,12 @@ impl ChatWidget {
             } else {
                 self.reading_view_browser_sections.push(new_section);
             }
+            if insert_at <= self.reading_view_browser_raw_sections.len() {
+                self.reading_view_browser_raw_sections
+                    .insert(insert_at, ev.content.clone());
+            } else {
+                self.reading_view_browser_raw_sections.push(ev.content.clone());
+            }
 
             let ws_msg = serde_json::json!({
                 "type": "addSection",
@@ -700,6 +1298,12 @@ impl ChatWidget {
             if let Some(sec) = self.reading_view_browser_sections.get_mut(ev.section_index) {
                 sec.1 = sec.1.replacen(&clean_old, &clean_new, 1);
             }
+            if let Some(raw) = self
+                .reading_view_browser_raw_sections
+                .get_mut(ev.section_index)
+            {
+                *raw = raw.replacen(&ev.old_text, &ev.new_text, 1);
+            }
 
             let ws_msg = serde_json::json!({
                 "type": "patchSection",
@@ -719,13 +1323,37 @@ impl ChatWidget {
     /// the target word's start time so audio and visual highlight stay in sync.
     #[cfg(not(target_os = "linux"))]
     fn handle_browser_karaoke_seek(&mut self, word_index: usize) {
+        let mut section_index = None;
         if let Some(ref mut state) = self.voice_mode_state {
             let offset = state.selection_word_offset.unwrap_or(0);
-            let adjusted = word_index.saturating_sub(offset);
-            state.tts_highlight_word_idx = Some(adjusted);
+
+            // With alignment-driven karaoke, data-wi IS the spoken index.
+            // With heuristic wrapping, data-wi is the visible index and
+            // needs visible→spoken conversion.
+            let spoken = if state.alignment_driven_karaoke {
+                word_index.saturating_sub(offset)
+            } else {
+                let visible = word_index.saturating_sub(offset);
+                let mut eq_offset = 0usize;
+                for &(_, start, end) in &state.equation_word_spans {
+                    let eq_len = end - start;
+                    let eq_visible_start = start.saturating_sub(eq_offset);
+                    if visible < eq_visible_start {
+                        break;
+                    }
+                    eq_offset += eq_len;
+                }
+                visible + eq_offset
+            };
+
+            state.tts_highlight_word_idx = Some(spoken);
+            section_index = state
+                .narrating_section
+                .as_ref()
+                .map(|(_, section_index, _)| *section_index);
 
             // Seek the audio to the target word's start time.
-            if let Some(entry) = state.tts_alignment_timeline.get(adjusted) {
+            if let Some(entry) = state.tts_alignment_timeline.get(spoken) {
                 let target_ms = entry.start_ms;
                 if let Some(ref player) = state.audio_player {
                     player.seek_to_ms(target_ms);
@@ -735,6 +1363,7 @@ impl ChatWidget {
         // Forward the updated word position back to the browser.
         let ws_msg = serde_json::json!({
             "type": "karaokeWord",
+            "sectionIndex": section_index,
             "wordIndex": word_index,
         });
         self.forward_to_reading_view_server(&ws_msg.to_string());

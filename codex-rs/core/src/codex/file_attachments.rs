@@ -906,7 +906,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut provider = ModelProviderInfo::create_openai_provider();
+        let mut provider = ModelProviderInfo::create_openai_provider(None);
         provider.base_url = Some(format!("{}/v1", server.uri()));
 
         let dir = tempfile::tempdir().expect("temp dir");
@@ -978,7 +978,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut provider = ModelProviderInfo::create_openai_provider();
+        let mut provider = ModelProviderInfo::create_openai_provider(None);
         provider.base_url = Some(format!("{}/v1", server.uri()));
 
         let dir = tempfile::tempdir().expect("temp dir");
@@ -1086,7 +1086,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut provider = ModelProviderInfo::create_openai_provider();
+        let mut provider = ModelProviderInfo::create_openai_provider(None);
         provider.base_url = Some(format!("{}/v1", server.uri()));
 
         let dir = tempfile::tempdir().expect("temp dir");
@@ -1172,7 +1172,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut provider = ModelProviderInfo::create_openai_provider();
+        let mut provider = ModelProviderInfo::create_openai_provider(None);
         provider.base_url = Some(format!("{}/v1", server.uri()));
 
         let dir = tempfile::tempdir().expect("temp dir");
@@ -1241,7 +1241,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        turn_context.provider = ModelProviderInfo::create_openai_provider();
+        turn_context.provider = ModelProviderInfo::create_openai_provider(None);
         turn_context.provider.base_url = Some(format!("{}/v1", server.uri()));
 
         let dir = tempfile::tempdir().expect("temp dir");
