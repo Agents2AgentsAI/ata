@@ -31,6 +31,10 @@ const WORKSPACE_SKILLS_DIR: Dir =
 const ADAPT_ENVIRONMENT_SKILLS_DIR: Dir =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/assets/adapt-environment");
 
+/// Remote-exec skill is private (ata-plus only) — the directory is stripped
+/// on the public release branch, so gating the include_dir avoids a compile
+/// error when the directory doesn't exist.
+#[cfg(feature = "ata-plus")]
 const REMOTE_EXEC_SKILLS_DIR: Dir =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/assets/remote-exec");
 
@@ -47,7 +51,7 @@ struct CustomSkillCategory {
 /// Registry of all custom (non-upstream) skill categories.
 /// Adding a new category only requires adding an entry here
 /// (plus the `include_dir!()` const and `build.rs` entry above).
-const CUSTOM_SKILL_CATEGORIES: &[CustomSkillCategory] = &[
+const CUSTOM_SKILL_CATEGORIES_BASE: &[CustomSkillCategory] = &[
     CustomSkillCategory {
         dir: &RESEARCH_SKILLS_DIR,
         cache_dir_name: ".system-research",
@@ -63,12 +67,14 @@ const CUSTOM_SKILL_CATEGORIES: &[CustomSkillCategory] = &[
         cache_dir_name: ".system-adapt-environment",
         fingerprint_salt: "v1-adapt-environment",
     },
-    CustomSkillCategory {
-        dir: &REMOTE_EXEC_SKILLS_DIR,
-        cache_dir_name: ".system-remote-exec",
-        fingerprint_salt: "v1-remote-exec",
-    },
 ];
+
+#[cfg(feature = "ata-plus")]
+const CUSTOM_SKILL_CATEGORIES_PLUS: &[CustomSkillCategory] = &[CustomSkillCategory {
+    dir: &REMOTE_EXEC_SKILLS_DIR,
+    cache_dir_name: ".system-remote-exec",
+    fingerprint_salt: "v1-remote-exec",
+}];
 
 // ============================================================================
 // Upstream skill category (system/samples only)
@@ -153,7 +159,7 @@ pub fn research_cache_root_dir(codex_home: &Path) -> PathBuf {
 
 /// Installs embedded research skills.
 pub fn install_research_skills(codex_home: &Path) -> Result<(), SystemSkillsError> {
-    install_skill_category(codex_home, &CUSTOM_SKILL_CATEGORIES[0])
+    install_skill_category(codex_home, &CUSTOM_SKILL_CATEGORIES_BASE[0])
 }
 
 /// Returns the on-disk cache location for embedded workspace skills.
@@ -163,17 +169,24 @@ pub fn workspace_cache_root_dir(codex_home: &Path) -> PathBuf {
 
 /// Installs embedded workspace skills.
 pub fn install_workspace_skills(codex_home: &Path) -> Result<(), SystemSkillsError> {
-    install_skill_category(codex_home, &CUSTOM_SKILL_CATEGORIES[1])
+    install_skill_category(codex_home, &CUSTOM_SKILL_CATEGORIES_BASE[1])
 }
 
 // ============================================================================
 // Custom skill categories — generic install and discovery
 // ============================================================================
 
+fn all_custom_categories() -> impl Iterator<Item = &'static CustomSkillCategory> {
+    let base = CUSTOM_SKILL_CATEGORIES_BASE.iter();
+    #[cfg(feature = "ata-plus")]
+    let base = base.chain(CUSTOM_SKILL_CATEGORIES_PLUS.iter());
+    base
+}
+
 /// Installs all custom (non-upstream) skill categories.
 /// Called once at startup alongside the upstream install_system_skills().
 pub fn install_custom_skills(codex_home: &Path) -> Result<(), SystemSkillsError> {
-    for cat in CUSTOM_SKILL_CATEGORIES {
+    for cat in all_custom_categories() {
         install_skill_category(codex_home, cat)?;
     }
     Ok(())
@@ -182,8 +195,7 @@ pub fn install_custom_skills(codex_home: &Path) -> Result<(), SystemSkillsError>
 /// Returns cache root directories for all custom skill categories.
 /// The loader adds these as skill roots so they get discovered automatically.
 pub fn custom_skill_cache_root_dirs(codex_home: &Path) -> Vec<PathBuf> {
-    CUSTOM_SKILL_CATEGORIES
-        .iter()
+    all_custom_categories()
         .map(|cat| custom_category_cache_root_dir(codex_home, cat.cache_dir_name))
         .collect()
 }
@@ -406,8 +418,8 @@ mod tests {
 
         let dirs = super::custom_skill_cache_root_dirs(codex_home.path());
         assert!(
-            dirs.len() >= 4,
-            "should have at least 4 custom categories (research, workspace, adapt-environment, remote-exec)"
+            dirs.len() >= 3,
+            "should have at least 3 custom categories (research, workspace, adapt-environment)"
         );
         for dir in &dirs {
             assert!(dir.is_dir(), "custom skill cache dir should exist: {dir:?}");

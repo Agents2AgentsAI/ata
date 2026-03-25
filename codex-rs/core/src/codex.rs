@@ -50,6 +50,8 @@ use crate::terminal;
 use crate::truncate::TruncationPolicy;
 use crate::turn_metadata::TurnMetadataState;
 use crate::util::error_or_panic;
+use crate::workspace_kb::CODEX_KB_PATH_ENV_VAR;
+use crate::workspace_kb::resolve_kb_env;
 use crate::ws_version_from_features;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -1311,7 +1313,26 @@ impl Session {
             .permissions
             .shell_environment_policy
             .r#set
-            .insert(CODEX_SESSION_ID_ENV_VAR.to_string(), scope_id);
+            .insert(CODEX_SESSION_ID_ENV_VAR.to_string(), scope_id.clone());
+
+        // Inject CODEX_KB_PATH so all execution paths (LLM tool calls,
+        // subagent shells, /shell) see the resolved knowledge-base directory.
+        let kb_env = resolve_kb_env(
+            session_configuration.codex_home().as_path(),
+            &per_turn_config.cwd,
+            per_turn_config
+                .kb
+                .as_ref()
+                .and_then(|kb| kb.kb_path.as_deref()),
+            Some(&scope_id),
+            None,
+        );
+        per_turn_config
+            .permissions
+            .shell_environment_policy
+            .r#set
+            .insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_env.kb_path);
+
         per_turn_config
     }
 

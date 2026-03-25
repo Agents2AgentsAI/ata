@@ -136,13 +136,6 @@ fn browser_preserve_spoken_tags(markdown: &str) -> String {
 fn browser_normalized_spoken_text(markdown: &str) -> String {
     use std::sync::LazyLock;
 
-    static RE_PAUSE_MARKER: LazyLock<regex_lite::Regex> =
-        LazyLock::new(
-            || match regex_lite::Regex::new(r"\[PAUSE:\d+\]") {
-                Ok(r) => r,
-                Err(e) => panic!("invalid RE_PAUSE_MARKER regex: {e}"),
-            },
-        );
     static RE_WHITESPACE: LazyLock<regex_lite::Regex> =
         LazyLock::new(|| match regex_lite::Regex::new(r"\s+") {
             Ok(r) => r,
@@ -150,9 +143,8 @@ fn browser_normalized_spoken_text(markdown: &str) -> String {
         });
 
     let spoken = browser_read_aloud_text(markdown);
-    let without_pauses = RE_PAUSE_MARKER.replace_all(&spoken, " ");
     RE_WHITESPACE
-        .replace_all(without_pauses.trim(), " ")
+        .replace_all(spoken.trim(), " ")
         .trim()
         .to_string()
 }
@@ -309,7 +301,7 @@ fn browser_finalize_read_aloud_text(cleaned: String) -> String {
     use std::sync::LazyLock;
 
     static RE_LIST_PREFIX: LazyLock<regex_lite::Regex> = LazyLock::new(|| {
-        match regex_lite::Regex::new(r"^(\[PAUSE:\d+\])?[ \t]*(?:[-+]|\d{1,3}\.)\s+") {
+        match regex_lite::Regex::new(r"^[ \t]*(?:[-+]|\d{1,3}\.)\s+") {
             Ok(r) => r,
             Err(e) => panic!("invalid RE_LIST_PREFIX regex: {e}"),
         }
@@ -317,7 +309,7 @@ fn browser_finalize_read_aloud_text(cleaned: String) -> String {
 
     cleaned
         .lines()
-        .map(|line| RE_LIST_PREFIX.replace(line, "$1").into_owned())
+        .map(|line| RE_LIST_PREFIX.replace(line, "").into_owned())
         .collect::<Vec<_>>()
         .join("\n")
         .trim()
@@ -554,6 +546,18 @@ impl ChatWidget {
         }
 
         self.reading_view_server = Some(server);
+
+        if self.reading_view_pending_browser_info {
+            self.reading_view_pending_browser_info = false;
+            if let Some(ref server) = self.reading_view_server {
+                let title = &self.reading_view_browser_title;
+                self.add_info_message(
+                    format!("Reading view opened in browser: {title} — {}", server.url()),
+                    None,
+                );
+                self.request_redraw();
+            }
+        }
     }
 
     /// Forward a JSON event to the browser reading-view server, if running.
@@ -980,6 +984,23 @@ impl ChatWidget {
             return;
         }
 
+        // On resume, just show a summary in chat — don't open browser or TUI.
+        if is_resume_replay {
+            let section_headings: Vec<String> = ev
+                .content
+                .lines()
+                .filter_map(|line| line.strip_prefix("## ").map(|h| h.trim().to_string()))
+                .collect();
+            let cell = crate::history_cell::new_document_cell(
+                ev.title,
+                section_headings,
+                ev.content,
+            );
+            self.add_boxed_history(Box::new(cell));
+            self.request_redraw();
+            return;
+        }
+
         // Browser mode: send outline first, then fill sections progressively.
         if self.is_reading_view_browser_mode() {
             // Stop any active karaoke before replacing the document.
@@ -1080,40 +1101,21 @@ impl ChatWidget {
                 }
             }
 
-            let url = self
-                .reading_view_server
-                .as_ref()
-                .map(codex_reading_view_server::ReadingViewServer::url)
-                .unwrap_or_default();
-            self.add_info_message(
-                format!("Reading view opened in browser: {} — {}", ev.title, url),
-                None,
-            );
+            if let Some(ref server) = self.reading_view_server {
+                self.add_info_message(
+                    format!("Reading view opened in browser: {} — {}", ev.title, server.url()),
+                    None,
+                );
+            } else {
+                self.reading_view_pending_browser_info = true;
+            }
             self.request_redraw();
             return;
         }
 
         self.flush_active_cell();
 
-        // On session resume, show a collapsed DocumentCell instead of opening
-        // the full reading view.  The document cache in codex-core is already
-        // pre-populated from the same replayed events, so asking the agent to
-        // reopen will be instant.
-        if is_resume_replay {
-            let section_headings: Vec<String> = ev
-                .content
-                .lines()
-                .filter_map(|line| line.strip_prefix("## ").map(|h| h.trim().to_string()))
-                .collect();
-            let cell = crate::history_cell::new_document_cell(
-                ev.title,
-                section_headings,
-                ev.content,
-            );
-            self.add_boxed_history(Box::new(cell));
-            self.request_redraw();
-            return;
-        }
+        // (is_resume_replay already handled above)
         self.bottom_pane.show_document_reader(ev, from_replay);
     }
 

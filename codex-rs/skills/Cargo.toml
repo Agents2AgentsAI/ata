@@ -10,6 +10,9 @@ doctest = false
 name = "codex_skills"
 path = "src/lib.rs"
 
+[features]
+ata-plus = []
+
 [lints]
 workspace = true
 

@@ -3977,10 +3977,6 @@ impl App {
                 self.chat_widget.on_voice_tts_audio_chunk(pcm, alignment);
             }
             #[cfg(not(target_os = "linux"))]
-            AppEvent::VoiceModeTtsPauseSilence { pcm, pause_ms } => {
-                self.chat_widget.on_voice_tts_pause_silence(pcm, pause_ms);
-            }
-            #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModeHighlightTick => {
                 self.chat_widget.on_voice_highlight_tick();
                 tui.frame_requester().schedule_frame();

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Paper Discoverer"
+  short_description: "Internal subagent skill for paper discovery"
+
+policy:
+  allow_implicit_invocation: false

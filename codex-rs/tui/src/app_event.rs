@@ -525,14 +525,6 @@ pub(crate) enum AppEvent {
         alignment: Option<codex_elevenlabs::TtsAlignment>,
     },
 
-    /// Silence PCM from a [PAUSE:N] marker. Enqueued to the audio player
-    /// but tracked separately so alignment lookup can compensate.
-    #[cfg(not(target_os = "linux"))]
-    VoiceModeTtsPauseSilence {
-        pcm: Vec<i16>,
-        pause_ms: u64,
-    },
-
     /// Live volume meter tick during PTT recording.
     #[cfg(not(target_os = "linux"))]
     VoiceModeMeterTick {
