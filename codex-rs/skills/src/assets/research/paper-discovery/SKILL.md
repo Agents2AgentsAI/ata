@@ -46,7 +46,7 @@ Parse the question into 3-5 search facets targeting different angles.
 
 **Citation-focused:** 3 calls — `paper_citations(id, limit=30)` + two `paper_search` variants.
 
-**General explore:** Keyword search (2-3 facets, `paper_search(query, limit=10, sort_by=citation_count)` + recent variant per facet), then citation expansion on top 3-5 seeds. **Budget: ≤ 20 API calls.**
+**General explore:** Keyword search (2-3 facets, `paper_search(query, limit=10, sort_by=citation_count)` + `paper_search(query, limit=10, sort_by=year)` per facet), then citation expansion on top 3-5 seeds. **Budget: ≤ 20 API calls.**
 
 ### Phase 3: Analyze and Organize
 

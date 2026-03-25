@@ -865,6 +865,10 @@ pub(crate) struct ChatWidget {
     /// progressively rather than all at once.  Populated by `on_present_document`
     /// and flushed (with per-section delays) in `set_reading_view_server()`.
     reading_view_pending_section_updates: Vec<String>,
+    /// Whether to show the "Reading view opened in browser" info message
+    /// once the server finishes starting. Set when `on_present_document`
+    /// fires before the server handle is available.
+    reading_view_pending_browser_info: bool,
     /// Title of the document currently displayed in the browser reading view.
     /// Populated when `on_present_document` fires in browser mode.
     reading_view_browser_title: String,
@@ -3834,6 +3838,7 @@ impl ChatWidget {
             reading_view_server: None,
             reading_view_pending_events: Vec::new(),
             reading_view_pending_section_updates: Vec::new(),
+            reading_view_pending_browser_info: false,
             reading_view_browser_title: String::new(),
             reading_view_browser_doc_id: String::new(),
             reading_view_browser_sections: Vec::new(),
@@ -4096,6 +4101,7 @@ impl ChatWidget {
             reading_view_server: None,
             reading_view_pending_events: Vec::new(),
             reading_view_pending_section_updates: Vec::new(),
+            reading_view_pending_browser_info: false,
             reading_view_browser_title: String::new(),
             reading_view_browser_doc_id: String::new(),
             reading_view_browser_sections: Vec::new(),
@@ -4332,6 +4338,7 @@ impl ChatWidget {
             reading_view_server: None,
             reading_view_pending_events: Vec::new(),
             reading_view_pending_section_updates: Vec::new(),
+            reading_view_pending_browser_info: false,
             reading_view_browser_title: String::new(),
             reading_view_browser_doc_id: String::new(),
             reading_view_browser_sections: Vec::new(),

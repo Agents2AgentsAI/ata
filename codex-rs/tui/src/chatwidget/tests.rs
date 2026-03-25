@@ -1956,6 +1956,7 @@ async fn make_chatwidget_manual(
         reading_view_server: None,
         reading_view_pending_events: Vec::new(),
         reading_view_pending_section_updates: Vec::new(),
+        reading_view_pending_browser_info: false,
         reading_view_browser_title: String::new(),
         reading_view_browser_doc_id: String::new(),
         reading_view_browser_sections: Vec::new(),
@@ -11630,10 +11631,7 @@ async fn cached_section_read_primes_first_word_before_first_tick() {
 fn browser_read_aloud_text_strips_ordered_list_markers_for_karaoke() {
     let markdown = "1. First item\n2. Second item";
 
-    assert_eq!(
-        browser_read_aloud_text(markdown),
-        "First item\n[PAUSE:400]Second item"
-    );
+    assert_eq!(browser_read_aloud_text(markdown), "First item\nSecond item");
 }
 
 #[test]
@@ -11641,10 +11639,7 @@ fn browser_read_aloud_text_strips_ordered_list_markers_for_karaoke() {
 fn browser_read_aloud_text_strips_blockquote_and_task_markers() {
     let markdown = "> 1. First item\n> 2. [x] Second item";
 
-    assert_eq!(
-        browser_read_aloud_text(markdown),
-        "First item\n[PAUSE:400]Second item"
-    );
+    assert_eq!(browser_read_aloud_text(markdown), "First item\nSecond item");
 }
 
 #[test]
@@ -11736,7 +11731,7 @@ async fn browser_section_read_aloud_uses_currently_rendered_content() {
             manual,
         }) if document_id == "doc-1"
             && section_index == 0
-            && text == "Figure 1: State lane\nFirst item\n[PAUSE:400]Second item\n[[[EQ:1]]]x squared[[[/EQ]]]"
+            && text == "Figure 1: State lane\nFirst item\nSecond item\n[[[EQ:1]]]x squared[[[/EQ]]]"
             && selection_word_offset.is_none()
             && manual
     );

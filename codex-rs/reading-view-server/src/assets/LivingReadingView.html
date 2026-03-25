@@ -853,7 +853,7 @@ details .details-content {
   cursor: pointer;
   padding: 4px 6px;
   margin-left: 8px;
-  font-size: 16px;
+  font-size: 1em;
   vertical-align: middle;
   transition: color 0.2s;
   border-radius: 4px;
@@ -870,12 +870,6 @@ details .details-content {
 
 .read-aloud-btn.tts-starting {
   color: var(--accent);
-  animation: read-aloud-pulse 1s ease-in-out infinite;
-}
-
-@keyframes read-aloud-pulse {
-  0%, 100% { opacity: 0.55; }
-  50% { opacity: 1; }
 }
 
 @media (max-width: 768px) {
@@ -1633,6 +1627,11 @@ function _postProcess(sectionEl) {
   if (_baseFontSize !== 16) {
     var content = sectionEl.querySelector('.section-content') || sectionEl;
     content.style.fontSize = _baseFontSize + 'px';
+    // Also scale section headings
+    var heading = sectionEl.querySelector('.section-heading');
+    if (heading) {
+      heading.style.fontSize = (_baseFontSize * 1.4) + 'px';
+    }
   }
   // Mermaid diagrams: convert <pre><code class="language-mermaid"> to rendered diagrams
   if (typeof mermaid !== 'undefined') {
@@ -1900,9 +1899,6 @@ function presentDocument(title, sectionsJson) {
 function updateSection(index, markdownContent) {
   if (index < 0 || index >= _sections.length) return;
 
-  // Strip [PAUSE:N] markers — they're TTS hints, not display content.
-  markdownContent = markdownContent.replace(/\[PAUSE:\d+\] */g, '');
-
   _sections[index].markdown = markdownContent;
 
   var sectionEl = document.getElementById('section-' + index);
@@ -1948,9 +1944,6 @@ function updateSection(index, markdownContent) {
 // =====================================================================
 function appendToSection(index, markdownContent, foldable, summary) {
   if (index < 0 || index >= _sections.length) return;
-
-  // Strip [PAUSE:N] markers — TTS hints, not display content.
-  markdownContent = markdownContent.replace(/\[PAUSE:\d+\] */g, '');
 
   // Append to stored markdown
   _sections[index].markdown = (_sections[index].markdown || '') + '\n' + markdownContent;
@@ -2441,6 +2434,8 @@ function _wrapWordsFromAlignment(sectionIndex, alignmentWords) {
   });
   container.normalize();
   container.classList.add('karaoke-active');
+  // Reset reveal state so the first karaokeWord properly reveals word 0.
+  _lastRevealed = -1;
 
   // Collect equation nodes for glow highlighting
   _collectEquationNodes(container).forEach(function(node) {
@@ -2448,10 +2443,17 @@ function _wrapWordsFromAlignment(sectionIndex, alignmentWords) {
     node.classList.add('katex-eq-dim');
   });
 
-  // Filter to non-equation words (these get .kw spans in the DOM)
-  var nonEqWords = alignmentWords.filter(function(w) { return !w.eq; });
+  // Filter to words that get .kw spans in the DOM (skip equations and
+  // standalone punctuation like em-dashes which become .kw-decor).
+  var nonEqWords = alignmentWords.filter(function(w) { return !w.eq && !w.decor; });
   var wordIdx = 0;
   var skipTags = { PRE:1, SVG:1, SCRIPT:1, STYLE:1 };
+
+  // Normalize an alignment word for fuzzy matching against DOM tokens.
+  // Strips trailing punctuation so "grid." matches DOM token "grid".
+  function _normalizeForMatch(s) {
+    return s.replace(/[.,;:!?"'()\[\]{}]+$/, '').replace(/^["'()\[\]{}]+/, '').toLowerCase();
+  }
 
   function walk(node) {
     if (wordIdx >= nonEqWords.length) return;
@@ -2463,16 +2465,25 @@ function _wrapWordsFromAlignment(sectionIndex, alignmentWords) {
       var parts = text.split(/(\s+)/);
       var frag = document.createDocumentFragment();
       for (var i = 0; i < parts.length; i++) {
-        if (/^\s+$/.test(parts[i])) {
-          frag.appendChild(document.createTextNode(parts[i]));
-        } else if (/^[,;:!?\u2014\u2013\u2026.()[\]{}"'\u201C\u201D\u2018\u2019\u2022\u25E6\u25AA\u2023]+$/.test(parts[i])) {
-          // Standalone punctuation — .kw-decor (dims but no word index)
-          var decor = document.createElement('span');
-          decor.className = 'kw-decor';
-          decor.textContent = parts[i];
-          frag.appendChild(decor);
-        } else if (parts[i].length > 0 && wordIdx < nonEqWords.length) {
-          // Alignment-driven: wrap as .kw with the alignment word's index
+        if (/^\s+$/.test(parts[i]) || parts[i].length === 0) {
+          if (parts[i].length > 0) frag.appendChild(document.createTextNode(parts[i]));
+          continue;
+        }
+        // Check if this DOM token matches the next expected alignment word.
+        // If it matches, wrap as .kw (with word index). Otherwise treat as
+        // .kw-decor (punctuation/structural — no word index consumed).
+        var isWord = false;
+        if (wordIdx < nonEqWords.length) {
+          var expected = _normalizeForMatch(nonEqWords[wordIdx].word);
+          var got = _normalizeForMatch(parts[i]);
+          // Match if: normalized forms agree, OR the DOM token starts with
+          // the expected word (handles "word." vs "word"), OR the expected
+          // word starts with the DOM token (handles split tokens).
+          isWord = got.length > 0 && (got === expected
+            || expected.startsWith(got)
+            || got.startsWith(expected));
+        }
+        if (isWord) {
           var span = document.createElement('span');
           span.className = 'kw';
           span.setAttribute('data-wi', nonEqWords[wordIdx].idx);
@@ -2480,7 +2491,11 @@ function _wrapWordsFromAlignment(sectionIndex, alignmentWords) {
           frag.appendChild(span);
           wordIdx++;
         } else {
-          frag.appendChild(document.createTextNode(parts[i]));
+          // Decor: standalone punctuation or unmatched token
+          var decor = document.createElement('span');
+          decor.className = 'kw-decor';
+          decor.textContent = parts[i];
+          frag.appendChild(decor);
         }
       }
       node.parentNode.replaceChild(frag, node);
@@ -2492,6 +2507,41 @@ function _wrapWordsFromAlignment(sectionIndex, alignmentWords) {
         var linkText = (node.textContent || '').trim();
         if (/^https?:\/\//.test(linkText)) return;
       }
+      // For <img>, extract alt text and wrap as karaoke words so figure
+      // captions are highlighted during read-aloud. The alt text exists
+      // in the TTS alignment but not as DOM text nodes.
+      if (tag === 'img') {
+        var alt = (node.getAttribute('alt') || '').trim();
+        if (alt && wordIdx < nonEqWords.length) {
+          var altWords = alt.split(/\s+/);
+          var captionSpan = document.createElement('span');
+          captionSpan.className = 'img-caption-karaoke';
+          captionSpan.style.display = 'block';
+          captionSpan.style.fontSize = '0.85em';
+          captionSpan.style.color = 'var(--text-muted)';
+          captionSpan.style.marginTop = '4px';
+          for (var aw = 0; aw < altWords.length && wordIdx < nonEqWords.length; aw++) {
+            if (aw > 0) captionSpan.appendChild(document.createTextNode(' '));
+            var expected = _normalizeForMatch(nonEqWords[wordIdx].word);
+            var got = _normalizeForMatch(altWords[aw]);
+            if (got.length > 0 && (got === expected || expected.startsWith(got) || got.startsWith(expected))) {
+              var kwSpan = document.createElement('span');
+              kwSpan.className = 'kw';
+              kwSpan.setAttribute('data-wi', nonEqWords[wordIdx].idx);
+              kwSpan.textContent = altWords[aw];
+              captionSpan.appendChild(kwSpan);
+              wordIdx++;
+            } else {
+              var decorSpan = document.createElement('span');
+              decorSpan.className = 'kw-decor';
+              decorSpan.textContent = altWords[aw];
+              captionSpan.appendChild(decorSpan);
+            }
+          }
+          node.parentNode.insertBefore(captionSpan, node.nextSibling);
+        }
+        return;
+      }
       var children = Array.from(node.childNodes);
       for (var j = 0; j < children.length; j++) {
         walk(children[j]);
@@ -2500,6 +2550,29 @@ function _wrapWordsFromAlignment(sectionIndex, alignmentWords) {
   }
   walk(container);
   _kwCounter = wordIdx;
+
+  // Debug: log wrapping results
+  console.log('[KARAOKE] wrapFromAlignment: wrapped ' + wordIdx + '/' + nonEqWords.length + ' words');
+  if (wordIdx < nonEqWords.length) {
+    console.warn('[KARAOKE] DOM ran out of text! Missing words:');
+    for (var d = wordIdx; d < Math.min(wordIdx + 5, nonEqWords.length); d++) {
+      console.warn('  idx=' + nonEqWords[d].idx + ' "' + nonEqWords[d].word + '"');
+    }
+  }
+  // Check first few for mismatches
+  var wrappedEls = container.querySelectorAll('.kw');
+  for (var mi = 0; mi < Math.min(wrappedEls.length, 10); mi++) {
+    var kwEl = wrappedEls[mi];
+    var kwWi = parseInt(kwEl.getAttribute('data-wi'));
+    var kwWord = nonEqWords.find(function(w) { return w.idx === kwWi; });
+    if (kwWord) {
+      var got = kwEl.textContent.trim().replace(/[.,;:!?"'()\[\]]/g, '').toLowerCase();
+      var exp = kwWord.word.replace(/[.,;:!?"'()\[\]]/g, '').toLowerCase();
+      if (got !== exp) {
+        console.warn('[KARAOKE] MISMATCH wi=' + kwWi + ' expected="' + kwWord.word + '" got="' + kwEl.textContent.trim() + '"');
+      }
+    }
+  }
 
   // Install tap listener for seek-to-word
   _addKaraokeTapListeners(container);
@@ -3272,8 +3345,8 @@ document.addEventListener('keydown', function(e) {
   if (_isTypingContext(e.target)) return;
 
   if (e.code === 'Space') {
+    e.preventDefault();
     if (_ttsState === 'playing' || _ttsState === 'paused') {
-      e.preventDefault();
       _togglePlayPause();
     }
     return;
@@ -3417,6 +3490,8 @@ function _karaokeOnUserScroll() {
 }
 
 // Scroll the currently highlighted karaoke word into view.
+// Only scrolls when the word is outside the comfortable reading zone
+// (middle 60% of viewport) to avoid distracting per-word scrolls.
 function _scrollToKaraokeWord(wordIndex) {
   if (!_karaokeAutoScroll) return;
   if (_activeKaraokeSection < 0) return;
@@ -3424,13 +3499,20 @@ function _scrollToKaraokeWord(wordIndex) {
   if (!container) return;
   var el = container.querySelector('.kw[data-wi="' + wordIndex + '"]');
   if (!el) return;
-  // Use scrollIntoView with block: 'center' so the word appears in the
-  // middle of the viewport, giving context above and below.
-  // Guard against the programmatic scroll re-triggering the manual-scroll
-  // listener by setting _karaokeScrollPending.
+  // Only scroll when the word is outside the comfortable reading zone
+  var rect = el.getBoundingClientRect();
+  var vh = window.innerHeight;
+  var topThreshold = vh * 0.2;
+  var bottomThreshold = vh * 0.8;
+  if (rect.top >= topThreshold && rect.bottom <= bottomThreshold) {
+    return; // word is comfortably visible — don't scroll
+  }
   _karaokeScrollPending = true;
-  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  // Clear the guard after the scroll settles.
+  // Position the word in the top third of the viewport so the reader
+  // sees more upcoming text below the current line.
+  var elRect = el.getBoundingClientRect();
+  var targetY = window.pageYOffset + elRect.top - (vh / 3);
+  window.scrollTo({ top: targetY, behavior: 'smooth' });
   setTimeout(function() { _karaokeScrollPending = false; }, 400);
 }
 
@@ -3512,7 +3594,14 @@ function _updateBottomChromeLayout() {
 
 function _showNowPlayingBar() {
   var bar = document.getElementById('nowPlayingBar');
-  if (bar) bar.classList.add('visible');
+  if (bar) {
+    // Position directly above the followup bar
+    var followup = document.querySelector('.followup-bar');
+    if (followup && followup.style.display !== 'none') {
+      bar.style.bottom = followup.offsetHeight + 'px';
+    }
+    bar.classList.add('visible');
+  }
   _updateBottomChromeLayout();
 }
 
@@ -3567,9 +3656,13 @@ function _stopPlayback() {
 
 var _baseFontSize = 16;
 function _changeFontSize(delta) {
-  _baseFontSize = Math.max(12, Math.min(48, _baseFontSize + delta));
+  _baseFontSize = Math.max(12, Math.min(192, _baseFontSize + delta));
   document.querySelectorAll('.section-content').forEach(function(el) {
     el.style.fontSize = _baseFontSize + 'px';
+  });
+  // Also scale section headings (outside .section-content)
+  document.querySelectorAll('.section-heading').forEach(function(el) {
+    el.style.fontSize = (_baseFontSize * 1.4) + 'px';
   });
   // Persist in localStorage
   try { localStorage.setItem('ata-reading-font-size', _baseFontSize); } catch(e) {}
@@ -3577,8 +3670,41 @@ function _changeFontSize(delta) {
 // Restore saved font size
 try {
   var saved = localStorage.getItem('ata-reading-font-size');
-  if (saved) { _baseFontSize = parseInt(saved, 10) || 16; }
+  if (saved) {
+    _baseFontSize = parseInt(saved, 10) || 16;
+    if (_baseFontSize !== 16) {
+      document.querySelectorAll('.section-content').forEach(function(el) {
+        el.style.fontSize = _baseFontSize + 'px';
+      });
+      document.querySelectorAll('.section-heading').forEach(function(el) {
+        el.style.fontSize = (_baseFontSize * 1.4) + 'px';
+      });
+    }
+  }
 } catch(e) {}
+
+// Keyboard shortcuts for font size: Cmd+=/Cmd+-/Cmd+0 (and Ctrl variants)
+document.addEventListener('keydown', function(e) {
+  if (e.metaKey || e.ctrlKey) {
+    if (e.key === '=' || e.key === '+') {
+      e.preventDefault();
+      _changeFontSize(2);
+    } else if (e.key === '-') {
+      e.preventDefault();
+      _changeFontSize(-2);
+    } else if (e.key === '0') {
+      e.preventDefault();
+      _baseFontSize = 16;
+      document.querySelectorAll('.section-content').forEach(function(el) {
+        el.style.fontSize = _baseFontSize + 'px';
+      });
+      document.querySelectorAll('.section-heading').forEach(function(el) {
+        el.style.fontSize = '';
+      });
+      try { localStorage.setItem('ata-reading-font-size', _baseFontSize); } catch(e2) {}
+    }
+  }
+});
 
 function _toggleAutoScroll() {
   _karaokeAutoScroll = !_karaokeAutoScroll;

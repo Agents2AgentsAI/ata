@@ -31,7 +31,6 @@ use codex_tui::clean_for_tts_preserving_equation_markers;
 use codex_tui::find_active_word;
 use codex_tui::parse_equation_markers;
 use codex_tui::repair_timeline_monotonicity;
-use codex_tui::strip_pause_markers;
 
 use support::recorded_tts::pcm_to_wav;
 
@@ -240,42 +239,19 @@ fn test_cases() -> Vec<TestCase> {
 }
 
 // ---------------------------------------------------------------------------
-// TTS helper: exact production path (send_with_pauses + tts_worker_loop)
+// TTS helper: exact production path (tts_worker_loop)
 // ---------------------------------------------------------------------------
 
-/// Mirrors the production `send_with_pauses` → `tts_worker_loop` flow exactly:
-/// one WebSocket, sentences split on `[PAUSE:N]` markers, text chunks sent
-/// via `send_text + flush`, pauses via `tokio::time::sleep`, EOS at the end.
+/// Mirrors the production `tts_worker_loop` flow: one WebSocket, sentences
+/// sent via `send_text + flush`, EOS at the end.
 async fn collect_all_chunks(config: &ElevenLabsConfig, sentences: &[String]) -> Vec<TtsChunk> {
     let mut stream = TtsStream::connect(config)
         .await
         .expect("failed to connect to ElevenLabs");
 
     for sentence in sentences {
-        // Exact replica of production send_with_pauses + worker processing.
-        let pause_marker = "[PAUSE:";
-        let mut remaining = sentence.as_str();
-        while let Some(start) = remaining.find(pause_marker) {
-            let before = remaining[..start].trim();
-            if !before.is_empty() {
-                stream.send_text(before).await.expect("send_text");
-                stream.flush().await.expect("flush");
-            }
-            let after_marker = &remaining[start + pause_marker.len()..];
-            if let Some(end) = after_marker.find(']') {
-                let ms: u64 = after_marker[..end].parse().unwrap_or(500).clamp(100, 3000);
-                stream.flush().await.expect("flush before pause");
-                tokio::time::sleep(tokio::time::Duration::from_millis(ms)).await;
-                remaining = &after_marker[end + 1..];
-            } else {
-                break;
-            }
-        }
-        let tail = remaining.trim();
-        if !tail.is_empty() {
-            stream.send_text(tail).await.expect("send_text");
-            stream.flush().await.expect("flush");
-        }
+        stream.send_text(sentence).await.expect("send_text");
+        stream.flush().await.expect("flush");
     }
 
     stream.send_eos().await;
@@ -423,11 +399,11 @@ async fn run_test_case(tc: &TestCase, config: &ElevenLabsConfig, report: &mut St
     }
 
     // ── Phase 4: Browser karaoke mapping ──────────────────────────────
-    // Matches ensure_tts_playback_started: strip_pause_markers then count.
+    // Matches ensure_tts_playback_started: count spoken words.
 
     let _ = writeln!(report, "## Phase 4 -- Browser karaoke mapping\n");
 
-    let spoken_total_words = strip_pause_markers(&tts_text).split_whitespace().count();
+    let spoken_total_words = tts_text.split_whitespace().count();
     let hidden_equation_words: usize = eq_spans.iter().map(|(_, s, e)| e - s).sum();
     let visible_total_words = spoken_total_words.saturating_sub(hidden_equation_words);
     let _ = writeln!(
@@ -544,14 +520,6 @@ async fn run_test_case(tc: &TestCase, config: &ElevenLabsConfig, report: &mut St
         while let Some(start) = s.find("[[[EQ:") {
             if let Some(end) = s[start..].find("[[[/EQ]]]") {
                 s = format!("{}{}", &s[..start], &s[start + end + 9..]);
-            } else {
-                break;
-            }
-        }
-        // Strip [PAUSE:N] markers (TTS timing hints, not in rendered DOM)
-        while let Some(start) = s.find("[PAUSE:") {
-            if let Some(end) = s[start..].find(']') {
-                s = format!("{}{}", &s[..start], &s[start + end + 1..]);
             } else {
                 break;
             }

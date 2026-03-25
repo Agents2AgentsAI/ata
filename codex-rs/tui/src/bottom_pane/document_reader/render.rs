@@ -34,7 +34,7 @@ pub(super) fn render_section(
     // Section body rendered as markdown.
     if !content.is_empty() {
         let clean = crate::text_formatting::latex_to_plain_text(&strip_voice_tags(
-            &strip_pause_sentinels(&strip_citation_annotations(content)),
+            &strip_citation_annotations(content),
         ));
         let spaced = ensure_paragraph_spacing(&clean);
         let wrap_width = width.saturating_sub(2).max(1) as usize;
@@ -61,7 +61,7 @@ pub(super) fn rendered_body_line_count(content: &str, width: u16) -> usize {
         return 0;
     }
     let clean = crate::text_formatting::latex_to_plain_text(&strip_voice_tags(
-        &strip_pause_sentinels(&strip_citation_annotations(content)),
+        &strip_citation_annotations(content),
     ));
     let spaced = ensure_paragraph_spacing(&clean);
     let wrap_width = width.saturating_sub(2).max(1) as usize;
@@ -776,25 +776,6 @@ pub(super) fn strip_citation_annotations(content: &str) -> String {
             out.push(ch);
         }
     }
-    out
-}
-
-/// Strip `[PAUSE:N]` sentinels from content so they don't appear in the
-/// rendered reading view.  These markers are used by the TTS pipeline and
-/// should be invisible to the user.
-fn strip_pause_sentinels(content: &str) -> String {
-    let mut out = String::with_capacity(content.len());
-    let mut remaining = content;
-    let marker = "[PAUSE:";
-    while let Some(start) = remaining.find(marker) {
-        out.push_str(&remaining[..start]);
-        remaining = &remaining[start + marker.len()..];
-        // Skip past the closing ']'.
-        if let Some(end) = remaining.find(']') {
-            remaining = &remaining[end + 1..];
-        }
-    }
-    out.push_str(remaining);
     out
 }
 

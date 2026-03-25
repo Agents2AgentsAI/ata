@@ -100,9 +100,6 @@ pub use chatwidget::voice_mode::parse_equation_markers;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 #[doc(hidden)]
 pub use chatwidget::voice_mode::repair_timeline_monotonicity;
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
-#[doc(hidden)]
-pub use chatwidget::voice_mode::strip_pause_markers;
 mod cli;
 mod clipboard_paste;
 mod clipboard_text;

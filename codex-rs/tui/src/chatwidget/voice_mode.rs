@@ -25,13 +25,7 @@ const VOICE_MODE_INSTRUCTION_VERBOSE: &str = "\
 [VOICE MODE] The user is speaking to you via voice. \
 Wrap any text you want spoken aloud in <voice></voice> tags. \
 Never put code, file paths, or markdown in <voice> tags — only natural, \
-conversational text. You MUST insert pauses using the [PAUSE:N] marker \
-(where N is milliseconds, default 500) in your voice output. \
-Always use [PAUSE:500] between paragraphs, before important points, and when \
-transitioning between topics. When listing multiple important points, concepts, \
-or problems, add a [PAUSE:400] between each list item so the listener can absorb \
-each point before the next. A response without any pause markers sounds rushed \
-and unnatural. Use [PAUSE:N] inside <voice> tags and in reading view content.\n\
+conversational text.\n\
 \n\
 IMPORTANT: Voice mode ONLY changes how you format output (with <voice> tags). \
 Everything else stays identical to non-voice mode:\n\
@@ -70,13 +64,7 @@ Only wrap your FINAL answer or summary in <voice> tags. Do NOT use <voice> \
 tags for acknowledgments, progress updates, or intermediate thoughts — those \
 should be text-only so the user can read them on screen. \
 Never put code, file paths, or markdown in <voice> tags — only natural, \
-conversational text. You MUST insert pauses using the [PAUSE:N] marker \
-(where N is milliseconds, default 500) in your voice output. \
-Always use [PAUSE:500] between paragraphs, before important points, and when \
-transitioning between topics. When listing multiple important points, concepts, \
-or problems, add a [PAUSE:400] between each list item so the listener can absorb \
-each point before the next. A response without any pause markers sounds rushed \
-and unnatural. Use [PAUSE:N] inside <voice> tags and in reading view content.\n\
+conversational text.\n\
 \n\
 IMPORTANT: Voice mode ONLY changes how you format output (with <voice> tags). \
 Everything else stays identical to non-voice mode:\n\
@@ -888,10 +876,6 @@ pub(crate) struct VoiceModeState {
     /// True when the browser is using alignment-driven word wrapping
     /// (alignmentWords sent in startKaraoke). False for heuristic wrapping.
     pub(crate) alignment_driven_karaoke: bool,
-    /// Cumulative silence inserted by [PAUSE:N] markers (ms).
-    /// Subtracted from playback position when looking up alignment words.
-    pub(crate) tts_cumulative_pause_ms: u64,
-
     // ─── Equation karaoke highlighting ───────────────────────────────
     /// Word spans for each equation: `(eq_index, start_word, end_word)`.
     /// Populated by `parse_equation_markers()` when preparing TTS text.
@@ -978,7 +962,6 @@ impl VoiceModeState {
             tts_startup_buffered_chunks: Vec::new(),
             tts_playback_started: false,
             alignment_driven_karaoke: false,
-            tts_cumulative_pause_ms: 0,
             equation_word_spans: Vec::new(),
             active_equation_index: None,
             passed_equation_index: 0,
@@ -1060,7 +1043,6 @@ impl VoiceModeState {
         // Clear alignment timeline and highlight.
         self.tts_alignment_timeline.clear();
         self.tts_cumulative_ms = 0;
-        self.tts_cumulative_pause_ms = 0;
         self.tts_highlight_word_idx = None;
         self.tts_pending_word = None;
         self.tts_data_complete = false;
@@ -2181,7 +2163,7 @@ impl super::ChatWidget {
                     if !spans.is_empty() {
                         state.equation_word_spans.extend(spans);
                     }
-                    send_with_pauses(worker_tx, &cleaned_sentence);
+                    let _ = worker_tx.send(TtsWorkerCommand::SendText(cleaned_sentence));
                 }
             }
         }
@@ -2242,7 +2224,7 @@ impl super::ChatWidget {
                     if !spans.is_empty() {
                         state.equation_word_spans.extend(spans);
                     }
-                    send_with_pauses(worker_tx, &cleaned_sentence);
+                    let _ = worker_tx.send(TtsWorkerCommand::SendText(cleaned_sentence));
                 }
                 let _ = worker_tx.send(TtsWorkerCommand::Finish);
             }
@@ -2329,25 +2311,6 @@ impl super::ChatWidget {
         #[cfg(not(target_os = "linux"))]
         if should_push_initial_lines {
             self.push_karaoke_to_reader();
-        }
-    }
-
-    /// Handle silence PCM from a [PAUSE:N] marker. Enqueued to the audio
-    /// player for natural pauses, and the pause duration is tracked so
-    /// alignment lookups compensate for the inserted silence.
-    pub(crate) fn on_voice_tts_pause_silence(&mut self, pcm: Vec<i16>, pause_ms: u64) {
-        let Some(ref mut state) = self.voice_mode_state else {
-            return;
-        };
-        // Track cumulative pause for alignment offset correction.
-        state.tts_cumulative_pause_ms += pause_ms;
-        // Cache the silence chunk for replay.
-        if state.narrating_section.is_some() {
-            state.narrating_chunks.push(pcm.clone());
-        }
-        // Enqueue to audio player.
-        if let Some(ref player) = state.audio_player {
-            player.enqueue_pcm(&pcm, 24_000, 1);
         }
     }
 
@@ -2615,7 +2578,6 @@ impl super::ChatWidget {
                 let spoken_total_words = state
                     .narrating_cleaned_text
                     .as_deref()
-                    .map(strip_pause_markers)
                     .map(|text| text.split_whitespace().count())
                     .unwrap_or(0);
                 let hidden_equation_words = state
@@ -2641,10 +2603,12 @@ impl super::ChatWidget {
             // received). During live streaming, the timeline is partial and
             // would produce wrong wrapping — fall back to heuristic approach.
             let timeline_complete = self.voice_mode_state.as_ref().is_some_and(|s| {
-                let expected =
-                    strip_pause_markers(s.narrating_cleaned_text.as_deref().unwrap_or(""))
-                        .split_whitespace()
-                        .count();
+                let expected = s
+                    .narrating_cleaned_text
+                    .as_deref()
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .count();
                 expected > 0 && s.tts_alignment_timeline.len() >= expected
             });
             let alignment_words: Vec<serde_json::Value> = if timeline_complete {
@@ -2659,10 +2623,28 @@ impl super::ChatWidget {
                                     .equation_word_spans
                                     .iter()
                                     .any(|(_, start, end)| i >= *start && i < *end);
+                                // Mark standalone punctuation so the browser
+                                // skips them (same as equation words) to keep
+                                // DOM word indices aligned with TTS indices.
+                                let is_decor = !is_eq
+                                    && entry.word.chars().all(|c| {
+                                        c.is_ascii_punctuation()
+                                            || matches!(
+                                                c,
+                                                '\u{2014}'
+                                                    | '\u{2013}'
+                                                    | '\u{2026}'
+                                                    | '\u{201C}'
+                                                    | '\u{201D}'
+                                                    | '\u{2018}'
+                                                    | '\u{2019}'
+                                            )
+                                    });
                                 serde_json::json!({
                                     "idx": i,
                                     "word": entry.word,
                                     "eq": is_eq,
+                                    "decor": is_decor,
                                 })
                             })
                             .collect()
@@ -2767,16 +2749,7 @@ impl super::ChatWidget {
             .map(super::super::voice::RealtimeAudioPlayer::playback_position_ms)
             .unwrap_or(0);
 
-        // Don't advance karaoke until audio has actually started playing.
-        // This prevents the highlight from jumping ahead during the audio
-        // player startup latency (buffering, hardware init).
-        if raw_pos_ms == 0 && state.tts_playback_started {
-            return;
-        }
-
-        // Subtract cumulative pause silence so the alignment lookup
-        // matches the speech-only timeline from ElevenLabs.
-        let pos_ms = raw_pos_ms.saturating_sub(state.tts_cumulative_pause_ms);
+        let pos_ms = raw_pos_ms;
 
         if state.tts_alignment_timeline.is_empty() {
             return;
@@ -2788,6 +2761,17 @@ impl super::ChatWidget {
         // Keep the previous highlight rather than showing no highlight,
         // so the karaoke doesn't appear to "pause".
         let effective_idx = new_idx.or(state.tts_highlight_word_idx);
+
+        // Diagnostic: log position and word index periodically so stuck
+        // highlights can be diagnosed from logs.
+        if effective_idx != state.tts_highlight_word_idx || raw_pos_ms == 0 {
+            tracing::debug!(
+                "[KARAOKE-TICK] raw_pos={raw_pos_ms}ms pos={pos_ms}ms \
+                 word={effective_idx:?} prev={:?} timeline_len={}",
+                state.tts_highlight_word_idx,
+                state.tts_alignment_timeline.len(),
+            );
+        }
 
         if effective_idx != state.tts_highlight_word_idx {
             state.tts_highlight_word_idx = effective_idx;
@@ -3295,13 +3279,8 @@ impl super::ChatWidget {
              - Wrap your spoken response in <voice>...</voice> tags\n\
              - Make exactly ONE append_to_section call\n\
              - Set foldable=true always\n\
-             - The content must match what you said (verbatim, without voice tags but keep [PAUSE:N] markers)\n\
+             - The content must match what you said (verbatim, without voice tags)\n\
              - Use <eq> tags for math; no raw LaTeX, no code blocks\n\
-             - You MUST use [PAUSE:N] markers (N = milliseconds) for natural pacing — \
-             add [PAUSE:500] between paragraphs, before key points, and at topic transitions. \
-             When listing multiple important points, concepts, or problems, add a [PAUSE:400] \
-             between each list item so the listener can absorb each point before the next. \
-             Responses without pauses sound rushed. Use [PAUSE:N] in both voice and content.\n\
              - The summary should describe the topic (e.g. \"Dropout as regularization\", \
              \"Why gradients vanish\")\n\
              - Do NOT rewrite the section or make multiple tool calls",
@@ -4028,13 +4007,7 @@ impl super::ChatWidget {
         state.equation_word_spans = eq_spans;
         state.narrating_chunks.clear();
 
-        // Split the marker-free text into sentences for TTS.
-        let mut sentence_buf = SentenceBuffer::new();
-        let mut sentences = sentence_buf.push(&tts_text);
-        if let Some(remaining) = sentence_buf.flush() {
-            sentences.push(remaining);
-        }
-        state.narrating_cleaned_text = Some(tts_text);
+        state.narrating_cleaned_text = Some(tts_text.clone());
 
         // Start the persistent TTS worker if not running.
         if state.tts_worker_tx.is_none() {
@@ -4054,11 +4027,9 @@ impl super::ChatWidget {
             });
         }
 
-        // Send all sentences (already marker-free) and signal finish.
+        // Send the full section text at once and signal finish.
         if let Some(ref worker_tx) = state.tts_worker_tx {
-            for sentence in sentences {
-                send_with_pauses(worker_tx, &sentence);
-            }
+            let _ = worker_tx.send(TtsWorkerCommand::SendText(tts_text));
             let _ = worker_tx.send(TtsWorkerCommand::Finish);
         }
         state.tts_worker_tx = None;
@@ -4305,12 +4276,6 @@ pub(crate) fn clean_for_tts(markdown: &str) -> String {
                 }
                 link_text.push(c);
             }
-            if link_text.starts_with("PAUSE:") {
-                out.push('[');
-                out.push_str(&link_text);
-                out.push(']');
-                continue;
-            }
             // Numeric citation markers (e.g. [1], [2,3], [1-3]) — drop entirely.
             if !link_text.is_empty()
                 && link_text.starts_with(|c: char| c.is_ascii_digit())
@@ -4431,21 +4396,7 @@ pub(crate) fn clean_for_tts(markdown: &str) -> String {
     let collapsed = RE_ET_AL.replace_all(&collapsed, "");
     let collapsed = RE_BRACKET_CITE.replace_all(&collapsed, "");
 
-    // Insert [PAUSE:400] between consecutive list items so TTS adds a brief
-    // silence between them.  This is a safety net — even if the agent forgets
-    // to add pause tokens, list items get natural spacing.
-    //
-    // Detected patterns (at the start of a line, after optional whitespace):
-    //   - Unordered: "- ", "+ "
-    //   - Ordered:   "1. ", "2. ", "10. ", etc.
-    // We insert the pause marker BEFORE the list item line (between items),
-    // so the first item in a group is not paused.
-    static RE_LIST_ITEM: LazyLock<regex_lite::Regex> = LazyLock::new(
-        || match regex_lite::Regex::new(r"^[ \t]*(?:[-+]|\d{1,3}\.) ") {
-            Ok(r) => r,
-            Err(e) => panic!("invalid RE_LIST_ITEM regex: {e}"),
-        },
-    );
+    // Strip list item markers (-, +, 1.) so they aren't spoken literally.
     static RE_LIST_PREFIX: LazyLock<regex_lite::Regex> =
         LazyLock::new(
             || match regex_lite::Regex::new(r"^[ \t]*(?:[-+]|\d{1,3}\.)\s+") {
@@ -4456,49 +4407,22 @@ pub(crate) fn clean_for_tts(markdown: &str) -> String {
     let collapsed = {
         let text = collapsed.to_string();
         let lines: Vec<&str> = text.split('\n').collect();
-        let mut result = String::with_capacity(text.len() + lines.len() * 12);
-        let mut prev_was_list_item = false;
+        let mut result = String::with_capacity(text.len());
         for (i, line) in lines.iter().enumerate() {
             if i > 0 {
                 result.push('\n');
             }
-            let is_list_item = RE_LIST_ITEM.is_match(line);
-            // Insert pause between consecutive list items (not before the first).
-            if is_list_item && prev_was_list_item {
-                result.push_str("[PAUSE:400]");
-            }
-            if is_list_item {
+            if RE_LIST_PREFIX.is_match(line) {
                 let stripped = RE_LIST_PREFIX.replace(line, "");
                 result.push_str(stripped.as_ref());
             } else {
                 result.push_str(line);
             }
-            prev_was_list_item = is_list_item;
         }
         result
     };
 
     collapsed.trim().to_string()
-}
-
-/// Strip `[PAUSE:N]` markers from text so they are not spoken literally by TTS.
-pub fn strip_pause_markers(text: &str) -> String {
-    let pause_marker = "[PAUSE:";
-    let mut result = String::with_capacity(text.len());
-    let mut remaining = text;
-    while let Some(start) = remaining.find(pause_marker) {
-        result.push_str(&remaining[..start]);
-        let after_marker = &remaining[start + pause_marker.len()..];
-        if let Some(end) = after_marker.find(']') {
-            remaining = &after_marker[end + 1..];
-        } else {
-            // Malformed marker – keep the rest as-is.
-            remaining = &remaining[start..];
-            break;
-        }
-    }
-    result.push_str(remaining);
-    result
 }
 
 /// Generate TTS for a sentence without sending audio events (for prefetching).
@@ -4508,8 +4432,7 @@ async fn prefetch_sentence_tts(
     sentence: &str,
     proxy: Option<&codex_elevenlabs::ElevenLabsProxy>,
 ) -> Result<(Vec<Vec<i16>>, Vec<AlignmentEntry>), codex_elevenlabs::ElevenLabsError> {
-    let cleaned = strip_pause_markers(sentence);
-    let mut rx = start_tts_generation(voice_config, &cleaned, proxy)?;
+    let mut rx = start_tts_generation(voice_config, sentence, proxy)?;
     let mut chunks = Vec::new();
     let mut timeline = Vec::new();
     let mut pending_word: Option<AlignmentEntry> = None;
@@ -4622,39 +4545,8 @@ fn hash_text(text: &str) -> u64 {
 pub(crate) enum TtsWorkerCommand {
     /// Send a sentence to TTS via the existing WebSocket.
     SendText(String),
-    /// Insert a silence of the given duration (ms) between TTS segments.
-    Pause(u64),
     /// Flush remaining audio and shut down the connection.
     Finish,
-}
-
-/// Split a sentence on `[PAUSE:N]` sentinels and emit interleaved
-/// SendText / Pause commands to the TTS worker.
-fn send_with_pauses(
-    worker_tx: &tokio::sync::mpsc::UnboundedSender<TtsWorkerCommand>,
-    sentence: &str,
-) {
-    let pause_marker = "[PAUSE:";
-    let mut remaining = sentence;
-    while let Some(start) = remaining.find(pause_marker) {
-        let before = remaining[..start].trim();
-        if !before.is_empty() {
-            let _ = worker_tx.send(TtsWorkerCommand::SendText(before.to_string()));
-        }
-        let after_marker = &remaining[start + pause_marker.len()..];
-        if let Some(end) = after_marker.find(']') {
-            let ms_str = &after_marker[..end];
-            let ms = ms_str.parse::<u64>().unwrap_or(500).clamp(100, 3000);
-            let _ = worker_tx.send(TtsWorkerCommand::Pause(ms));
-            remaining = &after_marker[end + 1..];
-        } else {
-            break;
-        }
-    }
-    let tail = remaining.trim();
-    if !tail.is_empty() {
-        let _ = worker_tx.send(TtsWorkerCommand::SendText(tail.to_string()));
-    }
 }
 
 /// Long-lived TTS task that maintains a single ElevenLabs WebSocket connection.
@@ -4753,25 +4645,6 @@ async fn tts_worker_loop(
 
                                 break;
                             }
-                        }
-                        Some(TtsWorkerCommand::Pause(ms)) => {
-                            if gen_ref.load(Ordering::SeqCst) != my_gen { break; }
-                            if let Err(e) = stream.flush().await {
-                                tracing::error!("TTS worker flush before pause: {e}");
-
-                                break;
-                            }
-                            // Generate a silence PCM chunk so the audio player
-                            // pauses naturally and the silence gets cached for
-                            // replay. 24kHz × ms/1000 = samples of silence.
-                            let silence_samples = (24000u64 * ms / 1000) as usize;
-                            let silence_pcm = vec![0i16; silence_samples];
-                            // Tag as pause so the receiver can track cumulative
-                            // silence for alignment offset correction.
-                            event_tx.send(AppEvent::VoiceModeTtsPauseSilence {
-                                pcm: silence_pcm,
-                                pause_ms: ms,
-                            });
                         }
                         Some(TtsWorkerCommand::Finish) => {
                             let _ = stream.flush().await;
@@ -5488,47 +5361,44 @@ mod tests {
         assert_eq!(cleaned, "Prior work  explored this");
     }
 
-    // ─── clean_for_tts list item pause tests ────────────────────────────
+    // ─── clean_for_tts list item prefix stripping tests ────────────────
 
     #[test]
-    fn clean_for_tts_inserts_pause_between_unordered_list_items() {
+    fn clean_for_tts_strips_unordered_list_prefixes() {
         let text = "Problems:\n- First problem\n- Second problem\n- Third problem";
         let cleaned = clean_for_tts(text);
         assert_eq!(
             cleaned,
-            "Problems:\nFirst problem\n[PAUSE:400]Second problem\n[PAUSE:400]Third problem"
+            "Problems:\nFirst problem\nSecond problem\nThird problem"
         );
     }
 
     #[test]
-    fn clean_for_tts_inserts_pause_between_ordered_list_items() {
+    fn clean_for_tts_strips_ordered_list_prefixes() {
         let text = "Steps:\n1. Do this\n2. Then that\n3. Finally this";
         let cleaned = clean_for_tts(text);
-        assert_eq!(
-            cleaned,
-            "Steps:\nDo this\n[PAUSE:400]Then that\n[PAUSE:400]Finally this"
-        );
+        assert_eq!(cleaned, "Steps:\nDo this\nThen that\nFinally this");
     }
 
     #[test]
-    fn clean_for_tts_no_pause_before_first_list_item() {
+    fn clean_for_tts_strips_single_list_item() {
         let text = "Here are items:\n- Only one item";
         let cleaned = clean_for_tts(text);
         assert_eq!(cleaned, "Here are items:\nOnly one item");
     }
 
     #[test]
-    fn clean_for_tts_no_pause_for_dashes_in_text() {
+    fn clean_for_tts_no_strip_for_dashes_in_text() {
         let text = "Llama-2 is a model";
         let cleaned = clean_for_tts(text);
         assert_eq!(cleaned, "Llama-2 is a model");
     }
 
     #[test]
-    fn clean_for_tts_pause_with_plus_list_marker() {
+    fn clean_for_tts_strips_plus_list_marker() {
         let text = "Items:\n+ Alpha\n+ Beta";
         let cleaned = clean_for_tts(text);
-        assert_eq!(cleaned, "Items:\nAlpha\n[PAUSE:400]Beta");
+        assert_eq!(cleaned, "Items:\nAlpha\nBeta");
     }
 
     // ─── Additional clean_for_tts tests (comprehensive) ─────────────────
@@ -5603,20 +5473,16 @@ mod tests {
 
     #[test]
     fn clean_for_tts_mixed_paragraph_and_list() {
-        // Paragraph → list items → paragraph: pauses only between consecutive items.
+        // Paragraph → list items → paragraph: list prefixes stripped.
         let text = "Intro paragraph.\n- Item A\n- Item B\nConclusion.";
         let cleaned = clean_for_tts(text);
-        assert_eq!(
-            cleaned,
-            "Intro paragraph.\nItem A\n[PAUSE:400]Item B\nConclusion."
-        );
+        assert_eq!(cleaned, "Intro paragraph.\nItem A\nItem B\nConclusion.");
     }
 
     #[test]
-    fn clean_for_tts_single_list_item_no_pause() {
+    fn clean_for_tts_single_list_item_prefix_stripped() {
         let text = "Summary:\n- Only one item";
         let cleaned = clean_for_tts(text);
-        // Single item — no pause before it.
         assert_eq!(cleaned, "Summary:\nOnly one item");
     }
 
@@ -5647,66 +5513,6 @@ mod tests {
         let text = "see (https://example.com) for details";
         let cleaned = clean_for_tts(text);
         assert_eq!(cleaned, "see ( for details");
-    }
-
-    // ─── strip_pause_markers tests ─────────────────────────────────────
-
-    #[test]
-    fn strip_pause_markers_basic() {
-        let text = "First [PAUSE:400] Second";
-        let result = strip_pause_markers(text);
-        assert_eq!(result, "First  Second");
-    }
-
-    #[test]
-    fn strip_pause_markers_multiple() {
-        let text = "[PAUSE:200]Hello [PAUSE:400]World [PAUSE:600]End";
-        let result = strip_pause_markers(text);
-        assert_eq!(result, "Hello World End");
-    }
-
-    #[test]
-    fn strip_pause_markers_no_markers() {
-        let text = "No markers here";
-        let result = strip_pause_markers(text);
-        assert_eq!(result, "No markers here");
-    }
-
-    #[test]
-    fn strip_pause_markers_malformed() {
-        // Missing closing bracket.
-        let text = "Before [PAUSE:400 After";
-        let result = strip_pause_markers(text);
-        // Malformed: keeps the rest as-is.
-        assert_eq!(result, "Before [PAUSE:400 After");
-    }
-
-    #[test]
-    fn strip_pause_markers_empty_input() {
-        assert_eq!(strip_pause_markers(""), "");
-    }
-
-    // ─── totalWords pause exclusion tests ──────────────────────────────
-
-    #[test]
-    fn total_words_excludes_pause_markers() {
-        let cleaned = "First item [PAUSE:400] Second item";
-        let total_words = strip_pause_markers(cleaned).split_whitespace().count();
-        assert_eq!(total_words, 4, "PAUSE markers should not count as words");
-    }
-
-    #[test]
-    fn total_words_no_pauses() {
-        let cleaned = "Hello beautiful world";
-        let total_words = strip_pause_markers(cleaned).split_whitespace().count();
-        assert_eq!(total_words, 3);
-    }
-
-    #[test]
-    fn total_words_all_pauses() {
-        let cleaned = "[PAUSE:400][PAUSE:200]";
-        let total_words = strip_pause_markers(cleaned).split_whitespace().count();
-        assert_eq!(total_words, 0, "text with only pauses should have 0 words");
     }
 
     // ─── VoiceTagParser attributed voice tag tests ─────────────────────
