@@ -535,7 +535,7 @@ impl AuthModeWidget {
                         idx,
                         option,
                         "Configure providers",
-                        "Set up API keys for providers (OpenAI, Anthropic, Gemini)",
+                        "Set up API keys for providers (OpenAI, Anthropic, Gemini, GitHub Copilot)",
                     ));
                 }
                 SignInOption::AtaAccount => {

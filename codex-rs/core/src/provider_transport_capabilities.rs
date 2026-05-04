@@ -15,6 +15,7 @@ pub(crate) fn provider_transport_capabilities(
         WireApi::Responses => provider.is_openai(),
         WireApi::AnthropicMessages => true,
         WireApi::GeminiGenerate => false,
+        WireApi::CopilotInline => false,
     };
 
     ProviderTransportCapabilities {

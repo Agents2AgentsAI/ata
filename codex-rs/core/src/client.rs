@@ -1372,6 +1372,18 @@ impl ModelClientSession {
             WireApi::GeminiGenerate => {
                 gemini::stream_gemini_api(self, prompt, model_info, effort, summary).await
             }
+            WireApi::CopilotInline => {
+                self.stream_responses_api(
+                    prompt,
+                    model_info,
+                    session_telemetry,
+                    effort,
+                    summary,
+                    service_tier,
+                    turn_metadata_header,
+                )
+                .await
+            }
         }
     }
 

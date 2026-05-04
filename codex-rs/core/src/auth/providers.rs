@@ -17,6 +17,7 @@ pub use types::ANTHROPIC_API_KEY_ENV_VAR;
 pub use types::GOOGLE_API_KEY_ENV_VAR;
 pub use types::GeminiAuthSource;
 pub use types::PROVIDER_ANTHROPIC;
+pub use types::PROVIDER_COPILOT;
 pub use types::PROVIDER_GEMINI;
 pub use types::PROVIDER_OPENAI;
 pub use types::ProviderAuthMethod;

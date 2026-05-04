@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use codex_core::auth::PROVIDER_ANTHROPIC;
+use codex_core::auth::PROVIDER_COPILOT;
 use codex_core::auth::PROVIDER_GEMINI;
 use codex_core::auth::PROVIDER_OPENAI;
 use codex_core::auth::ProviderAuthSource;
@@ -28,6 +29,7 @@ pub(crate) enum ProviderOption {
     OpenAI,
     Anthropic,
     Gemini,
+    Copilot,
 }
 
 impl ProviderOption {
@@ -36,6 +38,7 @@ impl ProviderOption {
             Self::OpenAI => PROVIDER_OPENAI,
             Self::Anthropic => PROVIDER_ANTHROPIC,
             Self::Gemini => PROVIDER_GEMINI,
+            Self::Copilot => PROVIDER_COPILOT,
         }
     }
 
@@ -44,6 +47,7 @@ impl ProviderOption {
             Self::OpenAI => "OpenAI",
             Self::Anthropic => "Anthropic",
             Self::Gemini => "Google Gemini",
+            Self::Copilot => "GitHub Copilot",
         }
     }
 
@@ -69,10 +73,11 @@ pub(super) fn api_key_entry_return_state(provider: Option<ProviderOption>) -> Si
     }
 }
 
-const PROVIDER_OPTIONS: [ProviderOption; 3] = [
+const PROVIDER_OPTIONS: [ProviderOption; 4] = [
     ProviderOption::OpenAI,
     ProviderOption::Anthropic,
     ProviderOption::Gemini,
+    ProviderOption::Copilot,
 ];
 
 fn provider_options() -> &'static [ProviderOption] {
@@ -103,6 +108,9 @@ impl AuthModeWidget {
                 }
                 KeyCode::Char('3') => {
                     self.start_provider_configuration(ProviderOption::Gemini);
+                }
+                KeyCode::Char('4') => {
+                    self.start_provider_configuration(ProviderOption::Copilot);
                 }
                 KeyCode::Char('l') | KeyCode::Char('L') => {
                     self.show_provider_list();

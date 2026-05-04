@@ -1,8 +1,13 @@
 {
     "rust-analyzer.checkOnSave": true,
     "rust-analyzer.check.command": "clippy",
-    "rust-analyzer.check.extraArgs": ["--tests"],
-    "rust-analyzer.rustfmt.extraArgs": ["--config", "imports_granularity=Item"],
+    "rust-analyzer.check.extraArgs": [
+        "--tests"
+    ],
+    "rust-analyzer.rustfmt.extraArgs": [
+        "--config",
+        "imports_granularity=Item"
+    ],
     "rust-analyzer.cargo.targetDir": "${workspaceFolder}/codex-rs/target/rust-analyzer",
     "[rust]": {
         "editor.defaultFormatter": "rust-lang.rust-analyzer",
@@ -16,4 +21,13 @@
     // `args` for an MCP server is significant, so we disable reordering.
     "evenBetterToml.formatter.reorderArrays": false,
     "evenBetterToml.formatter.reorderKeys": true,
+    "python.testing.unittestArgs": [
+        "-v",
+        "-s",
+        "./my_experiments",
+        "-p",
+        "*test.py"
+    ],
+    "python.testing.pytestEnabled": false,
+    "python.testing.unittestEnabled": true,
 }

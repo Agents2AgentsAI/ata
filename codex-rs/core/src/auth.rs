@@ -38,6 +38,7 @@ pub use crate::auth::providers::ANTHROPIC_API_KEY_ENV_VAR;
 pub use crate::auth::providers::GOOGLE_API_KEY_ENV_VAR;
 pub use crate::auth::providers::GeminiAuthSource;
 pub use crate::auth::providers::PROVIDER_ANTHROPIC;
+pub use crate::auth::providers::PROVIDER_COPILOT;
 pub use crate::auth::providers::PROVIDER_GEMINI;
 pub use crate::auth::providers::PROVIDER_OPENAI;
 pub use crate::auth::providers::ProviderAuthMethod;
