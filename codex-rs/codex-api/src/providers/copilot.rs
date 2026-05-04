@@ -1,9 +1,9 @@
-//! GitHub Copilot provider adapter implementation.
+//! GitHub Copilot provider adapter.
 //!
-//! Authenticates via a GitHub Personal Access Token read from the
-//! `GITHUB_COPILOT_TOKEN` environment variable and targets the Copilot
-//! inline completions endpoint. The wire format is identical to the OpenAI
-//! Responses API, so request/response handling is the same.
+//! Authentication is handled out-of-band via OAuth (see
+//! `codex_core::auth::copilot_oauth`); the resolved Copilot bearer token is
+//! threaded through the standard `ApiAuthProvider` path. This adapter is
+//! responsible for the VS Code impersonation headers Copilot requires.
 
 use http::HeaderMap;
 use http::HeaderValue;
@@ -15,19 +15,17 @@ use crate::file_support::rewrite_openai_url_file_blocks_in_payload;
 use crate::provider_adapter::ProviderAdapter;
 use crate::provider_adapter::RequestOptions;
 
-/// GitHub Copilot inline completions adapter.
-///
-/// Reads the PAT from `GITHUB_COPILOT_TOKEN` at construction time and injects
-/// it as an `Authorization: Bearer <token>` header on every request.
-pub struct CopilotAdapter {
-    token: Option<String>,
-}
+const COPILOT_USER_AGENT: &str = "GitHubCopilotChat/0.35.0";
+const COPILOT_EDITOR_VERSION: &str = "vscode/1.107.0";
+const COPILOT_EDITOR_PLUGIN_VERSION: &str = "copilot-chat/0.35.0";
+const COPILOT_INTEGRATION_ID: &str = "vscode-chat";
+
+/// GitHub Copilot adapter.
+pub struct CopilotAdapter;
 
 impl CopilotAdapter {
     pub fn new() -> Self {
-        Self {
-            token: std::env::var("GITHUB_COPILOT_TOKEN").ok(),
-        }
+        Self
     }
 }
 
@@ -86,16 +84,28 @@ impl ProviderAdapter for CopilotAdapter {
     }
 
     fn streaming_endpoint(&self, _model: &str) -> String {
-        "/copilot/inline".to_string()
+        "/responses".to_string()
     }
 
     fn extra_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        if let Some(token) = &self.token {
-            if let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}")) {
-                headers.insert(http::header::AUTHORIZATION, value);
-            }
-        }
+        headers.insert(
+            http::header::USER_AGENT,
+            HeaderValue::from_static(COPILOT_USER_AGENT),
+        );
+        headers.insert(
+            "Editor-Version",
+            HeaderValue::from_static(COPILOT_EDITOR_VERSION),
+        );
+        headers.insert(
+            "Editor-Plugin-Version",
+            HeaderValue::from_static(COPILOT_EDITOR_PLUGIN_VERSION),
+        );
+        headers.insert(
+            "Copilot-Integration-Id",
+            HeaderValue::from_static(COPILOT_INTEGRATION_ID),
+        );
+        headers.insert("Openai-Intent", HeaderValue::from_static("conversation-edits"));
         headers
     }
 }
@@ -111,14 +121,9 @@ mod tests {
     }
 
     #[test]
-    fn streaming_endpoint_is_copilot_inline() {
+    fn streaming_endpoint_is_responses() {
         let adapter = CopilotAdapter::new();
-        assert_eq!(adapter.streaming_endpoint("cushman"), "/copilot/inline");
-        assert_eq!(adapter.streaming_endpoint("codex"), "/copilot/inline");
-        assert_eq!(
-            adapter.streaming_endpoint("copilot-codex"),
-            "/copilot/inline"
-        );
+        assert_eq!(adapter.streaming_endpoint("any"), "/responses");
     }
 
     #[test]
@@ -139,23 +144,26 @@ mod tests {
     }
 
     #[test]
-    fn extra_headers_empty_when_no_token() {
-        // Ensure that constructing without the env var yields no auth header.
-        // We can only verify the no-token path without mutating process env.
-        let adapter = CopilotAdapter { token: None };
-        assert!(adapter.extra_headers().is_empty());
-    }
-
-    #[test]
-    fn extra_headers_bearer_when_token_present() {
-        let adapter = CopilotAdapter {
-            token: Some("ghp_testtoken".to_string()),
-        };
+    fn extra_headers_include_vscode_impersonation() {
+        let adapter = CopilotAdapter::new();
         let headers = adapter.extra_headers();
-        let auth = headers
-            .get(http::header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .expect("Authorization header");
-        assert_eq!(auth, "Bearer ghp_testtoken");
+        assert_eq!(
+            headers
+                .get(http::header::USER_AGENT)
+                .and_then(|v| v.to_str().ok()),
+            Some(COPILOT_USER_AGENT)
+        );
+        assert_eq!(
+            headers.get("Editor-Version").and_then(|v| v.to_str().ok()),
+            Some(COPILOT_EDITOR_VERSION)
+        );
+        assert_eq!(
+            headers
+                .get("Copilot-Integration-Id")
+                .and_then(|v| v.to_str().ok()),
+            Some(COPILOT_INTEGRATION_ID)
+        );
+        // Auth header is supplied by the auth provider, not the adapter.
+        assert!(headers.get(http::header::AUTHORIZATION).is_none());
     }
 }

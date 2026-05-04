@@ -576,11 +576,24 @@ impl ModelClient {
             Some(manager) => manager.auth().await,
             None => None,
         };
-        let api_provider = self
-            .state
-            .provider
-            .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
-        let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
+        let resolved_provider = if matches!(self.state.provider.wire_api, WireApi::CopilotInline) {
+            let manager = self
+                .state
+                .auth_manager
+                .as_ref()
+                .ok_or_else(|| crate::error::CodexErr::Api(
+                    "GitHub Copilot requires an auth manager. Run `ata login` and choose GitHub Copilot.".into(),
+                ))?;
+            let copilot_token = manager.get_copilot_token().await?;
+            let mut provider = self.state.provider.clone();
+            provider.experimental_bearer_token = Some(copilot_token);
+            provider
+        } else {
+            self.state.provider.clone()
+        };
+        let api_provider =
+            resolved_provider.to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
+        let api_auth = auth_provider_from_auth(auth.clone(), &resolved_provider)?;
         Ok(CurrentClientSetup {
             auth,
             api_provider,

@@ -326,11 +326,10 @@ impl ModelProviderInfo {
     pub fn create_copilot_provider() -> ModelProviderInfo {
         ModelProviderInfo {
             name: "GitHub Copilot".into(),
-            base_url: Some("https://api.github.com".into()),
-            env_key: Some("GITHUB_COPILOT_TOKEN".into()),
+            base_url: Some("https://api.githubcopilot.com".into()),
+            env_key: None,
             env_key_instructions: Some(
-                "Set GITHUB_COPILOT_TOKEN to a GitHub Personal Access Token with Copilot access"
-                    .into(),
+                "Sign in with GitHub Copilot from the login screen to authenticate.".into(),
             ),
             experimental_bearer_token: None,
             wire_api: WireApi::CopilotInline,
