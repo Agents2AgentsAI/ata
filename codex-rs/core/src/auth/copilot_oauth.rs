@@ -231,6 +231,23 @@ async fn exchange_for_copilot_token(github_oauth_token: &str) -> Result<(String,
     Ok((parsed.token, expires))
 }
 
+/// Finish a device-code login: exchange the long-lived GitHub OAuth token
+/// for a Copilot session token and persist both.
+pub async fn complete_login(
+    codex_home: &Path,
+    store_mode: AuthCredentialsStoreMode,
+    github_oauth_token: String,
+) -> Result<()> {
+    let (copilot_token, expires) = exchange_for_copilot_token(&github_oauth_token).await?;
+    save_credentials(
+        codex_home,
+        store_mode,
+        github_oauth_token,
+        copilot_token,
+        expires,
+    )
+}
+
 /// Persist a freshly-issued GitHub OAuth token + Copilot token to disk.
 pub fn save_credentials(
     codex_home: &Path,

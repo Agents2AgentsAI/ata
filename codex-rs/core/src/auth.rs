@@ -26,6 +26,7 @@ use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 
 pub use crate::auth::copilot_oauth::COPILOT_EDITOR_PLUGIN_VERSION;
+pub use crate::auth::copilot_oauth::complete_login as complete_copilot_login;
 pub use crate::auth::copilot_oauth::COPILOT_EDITOR_VERSION;
 pub use crate::auth::copilot_oauth::COPILOT_INTEGRATION_ID;
 pub use crate::auth::copilot_oauth::COPILOT_OAUTH_CLIENT_ID;

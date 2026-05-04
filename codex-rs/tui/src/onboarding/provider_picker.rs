@@ -344,10 +344,10 @@ impl AuthModeWidget {
     }
 
     fn start_provider_configuration(&mut self, provider: ProviderOption) {
-        if provider == ProviderOption::Gemini {
-            self.start_provider_auth_method_picker(provider);
-        } else {
-            self.start_provider_api_key_entry(provider);
+        match provider {
+            ProviderOption::Gemini => self.start_provider_auth_method_picker(provider),
+            ProviderOption::Copilot => self.start_copilot_oauth_login(),
+            _ => self.start_provider_api_key_entry(provider),
         }
     }
 
