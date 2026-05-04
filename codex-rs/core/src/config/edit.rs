@@ -784,6 +784,7 @@ pub fn default_model_for_provider(provider_id: &str) -> Option<&'static str> {
         "openai" => Some("gpt-5.3-codex"),
         "anthropic" => Some("claude-sonnet-4-6"),
         "gemini" => Some("gemini-3.1-pro-preview"),
+        "copilot" => Some("gpt-4o"),
         _ => None, // Unknown provider, clear model
     }
 }
