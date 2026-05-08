@@ -17,6 +17,7 @@ use crate::protocol::common::EXPERIMENTAL_CLIENT_METHODS;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_protocol::protocol::RolloutLine;
 use schemars::JsonSchema;
 use schemars::schema_for;
 use serde::Serialize;
@@ -128,12 +129,7 @@ pub fn generate_ts_with_options(
     }
 
     // Ensure our header is present on all TS files (root + subdirs like v2/).
-    let mut ts_files = Vec::new();
-    let should_collect_ts_files =
-        options.ensure_headers || (options.run_prettier && prettier.is_some());
-    if should_collect_ts_files {
-        ts_files = ts_files_in_recursive(out_dir)?;
-    }
+    let ts_files = ts_files_in_recursive(out_dir)?;
 
     if options.ensure_headers {
         let worker_count = thread::available_parallelism()
@@ -178,11 +174,19 @@ pub fn generate_ts_with_options(
         }
     }
 
+    trim_trailing_whitespace_in_ts_files(&ts_files)?;
+
     Ok(())
 }
 
 pub fn generate_json(out_dir: &Path) -> Result<()> {
-    generate_json_with_experimental(out_dir, false)
+    generate_json_with_experimental(out_dir, /*experimental_api*/ false)
+}
+
+pub fn generate_internal_json_schema(out_dir: &Path) -> Result<()> {
+    ensure_dir(out_dir)?;
+    write_json_schema::<RolloutLine>(out_dir, "RolloutLine")?;
+    Ok(())
 }
 
 pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -> Result<()> {
@@ -732,11 +736,11 @@ fn find_top_level_brace_span(input: &str) -> Option<(usize, usize)> {
     let mut state = ScanState::default();
     let mut open_index = None;
     for (index, ch) in input.char_indices() {
-        if !state.in_string() && ch == '{' && state.depth.is_top_level() {
+        if !state.in_ignored_syntax() && ch == '{' && state.depth.is_top_level() {
             open_index = Some(index);
         }
         state.observe(ch);
-        if !state.in_string()
+        if !state.in_ignored_syntax()
             && ch == '}'
             && state.depth.is_top_level()
             && let Some(open) = open_index
@@ -756,7 +760,7 @@ fn split_top_level_multi(input: &str, delimiters: &[char]) -> Vec<String> {
     let mut start = 0usize;
     let mut parts = Vec::new();
     for (index, ch) in input.char_indices() {
-        if !state.in_string() && state.depth.is_top_level() && delimiters.contains(&ch) {
+        if !state.in_ignored_syntax() && state.depth.is_top_level() && delimiters.contains(&ch) {
             let part = input[start..index].trim();
             if !part.is_empty() {
                 parts.push(part.to_string());
@@ -878,22 +882,58 @@ struct ScanState {
     depth: Depth,
     string_delim: Option<char>,
     escape: bool,
+    block_comment: bool,
+    line_comment: bool,
+    previous_char: Option<char>,
 }
 
 impl ScanState {
     fn observe(&mut self, ch: char) {
+        if self.line_comment {
+            if ch == '\n' {
+                self.line_comment = false;
+            }
+            self.previous_char = Some(ch);
+            return;
+        }
+
+        if self.block_comment {
+            if self.previous_char == Some('*') && ch == '/' {
+                self.block_comment = false;
+                self.previous_char = None;
+            } else {
+                self.previous_char = Some(ch);
+            }
+            return;
+        }
+
         if let Some(delim) = self.string_delim {
             if self.escape {
                 self.escape = false;
+                self.previous_char = Some(ch);
                 return;
             }
             if ch == '\\' {
                 self.escape = true;
+                self.previous_char = Some(ch);
                 return;
             }
             if ch == delim {
                 self.string_delim = None;
             }
+            self.previous_char = Some(ch);
+            return;
+        }
+
+        if self.previous_char == Some('/') && ch == '/' {
+            self.line_comment = true;
+            self.previous_char = Some(ch);
+            return;
+        }
+
+        if self.previous_char == Some('/') && ch == '*' {
+            self.block_comment = true;
+            self.previous_char = Some(ch);
             return;
         }
 
@@ -915,10 +955,11 @@ impl ScanState {
             }
             _ => {}
         }
+        self.previous_char = Some(ch);
     }
 
-    fn in_string(&self) -> bool {
-        self.string_delim.is_some()
+    fn in_ignored_syntax(&self) -> bool {
+        self.string_delim.is_some() || self.block_comment || self.line_comment
     }
 }
 
@@ -1935,6 +1976,32 @@ fn ts_files_in_recursive(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+fn trim_trailing_whitespace_in_ts_files(paths: &[PathBuf]) -> Result<()> {
+    for path in paths {
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        let trimmed = trim_trailing_line_whitespace(&content);
+        if trimmed != content {
+            fs::write(path, trimmed)
+                .with_context(|| format!("Failed to write {}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn trim_trailing_line_whitespace(content: &str) -> String {
+    let mut trimmed = String::with_capacity(content.len());
+    for line in content.split_inclusive('\n') {
+        if let Some(line_without_newline) = line.strip_suffix('\n') {
+            trimmed.push_str(line_without_newline.trim_end_matches([' ', '\t']));
+            trimmed.push('\n');
+        } else {
+            trimmed.push_str(line.trim_end_matches([' ', '\t']));
+        }
+    }
+    trimmed
+}
+
 /// Generate an index.ts file that re-exports all generated types.
 /// This allows consumers to import all types from a single file.
 fn generate_index_ts(out_dir: &Path) -> Result<PathBuf> {
@@ -1984,7 +2051,7 @@ pub(crate) fn generate_index_ts_tree(tree: &mut BTreeMap<PathBuf, String>) {
     if !v2_entries.is_empty() {
         tree.insert(
             PathBuf::from("v2").join("index.ts"),
-            index_ts_entries(&v2_entries, false),
+            index_ts_entries(&v2_entries, /*has_v2_ts*/ false),
         );
     }
 }
@@ -2669,6 +2736,79 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
     }
 
     #[test]
+    fn experimental_type_fields_ts_filter_handles_generated_command_params_shape() -> Result<()> {
+        let output_dir = std::env::temp_dir().join(format!("codex_ts_filter_{}", Uuid::now_v7()));
+        fs::create_dir_all(&output_dir)?;
+
+        struct TempDirGuard(PathBuf);
+
+        impl Drop for TempDirGuard {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let _guard = TempDirGuard(output_dir.clone());
+        let path = output_dir.join("CommandExecParams.ts");
+        let content = r#"import type { CommandExecTerminalSize } from "./CommandExecTerminalSize";
+import type { PermissionProfile } from "./PermissionProfile";
+import type { SandboxPolicy } from "./SandboxPolicy";
+
+export type CommandExecParams = {/**
+ * Command argv vector. Empty arrays are rejected.
+ */
+command: Array<string>, /**
+ * Optional environment overrides merged into the server-computed
+ * environment.
+ */
+env?: { [key in string]?: string | null } | null, /**
+ * Optional initial PTY size in character cells. Only valid when `tty` is
+ * true.
+ */
+size?: CommandExecTerminalSize | null, /**
+ * Optional sandbox policy for this command.
+ *
+ * Uses the same shape as thread/turn execution sandbox configuration and
+ * defaults to the user's configured policy when omitted. Cannot be
+ * combined with `permissionProfile`.
+ */
+sandboxPolicy?: SandboxPolicy | null,
+/**
+ * Optional full permissions profile for this command.
+ *
+ * Defaults to the user's configured permissions when omitted. Cannot be
+ * combined with `sandboxPolicy`.
+ */
+permissionProfile?: PermissionProfile | null};
+"#;
+        fs::write(&path, content)?;
+
+        static CUSTOM_FIELD: crate::experimental_api::ExperimentalField =
+            crate::experimental_api::ExperimentalField {
+                type_name: "CommandExecParams",
+                field_name: "permissionProfile",
+                reason: "command/exec.permissionProfile",
+            };
+        filter_experimental_type_fields_ts(&output_dir, &[&CUSTOM_FIELD])?;
+
+        let filtered = fs::read_to_string(&path)?;
+        assert_eq!(
+            filtered.contains("permissionProfile?: PermissionProfile"),
+            false
+        );
+        assert_eq!(
+            filtered.contains(r#"import type { PermissionProfile } from "./PermissionProfile";"#),
+            false
+        );
+        assert_eq!(filtered.contains("sandboxPolicy?: SandboxPolicy"), true);
+        assert_eq!(
+            filtered.contains(r#"import type { SandboxPolicy } from "./SandboxPolicy";"#),
+            true
+        );
+        Ok(())
+    }
+
+    #[test]
     fn stable_schema_filter_removes_mock_experimental_method() -> Result<()> {
         let output_dir = std::env::temp_dir().join(format!("codex_schema_{}", Uuid::now_v7()));
         fs::create_dir(&output_dir)?;
@@ -2687,7 +2827,7 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
     fn generate_json_filters_experimental_fields_and_methods() -> Result<()> {
         let output_dir = std::env::temp_dir().join(format!("codex_schema_{}", Uuid::now_v7()));
         fs::create_dir(&output_dir)?;
-        generate_json_with_experimental(&output_dir, false)?;
+        generate_json_with_experimental(&output_dir, /*experimental_api*/ false)?;
 
         let thread_start_json =
             fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.json"))?;

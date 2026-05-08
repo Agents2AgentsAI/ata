@@ -45,22 +45,18 @@
         },
         {
           "properties": {
-            "email": {
-              "type": "string"
-            },
             "type": {
               "enum": [
-                "gemini"
+                "amazonBedrock"
               ],
-              "title": "GeminiAccountType",
+              "title": "AmazonBedrockAccountType",
               "type": "string"
             }
           },
           "required": [
-            "email",
             "type"
           ],
-          "title": "GeminiAccount",
+          "title": "AmazonBedrockAccount",
           "type": "object"
         }
       ]
@@ -71,8 +67,11 @@
         "go",
         "plus",
         "pro",
+        "prolite",
         "team",
+        "self_serve_business_usage_based",
         "business",
+        "enterprise_cbp_usage_based",
         "enterprise",
         "edu",
         "unknown"

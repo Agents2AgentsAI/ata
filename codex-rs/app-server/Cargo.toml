@@ -29,10 +29,21 @@ axum = { workspace = true, default-features = false, features = [
     "tokio",
     "ws",
 ] }
+codex-analytics = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-cloud-requirements = { workspace = true }
+codex-config = { workspace = true }
 codex-core = { workspace = true }
+codex-core-plugins = { workspace = true }
+codex-device-key = { workspace = true }
+codex-exec-server = { workspace = true }
+codex-external-agent-migration = { workspace = true }
+codex-external-agent-sessions = { workspace = true }
+codex-features = { workspace = true }
+codex-git-utils = { workspace = true }
+codex-hooks = { workspace = true }
 codex-otel = { workspace = true }
+codex-plugin = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-utils-pty = { workspace = true }
@@ -40,22 +51,33 @@ codex-backend-client = { workspace = true }
 codex-file-search = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-login = { workspace = true }
+codex-memories-write = { workspace = true }
+codex-mcp = { workspace = true }
+codex-model-provider = { workspace = true }
+codex-models-manager = { workspace = true }
 codex-protocol = { workspace = true }
 codex-app-server-protocol = { workspace = true }
+codex-app-server-transport = { workspace = true }
 codex-feedback = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-rollout = { workspace = true }
+codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
+codex-thread-store = { workspace = true }
+codex-tools = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true }
-owo-colors = { workspace = true, features = ["supports-colors"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 tempfile = { workspace = true }
+thiserror = { workspace = true }
 time = { workspace = true }
 toml = { workspace = true }
+toml_edit = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
@@ -64,13 +86,10 @@ tokio = { workspace = true, features = [
     "signal",
 ] }
 tokio-util = { workspace = true }
-tokio-tungstenite = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }
-gethostname = { workspace = true }
-reqwest = { workspace = true }
-uuid = { workspace = true, features = ["serde", "v4", "v7"] }
-walkdir = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]
 app_test_support = { workspace = true }
@@ -81,7 +100,10 @@ axum = { workspace = true, default-features = false, features = [
     "tokio",
 ] }
 core_test_support = { workspace = true }
+codex-model-provider-info = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
+flate2 = { workspace = true }
+hmac = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
@@ -92,6 +114,7 @@ rmcp = { workspace = true, default-features = false, features = [
     "transport-streamable-http-server",
 ] }
 serial_test = { workspace = true }
+tar = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 wiremock = { workspace = true }

@@ -2,14 +2,14 @@
 
 use std::collections::HashMap;
 
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
@@ -24,6 +24,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
@@ -128,9 +129,12 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
     let second_mock = responses::mount_sse_once(&server, second_response).await;
 
     let session_model = session_configured.model.clone();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, cwd.path());
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "please confirm".into(),
                 text_elements: Vec::new(),
@@ -138,9 +142,10 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            approvals_reviewer: None,
+            sandbox_policy,
+            permission_profile,
             model: session_model,
-            model_provider: None,
             effort: None,
             summary: None,
             service_tier: None,
@@ -153,7 +158,6 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
                 },
             }),
             personality: None,
-            feature_flags: None,
         })
         .await?;
 
@@ -247,9 +251,12 @@ where
 
     let session_model = session_configured.model.clone();
     let collaboration_mode = build_mode(session_model.clone());
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, cwd.path());
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "please confirm".into(),
                 text_elements: Vec::new(),
@@ -257,15 +264,15 @@ where
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            approvals_reviewer: None,
+            sandbox_policy,
+            permission_profile,
             model: session_model,
-            model_provider: None,
             effort: None,
             summary: None,
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
-            feature_flags: None,
         })
         .await?;
 

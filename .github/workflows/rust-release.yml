@@ -19,8 +19,8 @@ jobs:
   tag-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.92
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
       - name: Validate tag matches Cargo.toml version
         shell: bash
         run: |
@@ -47,9 +47,11 @@ jobs:
 
   build:
     needs: tag-check
-    name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
+    name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
-    timeout-minutes: 60
+    # Release builds can take a long time, so leave some headroom to avoid
+    # having to restart the full workflow due to a timeout.
+    timeout-minutes: 90
     permissions:
       contents: read
       id-token: write
@@ -70,29 +72,56 @@ jobs:
         include:
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
+            bundle: primary
+            artifact_name: aarch64-apple-darwin
+            binaries: "codex codex-responses-api-proxy"
+            build_dmg: "true"
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+            bundle: app-server
+            artifact_name: aarch64-apple-darwin-app-server
+            binaries: "codex-app-server"
+            build_dmg: "false"
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
-          - runner: ubuntu-x64
+            bundle: primary
+            artifact_name: x86_64-apple-darwin
+            binaries: "codex codex-responses-api-proxy"
+            build_dmg: "true"
+          - runner: macos-15-xlarge
+            target: x86_64-apple-darwin
+            bundle: app-server
+            artifact_name: x86_64-apple-darwin-app-server
+            binaries: "codex-app-server"
+            build_dmg: "false"
+          # Release artifacts intentionally ship MUSL-linked Linux binaries.
+          - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
-            runs_on: "runs-on=${{ github.run_id }}/runner=release-linux-x64/extras=s3-cache"
-          - runner: ubuntu-x64
-            target: x86_64-unknown-linux-gnu
-            runs_on: "runs-on=${{ github.run_id }}/runner=release-linux-x64/extras=s3-cache"
-          - runner: ubuntu-arm64
+            bundle: primary
+            artifact_name: x86_64-unknown-linux-musl
+            binaries: "codex codex-responses-api-proxy bwrap"
+            build_dmg: "false"
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            bundle: app-server
+            artifact_name: x86_64-unknown-linux-musl-app-server
+            binaries: "codex-app-server"
+            build_dmg: "false"
+          - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
-            runs_on: "runs-on=${{ github.run_id }}/runner=release-linux-arm64/extras=s3-cache"
-          - runner: ubuntu-arm64
-            target: aarch64-unknown-linux-gnu
-            runs_on: "runs-on=${{ github.run_id }}/runner=release-linux-arm64/extras=s3-cache"
+            bundle: primary
+            artifact_name: aarch64-unknown-linux-musl
+            binaries: "codex codex-responses-api-proxy bwrap"
+            build_dmg: "false"
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            bundle: app-server
+            artifact_name: aarch64-unknown-linux-musl-app-server
+            binaries: "codex-app-server"
+            build_dmg: "false"
 
     steps:
-      - uses: actions/checkout@v6
-      - name: Activate RunsOn
-        if: ${{ contains(matrix.runs_on || '', 'runs-on=') }}
-        uses: runs-on/action@v2
-      - name: Set up MSVC dev environment
-        if: ${{ runner.os == 'Windows' }}
-        uses: ilammy/msvc-dev-cmd@v1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Print runner specs (Linux)
         if: ${{ runner.os == 'Linux' }}
         shell: bash
@@ -138,7 +167,7 @@ jobs:
             sudo apt-get update -y
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libubsan1
           fi
-      - uses: dtolnay/rust-toolchain@1.93.0
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
         with:
           targets: ${{ matrix.target }}
 
@@ -155,7 +184,7 @@ jobs:
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install Zig
-        uses: mlugg/setup-zig@v2
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: 0.14.1
 
@@ -223,20 +252,44 @@ jobs:
           echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
           echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
 
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        name: Configure musl rusty_v8 artifact overrides and verify checksums
+        uses: ./.github/actions/setup-rusty-v8-musl
+        with:
+          target: ${{ matrix.target }}
+
+      - if: ${{ contains(matrix.target, 'linux') && matrix.bundle == 'primary' }}
+        name: Build bwrap and export digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          cargo build --target "$target" --release --timings --bin bwrap
+
+          bwrap_path="target/${target}/release/bwrap"
+          if [[ ! -f "$bwrap_path" ]]; then
+            echo "bwrap binary ${bwrap_path} not found"
+            exit 1
+          fi
+
+          digest="$(sha256sum "$bwrap_path" | awk '{print $1}')"
+          echo "CODEX_BWRAP_SHA256=${digest}" >> "$GITHUB_ENV"
+          echo "Built bwrap ${bwrap_path} with sha256:${digest}"
+
       - name: Cargo build
         shell: bash
         run: |
+          build_args=()
+          for binary in ${{ matrix.binaries }}; do
+            build_args+=(--bin "$binary")
+          done
           echo "CARGO_PROFILE_RELEASE_LTO: ${CARGO_PROFILE_RELEASE_LTO}"
-          if [[ "${{ contains(matrix.target, 'windows') }}" == 'true' ]]; then
-            cargo build --target ${{ matrix.target }} --release --timings -p codex-cli -p codex-responses-api-proxy -p codex-windows-sandbox --bin ata --bin ata-responses-api-proxy --bin ata-windows-sandbox-setup --bin ata-command-runner
-          else
-            cargo build --target ${{ matrix.target }} --release --timings --bin ata --bin ata-responses-api-proxy
-          fi
+          cargo build --target ${{ matrix.target }} --release --timings "${build_args[@]}"
 
       - name: Upload Cargo timings
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
-          name: cargo-timings-rust-release-${{ matrix.target }}
+          name: cargo-timings-rust-release-${{ matrix.target }}-${{ matrix.bundle }}
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
           if-no-files-found: warn
 
@@ -246,12 +299,14 @@ jobs:
         with:
           target: ${{ matrix.target }}
           artifacts-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
+          binaries: ${{ matrix.binaries }}
 
       - if: ${{ runner.os == 'macOS' && env.HAS_APPLE_SIGNING == 'true' }}
         name: MacOS code signing (binaries)
         uses: ./.github/actions/macos-code-sign
         with:
           target: ${{ matrix.target }}
+          binaries: ${{ matrix.binaries }}
           sign-binaries: "true"
           sign-dmg: "false"
           apple-certificate: ${{ secrets.APPLE_CERTIFICATE_P12 }}
@@ -260,62 +315,7 @@ jobs:
           apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
           apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
 
-      - if: ${{ runner.os == 'macOS' }}
-        name: Free disk space before DMG creation
-        shell: bash
-        run: |
-          set -euo pipefail
-          target="${{ matrix.target }}"
-          release_dir="target/${target}/release"
-
-          echo "Disk usage before cleanup:"
-          df -h .
-
-          # Preserve only the final release binaries we need for the DMG.
-          mkdir -p /tmp/ata-binaries
-          cp "${release_dir}/ata" /tmp/ata-binaries/ 2>/dev/null || true
-          cp "${release_dir}/ata-responses-api-proxy" /tmp/ata-binaries/ 2>/dev/null || true
-          cp "${release_dir}/ata-windows-sandbox-setup" /tmp/ata-binaries/ 2>/dev/null || true
-          cp "${release_dir}/ata-command-runner" /tmp/ata-binaries/ 2>/dev/null || true
-          # Preserve any sigstore bundles.
-          cp "${release_dir}"/*.sigstore /tmp/ata-binaries/ 2>/dev/null || true
-
-          # Wipe the entire target directory to reclaim space.
-          rm -rf target
-
-          # Remove build tools no longer needed after compilation.
-          rm -rf ~/.rustup ~/.cargo
-
-          # Remove Xcode simulator runtimes and unused platform SDKs (multi-GB).
-          xcrun simctl delete all 2>/dev/null || true
-          sudo rm -rf \
-            ~/Library/Developer/CoreSimulator \
-            /Library/Developer/CoreSimulator \
-            2>/dev/null || true
-          for plat in iPhoneOS WatchOS AppleTVOS XROS WatchSimulator AppleTVSimulator iPhoneSimulator; do
-            sudo rm -rf "/Applications/Xcode.app/Contents/Developer/Platforms/${plat}.platform" 2>/dev/null || true
-          done
-
-          # Remove Homebrew and its caches.
-          brew cleanup --prune=all 2>/dev/null || true
-          rm -rf ~/Library/Caches/Homebrew 2>/dev/null || true
-
-          # Remove other pre-installed large tools not needed for DMG creation.
-          sudo rm -rf \
-            /usr/local/share/dotnet \
-            /usr/local/share/powershell \
-            /usr/local/lib/node_modules \
-            2>/dev/null || true
-
-          # Restore binaries into the expected release directory.
-          mkdir -p "${release_dir}"
-          cp /tmp/ata-binaries/* "${release_dir}/"
-          rm -rf /tmp/ata-binaries
-
-          echo "Disk usage after cleanup:"
-          df -h .
-
-      - if: ${{ runner.os == 'macOS' }}
+      - if: ${{ runner.os == 'macOS' && matrix.build_dmg == 'true' }}
         name: Build macOS dmg
         shell: bash
         run: |
@@ -330,23 +330,17 @@ jobs:
           # The previous "MacOS code signing (binaries)" step signs + notarizes the
           # built artifacts in `${release_dir}`. This step packages *those same*
           # signed binaries into a dmg.
-          ata_binary_path="${release_dir}/ata"
-          proxy_binary_path="${release_dir}/ata-responses-api-proxy"
-
           rm -rf "$dmg_root"
           mkdir -p "$dmg_root"
 
-          if [[ ! -f "$ata_binary_path" ]]; then
-            echo "Binary $ata_binary_path not found"
-            exit 1
-          fi
-          if [[ ! -f "$proxy_binary_path" ]]; then
-            echo "Binary $proxy_binary_path not found"
-            exit 1
-          fi
-
-          ditto "$ata_binary_path" "${dmg_root}/ata"
-          ditto "$proxy_binary_path" "${dmg_root}/ata-responses-api-proxy"
+          for binary in ${{ matrix.binaries }}; do
+            binary_path="${release_dir}/${binary}"
+            if [[ ! -f "${binary_path}" ]]; then
+              echo "Binary ${binary_path} not found"
+              exit 1
+            fi
+            ditto "${binary_path}" "${dmg_root}/${binary}"
+          done
 
           rm -f "$dmg_path"
 
@@ -380,7 +374,7 @@ jobs:
             exit 1
           fi
 
-      - if: ${{ runner.os == 'macOS' && env.HAS_APPLE_SIGNING == 'true' }}
+      - if: ${{ runner.os == 'macOS' && matrix.build_dmg == 'true' }}
         name: MacOS code signing (dmg)
         uses: ./.github/actions/macos-code-sign
         with:
@@ -399,23 +393,27 @@ jobs:
           dest="dist/${{ matrix.target }}"
           mkdir -p "$dest"
 
-          if [[ "${{ matrix.runner }}" == windows* ]]; then
-            cp target/${{ matrix.target }}/release/ata.exe "$dest/ata-${{ matrix.target }}.exe"
-            cp target/${{ matrix.target }}/release/ata-responses-api-proxy.exe "$dest/ata-responses-api-proxy-${{ matrix.target }}.exe"
-            cp target/${{ matrix.target }}/release/ata-windows-sandbox-setup.exe "$dest/ata-windows-sandbox-setup-${{ matrix.target }}.exe"
-            cp target/${{ matrix.target }}/release/ata-command-runner.exe "$dest/ata-command-runner-${{ matrix.target }}.exe"
-          else
-            cp target/${{ matrix.target }}/release/ata "$dest/ata-${{ matrix.target }}"
-            cp target/${{ matrix.target }}/release/ata-responses-api-proxy "$dest/ata-responses-api-proxy-${{ matrix.target }}"
+          for binary in ${{ matrix.binaries }}; do
+            cp "target/${{ matrix.target }}/release/${binary}" "$dest/${binary}-${{ matrix.target }}"
+            if [[ "${{ matrix.target }}" == *linux* ]]; then
+              cp "target/${{ matrix.target }}/release/${binary}.sigstore" \
+                "$dest/${binary}-${{ matrix.target }}.sigstore"
+            fi
+          done
+
+          if [[ "${{ matrix.target }}" == *linux* && "${{ matrix.bundle }}" == "primary" ]]; then
+            bundle_root="${RUNNER_TEMP}/codex-${{ matrix.target }}-bundle"
+            rm -rf "$bundle_root"
+            mkdir -p "$bundle_root/codex-resources"
+            cp "$dest/codex-${{ matrix.target }}" "$bundle_root/codex"
+            cp "$dest/bwrap-${{ matrix.target }}" "$bundle_root/codex-resources/bwrap"
+            chmod 0755 "$bundle_root/codex" "$bundle_root/codex-resources/bwrap"
+            tar -C "$bundle_root" -cf - codex codex-resources/bwrap |
+              zstd -T0 -19 -o "$dest/codex-${{ matrix.target }}-bundle.tar.zst"
           fi
 
-          if [[ "${{ matrix.target }}" == *linux* ]]; then
-            cp target/${{ matrix.target }}/release/ata.sigstore "$dest/ata-${{ matrix.target }}.sigstore"
-            cp target/${{ matrix.target }}/release/ata-responses-api-proxy.sigstore "$dest/ata-responses-api-proxy-${{ matrix.target }}.sigstore"
-          fi
-
-          if [[ "${{ matrix.target }}" == *apple-darwin ]]; then
-            cp target/${{ matrix.target }}/release/ata-${{ matrix.target }}.dmg "$dest/ata-${{ matrix.target }}.dmg"
+          if [[ "${{ matrix.build_dmg }}" == "true" ]]; then
+            cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
           fi
 
       - name: Compress artifacts
@@ -437,7 +435,7 @@ jobs:
             base="$(basename "$f")"
             # Skip files that are already archives (shouldn't happen, but be
             # safe).
-            if [[ "$base" == *.tar.gz || "$base" == *.zip || "$base" == *.dmg ]]; then
+            if [[ "$base" == *.tar.gz || "$base" == *.tar.zst || "$base" == *.zip || "$base" == *.dmg ]]; then
               continue
             fi
 
@@ -484,11 +482,11 @@ jobs:
             zstd -T0 -19 --rm "$dest/$base"
           done
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
-          name: ${{ matrix.target }}
-          # Upload the per-binary .zst files as well as the new .tar.gz
-          # equivalents we generated in the previous step.
+          name: ${{ matrix.artifact_name }}
+          # Upload the per-binary .zst files, .tar.gz equivalents, and any
+          # prebuilt archives staged above.
           path: |
             codex-rs/dist/${{ matrix.target }}/*
 
@@ -502,23 +500,24 @@ jobs:
       release-lto: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
     secrets: inherit
 
-  shell-tool-mcp:
-    name: shell-tool-mcp
+  argument-comment-lint-release-assets:
+    name: argument-comment-lint release assets
     needs: tag-check
-    permissions:
-      contents: read
-      id-token: write
-    uses: ./.github/workflows/shell-tool-mcp.yml
+    uses: ./.github/workflows/rust-release-argument-comment-lint.yml
     with:
-      release-tag: ${{ github.ref_name }}
       publish: true
-    secrets: inherit
+
+  zsh-release-assets:
+    name: zsh release assets
+    needs: tag-check
+    uses: ./.github/workflows/rust-release-zsh.yml
 
   release:
     needs:
       - build
       - build-windows
-      - shell-tool-mcp
+      - argument-comment-lint-release-assets
+      - zsh-release-assets
     name: release
     runs-on: ubuntu-latest
     permissions:
@@ -532,7 +531,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Generate release notes from tag commit message
         id: release_notes
@@ -554,18 +553,15 @@ jobs:
 
           echo "path=${notes_path}" >> "${GITHUB_OUTPUT}"
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: dist
 
       - name: List
         run: ls -R dist/
 
-      # This is a temporary fix: we should modify shell-tool-mcp.yml so these
-      # files do not end up in dist/ in the first place.
       - name: Delete entries from dist/ that should not go in the release
         run: |
-          rm -rf dist/shell-tool-mcp*
           rm -rf dist/windows-binaries*
           # cargo-timing.html appears under multiple target-specific directories.
           # If included in files: dist/**, release upload races on duplicate
@@ -607,12 +603,12 @@ jobs:
           fi
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
         with:
           run_install: false
 
       - name: Setup Node.js for npm packaging
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: 22
 
@@ -620,16 +616,17 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # stage_npm_packages.py requires DotSlash when staging releases.
-      - uses: facebook/install-dotslash@v2
+      - uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
       - name: Stage npm packages
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.release_name.outputs.name }}
         run: |
           ./scripts/stage_npm_packages.py \
-            --release-version "${{ steps.release_name.outputs.name }}" \
-            --package ata \
-            --package ata-responses-api-proxy \
-            --package ata-sdk
+            --release-version "$RELEASE_VERSION" \
+            --package codex \
+            --package codex-responses-api-proxy \
+            --package codex-sdk
 
       - name: Stage installer scripts
         run: |
@@ -637,7 +634,7 @@ jobs:
           cp scripts/install/install.ps1 dist/install.ps1
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
         with:
           name: ${{ steps.release_name.outputs.name }}
           tag_name: ${{ github.ref_name }}
@@ -647,12 +644,39 @@ jobs:
           # (e.g. -alpha, -beta). Otherwise publish a normal release.
           prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
 
-      - uses: facebook/dotslash-publish-release@v2
+      - uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-config.json
+
+      - uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag: ${{ github.ref_name }}
+          config: .github/dotslash-zsh-config.json
+
+      - uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag: ${{ github.ref_name }}
+          config: .github/dotslash-argument-comment-lint-config.json
+
+      - name: Trigger developers.openai.com deploy
+        # Only trigger the deploy if the release is not a pre-release.
+        # The deploy is used to update the developers.openai.com website with the new config schema json file.
+        if: ${{ !contains(steps.release_name.outputs.name, '-') }}
+        continue-on-error: true
+        env:
+          DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL: ${{ secrets.DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          if ! curl -sS -f -o /dev/null -X POST "$DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL"; then
+            echo "::warning title=developers.openai.com deploy hook failed::Vercel deploy hook POST failed for ${GITHUB_REF_NAME}"
+            exit 1
+          fi
 
   # Publish to npm using OIDC authentication.
   # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/
@@ -669,23 +693,22 @@ jobs:
 
     steps:
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
-          node-version: 22
+          # Node 24 bundles npm >= 11.5.1, which trusted publishing requires.
+          node-version: 24
           registry-url: "https://registry.npmjs.org"
           scope: "@a2a-ai"
-
-      # Trusted publishing requires npm CLI version 11.5.1 or later.
-      - name: Update npm
-        run: npm install -g npm@latest
 
       - name: Download npm tarballs from release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
         run: |
           set -euo pipefail
-          version="${{ needs.release.outputs.version }}"
-          tag="${{ needs.release.outputs.tag }}"
+          version="$RELEASE_VERSION"
+          tag="$RELEASE_TAG"
           mkdir -p dist/npm
           patterns=(
             "ata-npm-${version}.tgz"
@@ -714,11 +737,59 @@ jobs:
             prefix="${NPM_TAG}-"
           fi
 
+          root_tarball="dist/npm/codex-npm-${VERSION}.tgz"
+          sdk_tarball="dist/npm/codex-sdk-npm-${VERSION}.tgz"
+          # Keep this list in sync with CODEX_PLATFORM_PACKAGES in
+          # codex-cli/scripts/build_npm_package.py. The root wrapper advances
+          # @openai/codex@latest as soon as it publishes, so every platform
+          # package it aliases must already exist in the registry first.
+          platform_tarballs=(
+            "dist/npm/codex-npm-linux-x64-${VERSION}.tgz"
+            "dist/npm/codex-npm-linux-arm64-${VERSION}.tgz"
+            "dist/npm/codex-npm-darwin-x64-${VERSION}.tgz"
+            "dist/npm/codex-npm-darwin-arm64-${VERSION}.tgz"
+            "dist/npm/codex-npm-win32-x64-${VERSION}.tgz"
+            "dist/npm/codex-npm-win32-arm64-${VERSION}.tgz"
+          )
+
+          for required_tarball in "${platform_tarballs[@]}" "${root_tarball}"; do
+            if [[ ! -f "${required_tarball}" ]]; then
+              echo "Missing npm tarball: ${required_tarball}"
+              exit 1
+            fi
+          done
+
           shopt -s nullglob
-          tarballs=(dist/npm/*-"${VERSION}".tgz)
-          if [[ ${#tarballs[@]} -eq 0 ]]; then
-            echo "No npm tarballs found in dist/npm for version ${VERSION}"
-            exit 1
+          other_tarballs=()
+          for tarball in dist/npm/*-"${VERSION}".tgz; do
+            if [[ "${tarball}" == "${root_tarball}" || "${tarball}" == "${sdk_tarball}" ]]; then
+              continue
+            fi
+
+            is_platform_tarball=false
+            for platform_tarball in "${platform_tarballs[@]}"; do
+              if [[ "${tarball}" == "${platform_tarball}" ]]; then
+                is_platform_tarball=true
+                break
+              fi
+            done
+            if [[ "${is_platform_tarball}" == true ]]; then
+              continue
+            fi
+
+            other_tarballs+=("${tarball}")
+          done
+
+          # Publish the platform packages before the root CLI wrapper. The root
+          # wrapper advances @openai/codex@latest, so it should only publish
+          # after the optional dependency versions it references exist.
+          tarballs=(
+            "${platform_tarballs[@]}"
+            "${other_tarballs[@]}"
+            "${root_tarball}"
+          )
+          if [[ -f "${sdk_tarball}" ]]; then
+            tarballs+=("${sdk_tarball}")
           fi
 
           for tarball in "${tarballs[@]}"; do
@@ -764,85 +835,28 @@ jobs:
             exit "${publish_status}"
           done
 
-  update-homebrew:
-    # Update the Homebrew tap with new version and SHA256 hashes.
-    # Requires a PAT with repo scope stored as HOMEBREW_TAP_TOKEN.
-    # Only runs for stable releases (not alpha/beta).
-    if: ${{ !contains(needs.release.outputs.version, '-') }}
-    name: Update Homebrew tap
+  winget:
+    name: winget
     needs: release
+    # Only publish stable/mainline releases to WinGet; pre-releases include a
+    # '-' in the semver string (e.g., 1.2.3-alpha.1).
+    if: ${{ !contains(needs.release.outputs.version, '-') }}
+    # This job only invokes a GitHub Action to open/update the winget-pkgs PR;
+    # it does not execute Windows-only tooling, so Linux is sufficient.
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
-      - name: Download release artifacts and update tap
-        env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          VERSION: ${{ needs.release.outputs.version }}
-          TAG: ${{ needs.release.outputs.tag }}
-        run: |
-          set -euo pipefail
-
-          # Download the 6 artifacts needed for the tap
-          tmp="$(mktemp -d)"
-          artifacts=(
-            "ata-aarch64-apple-darwin.dmg"
-            "ata-x86_64-apple-darwin.dmg"
-            "ata-aarch64-apple-darwin.tar.gz"
-            "ata-x86_64-apple-darwin.tar.gz"
-            "ata-aarch64-unknown-linux-musl.tar.gz"
-            "ata-x86_64-unknown-linux-musl.tar.gz"
-          )
-          for artifact in "${artifacts[@]}"; do
-            gh release download "${TAG}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --pattern "${artifact}" \
-              --dir "${tmp}"
-          done
-
-          # Compute SHA256 hashes
-          sha() { sha256sum "${tmp}/$1" | cut -d' ' -f1; }
-          cask_arm="$(sha ata-aarch64-apple-darwin.dmg)"
-          cask_intel="$(sha ata-x86_64-apple-darwin.dmg)"
-          formula_darwin_arm="$(sha ata-aarch64-apple-darwin.tar.gz)"
-          formula_darwin_intel="$(sha ata-x86_64-apple-darwin.tar.gz)"
-          formula_linux_arm="$(sha ata-aarch64-unknown-linux-musl.tar.gz)"
-          formula_linux_intel="$(sha ata-x86_64-unknown-linux-musl.tar.gz)"
-
-          # Clone the tap repo
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/Agents2AgentsAI/homebrew-tap.git" tap
-          cd tap
-
-          # Update cask
-          sed -i "s/version \".*\"/version \"${VERSION}\"/" Casks/ata.rb
-          sed -i "s/sha256 arm:   \".*\",/sha256 arm:   \"${cask_arm}\",/" Casks/ata.rb
-          sed -i "s/intel: \".*\"/intel: \"${cask_intel}\"/" Casks/ata.rb
-
-          # Update formula version
-          sed -i "s/version \".*\"/version \"${VERSION}\"/" Formula/ata.rb
-
-          # Update formula SHA256s (in order of appearance)
-          python3 -c "
-          import re
-          with open('Formula/ata.rb') as f:
-              content = f.read()
-          shas = ['${formula_darwin_arm}', '${formula_darwin_intel}', '${formula_linux_arm}', '${formula_linux_intel}']
-          i = 0
-          def replacer(m):
-              global i
-              result = f'sha256 \"{shas[i]}\"'
-              i += 1
-              return result
-          content = re.sub(r'sha256 \"[^\"]+\"', replacer, content)
-          with open('Formula/ata.rb', 'w') as f:
-              f.write(content)
-          "
-
-          # Commit and push
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Update ata to ${VERSION}"
-          git push
+      - name: Publish to WinGet
+        uses: vedantmgoyal9/winget-releaser@7bd472be23763def6e16bd06cc8b1cdfab0e2fd5
+        with:
+          identifier: OpenAI.Codex
+          version: ${{ needs.release.outputs.version }}
+          release-tag: ${{ needs.release.outputs.tag }}
+          fork-user: openai-oss-forks
+          installers-regex: '^codex-(?:x86_64|aarch64)-pc-windows-msvc\.exe\.zip$'
+          token: ${{ secrets.WINGET_PUBLISH_PAT }}
 
   update-branch:
     name: Update latest-alpha-cli branch

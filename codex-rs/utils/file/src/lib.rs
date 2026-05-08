@@ -270,8 +270,9 @@ mod tests {
     use std::sync::LazyLock;
 
     use pretty_assertions::assert_eq;
+    use std::sync::Mutex;
+    use std::sync::MutexGuard;
     use tempfile::NamedTempFile;
-    use tokio::sync::Mutex;
 
     use super::*;
 
@@ -292,8 +293,10 @@ mod tests {
 
     static CACHE_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-    async fn lock_cache_tests() -> tokio::sync::MutexGuard<'static, ()> {
-        CACHE_TEST_LOCK.lock().await
+    fn lock_cache_tests() -> MutexGuard<'static, ()> {
+        CACHE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     #[test]
@@ -396,7 +399,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn cache_returns_same_result_for_unchanged_file() {
-        let _lock = lock_cache_tests().await;
+        let _lock = lock_cache_tests();
         FILE_CACHE.clear();
 
         let file = NamedTempFile::new().expect("temp file");
@@ -409,7 +412,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn cache_invalidates_on_file_change() {
-        let _lock = lock_cache_tests().await;
+        let _lock = lock_cache_tests();
         FILE_CACHE.clear();
 
         let file = NamedTempFile::new().expect("temp file");
@@ -446,8 +449,9 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
     async fn cache_handles_concurrent_reads_for_same_file() {
-        let _lock = lock_cache_tests().await;
+        let _lock = lock_cache_tests();
         FILE_CACHE.clear();
 
         let file = NamedTempFile::new().expect("temp file");
@@ -471,7 +475,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn cache_covers_all_processable_files() {
-        let _lock = lock_cache_tests().await;
+        let _lock = lock_cache_tests();
         FILE_CACHE.clear();
 
         // An 8 MB file produces ~10.7 MB base64 — previously exceeded the old 10 MB cache limit.

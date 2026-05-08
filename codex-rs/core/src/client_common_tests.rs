@@ -1,6 +1,6 @@
+use codex_api::OpenAiVerbosity;
 use codex_api::ResponsesApiRequest;
-use codex_api::common::OpenAiVerbosity;
-use codex_api::common::TextControls;
+use codex_api::TextControls;
 use codex_api::create_text_param_for_request;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -13,7 +13,7 @@ fn serializes_text_verbosity_when_set() {
     let input: Vec<ResponseItem> = vec![];
     let tools: Vec<serde_json::Value> = vec![];
     let req = ResponsesApiRequest {
-        model: "gpt-5.1".to_string(),
+        model: "gpt-5.4".to_string(),
         instructions: "i".to_string(),
         input,
         tools,
@@ -29,6 +29,7 @@ fn serializes_text_verbosity_when_set() {
             verbosity: Some(OpenAiVerbosity::Low),
             format: None,
         }),
+        client_metadata: None,
     };
 
     let v = serde_json::to_value(&req).expect("json");
@@ -51,11 +52,15 @@ fn serializes_text_schema_with_strict_format() {
         },
         "required": ["answer"],
     });
-    let text_controls =
-        create_text_param_for_request(None, &Some(schema.clone())).expect("text controls");
+    let text_controls = create_text_param_for_request(
+        /*verbosity*/ None,
+        &Some(schema.clone()),
+        /*output_schema_strict*/ true,
+    )
+    .expect("text controls");
 
     let req = ResponsesApiRequest {
-        model: "gpt-5.1".to_string(),
+        model: "gpt-5.4".to_string(),
         instructions: "i".to_string(),
         input,
         tools,
@@ -68,6 +73,7 @@ fn serializes_text_schema_with_strict_format() {
         prompt_cache_key: None,
         service_tier: None,
         text: Some(text_controls),
+        client_metadata: None,
     };
 
     let v = serde_json::to_value(&req).expect("json");
@@ -88,11 +94,34 @@ fn serializes_text_schema_with_strict_format() {
 }
 
 #[test]
+fn serializes_text_schema_with_non_strict_format() {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "answer": {"type": "string"},
+            "rationale": {"type": "string"}
+        },
+        "required": ["answer"],
+        "additionalProperties": false
+    });
+    let text_controls = create_text_param_for_request(
+        /*verbosity*/ None,
+        &Some(schema.clone()),
+        /*output_schema_strict*/ false,
+    )
+    .expect("text controls");
+
+    let format = text_controls.format.expect("format field");
+    assert!(!format.strict);
+    assert_eq!(format.schema, schema);
+}
+
+#[test]
 fn omits_text_when_not_set() {
     let input: Vec<ResponseItem> = vec![];
     let tools: Vec<serde_json::Value> = vec![];
     let req = ResponsesApiRequest {
-        model: "gpt-5.1".to_string(),
+        model: "gpt-5.4".to_string(),
         instructions: "i".to_string(),
         input,
         tools,
@@ -105,6 +134,7 @@ fn omits_text_when_not_set() {
         prompt_cache_key: None,
         service_tier: None,
         text: None,
+        client_metadata: None,
     };
 
     let v = serde_json::to_value(&req).expect("json");
@@ -114,7 +144,7 @@ fn omits_text_when_not_set() {
 #[test]
 fn serializes_flex_service_tier_when_set() {
     let req = ResponsesApiRequest {
-        model: "gpt-5.1".to_string(),
+        model: "gpt-5.4".to_string(),
         instructions: "i".to_string(),
         input: vec![],
         tools: vec![],
@@ -127,6 +157,7 @@ fn serializes_flex_service_tier_when_set() {
         prompt_cache_key: None,
         service_tier: Some(ServiceTier::Flex.to_string()),
         text: None,
+        client_metadata: None,
     };
 
     let v = serde_json::to_value(&req).expect("json");
@@ -147,7 +178,6 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
-            thought_signature: None,
         },
         ResponseItem::FunctionCallOutput {
             call_id: "call-1".to_string(),
@@ -162,6 +192,7 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
         },
         ResponseItem::CustomToolCallOutput {
             call_id: "call-2".to_string(),
+            name: None,
             output: FunctionCallOutputPayload::from_text(raw_output.to_string()),
         },
     ];
@@ -177,7 +208,6 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-1".to_string(),
-                thought_signature: None,
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "call-1".to_string(),
@@ -192,54 +222,9 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
             },
             ResponseItem::CustomToolCallOutput {
                 call_id: "call-2".to_string(),
+                name: None,
                 output: FunctionCallOutputPayload::from_text(expected_output.to_string()),
             },
         ]
-    );
-}
-
-#[test]
-fn tool_search_output_namespace_serializes_with_deferred_child_tools() {
-    let namespace = tools::ToolSearchOutputTool::Namespace(tools::ResponsesApiNamespace {
-        name: "mcp__codex_apps__calendar".to_string(),
-        description: "Plan events".to_string(),
-        tools: vec![tools::ResponsesApiNamespaceTool::Function(
-            tools::ResponsesApiTool {
-                name: "create_event".to_string(),
-                description: "Create a calendar event.".to_string(),
-                strict: false,
-                defer_loading: Some(true),
-                parameters: crate::tools::spec::JsonSchema::Object {
-                    properties: Default::default(),
-                    required: None,
-                    additional_properties: None,
-                },
-                output_schema: None,
-            },
-        )],
-    });
-
-    let value = serde_json::to_value(namespace).expect("serialize namespace");
-
-    assert_eq!(
-        value,
-        serde_json::json!({
-            "type": "namespace",
-            "name": "mcp__codex_apps__calendar",
-            "description": "Plan events",
-            "tools": [
-                {
-                    "type": "function",
-                    "name": "create_event",
-                    "description": "Create a calendar event.",
-                    "strict": false,
-                    "defer_loading": true,
-                    "parameters": {
-                        "type": "object",
-                        "properties": {}
-                    }
-                }
-            ]
-        })
     );
 }

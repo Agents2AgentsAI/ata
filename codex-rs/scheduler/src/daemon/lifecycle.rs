@@ -12,7 +12,7 @@ const LAUNCHD_LABEL: &str = "com.ata.scheduler";
 /// Path to the PID file (`~/.ata/scheduler/scheduler.pid`).
 fn pid_file_path() -> anyhow::Result<PathBuf> {
     let home = codex_utils_home_dir::find_codex_home().map_err(|e| anyhow::anyhow!(e))?;
-    Ok(home.join("scheduler").join("scheduler.pid"))
+    Ok(home.join("scheduler").join("scheduler.pid").into_path_buf())
 }
 
 /// Path to the launchd plist file.
@@ -20,7 +20,8 @@ fn plist_path() -> anyhow::Result<PathBuf> {
     let home = codex_utils_home_dir::find_codex_home().map_err(|e| anyhow::anyhow!(e))?;
     Ok(home
         .join("scheduler")
-        .join(format!("{LAUNCHD_LABEL}.plist")))
+        .join(format!("{LAUNCHD_LABEL}.plist"))
+        .into_path_buf())
 }
 
 /// Check if the launchd plist is installed.

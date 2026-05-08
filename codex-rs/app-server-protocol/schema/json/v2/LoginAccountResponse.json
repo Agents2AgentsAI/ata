@@ -44,27 +44,32 @@
     },
     {
       "properties": {
-        "authUrl": {
-          "description": "URL the client should open in a browser to initiate the OAuth flow.",
-          "type": "string"
-        },
         "loginId": {
           "type": "string"
         },
         "type": {
           "enum": [
-            "gemini"
+            "chatgptDeviceCode"
           ],
-          "title": "Geminiv2::LoginAccountResponseType",
+          "title": "ChatgptDeviceCodev2::LoginAccountResponseType",
+          "type": "string"
+        },
+        "userCode": {
+          "description": "One-time code the user must enter after signing in.",
+          "type": "string"
+        },
+        "verificationUrl": {
+          "description": "URL the client should open in a browser to complete device code authorization.",
           "type": "string"
         }
       },
       "required": [
-        "authUrl",
         "loginId",
-        "type"
+        "type",
+        "userCode",
+        "verificationUrl"
       ],
-      "title": "Geminiv2::LoginAccountResponse",
+      "title": "ChatgptDeviceCodev2::LoginAccountResponse",
       "type": "object"
     },
     {

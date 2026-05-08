@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -121,6 +123,10 @@ impl ResponsesRequest {
             .trim_matches('"')
             .to_string();
         self.body_json().to_string().contains(&json_fragment)
+    }
+
+    pub fn tool_by_name(&self, namespace: &str, tool_name: &str) -> Option<Value> {
+        namespace_child_tool(&self.body_json(), namespace, tool_name).cloned()
     }
 
     pub fn instructions_text(&self) -> String {
@@ -311,6 +317,31 @@ pub(crate) fn output_value_to_text(value: &Value) -> Option<String> {
         },
         Value::Object(_) | Value::Number(_) | Value::Bool(_) | Value::Null => None,
     }
+}
+
+pub fn namespace_child_tool<'a>(
+    body: &'a Value,
+    namespace: &str,
+    tool_name: &str,
+) -> Option<&'a Value> {
+    let tools = body.get("tools")?.as_array()?;
+    for tool in tools {
+        if tool.get("name").and_then(Value::as_str) != Some(namespace)
+            || tool.get("type").and_then(Value::as_str) != Some("namespace")
+        {
+            continue;
+        }
+
+        let child_tools = tool.get("tools")?.as_array()?;
+        if let Some(child_tool) = child_tools
+            .iter()
+            .find(|tool| tool.get("name").and_then(Value::as_str) == Some(tool_name))
+        {
+            return Some(child_tool);
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -510,7 +541,14 @@ impl WebSocketTestServer {
 
     pub async fn shutdown(self) {
         let _ = self.shutdown.send(());
-        let _ = self.task.await;
+        let mut task = self.task;
+        if tokio::time::timeout(Duration::from_secs(10), &mut task)
+            .await
+            .is_err()
+        {
+            task.abort();
+            let _ = task.await;
+        }
     }
 }
 
@@ -601,6 +639,17 @@ pub fn ev_response_created(id: &str) -> Value {
     })
 }
 
+pub fn ev_model_verification_metadata(id: &str, verifications: Vec<&str>) -> Value {
+    serde_json::json!({
+        "type": "response.metadata",
+        "sequence_number": 1,
+        "response_id": id,
+        "metadata": {
+            "openai_verification_recommendation": verifications,
+        }
+    })
+}
+
 pub fn ev_completed_with_tokens(id: &str, total_tokens: i64) -> Value {
     serde_json::json!({
         "type": "response.completed",
@@ -637,7 +686,6 @@ pub fn user_message_item(text: &str) -> ResponseItem {
         content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
-        end_turn: None,
         phase: None,
     }
 }
@@ -772,6 +820,24 @@ pub fn ev_function_call(call_id: &str, name: &str, arguments: &str) -> Value {
         "item": {
             "type": "function_call",
             "call_id": call_id,
+            "name": name,
+            "arguments": arguments
+        }
+    })
+}
+
+pub fn ev_function_call_with_namespace(
+    call_id: &str,
+    namespace: &str,
+    name: &str,
+    arguments: &str,
+) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "function_call",
+            "call_id": call_id,
+            "namespace": namespace,
             "name": name,
             "arguments": arguments
         }

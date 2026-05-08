@@ -1,44 +1,71 @@
 use super::AuthRequestTelemetryContext;
 use super::ModelClient;
 use super::PendingUnauthorizedRetry;
-use super::Prompt;
 use super::UnauthorizedRecoveryExecution;
-use crate::client_common::tools::ResponsesApiTool;
-use crate::client_common::tools::ToolSpec;
-use crate::tools::spec::JsonSchema;
+use super::X_CODEX_INSTALLATION_ID_HEADER;
+use super::X_CODEX_PARENT_THREAD_ID_HEADER;
+use super::X_CODEX_TURN_METADATA_HEADER;
+use super::X_CODEX_WINDOW_ID_HEADER;
+use super::X_OPENAI_SUBAGENT_HEADER;
+use codex_api::ApiError;
+use codex_api::ResponseEvent;
+use codex_app_server_protocol::AuthMode;
+use codex_model_provider::BearerAuthProvider;
+use codex_model_provider_info::WireApi;
+use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
-use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_rollout_trace::ExecutionStatus;
+use codex_rollout_trace::InferenceTraceAttempt;
+use codex_rollout_trace::InferenceTraceContext;
+use codex_rollout_trace::RawTraceEventPayload;
+use codex_rollout_trace::RolloutTrace;
+use codex_rollout_trace::TraceWriter;
+use codex_rollout_trace::replay_bundle;
+use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::BTreeMap;
+use std::collections::VecDeque;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::task::Context;
+use std::task::Poll;
+use std::time::Duration;
+use tempfile::TempDir;
+use tokio::sync::Notify;
+use tracing::Event;
+use tracing::Subscriber;
+use tracing::field::Visit;
+use tracing_subscriber::Layer;
+use tracing_subscriber::layer::Context as LayerContext;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::util::SubscriberInitExt;
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
-    test_model_client_with_home(session_source, std::path::PathBuf::from("/tmp"))
-}
-
-fn test_model_client_with_home(
-    session_source: SessionSource,
-    codex_home: std::path::PathBuf,
-) -> ModelClient {
-    let provider = crate::model_provider_info::create_oss_provider_with_base_url(
-        "https://example.com/v1",
-        crate::model_provider_info::WireApi::Responses,
-    );
+    let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
+    let thread_id = ThreadId::new();
     ModelClient::new(
-        None,
-        ThreadId::new(),
+        /*auth_manager*/ None,
+        thread_id.into(),
+        thread_id,
+        /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         provider,
         session_source,
-        None,
-        false,
-        false,
-        false,
-        None,
-        codex_home,
-        Default::default(),
+        /*model_verbosity*/ None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+        std::path::PathBuf::new(),
+        codex_config::types::AuthCredentialsStoreMode::File,
     )
 }
 
@@ -77,14 +104,136 @@ fn test_session_telemetry() -> SessionTelemetry {
         ThreadId::new(),
         "gpt-test",
         "gpt-test",
-        None,
-        None,
-        None,
+        /*account_id*/ None,
+        /*account_email*/ None,
+        /*auth_mode*/ None,
         "test-originator".to_string(),
-        false,
+        /*log_user_prompts*/ false,
         "test-terminal".to_string(),
         SessionSource::Cli,
     )
+}
+
+#[derive(Default)]
+struct TagCollectorVisitor {
+    tags: BTreeMap<String, String>,
+}
+
+impl Visit for TagCollectorVisitor {
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.tags
+            .insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.tags
+            .insert(field.name().to_string(), format!("{value:?}"));
+    }
+}
+
+#[derive(Clone)]
+struct TagCollectorLayer {
+    tags: Arc<Mutex<BTreeMap<String, String>>>,
+}
+
+impl<S> Layer<S> for TagCollectorLayer
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_event(&self, event: &Event<'_>, _ctx: LayerContext<'_, S>) {
+        if event.metadata().target() != "feedback_tags" {
+            return;
+        }
+        let mut visitor = TagCollectorVisitor::default();
+        event.record(&mut visitor);
+        self.tags.lock().unwrap().extend(visitor.tags);
+    }
+}
+
+fn started_inference_attempt(temp: &TempDir) -> anyhow::Result<InferenceTraceAttempt> {
+    let writer = Arc::new(TraceWriter::create(
+        temp.path(),
+        "trace-1".to_string(),
+        "rollout-1".to_string(),
+        "thread-root".to_string(),
+    )?);
+    writer.append(RawTraceEventPayload::ThreadStarted {
+        thread_id: "thread-root".to_string(),
+        agent_path: "/root".to_string(),
+        metadata_payload: None,
+    })?;
+    writer.append(RawTraceEventPayload::CodexTurnStarted {
+        codex_turn_id: "turn-1".to_string(),
+        thread_id: "thread-root".to_string(),
+    })?;
+
+    let inference_trace = InferenceTraceContext::enabled(
+        writer,
+        "thread-root".to_string(),
+        "turn-1".to_string(),
+        "gpt-test".to_string(),
+        "test-provider".to_string(),
+    );
+    let attempt = inference_trace.start_attempt();
+    attempt.record_started(&json!({
+        "model": "gpt-test",
+        "input": [{
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hello"}]
+        }],
+    }));
+    Ok(attempt)
+}
+
+fn output_message(id: &str, text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: Some(id.to_string()),
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+    }
+}
+
+async fn replay_until_cancelled(temp: &TempDir) -> anyhow::Result<RolloutTrace> {
+    let mut rollout = replay_bundle(temp.path())?;
+    for _ in 0..50 {
+        let inference = rollout
+            .inference_calls
+            .values()
+            .next()
+            .expect("inference should be reduced");
+        if inference.execution.status == ExecutionStatus::Cancelled {
+            return Ok(rollout);
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        rollout = replay_bundle(temp.path())?;
+    }
+    Ok(rollout)
+}
+
+struct NotifyAfterEventStream {
+    events: VecDeque<ResponseEvent>,
+    yielded: usize,
+    notify_after: usize,
+    notify: Arc<Notify>,
+}
+
+impl futures::Stream for NotifyAfterEventStream {
+    type Item = std::result::Result<ResponseEvent, ApiError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let Some(event) = self.events.pop_front() else {
+            return Poll::Pending;
+        };
+        self.yielded += 1;
+        if self.yielded == self.notify_after {
+            self.notify.notify_one();
+        }
+        Poll::Ready(Some(Ok(event)))
+    }
 }
 
 #[test]
@@ -94,9 +243,63 @@ fn build_subagent_headers_sets_other_subagent_label() {
     )));
     let headers = client.build_subagent_headers();
     let value = headers
-        .get("x-openai-subagent")
+        .get(X_OPENAI_SUBAGENT_HEADER)
         .and_then(|value| value.to_str().ok());
     assert_eq!(value, Some("memory_consolidation"));
+}
+
+#[test]
+fn build_subagent_headers_sets_internal_memory_consolidation_label() {
+    let client = test_model_client(SessionSource::Internal(
+        InternalSessionSource::MemoryConsolidation,
+    ));
+    let headers = client.build_subagent_headers();
+    let value = headers
+        .get(X_OPENAI_SUBAGENT_HEADER)
+        .and_then(|value| value.to_str().ok());
+    assert_eq!(value, Some("memory_consolidation"));
+}
+
+#[test]
+fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
+    let parent_thread_id = ThreadId::new();
+    let client = test_model_client(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id,
+        depth: 2,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+    }));
+
+    client.advance_window_generation();
+
+    let client_metadata = client.build_ws_client_metadata(Some(r#"{"turn_id":"turn-123"}"#));
+    let thread_id = client.state.thread_id;
+    assert_eq!(
+        client_metadata,
+        std::collections::HashMap::from([
+            (
+                X_CODEX_INSTALLATION_ID_HEADER.to_string(),
+                "11111111-1111-4111-8111-111111111111".to_string(),
+            ),
+            (
+                X_CODEX_WINDOW_ID_HEADER.to_string(),
+                format!("{thread_id}:1"),
+            ),
+            (
+                X_OPENAI_SUBAGENT_HEADER.to_string(),
+                "collab_spawn".to_string(),
+            ),
+            (
+                X_CODEX_PARENT_THREAD_ID_HEADER.to_string(),
+                parent_thread_id.to_string(),
+            ),
+            (
+                X_CODEX_TURN_METADATA_HEADER.to_string(),
+                r#"{"turn_id":"turn-123"}"#.to_string(),
+            ),
+        ])
+    );
 }
 
 #[tokio::test]
@@ -106,17 +309,152 @@ async fn summarize_memories_returns_empty_for_empty_input() {
     let session_telemetry = test_session_telemetry();
 
     let output = client
-        .summarize_memories(Vec::new(), &model_info, None, &session_telemetry)
+        .summarize_memories(
+            Vec::new(),
+            &model_info,
+            /*effort*/ None,
+            &session_telemetry,
+        )
         .await
         .expect("empty summarize request should succeed");
     assert_eq!(output.len(), 0);
 }
 
+#[tokio::test]
+async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let attempt = started_inference_attempt(&temp)?;
+
+    // The provider has produced one complete output item, but no terminal
+    // response.completed event. The harness has enough information to keep this
+    // item in history, so the trace should preserve it when the stream is
+    // abandoned.
+    let item = output_message("msg-1", "partial answer");
+    let api_stream = futures::stream::iter([Ok(ResponseEvent::OutputItemDone(item))])
+        .chain(futures::stream::pending());
+    let (mut stream, _) = super::map_response_events(
+        /*upstream_request_id*/ None,
+        api_stream,
+        test_session_telemetry(),
+        attempt,
+    );
+
+    let observed = stream
+        .next()
+        .await
+        .expect("mapped stream should yield output item")?;
+    assert!(matches!(observed, ResponseEvent::OutputItemDone(_)));
+
+    // Dropping the consumer is how turn interruption/preemption stops polling
+    // the provider stream. The mapper task observes that drop asynchronously
+    // and records cancellation using the output items it has already seen.
+    drop(stream);
+
+    // Cancellation is recorded by the mapper task after Drop wakes it, so the
+    // replay may need a short wait before the terminal event appears on disk.
+    let rollout = replay_until_cancelled(&temp).await?;
+    let inference = rollout
+        .inference_calls
+        .values()
+        .next()
+        .expect("inference should be reduced");
+
+    assert_eq!(inference.execution.status, ExecutionStatus::Cancelled);
+    assert_eq!(inference.response_item_ids.len(), 1);
+    assert_eq!(rollout.raw_payloads.len(), 2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn response_stream_records_last_model_feedback_ids() {
+    let tags = Arc::new(Mutex::new(BTreeMap::new()));
+    let _guard = tracing_subscriber::registry()
+        .with(TagCollectorLayer { tags: tags.clone() })
+        .set_default();
+
+    let api_stream = futures::stream::iter([
+        Ok(ResponseEvent::Created),
+        Ok(ResponseEvent::Completed {
+            response_id: "resp-123".to_string(),
+            token_usage: None,
+            end_turn: Some(true),
+        }),
+    ]);
+    let (mut stream, _) = super::map_response_events(
+        Some("req-123".to_string()),
+        api_stream,
+        test_session_telemetry(),
+        InferenceTraceAttempt::disabled(),
+    );
+
+    while stream.next().await.is_some() {}
+
+    let tags = tags.lock().unwrap().clone();
+    assert_eq!(
+        tags.get("last_model_request_id").map(String::as_str),
+        Some("\"req-123\"")
+    );
+    assert_eq!(
+        tags.get("last_model_response_id").map(String::as_str),
+        Some("\"resp-123\"")
+    );
+}
+
+#[tokio::test]
+async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
+-> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let attempt = started_inference_attempt(&temp)?;
+    let backpressured_item_yielded = Arc::new(Notify::new());
+    let mut events = VecDeque::new();
+    for _ in 0..super::RESPONSE_STREAM_CHANNEL_CAPACITY {
+        events.push_back(ResponseEvent::Created);
+    }
+    events.push_back(ResponseEvent::OutputItemDone(output_message(
+        "msg-1",
+        "partial answer",
+    )));
+    let api_stream = NotifyAfterEventStream {
+        events,
+        yielded: 0,
+        notify_after: super::RESPONSE_STREAM_CHANNEL_CAPACITY + 1,
+        notify: Arc::clone(&backpressured_item_yielded),
+    };
+
+    let (stream, _) = super::map_response_events(
+        /*upstream_request_id*/ None,
+        api_stream,
+        test_session_telemetry(),
+        attempt,
+    );
+
+    // Fill the mapper channel with non-terminal events, then yield one output
+    // item. The mapper has observed that item and is blocked trying to send it
+    // downstream, so dropping the consumer covers the send-failure path rather
+    // than the `consumer_dropped` select branch.
+    backpressured_item_yielded.notified().await;
+    drop(stream);
+
+    let rollout = replay_until_cancelled(&temp).await?;
+    let inference = rollout
+        .inference_calls
+        .values()
+        .next()
+        .expect("inference should be reduced");
+
+    assert_eq!(inference.execution.status, ExecutionStatus::Cancelled);
+    assert_eq!(inference.response_item_ids.len(), 1);
+    assert_eq!(rollout.raw_payloads.len(), 2);
+
+    Ok(())
+}
+
 #[test]
 fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     let auth_context = AuthRequestTelemetryContext::new(
-        Some(crate::auth::AuthMode::Chatgpt),
-        &crate::api_bridge::CoreAuthProvider::for_test(Some("access-token"), Some("workspace-123")),
+        Some(AuthMode::Chatgpt),
+        &BearerAuthProvider::for_test(Some("access-token"), Some("workspace-123")),
         PendingUnauthorizedRetry::from_recovery(UnauthorizedRecoveryExecution {
             mode: "managed",
             phase: "refresh_token",
@@ -129,65 +467,4 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     assert!(auth_context.retry_after_unauthorized);
     assert_eq!(auth_context.recovery_mode, Some("managed"));
     assert_eq!(auth_context.recovery_phase, Some("refresh_token"));
-}
-
-#[tokio::test]
-async fn build_responses_request_logs_full_request_jsonl() {
-    let tempdir = tempfile::tempdir().expect("tempdir");
-    let client = test_model_client_with_home(SessionSource::Cli, tempdir.path().to_path_buf());
-    let session = client.new_session();
-    let model_info = test_model_info();
-    let client_setup = client.current_client_setup().await.expect("client setup");
-    let prompt = Prompt {
-        input: Vec::new(),
-        tools: vec![ToolSpec::Function(ResponsesApiTool {
-            name: "present_reading_view".to_string(),
-            description: "Reading view tool description".to_string(),
-            strict: false,
-            parameters: JsonSchema::Object {
-                properties: Default::default(),
-                required: None,
-                additional_properties: Some(false.into()),
-            },
-            output_schema: None,
-            defer_loading: None,
-        })],
-        parallel_tool_calls: false,
-        base_instructions: BaseInstructions {
-            text: "base instructions".to_string(),
-        },
-        personality: None,
-        output_schema: None,
-    };
-
-    let request = session
-        .build_responses_request(
-            &client_setup.api_provider,
-            &prompt,
-            &model_info,
-            None,
-            codex_protocol::config_types::ReasoningSummary::None,
-            None,
-            Some("turn-meta"),
-            "responses_http",
-            false,
-        )
-        .expect("build request");
-
-    assert_eq!(request.model, "gpt-test");
-
-    let log_path = tempdir.path().join("logs/llm-requests.jsonl");
-    let log_contents = std::fs::read_to_string(log_path).expect("read log file");
-    assert!(
-        log_contents.contains("\"transport\":\"responses_http\""),
-        "expected transport in log entry: {log_contents}"
-    );
-    assert!(
-        log_contents.contains("\"turn_metadata_header\":\"turn-meta\""),
-        "expected turn metadata in log entry: {log_contents}"
-    );
-    assert!(
-        log_contents.contains("Reading view tool description"),
-        "expected serialized tool description in log entry: {log_contents}"
-    );
 }

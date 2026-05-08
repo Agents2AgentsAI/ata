@@ -10,6 +10,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
+pub use codex_protocol::protocol::GitSha;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
@@ -21,7 +22,6 @@ use serde::Serialize;
 use ts_rs::TS;
 
 use crate::protocol::common::AuthMode;
-use crate::protocol::common::GitSha;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -56,6 +56,8 @@ pub struct InitializeCapabilities {
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResponse {
     pub user_agent: String,
+    /// Absolute path to the server's $CODEX_HOME directory.
+    pub codex_home: AbsolutePathBuf,
     /// Platform family for the running app-server target, for example
     /// `"unix"` or `"windows"`.
     pub platform_family: String,
@@ -241,28 +243,3 @@ pub struct SandboxSettings {
 pub struct InterruptConversationResponse {
     pub abort_reason: TurnAbortReason,
 }
-
-// --- ATA-specific types ---
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct UserInfoResponse {
-    pub alleged_user_email: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct GetUserSavedConfigResponse {
-    pub config: UserSavedConfig,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct SetDefaultModelParams {
-    pub model: Option<String>,
-    pub reasoning_effort: Option<ReasoningEffort>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct SetDefaultModelResponse {}

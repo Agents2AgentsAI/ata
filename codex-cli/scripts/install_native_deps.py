@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install Ata native binaries (Rust CLI plus ripgrep helpers)."""
+"""Install Codex native binaries (Rust CLI, bwrap, and ripgrep helpers)."""
 
 import argparse
 from contextlib import contextmanager
@@ -42,12 +42,19 @@ class BinaryComponent:
 
 
 WINDOWS_TARGETS = tuple(target for target in BINARY_TARGETS if "windows" in target)
+LINUX_TARGETS = tuple(target for target in BINARY_TARGETS if "linux" in target)
 
 BINARY_COMPONENTS = {
-    "ata": BinaryComponent(
-        artifact_prefix="ata",
-        dest_dir="ata",
-        binary_basename="ata",
+    "bwrap": BinaryComponent(
+        artifact_prefix="bwrap",
+        dest_dir="codex-resources",
+        binary_basename="bwrap",
+        targets=LINUX_TARGETS,
+    ),
+    "codex": BinaryComponent(
+        artifact_prefix="codex",
+        dest_dir="codex",
+        binary_basename="codex",
     ),
     "ata-responses-api-proxy": BinaryComponent(
         artifact_prefix="ata-responses-api-proxy",
@@ -134,8 +141,8 @@ def parse_args() -> argparse.Namespace:
         choices=tuple(list(BINARY_COMPONENTS) + ["rg"]),
         help=(
             "Limit installation to the specified components."
-            " May be repeated. Defaults to ata, ata-windows-sandbox-setup,"
-            " ata-command-runner, and rg."
+            " May be repeated. Defaults to bwrap, codex, codex-windows-sandbox-setup,"
+            " codex-command-runner, and rg."
         ),
     )
     parser.add_argument(
@@ -158,9 +165,10 @@ def main() -> int:
     vendor_dir.mkdir(parents=True, exist_ok=True)
 
     components = args.components or [
-        "ata",
-        "ata-windows-sandbox-setup",
-        "ata-command-runner",
+        "bwrap",
+        "codex",
+        "codex-windows-sandbox-setup",
+        "codex-command-runner",
         "rg",
     ]
 

@@ -1,6 +1,6 @@
 # Ata CLI (Rust Implementation)
 
-We provide Ata CLI as a standalone, native executable to ensure a zero-dependency install.
+We provide Codex CLI as a standalone executable to ensure a zero-dependency install.
 
 ## Installing Ata
 
@@ -56,8 +56,8 @@ You can enable notifications by configuring a script that is run whenever the ag
 
 ### `ata exec` to run Ata programmatically/non-interactively
 
-To run Ata non-interactively, run `ata exec PROMPT` (you can also pass the prompt via `stdin`) and Ata will work on your task until it decides that it is done and exits. Output is printed to the terminal directly. You can set the `RUST_LOG` environment variable to see more about what's going on.
-Use `ata exec --ephemeral ...` to run without persisting session rollout files to disk.
+To run Codex non-interactively, run `codex exec PROMPT` (you can also pass the prompt via `stdin`) and Codex will work on your task until it decides that it is done and exits. If you provide both a prompt argument and piped stdin, Codex appends stdin as a `<stdin>` block after the prompt so patterns like `echo "my output" | codex exec "Summarize this concisely"` work naturally. Output is printed to the terminal directly. You can set the `RUST_LOG` environment variable to see more about what's going on.
+Use `codex exec --ephemeral ...` to run without persisting session rollout files to disk.
 
 ### Experimenting with the Ata Sandbox
 
@@ -65,18 +65,21 @@ To test to see what happens when a command is run under the sandbox provided by 
 
 ```
 # macOS
-ata sandbox macos [--full-auto] [--log-denials] [COMMAND]...
+codex sandbox macos [--log-denials] [COMMAND]...
 
 # Linux
-ata sandbox linux [--full-auto] [COMMAND]...
+codex sandbox linux [COMMAND]...
 
 # Windows
-ata sandbox windows [--full-auto] [COMMAND]...
+codex sandbox windows [COMMAND]...
 
 # Legacy aliases
-ata debug seatbelt [--full-auto] [--log-denials] [COMMAND]...
-ata debug landlock [--full-auto] [COMMAND]...
+codex debug seatbelt [--log-denials] [COMMAND]...
+codex debug landlock [COMMAND]...
 ```
+
+To try a writable legacy sandbox mode with these commands, pass an explicit config override such
+as `-c 'sandbox_mode="workspace-write"'`.
 
 ### Selecting a sandbox policy via `--sandbox`
 
@@ -100,7 +103,7 @@ In `workspace-write`, Ata also includes `~/.ata/memories` in its writable roots 
 
 This folder is the root of a Cargo workspace. It contains quite a bit of experimental code, but here are the key crates:
 
-- [`core/`](./core) contains the business logic for Ata. Ultimately, we hope this to be a library crate that is generally useful for building other Rust/native applications that use Ata.
+- [`core/`](./core) contains the business logic for Codex. Ultimately, we hope this becomes a library crate that is generally useful for building other Rust/native applications that use Codex.
 - [`exec/`](./exec) "headless" CLI for use in automation.
 - [`tui/`](./tui) CLI that launches a fullscreen TUI built with [Ratatui](https://ratatui.rs/).
 - [`cli/`](./cli) CLI multitool that provides the aforementioned CLIs via subcommands.
