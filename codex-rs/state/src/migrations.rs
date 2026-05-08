@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use sqlx::migrate::Migrator;
 
 pub(crate) static STATE_MIGRATOR: Migrator = sqlx::migrate!("./migrations");

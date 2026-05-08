@@ -27,8 +27,6 @@ pub enum ApiError {
     RateLimit(String),
     #[error("invalid request: {message}")]
     InvalidRequest { message: String },
-    #[error("cyber policy: {message}")]
-    CyberPolicy { message: String },
     #[error("server overloaded")]
     ServerOverloaded,
 }

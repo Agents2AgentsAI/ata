@@ -1,22 +1,21 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+
 use crate::mcp::RequestId;
-use crate::models::AdditionalPermissionProfile;
+use crate::models::MacOsSeatbeltProfileExtensions;
 use crate::models::PermissionProfile;
 use crate::parse_command::ParsedCommand;
 use crate::permissions::FileSystemSandboxPolicy;
 use crate::permissions::NetworkSandboxPolicy;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
-use crate::request_permissions::RequestPermissionProfile;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use crate::protocol::SandboxPolicy;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use std::collections::HashMap;
-use std::path::PathBuf;
 use ts_rs::TS;
 
-/// Fully resolved permissions for rerunning an intercepted child process.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Permissions {
     pub sandbox_policy: SandboxPolicy,
@@ -28,10 +27,8 @@ pub struct Permissions {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EscalationPermissions {
-    /// Permissions to merge with the active turn permissions.
-    AdditionalPermissionProfile(AdditionalPermissionProfile),
-    /// Fully resolved permissions that should replace the active turn permissions.
-    ResolvedPermissionProfile(ResolvedPermissionProfile),
+    PermissionProfile(PermissionProfile),
+    Permissions(Permissions),
 }
 
 /// Proposed execpolicy change to allow commands starting with this prefix.
@@ -164,7 +161,7 @@ pub struct ExecApprovalRequestEvent {
     /// The command to be executed.
     pub command: Vec<String>,
     /// The command's working directory.
-    pub cwd: AbsolutePathBuf,
+    pub cwd: PathBuf,
     /// Optional human-readable reason for the approval (e.g. retry without sandbox).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -223,7 +220,7 @@ impl ExecApprovalRequestEvent {
         network_approval_context: Option<&NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<&ExecPolicyAmendment>,
         proposed_network_policy_amendments: Option<&[NetworkPolicyAmendment]>,
-        additional_permissions: Option<&AdditionalPermissionProfile>,
+        additional_permissions: Option<&PermissionProfile>,
     ) -> Vec<ReviewDecision> {
         if network_approval_context.is_some() {
             let mut decisions = vec![ReviewDecision::Approved, ReviewDecision::ApprovedForSession];
@@ -319,65 +316,4 @@ pub struct ApplyPatchApprovalRequestEvent {
     /// When set, the agent is asking the user to allow writes under this root for the remainder of the session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grant_root: Option<PathBuf>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use codex_utils_absolute_path::test_support::PathBufExt;
-    use codex_utils_absolute_path::test_support::test_path_buf;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn guardian_assessment_action_deserializes_command_shape() {
-        let action: GuardianAssessmentAction = serde_json::from_value(serde_json::json!({
-            "type": "command",
-            "source": "shell",
-            "command": "rm -rf /tmp/guardian",
-            "cwd": test_path_buf("/tmp"),
-        }))
-        .expect("guardian action");
-
-        assert_eq!(
-            action,
-            GuardianAssessmentAction::Command {
-                source: GuardianCommandSource::Shell,
-                command: "rm -rf /tmp/guardian".to_string(),
-                cwd: test_path_buf("/tmp").abs(),
-            }
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn guardian_assessment_action_round_trips_execve_shape() {
-        let value = serde_json::json!({
-            "type": "execve",
-            "source": "shell",
-            "program": "/bin/rm",
-            "argv": ["/usr/bin/rm", "-f", "/tmp/file.sqlite"],
-            "cwd": "/tmp",
-        });
-        let action: GuardianAssessmentAction =
-            serde_json::from_value(value.clone()).expect("guardian action");
-
-        assert_eq!(
-            serde_json::to_value(&action).expect("serialize guardian action"),
-            value
-        );
-
-        assert_eq!(
-            action,
-            GuardianAssessmentAction::Execve {
-                source: GuardianCommandSource::Shell,
-                program: "/bin/rm".to_string(),
-                argv: vec![
-                    "/usr/bin/rm".to_string(),
-                    "-f".to_string(),
-                    "/tmp/file.sqlite".to_string(),
-                ],
-                cwd: test_path_buf("/tmp").abs(),
-            }
-        );
-    }
 }

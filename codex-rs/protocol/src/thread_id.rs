@@ -11,7 +11,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TS, Hash)]
 #[ts(type = "string")]
 pub struct ThreadId {
-    pub(crate) uuid: Uuid,
+    uuid: Uuid,
 }
 
 impl ThreadId {

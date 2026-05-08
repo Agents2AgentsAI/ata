@@ -1,4 +1,4 @@
-use crate::auth::SharedAuthProvider;
+use crate::auth::AuthProvider;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
@@ -11,12 +11,12 @@ use http::Method;
 use http::header::ETAG;
 use std::sync::Arc;
 
-pub struct ModelsClient<T: HttpTransport> {
-    session: EndpointSession<T>,
+pub struct ModelsClient<T: HttpTransport, A: AuthProvider> {
+    session: EndpointSession<T, A>,
 }
 
-impl<T: HttpTransport> ModelsClient<T> {
-    pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
+impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
+    pub fn new(transport: T, provider: Provider, auth: A) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
         }
@@ -44,15 +44,9 @@ impl<T: HttpTransport> ModelsClient<T> {
     ) -> Result<(Vec<ModelInfo>, Option<String>), ApiError> {
         let resp = self
             .session
-            .execute_with(
-                Method::GET,
-                Self::path(),
-                extra_headers,
-                /*body*/ None,
-                |req| {
-                    Self::append_client_version_query(req, client_version);
-                },
-            )
+            .execute_with(Method::GET, Self::path(), extra_headers, None, |req| {
+                Self::append_client_version_query(req, client_version);
+            })
             .await?;
 
         let header_etag = resp
@@ -76,7 +70,6 @@ impl<T: HttpTransport> ModelsClient<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::AuthProvider;
     use crate::provider::RetryConfig;
     use async_trait::async_trait;
     use codex_client::Request;
@@ -133,7 +126,9 @@ mod tests {
     struct DummyAuth;
 
     impl AuthProvider for DummyAuth {
-        fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
+        fn bearer_token(&self) -> Option<String> {
+            None
+        }
     }
 
     fn provider(base_url: &str) -> Provider {
@@ -166,7 +161,7 @@ mod tests {
         let client = ModelsClient::new(
             transport.clone(),
             provider("https://example.com/api/codex"),
-            Arc::new(DummyAuth),
+            DummyAuth,
         );
 
         let (models, _) = client
@@ -230,7 +225,7 @@ mod tests {
         let client = ModelsClient::new(
             transport,
             provider("https://example.com/api/codex"),
-            Arc::new(DummyAuth),
+            DummyAuth,
         );
 
         let (models, _) = client
@@ -257,7 +252,7 @@ mod tests {
         let client = ModelsClient::new(
             transport,
             provider("https://example.com/api/codex"),
-            Arc::new(DummyAuth),
+            DummyAuth,
         );
 
         let (models, etag) = client

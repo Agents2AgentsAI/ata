@@ -1,80 +1,84 @@
 [workspace]
 members = [
-    "aws-auth",
-    "analytics",
-    "agent-graph-store",
-    "agent-identity",
+    # "aws-auth",  # excluded for Phase 1
+    # "analytics",  # excluded for Phase 1
+    # "agent-graph-store",  # excluded for Phase 1
+    # "agent-identity",  # excluded for Phase 1
     "backend-client",
-    "builtin-mcps",
-    "bwrap",
+    # "builtin-mcps",  # excluded for Phase 1
+    # "bwrap",  # excluded for Phase 1
     "ansi-escape",
     "async-utils",
     "app-server",
-    "app-server-transport",
+    # "app-server-transport",  # excluded for Phase 1
     "app-server-client",
     "app-server-protocol",
     "app-server-test-client",
     "debug-client",
     "apply-patch",
     "arg0",
-    "feedback",
-    "features",
-    "install-context",
+    # "feedback",  # excluded for Phase 1
+    # "features",  # excluded for Phase 1
+    # "install-context",  # excluded for Phase 1
     "codex-backend-openapi-models",
-    "code-mode",
     "cloud-requirements",
     "cloud-tasks",
     "cloud-tasks-client",
-    "cloud-tasks-mock-client",
+    # "cloud-tasks-mock-client",  # excluded for Phase 1
     "cli",
-    "collaboration-mode-templates",
+    # "collaboration-mode-templates",  # excluded for Phase 1
     "connectors",
     "config",
-    "device-key",
+    # "device-key",  # excluded for Phase 1
+    # NOTE (Phase 2 of upstream merge): code-mode pulls in v8 -> temporal_rs which
+    # is currently incompatible with the icu_calendar version locked in Cargo.lock.
+    # The fork's runtime equivalent lives in core/src/tools/code_mode/, so the new
+    # crate is excluded until Phase 6 unifies the two implementations.
+    # "code-mode",
     "shell-command",
     "shell-escalation",
     "skills",
     "core",
-    "core-api",
-    "core-plugins",
-    "core-skills",
+    # "core-api",  # excluded for Phase 1
+    # "core-plugins",  # excluded for Phase 1
+    # "core-skills",  # excluded for Phase 1
     "hooks",
     "secrets",
     "exec",
-    "file-system",
-    "exec-server",
+    # "file-system",  # excluded for Phase 1
+    # "exec-server",  # excluded for Phase 1
     "execpolicy",
     "execpolicy-legacy",
-    "external-agent-migration",
-    "external-agent-sessions",
+    # "external-agent-migration",  # excluded for Phase 1
+    # "external-agent-sessions",  # excluded for Phase 1
     "keyring-store",
     "file-search",
     "linux-sandbox",
     "lmstudio",
     "login",
-    "codex-mcp",
+    # "codex-mcp",  # excluded for Phase 1
     "mcp-server",
-    "memories/mcp",
-    "memories/read",
-    "memories/write",
-    "model-provider-info",
-    "models-manager",
+    # "memories/mcp",  # excluded for Phase 1; Phase 2 follow-up
+    # "memories/read",  # excluded for Phase 1; Phase 2 follow-up
+    # "memories/write",  # excluded for Phase 1; Phase 2 follow-up
+    # "model-provider-info",  # excluded for Phase 1
+    # "models-manager",  # excluded for Phase 1
     "network-proxy",
     "ollama",
     "process-hardening",
     "protocol",
-    "realtime-webrtc",
-    "rollout",
-    "rollout-trace",
+    # "realtime-webrtc",  # excluded for Phase 1
+    # "rollout",  # excluded for Phase 1; Phase 2 follow-up
+    # "rollout-trace",  # excluded for Phase 1; Phase 2 follow-up
     "rmcp-client",
     "responses-api-proxy",
-    "response-debug-context",
-    "sandboxing",
+    # "response-debug-context",  # excluded for Phase 1
+    # "sandboxing",  # excluded for Phase 1
     "stdio-to-uds",
     "otel",
     "tui",
-    "tools",
-    "v8-poc",
+    # "tools",  # excluded for Phase 1; Phase 2 follow-up
+    # "v8-poc",  # excluded for Phase 1; Phase 2 follow-up
     "utils/absolute-path",
     "utils/cargo-bin",
     "git-utils",
@@ -93,23 +97,23 @@ members = [
     "utils/sleep-inhibitor",
     "utils/approval-presets",
     "utils/oss",
-    "utils/output-truncation",
-    "utils/path-utils",
-    "utils/plugins",
+    # "utils/output-truncation",  # excluded for Phase 1
+    # "utils/path-utils",  # excluded for Phase 1
+    # "utils/plugins",  # excluded for Phase 1
     "utils/fuzzy-match",
     "utils/stream-parser",
     "utils/template",
     "codex-client",
     "codex-api",
     "state",
-    "terminal-detection",
-    "test-binary-support",
-    "thread-manager-sample",
-    "thread-store",
-    "uds",
+    # "terminal-detection",  # excluded for Phase 1
+    # "test-binary-support",  # excluded for Phase 1
+    # "thread-manager-sample",  # excluded for Phase 1
+    # "thread-store",  # excluded for Phase 1
+    # "uds",  # excluded for Phase 1
     "codex-experimental-api-macros",
-    "plugin",
-    "model-provider",
+    # "plugin",  # excluded for Phase 1
+    # "model-provider",  # excluded for Phase 1
     # ATA-specific crates (preserved through the upstream merge).
     "codex-research-tools",
     "codex-data-tools",

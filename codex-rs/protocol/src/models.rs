@@ -1,12 +1,10 @@
 use std::collections::HashMap;
-use std::io;
-use std::num::NonZeroUsize;
 use std::path::Path;
 
 use codex_utils_file::encode_inline_cached;
 use codex_utils_file::into_owned_processed_file;
 use codex_utils_image::PromptImageMode;
-use codex_utils_image::load_for_prompt_bytes;
+use codex_utils_image::load_for_prompt;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -24,9 +22,19 @@ use crate::protocol::NetworkAccess;
 use crate::protocol::REALTIME_CONVERSATION_CLOSE_TAG;
 use crate::protocol::REALTIME_CONVERSATION_OPEN_TAG;
 use crate::protocol::SandboxPolicy;
+use crate::protocol::WritableRoot;
 use crate::user_input::UserInput;
+use codex_execpolicy::Policy;
+// NOTE: protocol cannot depend on codex-git-utils because git-utils transitively
+// depends back on codex-protocol via codex-file-system. Until the upstream merge
+// re-introduces a cycle-free git crate that exposes a ghost-commit type, define a
+// minimal stand-in here.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema, ts_rs::TS)]
+pub struct GhostCommit {
+    pub commit_hash: String,
+}
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_image::ImageProcessingError;
+use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 
 use crate::mcp::CallToolResult;
@@ -66,79 +74,15 @@ impl SandboxPermissions {
     }
 }
 
-#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, JsonSchema, TS)]
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct FileSystemPermissions {
-    pub entries: Vec<FileSystemSandboxEntry>,
-    pub glob_scan_max_depth: Option<NonZeroUsize>,
+    pub read: Option<Vec<AbsolutePathBuf>>,
+    pub write: Option<Vec<AbsolutePathBuf>>,
 }
-
-pub type LegacyReadWriteRoots = (Option<Vec<AbsolutePathBuf>>, Option<Vec<AbsolutePathBuf>>);
 
 impl FileSystemPermissions {
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    pub fn from_read_write_roots(
-        read: Option<Vec<AbsolutePathBuf>>,
-        write: Option<Vec<AbsolutePathBuf>>,
-    ) -> Self {
-        let mut entries = Vec::new();
-        if let Some(read) = read {
-            entries.extend(read.into_iter().map(|path| FileSystemSandboxEntry {
-                path: FileSystemPath::Path { path },
-                access: FileSystemAccessMode::Read,
-            }));
-        }
-        if let Some(write) = write {
-            entries.extend(write.into_iter().map(|path| FileSystemSandboxEntry {
-                path: FileSystemPath::Path { path },
-                access: FileSystemAccessMode::Write,
-            }));
-        }
-        Self {
-            entries,
-            glob_scan_max_depth: None,
-        }
-    }
-
-    pub fn explicit_path_entries(
-        &self,
-    ) -> impl Iterator<Item = (&AbsolutePathBuf, FileSystemAccessMode)> {
-        self.entries.iter().filter_map(|entry| match &entry.path {
-            FileSystemPath::Path { path } => Some((path, entry.access)),
-            FileSystemPath::GlobPattern { .. } | FileSystemPath::Special { .. } => None,
-        })
-    }
-
-    pub fn legacy_read_write_roots(&self) -> Option<LegacyReadWriteRoots> {
-        self.as_legacy_permissions()
-            .map(|legacy| (legacy.read, legacy.write))
-    }
-
-    fn as_legacy_permissions(&self) -> Option<LegacyFileSystemPermissions> {
-        if self.glob_scan_max_depth.is_some() {
-            return None;
-        }
-
-        let mut read = Vec::new();
-        let mut write = Vec::new();
-
-        for entry in &self.entries {
-            let FileSystemPath::Path { path } = &entry.path else {
-                return None;
-            };
-            match entry.access {
-                FileSystemAccessMode::Read => read.push(path.clone()),
-                FileSystemAccessMode::Write => write.push(path.clone()),
-                FileSystemAccessMode::None => return None,
-            }
-        }
-
-        Some(LegacyFileSystemPermissions {
-            read: (!read.is_empty()).then_some(read),
-            write: (!write.is_empty()).then_some(write),
-        })
+        self.read.is_none() && self.write.is_none()
     }
 }
 
@@ -276,7 +220,7 @@ pub struct MacOsSeatbeltProfileExtensions {
 }
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
-pub struct AdditionalPermissionProfile {
+pub struct PermissionProfile {
     pub network: Option<NetworkPermissions>,
     pub file_system: Option<FileSystemPermissions>,
     pub macos: Option<MacOsSeatbeltProfileExtensions>,
@@ -294,14 +238,9 @@ pub enum ResponseInputItem {
     Message {
         role: String,
         content: Vec<ContentItem>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        phase: Option<MessagePhase>,
     },
     FunctionCallOutput {
         call_id: String,
-        #[ts(as = "FunctionCallOutputBody")]
-        #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
     },
     McpToolCallOutput {
@@ -310,11 +249,6 @@ pub enum ResponseInputItem {
     },
     CustomToolCallOutput {
         call_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        name: Option<String>,
-        #[ts(as = "FunctionCallOutputBody")]
-        #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
     },
     ToolSearchOutput {
@@ -514,8 +448,6 @@ pub enum ImageDetail {
     Original,
 }
 
-pub const DEFAULT_IMAGE_DETAIL: ImageDetail = ImageDetail::High;
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 /// Classifies an assistant message as interim commentary or final answer text.
@@ -541,6 +473,10 @@ pub enum ResponseItem {
         id: Option<String>,
         role: String,
         content: Vec<ContentItem>,
+        // Do not use directly, no available consistently across all providers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        end_turn: Option<bool>,
         // Optional output-message phase (for example: "commentary", "final_answer").
         // Availability varies by provider/model, so downstream consumers must
         // preserve fallback behavior when this is absent.
@@ -551,7 +487,6 @@ pub enum ResponseItem {
     Reasoning {
         #[serde(default, skip_serializing)]
         #[ts(skip)]
-        #[schemars(skip)]
         id: String,
         summary: Vec<ReasoningItemReasoningSummary>,
         #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
@@ -600,18 +535,6 @@ pub enum ResponseItem {
         #[ts(type = "unknown")]
         arguments: serde_json::Value,
     },
-    ToolSearchCall {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: Option<String>,
-        call_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        status: Option<String>,
-        execution: String,
-        #[ts(type = "unknown")]
-        arguments: serde_json::Value,
-    },
     // NOTE: The `output` field for `function_call_output` uses a dedicated payload type with
     // custom serialization. On the wire it is either:
     //   - a plain string (`content`)
@@ -619,8 +542,6 @@ pub enum ResponseItem {
     // We keep this behavior centralized in `FunctionCallOutputPayload`.
     FunctionCallOutput {
         call_id: String,
-        #[ts(as = "FunctionCallOutputBody")]
-        #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
     },
     CustomToolCall {
@@ -640,11 +561,6 @@ pub enum ResponseItem {
     // text or structured content items.
     CustomToolCallOutput {
         call_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        name: Option<String>,
-        #[ts(as = "FunctionCallOutputBody")]
-        #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
     },
     ToolSearchOutput {
@@ -690,12 +606,13 @@ pub enum ResponseItem {
         revised_prompt: Option<String>,
         result: String,
     },
+    // Generated by the harness but considered exactly as a model response.
+    GhostSnapshot {
+        ghost_commit: GhostCommit,
+    },
     #[serde(alias = "compaction_summary")]
-    Compaction { encrypted_content: String },
-    ContextCompaction {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        encrypted_content: Option<String>,
+    Compaction {
+        encrypted_content: String,
     },
     #[serde(other)]
     Other,
@@ -1090,6 +1007,31 @@ fn render_command_prefix(prefix: &[String]) -> String {
     format!("[{tokens}]")
 }
 
+impl From<DeveloperInstructions> for ResponseItem {
+    fn from(di: DeveloperInstructions) -> Self {
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: di.into_text(),
+            }],
+            end_turn: None,
+            phase: None,
+        }
+    }
+}
+
+impl From<SandboxMode> for DeveloperInstructions {
+    fn from(mode: SandboxMode) -> Self {
+        let network_access = match mode {
+            SandboxMode::DangerFullAccess => NetworkAccess::Enabled,
+            SandboxMode::WorkspaceWrite | SandboxMode::ReadOnly => NetworkAccess::Restricted,
+        };
+
+        DeveloperInstructions::sandbox_text(mode, network_access)
+    }
+}
+
 fn should_serialize_reasoning_content(content: &Option<Vec<ReasoningItemContent>>) -> bool {
     match content {
         Some(content) => !content
@@ -1231,7 +1173,7 @@ fn invalid_image_error_placeholder(
 fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> ContentItem {
     ContentItem::InputText {
         text: format!(
-            "Codex cannot attach image at `{}`: unsupported image `{}`.",
+            "Codex cannot attach image at `{}`: unsupported image format `{}`.",
             path.display(),
             mime
         ),
@@ -1240,11 +1182,10 @@ fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> Co
 
 pub fn local_image_content_items_with_label_number(
     path: &std::path::Path,
-    file_bytes: Vec<u8>,
     label_number: Option<usize>,
     mode: PromptImageMode,
 ) -> Vec<ContentItem> {
-    match load_for_prompt_bytes(path, file_bytes, mode) {
+    match load_for_prompt(path, mode) {
         Ok(image) => {
             let mut items = Vec::with_capacity(3);
             if let Some(label_number) = label_number {
@@ -1254,7 +1195,6 @@ pub fn local_image_content_items_with_label_number(
             }
             items.push(ContentItem::InputImage {
                 image_url: image.into_data_url(),
-                detail: Some(DEFAULT_IMAGE_DETAIL),
             });
             if label_number.is_some() {
                 items.push(ContentItem::InputText {
@@ -1263,20 +1203,28 @@ pub fn local_image_content_items_with_label_number(
             }
             items
         }
-        Err(err) => match &err {
-            ImageProcessingError::Read { .. } | ImageProcessingError::Encode { .. } => {
+        Err(err) => {
+            if matches!(&err, ImageProcessingError::Read { .. }) {
                 vec![local_image_error_placeholder(path, &err)]
-            }
-            ImageProcessingError::Decode { .. } if err.is_invalid_image() => {
+            } else if err.is_invalid_image() {
                 vec![invalid_image_error_placeholder(path, &err)]
+            } else {
+                let Some(mime_guess) = mime_guess::from_path(path).first() else {
+                    return vec![local_image_error_placeholder(
+                        path,
+                        "unsupported MIME type (unknown)",
+                    )];
+                };
+                let mime = mime_guess.essence_str().to_owned();
+                if !mime.starts_with("image/") {
+                    return vec![local_image_error_placeholder(
+                        path,
+                        format!("unsupported MIME type `{mime}`"),
+                    )];
+                }
+                vec![unsupported_image_error_placeholder(path, &mime)]
             }
-            ImageProcessingError::Decode { .. } => {
-                vec![local_image_error_placeholder(path, &err)]
-            }
-            ImageProcessingError::UnsupportedImageFormat { mime } => {
-                vec![unsupported_image_error_placeholder(path, mime)]
-            }
-        },
+        }
     }
 }
 
@@ -1331,15 +1279,12 @@ fn wrap_file_content_items(
 impl From<ResponseInputItem> for ResponseItem {
     fn from(item: ResponseInputItem) -> Self {
         match item {
-            ResponseInputItem::Message {
-                role,
-                content,
-                phase,
-            } => Self::Message {
+            ResponseInputItem::Message { role, content } => Self::Message {
                 role,
                 content,
                 id: None,
-                phase,
+                end_turn: None,
+                phase: None,
             },
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 Self::FunctionCallOutput { call_id, output }
@@ -1449,10 +1394,7 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             ContentItem::InputText {
                                 text: image_open_tag_text(),
                             },
-                            ContentItem::InputImage {
-                                image_url,
-                                detail: Some(DEFAULT_IMAGE_DETAIL),
-                            },
+                            ContentItem::InputImage { image_url },
                             ContentItem::InputText {
                                 text: image_close_tag_text(),
                             },
@@ -1488,7 +1430,6 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                     UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(), // Tool bodies are injected later in core
                 })
                 .collect::<Vec<ContentItem>>(),
-            phase: None,
         }
     }
 }
@@ -1519,7 +1460,7 @@ pub struct ShellToolCallParams {
     pub prefix_rule: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub additional_permissions: Option<AdditionalPermissionProfile>,
+    pub additional_permissions: Option<PermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -1545,7 +1486,7 @@ pub struct ShellCommandToolCallParams {
     pub prefix_rule: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub additional_permissions: Option<AdditionalPermissionProfile>,
+    pub additional_permissions: Option<PermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -1611,7 +1552,7 @@ impl From<crate::dynamic_tools::DynamicToolCallOutputContentItem>
             crate::dynamic_tools::DynamicToolCallOutputContentItem::InputImage { image_url } => {
                 Self::InputImage {
                     image_url,
-                    detail: Some(DEFAULT_IMAGE_DETAIL),
+                    detail: None,
                 }
             }
         }
@@ -1803,8 +1744,6 @@ impl CallToolResult {
 fn convert_mcp_content_to_items(
     contents: &[serde_json::Value],
 ) -> Option<Vec<FunctionCallOutputContentItem>> {
-    const CODEX_IMAGE_DETAIL_META_KEY: &str = "codex/imageDetail";
-
     #[derive(serde::Deserialize)]
     #[serde(tag = "type")]
     enum McpContent {
@@ -1815,8 +1754,6 @@ fn convert_mcp_content_to_items(
             data: String,
             #[serde(rename = "mimeType", alias = "mime_type")]
             mime_type: Option<String>,
-            #[serde(rename = "_meta", default)]
-            meta: Option<serde_json::Value>,
         },
         #[serde(other)]
         Unknown,
@@ -1828,11 +1765,7 @@ fn convert_mcp_content_to_items(
     for content in contents {
         let item = match serde_json::from_value::<McpContent>(content.clone()) {
             Ok(McpContent::Text { text }) => FunctionCallOutputContentItem::InputText { text },
-            Ok(McpContent::Image {
-                data,
-                mime_type,
-                meta,
-            }) => {
+            Ok(McpContent::Image { data, mime_type }) => {
                 saw_image = true;
                 let image_url = if data.starts_with("data:") {
                     data
@@ -1842,19 +1775,7 @@ fn convert_mcp_content_to_items(
                 };
                 FunctionCallOutputContentItem::InputImage {
                     image_url,
-                    detail: meta
-                        .as_ref()
-                        .and_then(serde_json::Value::as_object)
-                        .and_then(|meta| meta.get(CODEX_IMAGE_DETAIL_META_KEY))
-                        .and_then(serde_json::Value::as_str)
-                        .and_then(|detail| match detail {
-                            "auto" => Some(ImageDetail::Auto),
-                            "low" => Some(ImageDetail::Low),
-                            "high" => Some(ImageDetail::High),
-                            "original" => Some(ImageDetail::Original),
-                            _ => None,
-                        })
-                        .or(Some(DEFAULT_IMAGE_DETAIL)),
+                    detail: None,
                 }
             }
             Ok(McpContent::Unknown) | Err(_) => FunctionCallOutputContentItem::InputText {
@@ -1945,7 +1866,7 @@ mod tests {
             items,
             vec![FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,Zm9v".to_string(),
-                detail: Some(DEFAULT_IMAGE_DETAIL),
+                detail: None,
             }]
         );
     }
@@ -2180,7 +2101,7 @@ mod tests {
             items,
             vec![FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,Zm9v".to_string(),
-                detail: Some(DEFAULT_IMAGE_DETAIL),
+                detail: None,
             }]
         );
     }
@@ -2203,7 +2124,7 @@ mod tests {
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
-                detail: Some(DEFAULT_IMAGE_DETAIL),
+                detail: None,
             },
             FunctionCallOutputContentItem::InputText {
                 text: "line 2".to_string(),
@@ -2222,7 +2143,7 @@ mod tests {
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
-                detail: Some(DEFAULT_IMAGE_DETAIL),
+                detail: None,
             },
         ];
 
@@ -2245,7 +2166,7 @@ mod tests {
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
-                detail: Some(DEFAULT_IMAGE_DETAIL),
+                detail: None,
             },
         ]);
 
@@ -2281,14 +2202,10 @@ mod tests {
     fn converts_sandbox_mode_into_developer_instructions() {
         let workspace_write: DeveloperInstructions = SandboxMode::WorkspaceWrite.into();
         assert_eq!(
-            item,
-            ResponseItem::FunctionCall {
-                id: None,
-                name: "mcp__codex_apps__gmail_get_recent_emails".to_string(),
-                namespace: Some("mcp__codex_apps__gmail".to_string()),
-                arguments: "{\"top_k\":5}".to_string(),
-                call_id: "call-1".to_string(),
-            }
+            workspace_write,
+            DeveloperInstructions::new(
+                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted."
+            )
         );
 
         let read_only: DeveloperInstructions = SandboxMode::ReadOnly.into();
@@ -2755,7 +2672,7 @@ mod tests {
                 },
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,BASE64".into(),
-                    detail: Some(DEFAULT_IMAGE_DETAIL),
+                    detail: None,
                 },
             ]
         );
@@ -2778,11 +2695,10 @@ mod tests {
     fn serializes_custom_tool_image_outputs_as_array() -> Result<()> {
         let item = ResponseInputItem::CustomToolCallOutput {
             call_id: "call1".into(),
-            name: None,
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,BASE64".into(),
-                    detail: Some(DEFAULT_IMAGE_DETAIL),
+                    detail: None,
                 },
             ]),
         };
@@ -2818,71 +2734,7 @@ mod tests {
             items,
             vec![FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,BASE64".into(),
-                detail: Some(DEFAULT_IMAGE_DETAIL),
-            }]
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn preserves_original_detail_metadata_on_mcp_images() -> Result<()> {
-        let call_tool_result = CallToolResult {
-            content: vec![serde_json::json!({
-                "type": "image",
-                "data": "BASE64",
-                "mimeType": "image/png",
-                "_meta": {
-                    "codex/imageDetail": "original",
-                },
-            })],
-            structured_content: None,
-            is_error: Some(false),
-            meta: None,
-        };
-
-        let payload = call_tool_result.into_function_call_output_payload();
-        let Some(items) = payload.content_items() else {
-            panic!("expected content items");
-        };
-        let items = items.to_vec();
-        assert_eq!(
-            items,
-            vec![FunctionCallOutputContentItem::InputImage {
-                image_url: "data:image/png;base64,BASE64".into(),
-                detail: Some(ImageDetail::Original),
-            }]
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn preserves_standard_detail_metadata_on_mcp_images() -> Result<()> {
-        let call_tool_result = CallToolResult {
-            content: vec![serde_json::json!({
-                "type": "image",
-                "data": "BASE64",
-                "mimeType": "image/png",
-                "_meta": {
-                    "codex/imageDetail": "high",
-                },
-            })],
-            structured_content: None,
-            is_error: Some(false),
-            meta: None,
-        };
-
-        let payload = call_tool_result.into_function_call_output_payload();
-        let Some(items) = payload.content_items() else {
-            panic!("expected content items");
-        };
-        let items = items.to_vec();
-        assert_eq!(
-            items,
-            vec![FunctionCallOutputContentItem::InputImage {
-                image_url: "data:image/png;base64,BASE64".into(),
-                detail: Some(ImageDetail::High),
+                detail: None,
             }]
         );
 
@@ -3098,10 +2950,7 @@ mod tests {
                     ContentItem::InputText {
                         text: image_open_tag_text(),
                     },
-                    ContentItem::InputImage {
-                        image_url,
-                        detail: Some(DEFAULT_IMAGE_DETAIL),
-                    },
+                    ContentItem::InputImage { image_url },
                     ContentItem::InputText {
                         text: image_close_tag_text(),
                     },
@@ -3306,13 +3155,7 @@ mod tests {
                         text: image_open_tag_text(),
                     })
                 );
-                assert_eq!(
-                    content.get(1),
-                    Some(&ContentItem::InputImage {
-                        image_url,
-                        detail: Some(DEFAULT_IMAGE_DETAIL),
-                    })
-                );
+                assert_eq!(content.get(1), Some(&ContentItem::InputImage { image_url }));
                 assert_eq!(
                     content.get(2),
                     Some(&ContentItem::InputText {
@@ -3322,7 +3165,7 @@ mod tests {
                 assert_eq!(
                     content.get(3),
                     Some(&ContentItem::InputText {
-                        text: local_image_open_tag_text(/*label_number*/ 2),
+                        text: local_image_open_tag_text(2),
                     })
                 );
                 assert!(matches!(
@@ -3391,8 +3234,8 @@ mod tests {
                 match &content[0] {
                     ContentItem::InputText { text } => {
                         assert!(
-                            text.contains("unsupported image `application/json`"),
-                            "placeholder should mention unsupported image MIME: {text}"
+                            text.contains("unsupported MIME type `application/json`"),
+                            "placeholder should mention unsupported MIME: {text}"
                         );
                         assert!(
                             text.contains(&json_path.display().to_string()),
@@ -3426,7 +3269,7 @@ mod tests {
             ResponseInputItem::Message { content, .. } => {
                 assert_eq!(content.len(), 1);
                 let expected = format!(
-                    "Codex cannot attach image at `{}`: unsupported image `image/svg+xml`.",
+                    "Codex cannot attach image at `{}`: unsupported image format `image/svg+xml`.",
                     svg_path.display()
                 );
                 match &content[0] {

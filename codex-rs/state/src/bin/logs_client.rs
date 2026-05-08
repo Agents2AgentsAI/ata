@@ -4,7 +4,6 @@ use std::time::Duration;
 use anyhow::Context;
 use chrono::DateTime;
 use clap::Parser;
-use clap::ValueEnum;
 use codex_state::LogQuery;
 use codex_state::LogRow;
 use codex_state::StateRuntime;
@@ -23,9 +22,9 @@ struct Args {
     #[arg(long)]
     db: Option<PathBuf>,
 
-    /// Minimum log level to include.
-    #[arg(long, value_enum, ignore_case = true)]
-    level: Option<LogLevelThreshold>,
+    /// Log level to match exactly (case-insensitive).
+    #[arg(long)]
+    level: Option<String>,
 
     /// Start timestamp (RFC3339 or unix seconds).
     #[arg(long, value_name = "RFC3339|UNIX")]
@@ -47,7 +46,7 @@ struct Args {
     #[arg(long = "thread-id")]
     thread_id: Vec<String>,
 
-    /// Substring match against the rendered log body.
+    /// Substring match against the log message.
     #[arg(long)]
     search: Option<String>,
 
@@ -63,14 +62,14 @@ struct Args {
     #[arg(long, default_value_t = 500)]
     poll_ms: u64,
 
-    /// Show compact output with only time, level, and rendered log body.
+    /// Show compact output with only time, level, and message.
     #[arg(long)]
     compact: bool,
 }
 
 #[derive(Debug, Clone)]
 struct LogFilter {
-    levels_upper: Vec<String>,
+    level_upper: Option<String>,
     from_ts: Option<i64>,
     to_ts: Option<i64>,
     module_like: Vec<String>,
@@ -78,28 +77,6 @@ struct LogFilter {
     thread_ids: Vec<String>,
     search: Option<String>,
     include_threadless: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum LogLevelThreshold {
-    Trace,
-    Debug,
-    Info,
-    Warn,
-    Error,
-}
-
-impl LogLevelThreshold {
-    fn levels_upper(self) -> Vec<String> {
-        let levels = match self {
-            LogLevelThreshold::Trace => &["TRACE", "DEBUG", "INFO", "WARN", "ERROR"][..],
-            LogLevelThreshold::Debug => &["DEBUG", "INFO", "WARN", "ERROR"],
-            LogLevelThreshold::Info => &["INFO", "WARN", "ERROR"],
-            LogLevelThreshold::Warn => &["WARN", "ERROR"],
-            LogLevelThreshold::Error => &["ERROR"],
-        };
-        levels.iter().map(ToString::to_string).collect()
-    }
 }
 
 #[tokio::main]
@@ -160,9 +137,7 @@ fn build_filter(args: &Args) -> anyhow::Result<LogFilter> {
         .transpose()
         .context("failed to parse --to")?;
 
-    let levels_upper = args
-        .level
-        .map_or_else(Vec::new, LogLevelThreshold::levels_upper);
+    let level_upper = args.level.as_ref().map(|level| level.to_ascii_uppercase());
     let module_like = args
         .module
         .iter()
@@ -183,7 +158,7 @@ fn build_filter(args: &Args) -> anyhow::Result<LogFilter> {
         .collect::<Vec<_>>();
 
     Ok(LogFilter {
-        levels_upper,
+        level_upper,
         from_ts,
         to_ts,
         module_like,
@@ -230,12 +205,7 @@ async fn fetch_backfill(
     filter: &LogFilter,
     backfill: usize,
 ) -> anyhow::Result<Vec<LogRow>> {
-    let query = to_log_query(
-        filter,
-        Some(backfill),
-        /*after_id*/ None,
-        /*descending*/ true,
-    );
+    let query = to_log_query(filter, Some(backfill), None, true);
     runtime
         .query_logs(&query)
         .await
@@ -247,12 +217,7 @@ async fn fetch_new_rows(
     filter: &LogFilter,
     last_id: i64,
 ) -> anyhow::Result<Vec<LogRow>> {
-    let query = to_log_query(
-        filter,
-        /*limit*/ None,
-        Some(last_id),
-        /*descending*/ false,
-    );
+    let query = to_log_query(filter, None, Some(last_id), false);
     runtime
         .query_logs(&query)
         .await
@@ -260,9 +225,7 @@ async fn fetch_new_rows(
 }
 
 async fn fetch_max_id(runtime: &StateRuntime, filter: &LogFilter) -> anyhow::Result<i64> {
-    let query = to_log_query(
-        filter, /*limit*/ None, /*after_id*/ None, /*descending*/ false,
-    );
+    let query = to_log_query(filter, None, None, false);
     runtime
         .max_log_id(&query)
         .await
@@ -276,7 +239,7 @@ fn to_log_query(
     descending: bool,
 ) -> LogQuery {
     LogQuery {
-        levels_upper: filter.levels_upper.clone(),
+        level_upper: filter.level_upper.clone(),
         from_ts: filter.from_ts,
         to_ts: filter.to_ts,
         module_like: filter.module_like.clone(),
@@ -320,7 +283,7 @@ fn heuristic_formatting(message: &str) -> String {
 
 mod matcher {
     pub(super) fn apply_patch(message: &str) -> bool {
-        message.contains("ToolCall: apply_patch")
+        message.starts_with("ToolCall: apply_patch")
     }
 }
 
@@ -373,44 +336,5 @@ mod formatter {
             return padded.magenta().bold().to_string();
         }
         padded.bold().to_string()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn log_level_threshold_includes_more_severe_levels() {
-        assert_eq!(
-            LogLevelThreshold::Warn.levels_upper(),
-            vec!["WARN".to_string(), "ERROR".to_string()]
-        );
-        assert_eq!(
-            LogLevelThreshold::Trace.levels_upper(),
-            vec![
-                "TRACE".to_string(),
-                "DEBUG".to_string(),
-                "INFO".to_string(),
-                "WARN".to_string(),
-                "ERROR".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn log_level_rejects_aliases_and_unknown_values() {
-        assert!(Args::try_parse_from(["codex-state-logs", "--level", "warning"]).is_err());
-        assert!(Args::try_parse_from(["codex-state-logs", "--level", "err"]).is_err());
-        assert!(Args::try_parse_from(["codex-state-logs", "--level", "warn,error"]).is_err());
-    }
-
-    #[test]
-    fn log_level_accepts_canonical_values_case_insensitively() {
-        let args = Args::try_parse_from(["codex-state-logs", "--level", "WARN"])
-            .expect("parse uppercase log level");
-
-        assert_eq!(args.level, Some(LogLevelThreshold::Warn));
     }
 }

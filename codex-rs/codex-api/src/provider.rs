@@ -86,7 +86,7 @@ impl Provider {
     }
 
     pub fn is_azure_responses_endpoint(&self) -> bool {
-        is_azure_responses_provider(&self.name, Some(&self.base_url))
+        is_azure_responses_wire_base_url(&self.name, Some(&self.base_url))
     }
 
     pub fn websocket_url_for_path(&self, path: &str) -> Result<Url, url::ParseError> {
@@ -103,20 +103,21 @@ impl Provider {
     }
 }
 
-pub fn is_azure_responses_provider(name: &str, base_url: Option<&str>) -> bool {
+pub fn is_azure_responses_wire_base_url(name: &str, base_url: Option<&str>) -> bool {
     if name.eq_ignore_ascii_case("azure") {
-        true
-    } else if let Some(base_url) = base_url {
-        matches_azure_responses_base_url(base_url)
-    } else {
-        false
+        return true;
     }
+
+    let Some(base_url) = base_url else {
+        return false;
+    };
+
+    let base = base_url.to_ascii_lowercase();
+    base.contains("openai.azure.") || matches_azure_responses_base_url(&base)
 }
 
 fn matches_azure_responses_base_url(base_url: &str) -> bool {
-    let base_url = base_url.to_ascii_lowercase();
-    const AZURE_MARKERS: [&str; 6] = [
-        "openai.azure.",
+    const AZURE_MARKERS: [&str; 5] = [
         "cognitiveservices.azure.",
         "aoai.azure.",
         "azure-api.",
@@ -143,12 +144,12 @@ mod tests {
 
         for base_url in positive_cases {
             assert!(
-                is_azure_responses_provider("test", Some(base_url)),
+                is_azure_responses_wire_base_url("test", Some(base_url)),
                 "expected {base_url} to be detected as Azure"
             );
         }
 
-        assert!(is_azure_responses_provider(
+        assert!(is_azure_responses_wire_base_url(
             "Azure",
             Some("https://example.com")
         ));
@@ -161,7 +162,7 @@ mod tests {
 
         for base_url in negative_cases {
             assert!(
-                !is_azure_responses_provider("test", Some(base_url)),
+                !is_azure_responses_wire_base_url("test", Some(base_url)),
                 "expected {base_url} not to be detected as Azure"
             );
         }
