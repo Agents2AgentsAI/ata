@@ -38,9 +38,18 @@ In the codex-rs folder where the rust code lives:
   - Do not add these comments for string or char literals unless the comment adds real clarity; those literals are intentionally exempt from the lint.
   - If you add one of these comments, the parameter name must exactly match the callee signature.
 - When possible, make `match` statements exhaustive and avoid wildcard arms.
+- Newly added traits should include doc comments that explain their role and how implementations are expected to use them.
+- Discourage both `#[async_trait]` and `#[allow(async_fn_in_trait)]` in Rust traits.
+  - Prefer native RPITIT trait methods with explicit `Send` bounds on the returned future, as in `3c7f013f9735` / `#16630`.
+  - Preferred trait shape:
+    `fn foo(&self, ...) -> impl std::future::Future<Output = T> + Send;`
+  - Implementations may still use `async fn foo(&self, ...) -> T` when they satisfy that contract.
+  - Do not use `#[allow(async_fn_in_trait)]` as a shortcut around spelling the future contract explicitly.
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
 - When making a change that adds or changes an API, ensure that the documentation in the `docs/` folder is up to date if applicable.
+- Prefer private modules and explicitly exported public crate API.
 - If you change `ConfigToml` or nested config types, run `just write-config-schema` to update `codex-rs/core/config.schema.json`.
+- When working with MCP tool calls, prefer using `codex-rs/codex-mcp/src/mcp_connection_manager.rs` to handle mutation of tools and tool calls. Aim to minimize the footprint of changes and leverage existing abstractions rather than plumbing code through multiple levels of function calls.
 - If you change Rust dependencies (`Cargo.toml` or `Cargo.lock`), run `just bazel-lock-update` from the
   repo root to refresh `MODULE.bazel.lock`, and include that lockfile update in the same change.
 - After dependency changes, run `just bazel-lock-check` from the repo root so lockfile drift is caught
@@ -79,6 +88,19 @@ This private repo has a `release` branch that is the only branch pushed to the p
 - **Sync main → release:** `just sync-release` (copies files, strips private dirs, no history link)
 - **Private code** (fleet, coordination, supabase backend, remote-exec, experiments) goes in its own crates/directories — never inside shared crates like `core/`, `tui/`, `exec/`, `cli/`
 - See `codex-rs/CLAUDE.md` for the full list of private paths and mixed files
+
+## The `codex-core` crate
+
+Over time, the `codex-core` crate (defined in `codex-rs/core/`) has become bloated because it is the largest crate, so it is often easier to add something new to `codex-core` rather than refactor out the library code you need so your new code neither takes a dependency on, nor contributes to the size of, `codex-core`.
+
+To that end: **resist adding code to codex-core**!
+
+Particularly when introducing a new concept/feature/API, before adding to `codex-core`, consider whether:
+
+- There is an existing crate other than `codex-core` that is an appropriate place for your new code to live.
+- It is time to introduce a new crate to the Cargo workspace for your new functionality. Refactor existing code as necessary to make this happen.
+
+Likewise, when reviewing code, do not hesitate to push back on PRs that would unnecessarily add code to `codex-core`.
 
 ## TUI style conventions
 

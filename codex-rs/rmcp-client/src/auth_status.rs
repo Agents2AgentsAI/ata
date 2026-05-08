@@ -12,10 +12,10 @@ use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use tracing::debug;
 
-use crate::OAuthCredentialsStoreMode;
 use crate::oauth::has_oauth_tokens;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
+use codex_config::types::OAuthCredentialsStoreMode;
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const OAUTH_DISCOVERY_HEADER: &str = "MCP-Protocol-Version";
@@ -274,12 +274,12 @@ mod tests {
         let status = determine_streamable_http_auth_status(
             "server",
             "not-a-url",
-            None,
+            /*bearer_token_env_var*/ None,
             Some(HashMap::from([(
                 "Authorization".to_string(),
                 "Bearer token".to_string(),
             )])),
-            None,
+            /*env_http_headers*/ None,
             OAuthCredentialsStoreMode::Keyring,
         )
         .await
@@ -295,8 +295,8 @@ mod tests {
         let status = determine_streamable_http_auth_status(
             "server",
             "not-a-url",
-            None,
-            None,
+            /*bearer_token_env_var*/ None,
+            /*http_headers*/ None,
             Some(HashMap::from([(
                 "Authorization".to_string(),
                 "CODEX_RMCP_CLIENT_AUTH_STATUS_TEST_TOKEN".to_string(),

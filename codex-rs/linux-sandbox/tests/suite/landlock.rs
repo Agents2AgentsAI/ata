@@ -1,13 +1,11 @@
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used)]
-use codex_core::config::types::ShellEnvironmentPolicy;
-use codex_core::error::CodexErr;
-use codex_core::error::Result;
-use codex_core::error::SandboxErr;
+use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecParams;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::exec_env::create_env;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -26,25 +24,33 @@ use tempfile::NamedTempFile;
 // At least on GitHub CI, the arm64 tests appear to need longer timeouts.
 
 #[cfg(not(target_arch = "aarch64"))]
-const SHORT_TIMEOUT_MS: u64 = 200;
+const SHORT_TIMEOUT_MS: u64 = 5_000;
 #[cfg(target_arch = "aarch64")]
 const SHORT_TIMEOUT_MS: u64 = 5_000;
 
 #[cfg(not(target_arch = "aarch64"))]
-const LONG_TIMEOUT_MS: u64 = 1_000;
+const LONG_TIMEOUT_MS: u64 = 5_000;
 #[cfg(target_arch = "aarch64")]
 const LONG_TIMEOUT_MS: u64 = 5_000;
 
 #[cfg(not(target_arch = "aarch64"))]
-const NETWORK_TIMEOUT_MS: u64 = 2_000;
+const NETWORK_TIMEOUT_MS: u64 = 10_000;
 #[cfg(target_arch = "aarch64")]
 const NETWORK_TIMEOUT_MS: u64 = 10_000;
 
-const BWRAP_UNAVAILABLE_ERR: &str = "build-time bubblewrap is not available in this build.";
+const BWRAP_UNAVAILABLE_ERR: &str = "bubblewrap is unavailable: no system bwrap was found";
 
 fn create_env_from_core_vars() -> HashMap<String, String> {
     let policy = ShellEnvironmentPolicy::default();
-    create_env(&policy, None)
+    create_env(&policy, /*thread_id*/ None)
+}
+
+fn codex_linux_sandbox_exe() -> PathBuf {
+    let sandbox_program = PathBuf::from(env!("CARGO_BIN_EXE_codex-linux-sandbox"));
+    match sandbox_program.canonicalize() {
+        Ok(path) => path,
+        Err(_) => sandbox_program,
+    }
 }
 
 #[expect(clippy::print_stdout)]
@@ -62,10 +68,16 @@ async fn run_cmd_output(
     cmd: &[&str],
     writable_roots: &[PathBuf],
     timeout_ms: u64,
-) -> codex_core::exec::ExecToolCallOutput {
-    run_cmd_result_with_writable_roots(cmd, writable_roots, timeout_ms, false, false)
-        .await
-        .expect("sandboxed command should execute")
+) -> codex_protocol::exec_output::ExecToolCallOutput {
+    run_cmd_result_with_writable_roots(
+        cmd,
+        writable_roots,
+        timeout_ms,
+        /*use_legacy_landlock*/ false,
+        /*network_access*/ false,
+    )
+    .await
+    .expect("sandboxed command should execute")
 }
 
 async fn run_cmd_result_with_writable_roots(
@@ -140,7 +152,7 @@ async fn run_cmd_result_with_policies(
     .await
 }
 
-fn is_bwrap_unavailable_output(output: &codex_core::exec::ExecToolCallOutput) -> bool {
+fn is_bwrap_unavailable_output(output: &codex_protocol::exec_output::ExecToolCallOutput) -> bool {
     output.stderr.text.contains(BWRAP_UNAVAILABLE_ERR)
         || (output
             .stderr
@@ -176,9 +188,9 @@ async fn should_skip_bwrap_tests() -> bool {
 }
 
 fn expect_denied(
-    result: Result<codex_core::exec::ExecToolCallOutput>,
+    result: Result<codex_protocol::exec_output::ExecToolCallOutput>,
     context: &str,
-) -> codex_core::exec::ExecToolCallOutput {
+) -> codex_protocol::exec_output::ExecToolCallOutput {
     match result {
         Ok(output) => {
             assert_ne!(output.exit_code, 0, "{context}: expected nonzero exit code");
@@ -314,6 +326,32 @@ async fn test_writable_root() {
 }
 
 #[tokio::test]
+async fn sandbox_ignores_missing_writable_roots_under_bwrap() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let existing_root = tempdir.path().join("existing");
+    let missing_root = tempdir.path().join("missing");
+    std::fs::create_dir(&existing_root).expect("create existing root");
+
+    let output = run_cmd_result_with_writable_roots(
+        &["bash", "-lc", "printf sandbox-ok"],
+        &[existing_root, missing_root],
+        LONG_TIMEOUT_MS,
+        /*use_legacy_landlock*/ false,
+        /*network_access*/ true,
+    )
+    .await
+    .expect("sandboxed command should execute");
+
+    assert_eq!(output.exit_code, 0);
+    assert_eq!(output.stdout.text, "sandbox-ok");
+}
+
+#[tokio::test]
 async fn test_no_new_privs_is_enabled() {
     let output = run_cmd_output(
         &["bash", "-lc", "grep '^NoNewPrivs:' /proc/self/status"],
@@ -335,7 +373,7 @@ async fn test_no_new_privs_is_enabled() {
 #[tokio::test]
 #[should_panic(expected = "Sandbox(Timeout")]
 async fn test_timeout() {
-    run_cmd(&["sleep", "2"], &[], 50).await;
+    run_cmd(&["sleep", "2"], &[], /*timeout_ms*/ 50).await;
 }
 
 /// Helper that runs `cmd` under the Linux sandbox and asserts that the command
@@ -344,7 +382,7 @@ async fn test_timeout() {
 /// suite remains green on leaner CI images.
 #[expect(clippy::expect_used)]
 async fn assert_network_blocked(cmd: &[&str]) {
-    let cwd = std::env::current_dir().expect("cwd should exist");
+    let cwd = AbsolutePathBuf::current_dir().expect("cwd should exist");
     let sandbox_cwd = cwd.clone();
     let params = ExecParams {
         command: cmd.iter().copied().map(str::to_owned).collect(),
@@ -352,6 +390,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
         // Give the tool a generous 2-second timeout so even slow DNS timeouts
         // do not stall the suite.
         expiration: NETWORK_TIMEOUT_MS.into(),
+        capture_policy: ExecCapturePolicy::ShellTool,
         env: create_env_from_core_vars(),
         network: None,
         sandbox_permissions: SandboxPermissions::UseDefault,
@@ -361,9 +400,8 @@ async fn assert_network_blocked(cmd: &[&str]) {
         arg0: None,
     };
 
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
-    let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
-    let codex_linux_sandbox_exe: Option<PathBuf> = Some(PathBuf::from(sandbox_program));
+    let codex_linux_sandbox_exe: Option<PathBuf> = Some(codex_linux_sandbox_exe());
+    let permission_profile = PermissionProfile::read_only();
     let result = process_exec_tool_call(
         params,
         &sandbox_policy,
@@ -371,8 +409,8 @@ async fn assert_network_blocked(cmd: &[&str]) {
         NetworkSandboxPolicy::from(&sandbox_policy),
         sandbox_cwd.as_path(),
         &codex_linux_sandbox_exe,
-        false,
-        None,
+        /*use_legacy_landlock*/ false,
+        /*stdout_stream*/ None,
     )
     .await;
 

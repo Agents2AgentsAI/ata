@@ -7,11 +7,11 @@ export type LoginAccountParams = { "type": "apiKey", apiKey: string, } | { "type
  * Access token (JWT) supplied by the client.
  * This token is used for backend API requests and email extraction.
  */
-accessToken: string, 
+accessToken: string,
 /**
  * Workspace/account identifier supplied by the client.
  */
-chatgptAccountId: string, 
+chatgptAccountId: string,
 /**
  * Optional plan type supplied by the client.
  *

@@ -70,6 +70,12 @@
         "inputSchema": true,
         "name": {
           "type": "string"
+        },
+        "namespace": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -78,6 +84,65 @@
         "name"
       ],
       "type": "object"
+    },
+    "PermissionProfileModificationParams": {
+      "oneOf": [
+        {
+          "description": "Additional concrete directory that should be writable.",
+          "properties": {
+            "path": {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            "type": {
+              "enum": [
+                "additionalWritableRoot"
+              ],
+              "title": "AdditionalWritableRootPermissionProfileModificationParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "AdditionalWritableRootPermissionProfileModificationParams",
+          "type": "object"
+        }
+      ]
+    },
+    "PermissionProfileSelectionParams": {
+      "oneOf": [
+        {
+          "description": "Select a named built-in or user-defined profile and optionally apply bounded modifications that Codex knows how to validate.",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "modifications": {
+              "items": {
+                "$ref": "#/definitions/PermissionProfileModificationParams"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "profile"
+              ],
+              "title": "ProfilePermissionProfileSelectionParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "ProfilePermissionProfileSelectionParams",
+          "type": "object"
+        }
+      ]
     },
     "Personality": {
       "enum": [
@@ -95,12 +160,35 @@
       ],
       "type": "string"
     },
-    "ServiceTier": {
+    "ThreadSource": {
       "enum": [
-        "fast",
-        "flex"
+        "user",
+        "subagent",
+        "memory_consolidation"
       ],
       "type": "string"
+    },
+    "ThreadStartSource": {
+      "enum": [
+        "startup",
+        "clear"
+      ],
+      "type": "string"
+    },
+    "TurnEnvironmentParams": {
+      "properties": {
+        "cwd": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "environmentId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cwd",
+        "environmentId"
+      ],
+      "type": "object"
     }
   },
   "properties": {
@@ -195,21 +283,31 @@
       ]
     },
     "serviceTier": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sessionStartSource": {
       "anyOf": [
         {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ServiceTier"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/definitions/ThreadStartSource"
         },
         {
           "type": "null"
         }
       ]
+    },
+    "threadSource": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ThreadSource"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional client-supplied analytics source classification for this thread."
     }
   },
   "title": "ThreadStartParams",

@@ -1,8 +1,8 @@
 //! Exercises `ChatWidget` event handling and rendering invariants.
 //!
-//! These tests treat the widget as the adapter between `codex_protocol::protocol::EventMsg` inputs and
-//! the TUI output. Many assertions are snapshot-based so that layout regressions and status/header
-//! changes show up as stable, reviewable diffs.
+//! These tests cover both app-server-native inputs and focused widget helpers. Many assertions are
+//! snapshot-based so that layout regressions and status/header changes show up as stable,
+//! reviewable diffs.
 
 use super::*;
 use crate::app_event::AppEvent;
@@ -11164,67 +11164,41 @@ printf 'fenced within fenced\n'
             id: "t1".into(),
             msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
         });
-        // Drive commit ticks and drain emitted history lines into the vt100 buffer.
-        loop {
-            chat.on_commit_tick();
-            let mut inserted_any = false;
-            while let Ok(app_ev) = rx.try_recv() {
-                if let AppEvent::InsertHistoryCell(cell) = app_ev {
-                    let lines = cell.display_lines(width);
-                    crate::insert_history::insert_history_lines(&mut term, lines)
-                        .expect("Failed to insert history lines in test");
-                    inserted_any = true;
-                }
-            }
-            if !inserted_any {
-                break;
-            }
-        }
-    }
-
-    // Finalize the stream without sending a final AgentMessage, to flush any tail.
-    chat.handle_codex_event(Event {
-        id: "t1".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "turn-1".to_string(),
-            last_agent_message: None,
-        }),
-    });
-    for lines in drain_insert_history(&mut rx) {
-        crate::insert_history::insert_history_lines(&mut term, lines)
-            .expect("Failed to insert history lines in test");
-    }
-
-    assert_snapshot!(term.backend().vt100().screen().contents());
+    }};
+    ($name:expr, $value:expr, @$snapshot:literal $(,)?) => {{
+        let mut settings = insta::Settings::clone_current();
+        settings.set_prepend_module_to_snapshot(false);
+        settings.set_snapshot_path(crate::chatwidget::tests::chatwidget_snapshot_dir());
+        settings.bind(|| {
+            insta::assert_snapshot!(
+                format!("codex_tui__chatwidget__tests__{}", $name),
+                &($value),
+                @$snapshot
+            );
+        });
+    }};
 }
 
-#[tokio::test]
-async fn chatwidget_tall() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.thread_id = Some(ThreadId::new());
-    chat.handle_codex_event(Event {
-        id: "t1".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-1".to_string(),
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-    });
-    for i in 0..30 {
-        chat.queue_user_message(format!("Hello, world! {i}").into());
-    }
-    let width: u16 = 80;
-    let height: u16 = 24;
-    let backend = VT100Backend::new(width, height);
-    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
-    let desired_height = chat.desired_height(width).min(height);
-    term.set_viewport_area(Rect::new(0, height - desired_height, width, desired_height));
-    term.draw(|f| {
-        chat.render(f.area(), f.buffer_mut());
-    })
-    .unwrap();
-    assert_snapshot!(term.backend().vt100().screen().contents());
-}
+mod app_server;
+mod approval_requests;
+mod composer_submission;
+mod exec_flow;
+mod goal_menu;
+mod goal_validation;
+mod guardian;
+mod helpers;
+mod history_replay;
+mod mcp_startup;
+mod permissions;
+mod plan_mode;
+mod popups_and_settings;
+mod review_mode;
+mod side;
+mod slash_commands;
+mod status_and_layout;
+mod status_command_tests;
+mod status_surface_previews;
+mod terminal_title;
 
 #[tokio::test]
 async fn enter_queues_user_messages_while_review_is_running() {

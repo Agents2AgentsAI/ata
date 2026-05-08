@@ -185,6 +185,11 @@ impl Respond for CodexAppsJsonRpcResponder {
                             {
                                 "name": "calendar_create_event",
                                 "description": "Create a calendar event.",
+                                "annotations": {
+                                    "readOnlyHint": false,
+                                    "destructiveHint": false,
+                                    "openWorldHint": false
+                                },
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {
@@ -209,6 +214,9 @@ impl Respond for CodexAppsJsonRpcResponder {
                             {
                                 "name": "calendar_list_events",
                                 "description": "List calendar events.",
+                                "annotations": {
+                                    "readOnlyHint": true
+                                },
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {

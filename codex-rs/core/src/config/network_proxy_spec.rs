@@ -1,4 +1,3 @@
-use crate::config_loader::NetworkConstraints;
 use async_trait::async_trait;
 use codex_execpolicy::Policy;
 use codex_network_proxy::BlockedRequestObserver;
@@ -22,6 +21,8 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkProxySpec {
+    base_config: NetworkProxyConfig,
+    requirements: Option<NetworkConstraints>,
     config: NetworkProxyConfig,
     constraints: NetworkProxyConstraints,
     hard_deny_allowlist_misses: bool,
@@ -77,7 +78,7 @@ impl NetworkProxySpec {
     }
 
     pub fn proxy_host_and_port(&self) -> String {
-        host_and_port_from_network_addr(&self.config.network.proxy_url, 3128)
+        host_and_port_from_network_addr(&self.config.network.proxy_url, /*default_port*/ 3128)
     }
 
     pub fn socks_enabled(&self) -> bool {
@@ -109,6 +110,8 @@ impl NetworkProxySpec {
             )
         })?;
         Ok(Self {
+            base_config,
+            requirements,
             config,
             constraints,
             hard_deny_allowlist_misses,
@@ -117,7 +120,7 @@ impl NetworkProxySpec {
 
     pub async fn start_proxy(
         &self,
-        sandbox_policy: &SandboxPolicy,
+        permission_profile: &PermissionProfile,
         policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
         blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
         enable_network_approval_flow: bool,
@@ -173,16 +176,19 @@ impl NetworkProxySpec {
         &self,
         audit_metadata: NetworkProxyAuditMetadata,
     ) -> std::io::Result<NetworkProxyState> {
-        let state =
-            build_config_state(self.config.clone(), self.constraints.clone()).map_err(|err| {
-                std::io::Error::other(format!("failed to build network proxy state: {err}"))
-            })?;
+        let state = self.build_config_state_for_spec()?;
         let reloader = Arc::new(StaticNetworkProxyReloader::new(state.clone()));
         Ok(NetworkProxyState::with_reloader_and_audit_metadata(
             state,
             reloader,
             audit_metadata,
         ))
+    }
+
+    fn build_config_state_for_spec(&self) -> std::io::Result<ConfigState> {
+        build_config_state(self.config.clone(), self.constraints.clone()).map_err(|err| {
+            std::io::Error::other(format!("failed to build network proxy state: {err}"))
+        })
     }
 
     fn apply_requirements(
@@ -251,8 +257,15 @@ impl NetworkProxySpec {
             constraints.denied_domains = Some(denied_domains);
             constraints.denylist_expansion_enabled = Some(denylist_expansion_enabled);
         }
-        if let Some(allow_unix_sockets) = requirements.allow_unix_sockets.clone() {
-            config.network.allow_unix_sockets = allow_unix_sockets.clone();
+        if requirements.unix_sockets.is_some() {
+            let allow_unix_sockets = requirements
+                .unix_sockets
+                .as_ref()
+                .map(codex_config::NetworkUnixSocketPermissionsToml::allow_unix_sockets)
+                .unwrap_or_default();
+            config
+                .network
+                .set_allow_unix_sockets(allow_unix_sockets.clone());
             constraints.allow_unix_sockets = Some(allow_unix_sockets);
         }
         if let Some(allow_local_binding) = requirements.allow_local_binding {

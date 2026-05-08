@@ -9,6 +9,7 @@ use crate::truncate::formatted_truncate_text;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::resolve_max_tokens;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -23,10 +24,11 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ToolCallSource {
     Direct,
     JsRepl,

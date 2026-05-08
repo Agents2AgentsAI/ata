@@ -23,7 +23,7 @@ use tracing::info_span;
 
 pub(crate) fn request_span(
     request: &JSONRPCRequest,
-    transport: AppServerTransport,
+    transport: &AppServerTransport,
     connection_id: ConnectionId,
     session: &ConnectionSessionState,
 ) -> Span {
@@ -85,7 +85,59 @@ pub(crate) fn typed_request_span(
 fn transport_name(transport: AppServerTransport) -> &'static str {
     match transport {
         AppServerTransport::Stdio => "stdio",
+        AppServerTransport::UnixSocket { .. } => "unix_socket",
         AppServerTransport::WebSocket { .. } => "websocket",
+        AppServerTransport::Off => "off",
+    }
+}
+
+fn app_server_request_span_template(
+    method: &str,
+    transport: &'static str,
+    request_id: &impl std::fmt::Display,
+    connection_id: ConnectionId,
+) -> Span {
+    info_span!(
+        "app_server.request",
+        otel.kind = "server",
+        otel.name = method,
+        rpc.system = "jsonrpc",
+        rpc.method = method,
+        rpc.transport = transport,
+        rpc.request_id = %request_id,
+        app_server.connection_id = %connection_id,
+        app_server.api_version = "v2",
+        app_server.client_name = field::Empty,
+        app_server.client_version = field::Empty,
+        turn.id = field::Empty,
+    )
+}
+
+fn record_client_info(span: &Span, client_name: Option<&str>, client_version: Option<&str>) {
+    if let Some(client_name) = client_name {
+        span.record("app_server.client_name", client_name);
+    }
+    if let Some(client_version) = client_version {
+        span.record("app_server.client_version", client_version);
+    }
+}
+
+fn attach_parent_context(
+    span: &Span,
+    method: &str,
+    request_id: &impl std::fmt::Display,
+    parent_trace: Option<&W3cTraceContext>,
+) {
+    if let Some(trace) = parent_trace {
+        if !set_parent_from_w3c_trace_context(span, trace) {
+            tracing::warn!(
+                rpc_method = method,
+                rpc_request_id = %request_id,
+                "ignoring invalid inbound request trace carrier"
+            );
+        }
+    } else if let Some(context) = traceparent_context_from_env() {
+        set_parent_from_context(span, context);
     }
 }
 
@@ -145,7 +197,7 @@ fn client_name<'a>(
     if let Some(params) = initialize_client_info {
         return Some(params.client_info.name.as_str());
     }
-    session.app_server_client_name.as_deref()
+    session.app_server_client_name()
 }
 
 fn client_version<'a>(
@@ -155,7 +207,7 @@ fn client_version<'a>(
     if let Some(params) = initialize_client_info {
         return Some(params.client_info.version.as_str());
     }
-    session.client_version.as_deref()
+    session.client_version()
 }
 
 fn initialize_client_info(request: &JSONRPCRequest) -> Option<InitializeParams> {

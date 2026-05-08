@@ -7,8 +7,19 @@ This crate is responsible for producing:
   - the `codex-exec` CLI can check if its arg0 is `codex-linux-sandbox` and, if so, execute as if it were `codex-linux-sandbox`
   - this should also be true of the `codex` multitool CLI
 
-On Linux, the bubblewrap pipeline uses the vendored bubblewrap path compiled
-into this binary.
+On Linux, Codex prefers the first `bwrap` found on `PATH`
+outside the current working directory whenever it is available. If `bwrap` is
+present but too old to support
+`--argv0`, the helper keeps using system bubblewrap and switches to a
+no-`--argv0` compatibility path for the inner re-exec. If `bwrap` is missing,
+the helper falls back to the bundled `codex-resources/bwrap` binary shipped
+with Codex.
+Codex also surfaces a startup warning when `bwrap` is missing so users know it
+is falling back to the bundled helper. Codex surfaces the same startup warning
+path when bubblewrap cannot create user namespaces. WSL2 follows the normal
+Linux bubblewrap path. WSL1 is not supported for bubblewrap sandboxing because
+it cannot create the required user namespaces, so Codex rejects sandboxed shell
+commands that would enter the bubblewrap path.
 
 **Current Behavior**
 - Legacy `SandboxPolicy` / `sandbox_mode` configs remain supported.

@@ -1,20 +1,14 @@
-use crate::client_common::tools::ResponsesApiTool;
-use crate::client_common::tools::ToolSpec;
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use crate::tools::spec::JsonSchema;
-use async_trait::async_trait;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::EventMsg;
-use std::collections::BTreeMap;
-use std::sync::LazyLock;
+use codex_tools::ToolName;
+use serde_json::Value as JsonValue;
 
 pub struct PlanHandler;
 
@@ -29,21 +23,12 @@ pub static PLAN_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         },
     );
 
-    let plan_items_schema = JsonSchema::Array {
-        description: Some("The list of steps".to_string()),
-        items: Box::new(JsonSchema::Object {
-            properties: plan_item_props,
-            required: Some(vec!["step".to_string(), "status".to_string()]),
-            additional_properties: Some(false.into()),
-        }),
-    };
+const PLAN_UPDATED_MESSAGE: &str = "Plan updated";
 
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "explanation".to_string(),
-        JsonSchema::String { description: None },
-    );
-    properties.insert("plan".to_string(), plan_items_schema);
+impl ToolOutput for PlanToolOutput {
+    fn log_preview(&self) -> String {
+        PLAN_UPDATED_MESSAGE.to_string()
+    }
 
     ToolSpec::Function(ResponsesApiTool {
         name: "update_plan".to_string(),
@@ -63,7 +48,6 @@ At most one step can be in_progress at a time.
     })
 });
 
-#[async_trait]
 impl ToolHandler for PlanHandler {
     type Output = FunctionToolOutput;
 
@@ -75,7 +59,7 @@ impl ToolHandler for PlanHandler {
         let ToolInvocation {
             session,
             turn,
-            call_id,
+            call_id: _,
             payload,
             ..
         } = invocation;
@@ -89,32 +73,18 @@ impl ToolHandler for PlanHandler {
             }
         };
 
-        let content =
-            handle_update_plan(session.as_ref(), turn.as_ref(), arguments, call_id).await?;
+        if turn.collaboration_mode.mode == ModeKind::Plan {
+            return Err(FunctionCallError::RespondToModel(
+                "update_plan is a TODO/checklist tool and is not allowed in Plan mode".to_string(),
+            ));
+        }
 
         Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
 
-/// This function doesn't do anything useful. However, it gives the model a structured way to record its plan that clients can read and render.
-/// So it's the _inputs_ to this function that are useful to clients, not the outputs and neither are actually useful for the model other
-/// than forcing it to come up and document a plan (TBD how that affects performance).
-pub(crate) async fn handle_update_plan(
-    session: &Session,
-    turn_context: &TurnContext,
-    arguments: String,
-    _call_id: String,
-) -> Result<String, FunctionCallError> {
-    if turn_context.collaboration_mode.mode == ModeKind::Plan {
-        return Err(FunctionCallError::RespondToModel(
-            "update_plan is a TODO/checklist tool and is not allowed in Plan mode".to_string(),
-        ));
+        Ok(PlanToolOutput)
     }
-    let args = parse_update_plan_arguments(&arguments)?;
-    session
-        .send_event(turn_context, EventMsg::PlanUpdate(args))
-        .await;
-    Ok("Plan updated".to_string())
 }
 
 fn parse_update_plan_arguments(arguments: &str) -> Result<UpdatePlanArgs, FunctionCallError> {

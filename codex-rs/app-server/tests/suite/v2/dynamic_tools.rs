@@ -21,6 +21,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -34,6 +35,11 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 use wiremock::MockServer;
 
+// macOS and Windows Bazel CI can spend tens of seconds starting app-server
+// subprocesses or processing test RPCs under load.
+#[cfg(any(target_os = "macos", windows))]
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(not(any(target_os = "macos", windows)))]
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Ensures dynamic tool specs are serialized into the model request payload.
@@ -58,6 +64,7 @@ async fn thread_start_injects_dynamic_tools_into_model_requests() -> Result<()> 
         "additionalProperties": false,
     });
     let dynamic_tool = DynamicToolSpec {
+        namespace: None,
         name: "demo_tool".to_string(),
         description: "Demo dynamic tool".to_string(),
         input_schema: input_schema.clone(),
@@ -195,6 +202,7 @@ async fn thread_start_keeps_hidden_dynamic_tools_out_of_model_requests() -> Resu
 #[tokio::test]
 async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Result<()> {
     let call_id = "dyn-call-1";
+    let tool_namespace = "codex_app";
     let tool_name = "demo_tool";
     let tool_args = json!({ "city": "Paris" });
     let tool_call_arguments = serde_json::to_string(&tool_args)?;
@@ -203,7 +211,16 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
     let responses = vec![
         responses::sse(vec![
             responses::ev_response_created("resp-1"),
-            responses::ev_function_call(call_id, tool_name, &tool_call_arguments),
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "namespace": tool_namespace,
+                    "name": tool_name,
+                    "arguments": tool_call_arguments,
+                }
+            }),
             responses::ev_completed("resp-1"),
         ]),
         create_final_assistant_message_sse_response("Done")?,
@@ -217,6 +234,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let dynamic_tool = DynamicToolSpec {
+        namespace: Some(tool_namespace.to_string()),
         name: tool_name.to_string(),
         description: "Demo dynamic tool".to_string(),
         input_schema: json!({
@@ -268,6 +286,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
     assert_eq!(started.turn_id, turn_id.clone());
     let ThreadItem::DynamicToolCall {
         id,
+        namespace,
         tool,
         arguments,
         status,
@@ -279,6 +298,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
         panic!("expected dynamic tool call item");
     };
     assert_eq!(id, call_id);
+    assert_eq!(namespace.as_deref(), Some(tool_namespace));
     assert_eq!(tool, tool_name);
     assert_eq!(arguments, tool_args);
     assert_eq!(status, DynamicToolCallStatus::InProgress);
@@ -301,6 +321,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
         thread_id: thread_id.clone(),
         turn_id: turn_id.clone(),
         call_id: call_id.to_string(),
+        namespace: Some(tool_namespace.to_string()),
         tool: tool_name.to_string(),
         arguments: tool_args.clone(),
     };
@@ -321,6 +342,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
     assert_eq!(completed.turn_id, turn_id);
     let ThreadItem::DynamicToolCall {
         id,
+        namespace,
         tool,
         arguments,
         status,
@@ -332,6 +354,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
         panic!("expected dynamic tool call item");
     };
     assert_eq!(id, call_id);
+    assert_eq!(namespace.as_deref(), Some(tool_namespace));
     assert_eq!(tool, tool_name);
     assert_eq!(arguments, tool_args);
     assert_eq!(status, DynamicToolCallStatus::Completed);
@@ -386,6 +409,7 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let dynamic_tool = DynamicToolSpec {
+        namespace: None,
         name: tool_name.to_string(),
         description: "Demo dynamic tool".to_string(),
         input_schema: json!({
@@ -449,6 +473,7 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
         thread_id,
         turn_id: turn_id.clone(),
         call_id: call_id.to_string(),
+        namespace: None,
         tool: tool_name.to_string(),
         arguments: tool_args,
     };
@@ -472,7 +497,7 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
             DynamicToolCallOutputContentItem::InputImage { image_url } => {
                 FunctionCallOutputContentItem::InputImage {
                     image_url,
-                    detail: None,
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
                 }
             }
         })
@@ -530,7 +555,8 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
             },
             {
                 "type": "input_image",
-                "image_url": "data:image/png;base64,AAA"
+                "image_url": "data:image/png;base64,AAA",
+                "detail": "high"
             }
         ])
     );

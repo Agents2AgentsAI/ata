@@ -3,6 +3,7 @@ name = "codex-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [[bin]]
 name = "ata"
@@ -23,15 +24,22 @@ codex-app-server = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-app-server-test-client = { workspace = true }
 codex-arg0 = { workspace = true }
+codex-builtin-mcps = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-cloud-tasks = { path = "../cloud-tasks" }
 codex-utils-cli = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
+codex-core-plugins = { workspace = true }
 codex-exec = { workspace = true }
+codex-exec-server = { workspace = true }
 codex-execpolicy = { workspace = true }
+codex-features = { workspace = true }
 codex-login = { workspace = true }
+codex-memories-write = { workspace = true }
+codex-mcp = { workspace = true }
 codex-mcp-server = { workspace = true }
+codex-models-manager = { workspace = true }
 codex-protocol = { workspace = true }
 codex-responses-api-proxy = { workspace = true }
 codex-research-tools = { workspace = true }
@@ -39,6 +47,7 @@ codex-rmcp-client = { workspace = true }
 codex-scheduler = { workspace = true }
 codex-state = { workspace = true }
 codex-stdio-to-uds = { workspace = true }
+codex-terminal-detection = { workspace = true }
 codex-tui = { workspace = true }
 codex-workspace = { workspace = true }
 libc = { workspace = true }

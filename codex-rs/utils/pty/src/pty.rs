@@ -18,9 +18,11 @@ use std::process::Stdio;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use anyhow::Result;
+use portable_pty::CommandBuilder;
 #[cfg(not(windows))]
 use portable_pty::native_pty_system;
 use portable_pty::CommandBuilder;
@@ -242,6 +244,7 @@ async fn spawn_process_portable(
         exit_status,
         exit_code,
         Some(handles),
+        /*resizer*/ None,
     );
 
     Ok(SpawnedProcess {

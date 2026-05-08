@@ -18,18 +18,18 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 
-# CI builds in debug (dev) for faster signal.
-
 jobs:
-  # --- Detect what changed to detect which tests to run (always runs) -------------------------------------
+  # --- Detect what changed so the fast PR workflow only runs relevant jobs ----
   changed:
     name: Detect changed areas
     runs-on: ubuntu-24.04
     outputs:
+      argument_comment_lint: ${{ steps.detect.outputs.argument_comment_lint }}
+      argument_comment_lint_package: ${{ steps.detect.outputs.argument_comment_lint_package }}
       codex: ${{ steps.detect.outputs.codex }}
       workflows: ${{ steps.detect.outputs.workflows }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
       - name: Detect changed paths (no external action)
@@ -43,35 +43,41 @@ jobs:
             HEAD_SHA='${{ github.event.pull_request.head.sha }}'
             echo "Base SHA: $BASE_SHA"
             echo "Head SHA: $HEAD_SHA"
-            # List files changed between base and PR head
             mapfile -t files < <(git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA")
           else
-            # On push / manual runs, default to running everything
-            files=("codex-rs/force" ".github/force")
+            # On manual runs, default to the full fast-PR bundle.
+            files=("codex-rs/force" "tools/argument-comment-lint/force" ".github/force")
           fi
 
           codex=false
+          argument_comment_lint=false
+          argument_comment_lint_package=false
           workflows=false
           for f in "${files[@]}"; do
             [[ $f == codex-rs/* ]] && codex=true
+            [[ $f == codex-rs/* || $f == tools/argument-comment-lint/* || $f == justfile ]] && argument_comment_lint=true
+            [[ $f == defs.bzl || $f == workspace_root_test_launcher.sh.tpl || $f == workspace_root_test_launcher.bat.tpl ]] && argument_comment_lint=true
+            [[ $f == tools/argument-comment-lint/* || $f == .github/workflows/rust-ci.yml || $f == .github/workflows/rust-ci-full.yml ]] && argument_comment_lint_package=true
             [[ $f == .github/* ]] && workflows=true
           done
 
+          echo "argument_comment_lint=$argument_comment_lint" >> "$GITHUB_OUTPUT"
+          echo "argument_comment_lint_package=$argument_comment_lint_package" >> "$GITHUB_OUTPUT"
           echo "codex=$codex" >> "$GITHUB_OUTPUT"
           echo "workflows=$workflows" >> "$GITHUB_OUTPUT"
 
-  # --- CI that doesn't need specific targets ---------------------------------
+  # --- Fast Cargo-native PR checks -------------------------------------------
   general:
     name: Format / etc
     runs-on: ubuntu-24.04
     needs: changed
-    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' }}
     defaults:
       run:
         working-directory: codex-rs
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.93.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
         with:
           components: rustfmt
       - name: cargo fmt
@@ -81,13 +87,13 @@ jobs:
     name: cargo shear
     runs-on: ubuntu-24.04
     needs: changed
-    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' }}
     defaults:
       run:
         working-directory: codex-rs
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.93.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: cargo-shear
@@ -107,13 +113,53 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      # Speed up repeated builds across CI runs by caching compiled objects (non-Windows).
-      USE_SCCACHE: ${{ startsWith(matrix.runner, 'windows') && 'false' || 'true' }}
-      CARGO_INCREMENTAL: "0"
-      SCCACHE_CACHE_SIZE: 10G
-      # In rust-ci, representative release-profile checks use thin LTO for faster feedback.
-      CARGO_PROFILE_RELEASE_LTO: ${{ matrix.profile == 'release' && 'thin' || 'fat' }}
+      CARGO_DYLINT_VERSION: 5.0.0
+      DYLINT_LINK_VERSION: 5.0.0
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+      - name: Install nightly argument-comment-lint toolchain
+        shell: bash
+        run: |
+          rustup toolchain install nightly-2025-09-18 \
+            --profile minimal \
+            --component llvm-tools-preview \
+            --component rustc-dev \
+            --component rust-src \
+            --no-self-update
+          rustup default nightly-2025-09-18
+      - name: Cache cargo-dylint tooling
+        id: cargo_dylint_cache
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: |
+            ~/.cargo/bin/cargo-dylint
+            ~/.cargo/bin/dylint-link
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: argument-comment-lint-${{ runner.os }}-${{ env.CARGO_DYLINT_VERSION }}-${{ env.DYLINT_LINK_VERSION }}-${{ hashFiles('tools/argument-comment-lint/Cargo.lock', 'tools/argument-comment-lint/rust-toolchain', '.github/workflows/rust-ci.yml', '.github/workflows/rust-ci-full.yml') }}
+      - name: Install cargo-dylint tooling
+        if: ${{ steps.cargo_dylint_cache.outputs.cache-hit != 'true' }}
+        shell: bash
+        run: |
+          cargo install --locked cargo-dylint --version "$CARGO_DYLINT_VERSION"
+          cargo install --locked dylint-link --version "$DYLINT_LINK_VERSION"
+      - name: Check Python wrapper syntax
+        run: python3 -m py_compile tools/argument-comment-lint/wrapper_common.py tools/argument-comment-lint/run.py tools/argument-comment-lint/run-prebuilt-linter.py tools/argument-comment-lint/test_wrapper_common.py
+      - name: Test Python wrapper helpers
+        run: python3 -m unittest discover -s tools/argument-comment-lint -p 'test_*.py'
+      - name: Test argument comment lint package
+        working-directory: tools/argument-comment-lint
+        run: cargo test
+        env:
+          RUST_MIN_STACK: "8388608" # 8 MiB
 
+  argument_comment_lint_prebuilt:
+    name: Argument comment lint - ${{ matrix.name }}
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout_minutes }}
+    needs: changed
     strategy:
       fail-fast: false
       matrix:
@@ -305,16 +351,8 @@ jobs:
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install musl build tools
         env:
-          DEBIAN_FRONTEND: noninteractive
-          TARGET: ${{ matrix.target }}
-          APT_UPDATE_ARGS: -o Acquire::Retries=3
-          APT_INSTALL_ARGS: --no-install-recommends
-        shell: bash
-        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
-
-      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
-        name: Configure rustc UBSan wrapper (musl host)
-        shell: bash
+          ARGUMENT_COMMENT_LINT: ${{ needs.changed.outputs.argument_comment_lint }}
+          WORKFLOWS: ${{ needs.changed.outputs.workflows }}
         run: |
           set -euo pipefail
           ubsan=""
@@ -554,15 +592,13 @@ jobs:
             echo "Using sccache local disk + actions/cache fallback"
           fi
 
-      - name: Enable sccache wrapper
-        if: ${{ env.USE_SCCACHE == 'true' }}
-        shell: bash
-        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-
-      - name: Restore sccache cache (fallback)
-        if: ${{ env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true' }}
-        id: cache_sccache_restore
-        uses: actions/cache/restore@v5
+          echo "No argument-comment-lint relevant changes."
+          echo "run=false" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        if: ${{ steps.argument_comment_lint_gate.outputs.run == 'true' }}
+      - name: Run argument comment lint on codex-rs via Bazel
+        if: ${{ steps.argument_comment_lint_gate.outputs.run == 'true' }}
+        uses: ./.github/actions/run-argument-comment-lint
         with:
           path: ${{ github.workspace }}/.sccache/
           key: sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ steps.lockhash.outputs.hash }}-${{ github.run_id }}
@@ -649,17 +685,24 @@ jobs:
   # --- Gatherer job that you mark as the ONLY required status -----------------
   results:
     name: CI results (required)
-    needs: [changed, general, cargo_shear, lint_build, tests]
+    needs:
+      [
+        changed,
+        general,
+        cargo_shear,
+        argument_comment_lint_package,
+        argument_comment_lint_prebuilt,
+      ]
     if: always()
     runs-on: ubuntu-24.04
     steps:
       - name: Summarize
         shell: bash
         run: |
+          echo "argpkg : ${{ needs.argument_comment_lint_package.result }}"
+          echo "arglint: ${{ needs.argument_comment_lint_prebuilt.result }}"
           echo "general: ${{ needs.general.result }}"
           echo "shear  : ${{ needs.cargo_shear.result }}"
-          echo "lint   : ${{ needs.lint_build.result }}"
-          echo "tests  : ${{ needs.tests.result }}"
 
           # Draft PRs intentionally skip expensive jobs.
           if [[ '${{ github.event.pull_request.draft }}' == 'true' ]]; then
@@ -669,18 +712,20 @@ jobs:
 
           # If nothing relevant changed (PR touching only root README, etc.),
           # declare success regardless of other jobs.
-          if [[ '${{ needs.changed.outputs.codex }}' != 'true' && '${{ needs.changed.outputs.workflows }}' != 'true' && '${{ github.event_name }}' != 'push' ]]; then
+          if [[ '${{ needs.changed.outputs.argument_comment_lint }}' != 'true' && '${{ needs.changed.outputs.codex }}' != 'true' && '${{ needs.changed.outputs.workflows }}' != 'true' ]]; then
             echo 'No relevant changes -> CI not required.'
             exit 0
           fi
 
-          # Otherwise require the jobs to have succeeded
-          [[ '${{ needs.general.result }}' == 'success' ]] || { echo 'general failed'; exit 1; }
-          [[ '${{ needs.cargo_shear.result }}' == 'success' ]] || { echo 'cargo_shear failed'; exit 1; }
-          [[ '${{ needs.lint_build.result }}' == 'success' ]] || { echo 'lint_build failed'; exit 1; }
-          [[ '${{ needs.tests.result }}' == 'success' ]] || { echo 'tests failed'; exit 1; }
+          if [[ '${{ needs.changed.outputs.argument_comment_lint_package }}' == 'true' ]]; then
+            [[ '${{ needs.argument_comment_lint_package.result }}' == 'success' ]] || { echo 'argument_comment_lint_package failed'; exit 1; }
+          fi
 
-      - name: sccache summary note
-        if: always()
-        run: |
-          echo "Per-job sccache stats are attached to each matrix job's Step Summary."
+          if [[ '${{ needs.changed.outputs.argument_comment_lint }}' == 'true' || '${{ needs.changed.outputs.workflows }}' == 'true' ]]; then
+            [[ '${{ needs.argument_comment_lint_prebuilt.result }}' == 'success' ]] || { echo 'argument_comment_lint_prebuilt failed'; exit 1; }
+          fi
+
+          if [[ '${{ needs.changed.outputs.codex }}' == 'true' || '${{ needs.changed.outputs.workflows }}' == 'true' ]]; then
+            [[ '${{ needs.general.result }}' == 'success' ]] || { echo 'general failed'; exit 1; }
+            [[ '${{ needs.cargo_shear.result }}' == 'success' ]] || { echo 'cargo_shear failed'; exit 1; }
+          fi

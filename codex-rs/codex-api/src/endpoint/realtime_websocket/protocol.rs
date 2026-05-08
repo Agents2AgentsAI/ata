@@ -39,6 +39,8 @@ pub(super) enum RealtimeOutboundMessage {
         handoff_id: String,
         output_text: String,
     },
+    #[serde(rename = "response.create")]
+    ResponseCreate,
     #[serde(rename = "session.update")]
     SessionUpdate { session: SessionUpdateSession },
     #[serde(rename = "conversation.item.create")]
@@ -47,6 +49,8 @@ pub(super) enum RealtimeOutboundMessage {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SessionUpdateSession {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) id: Option<String>,
     #[serde(rename = "type")]
     pub(super) kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -66,13 +70,30 @@ pub(super) struct SessionAudio {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SessionAudioInput {
     pub(super) format: SessionAudioFormat,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) noise_reduction: Option<SessionNoiseReduction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) transcription: Option<SessionInputAudioTranscription>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) turn_detection: Option<SessionTurnDetection>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct SessionInputAudioTranscription {
+    pub(super) model: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SessionAudioFormat {
     #[serde(rename = "type")]
-    pub(super) kind: String,
+    pub(super) r#type: AudioFormatType,
     pub(super) rate: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub(super) enum AudioFormatType {
+    #[serde(rename = "audio/pcm")]
+    AudioPcm,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -91,9 +112,71 @@ pub(super) enum SessionAudioVoice {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ConversationMessageItem {
     #[serde(rename = "type")]
-    pub(super) kind: String,
-    pub(super) role: String,
+    pub(super) r#type: NoiseReductionType,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum NoiseReductionType {
+    NearField,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct SessionTurnDetection {
+    #[serde(rename = "type")]
+    pub(super) r#type: TurnDetectionType,
+    pub(super) interrupt_response: bool,
+    pub(super) create_response: bool,
+    pub(super) silence_duration_ms: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum TurnDetectionType {
+    ServerVad,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct SessionAudioOutputFormat {
+    #[serde(rename = "type")]
+    pub(super) r#type: AudioFormatType,
+    pub(super) rate: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ConversationMessageItem {
+    #[serde(rename = "type")]
+    pub(super) r#type: ConversationItemType,
+    pub(super) role: ConversationRole,
     pub(super) content: Vec<ConversationItemContent>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ConversationItemType {
+    Message,
+    FunctionCallOutput,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ConversationRole {
+    User,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub(super) enum ConversationItemPayload {
+    Message(ConversationMessageItem),
+    FunctionCallOutput(ConversationFunctionCallOutputItem),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ConversationFunctionCallOutputItem {
+    #[serde(rename = "type")]
+    pub(super) r#type: ConversationItemType,
+    pub(super) call_id: String,
+    pub(super) output: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -114,7 +197,7 @@ pub(super) struct ConversationFunctionCallOutputItem {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ConversationItemContent {
     #[serde(rename = "type")]
-    pub(super) kind: String,
+    pub(super) r#type: ConversationContentType,
     pub(super) text: String,
 }
 

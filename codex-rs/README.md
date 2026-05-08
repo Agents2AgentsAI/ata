@@ -78,6 +78,9 @@ ata debug seatbelt [--full-auto] [--log-denials] [COMMAND]...
 ata debug landlock [--full-auto] [COMMAND]...
 ```
 
+To try a writable legacy sandbox mode with these commands, pass an explicit config override such
+as `-c 'sandbox_mode="workspace-write"'`.
+
 ### Selecting a sandbox policy via `--sandbox`
 
 The Rust CLI exposes a dedicated `--sandbox` (`-s`) flag that lets you pick the sandbox policy **without** having to reach for the generic `-c/--config` option:

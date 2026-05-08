@@ -2,13 +2,11 @@ use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
+use serde_json::Value as JsonValue;
 use std::sync::Arc;
 
-use crate::codex::TurnContext;
 use crate::exec::ExecParams;
-use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
@@ -23,36 +21,65 @@ use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
-use crate::tools::handlers::parse_arguments_with_base_path;
-use crate::tools::handlers::resolve_workdir_base_path;
+use crate::tools::handlers::parse_arguments;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::orchestrator::ToolOrchestrator;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use crate::tools::sandboxing::ToolCtx;
-use crate::tools::spec::ShellCommandBackendConfig;
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::protocol::ExecCommandSource;
 
-pub struct ShellHandler;
+mod container_exec;
+mod local_shell;
+mod shell_command;
+mod shell_handler;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ShellCommandBackend {
-    Classic,
-    ZshFork,
+pub use container_exec::ContainerExecHandler;
+pub use local_shell::LocalShellHandler;
+pub use shell_command::ShellCommandHandler;
+pub use shell_handler::ShellHandler;
+
+fn shell_function_payload_command(payload: &ToolPayload) -> Option<String> {
+    let ToolPayload::Function { arguments } = payload else {
+        return None;
+    };
+
+    parse_arguments::<ShellToolCallParams>(arguments)
+        .ok()
+        .map(|params| codex_shell_command::parse_command::shlex_join(&params.command))
 }
 
-pub struct ShellCommandHandler {
-    backend: ShellCommandBackend,
+fn local_shell_payload_command(payload: &ToolPayload) -> Option<String> {
+    let ToolPayload::LocalShell { params } = payload else {
+        return None;
+    };
+
+    Some(codex_shell_command::parse_command::shlex_join(
+        &params.command,
+    ))
+}
+
+fn shell_command_payload_command(payload: &ToolPayload) -> Option<String> {
+    let ToolPayload::Function { arguments } = payload else {
+        return None;
+    };
+
+    parse_arguments::<ShellCommandToolCallParams>(arguments)
+        .ok()
+        .map(|params| params.command)
 }
 
 struct RunExecLikeArgs {
     tool_name: String,
     exec_params: ExecParams,
-    additional_permissions: Option<PermissionProfile>,
+    hook_command: String,
+    additional_permissions: Option<AdditionalPermissionProfile>,
     prefix_rule: Option<Vec<String>>,
-    session: Arc<crate::codex::Session>,
+    session: Arc<crate::session::session::Session>,
     turn: Arc<TurnContext>,
     tracker: crate::tools::context::SharedTurnDiffTracker,
     call_id: String,
@@ -138,15 +165,20 @@ impl ShellCommandHandler {
     }
 }
 
-impl From<ShellCommandBackendConfig> for ShellCommandHandler {
-    fn from(config: ShellCommandBackendConfig) -> Self {
-        let backend = match config {
-            ShellCommandBackendConfig::Classic => ShellCommandBackend::Classic,
-            ShellCommandBackendConfig::ZshFork => ShellCommandBackend::ZshFork,
-        };
-        Self { backend }
-    }
-}
+async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, FunctionCallError> {
+    let RunExecLikeArgs {
+        tool_name,
+        exec_params,
+        hook_command,
+        additional_permissions,
+        prefix_rule,
+        session,
+        turn,
+        tracker,
+        call_id,
+        freeform,
+        shell_runtime_backend,
+    } = args;
 
 #[async_trait]
 impl ToolHandler for ShellHandler {
@@ -156,22 +188,10 @@ impl ToolHandler for ShellHandler {
         ToolKind::Function
     }
 
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(
-            payload,
-            ToolPayload::Function { .. } | ToolPayload::LocalShell { .. }
-        )
-    }
-
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
-        match &invocation.payload {
-            ToolPayload::Function { arguments } => {
-                serde_json::from_str::<ShellToolCallParams>(arguments)
-                    .map(|params| !is_known_safe_command(&params.command))
-                    .unwrap_or(true)
-            }
-            ToolPayload::LocalShell { params } => !is_known_safe_command(&params.command),
-            _ => true, // unknown payloads => assume mutating
+    let mut explicit_env_overrides = turn.shell_environment_policy.r#set.clone();
+    for key in dependency_env.keys() {
+        if let Some(value) = exec_params.env.get(key) {
+            explicit_env_overrides.insert(key.clone(), value.clone());
         }
     }
 
@@ -483,6 +503,118 @@ impl ShellHandler {
         let content = emitter.finish(event_ctx, out).await?;
         Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
+
+    // Intercept apply_patch if present.
+    if let Some(output) = intercept_apply_patch(
+        &exec_params.command,
+        &exec_params.cwd,
+        fs.as_ref(),
+        session.clone(),
+        turn.clone(),
+        Some(&tracker),
+        &call_id,
+        tool_name.as_str(),
+    )
+    .await?
+    {
+        return Ok(output);
+    }
+
+    let source = ExecCommandSource::Agent;
+    let emitter = ToolEmitter::shell(
+        exec_params.command.clone(),
+        exec_params.cwd.clone(),
+        source,
+        freeform,
+    );
+    let event_ctx = ToolEventCtx::new(
+        session.as_ref(),
+        turn.as_ref(),
+        &call_id,
+        /*turn_diff_tracker*/ None,
+    );
+    emitter.begin(event_ctx).await;
+
+    let file_system_sandbox_policy = turn.file_system_sandbox_policy();
+    let exec_approval_requirement = session
+        .services
+        .exec_policy
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &exec_params.command,
+            approval_policy: turn.approval_policy.value(),
+            permission_profile: turn.permission_profile(),
+            file_system_sandbox_policy: &file_system_sandbox_policy,
+            sandbox_cwd: turn.cwd.as_path(),
+            sandbox_permissions: if effective_additional_permissions.permissions_preapproved {
+                codex_protocol::models::SandboxPermissions::UseDefault
+            } else {
+                effective_additional_permissions.sandbox_permissions
+            },
+            prefix_rule,
+        })
+        .await;
+
+    let req = ShellRequest {
+        command: exec_params.command.clone(),
+        hook_command,
+        cwd: exec_params.cwd.clone(),
+        timeout_ms: exec_params.expiration.timeout_ms(),
+        env: exec_params.env.clone(),
+        explicit_env_overrides,
+        network: exec_params.network.clone(),
+        sandbox_permissions: effective_additional_permissions.sandbox_permissions,
+        additional_permissions: normalized_additional_permissions,
+        #[cfg(unix)]
+        additional_permissions_preapproved: effective_additional_permissions
+            .permissions_preapproved,
+        justification: exec_params.justification.clone(),
+        exec_approval_requirement,
+    };
+    let mut orchestrator = ToolOrchestrator::new();
+    let mut runtime = {
+        use ShellRuntimeBackend::*;
+        match shell_runtime_backend {
+            Generic => ShellRuntime::new(),
+            backend @ (ShellCommandClassic | ShellCommandZshFork) => {
+                ShellRuntime::for_shell_command(backend)
+            }
+        }
+    };
+    let tool_ctx = ToolCtx {
+        session: session.clone(),
+        turn: turn.clone(),
+        call_id: call_id.clone(),
+        tool_name,
+    };
+    let out = orchestrator
+        .run(
+            &mut runtime,
+            &req,
+            &tool_ctx,
+            &turn,
+            turn.approval_policy.value(),
+        )
+        .await
+        .map(|result| result.output);
+    let event_ctx = ToolEventCtx::new(
+        session.as_ref(),
+        turn.as_ref(),
+        &call_id,
+        /*turn_diff_tracker*/ None,
+    );
+    let post_tool_use_response = out
+        .as_ref()
+        .ok()
+        .map(|output| crate::tools::format_exec_output_str(output, turn.truncation_policy))
+        .map(JsonValue::String);
+    let content = emitter.finish(event_ctx, out).await?;
+    Ok(FunctionToolOutput {
+        body: vec![
+            codex_protocol::models::FunctionCallOutputContentItem::InputText { text: content },
+        ],
+        success: Some(true),
+        post_tool_use_response,
+    })
 }
 
 #[cfg(test)]

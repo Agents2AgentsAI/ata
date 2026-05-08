@@ -47,6 +47,7 @@ fn inserts_bwrap_argv0_before_command_separator() {
         BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
+            ..Default::default()
         },
     )
     .args;
@@ -74,6 +75,75 @@ fn inserts_bwrap_argv0_before_command_separator() {
 }
 
 #[test]
+fn rewrites_inner_command_path_when_bwrap_lacks_argv0() {
+    let file_system_sandbox_policy = read_only_file_system_policy();
+    let mut argv = build_bwrap_argv(
+        vec!["/bin/true".to_string()],
+        &file_system_sandbox_policy,
+        Path::new("/"),
+        Path::new("/"),
+        BwrapOptions {
+            mount_proc: true,
+            network_mode: BwrapNetworkMode::FullAccess,
+            ..Default::default()
+        },
+    )
+    .expect("build bwrap argv")
+    .args;
+    apply_inner_command_argv0_for_launcher(
+        &mut argv,
+        /*supports_argv0*/ false,
+        "/tmp/codex-arg0-session/codex-linux-sandbox".to_string(),
+    );
+
+    assert!(!argv.iter().any(|arg| arg == "--argv0"));
+    assert!(
+        argv.windows(2)
+            .any(|window| { window == ["--", "/tmp/codex-arg0-session/codex-linux-sandbox"] })
+    );
+}
+
+#[test]
+fn rewrites_bwrap_helper_command_not_nested_user_command_when_current_exe_appears_later() {
+    let nested_current_exe = std::env::current_exe()
+        .expect("current exe")
+        .to_string_lossy()
+        .into_owned();
+    let mut argv = vec![
+        "bwrap".to_string(),
+        "--".to_string(),
+        "/tmp/helper-symlink".to_string(),
+        "--sandbox-policy-cwd".to_string(),
+        "/tmp/cwd".to_string(),
+        "--".to_string(),
+        nested_current_exe.clone(),
+        "--codex-run-as-apply-patch".to_string(),
+        "patch".to_string(),
+    ];
+
+    apply_inner_command_argv0_for_launcher(
+        &mut argv,
+        /*supports_argv0*/ false,
+        "/tmp/argv0-fallback-helper".to_string(),
+    );
+
+    assert_eq!(
+        argv,
+        vec![
+            "bwrap".to_string(),
+            "--".to_string(),
+            "/tmp/argv0-fallback-helper".to_string(),
+            "--sandbox-policy-cwd".to_string(),
+            "/tmp/cwd".to_string(),
+            "--".to_string(),
+            nested_current_exe,
+            "--codex-run-as-apply-patch".to_string(),
+            "patch".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn inserts_unshare_net_when_network_isolation_requested() {
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let argv = build_bwrap_argv(
@@ -83,6 +153,7 @@ fn inserts_unshare_net_when_network_isolation_requested() {
         BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::Isolated,
+            ..Default::default()
         },
     )
     .args;
@@ -99,6 +170,7 @@ fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
         BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::ProxyOnly,
+            ..Default::default()
         },
     )
     .args;

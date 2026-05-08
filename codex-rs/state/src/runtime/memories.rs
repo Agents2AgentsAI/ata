@@ -1,7 +1,8 @@
+use super::threads::ThreadFilterOptions;
 use super::threads::push_thread_filters;
 use super::threads::push_thread_order_and_limit;
 use super::*;
-use crate::model::Phase2InputSelection;
+use crate::SortDirection;
 use crate::model::Phase2JobClaimOutcome;
 use crate::model::Stage1JobClaim;
 use crate::model::Stage1JobClaimOutcome;
@@ -9,17 +10,16 @@ use crate::model::Stage1Output;
 use crate::model::Stage1OutputRow;
 use crate::model::Stage1StartupClaimParams;
 use crate::model::ThreadRow;
-use crate::model::stage1_output_ref_from_parts;
 use chrono::Duration;
 use sqlx::Executor;
 use sqlx::QueryBuilder;
 use sqlx::Sqlite;
-use std::collections::HashSet;
 use uuid::Uuid;
 
 const JOB_KIND_MEMORY_STAGE1: &str = "memory_stage1";
 const JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL: &str = "memory_consolidate_global";
 const MEMORY_CONSOLIDATION_JOB_KEY: &str = "global";
+const PHASE2_SUCCESS_COOLDOWN_SECONDS: i64 = 6 * 60 * 60;
 
 const DEFAULT_RETRY_REMAINING: i64 = 3;
 
@@ -30,19 +30,6 @@ impl StateRuntime {
     /// stage-1 (`memory_stage1`) and phase-2 (`memory_consolidate_global`)
     /// memory pipelines.
     pub async fn clear_memory_data(&self) -> anyhow::Result<()> {
-        self.clear_memory_data_inner(false).await
-    }
-
-    /// Resets persisted memory state for a clean-slate local start.
-    ///
-    /// In addition to clearing persisted stage-1 outputs and memory pipeline
-    /// jobs, this disables memory generation for all existing threads so
-    /// historical rollouts are not immediately picked up again.
-    pub async fn reset_memory_data_for_fresh_start(&self) -> anyhow::Result<()> {
-        self.clear_memory_data_inner(true).await
-    }
-
-    async fn clear_memory_data_inner(&self, disable_existing_threads: bool) -> anyhow::Result<()> {
         let mut tx = self.pool.begin().await?;
 
         sqlx::query(
@@ -63,18 +50,6 @@ WHERE kind = ? OR kind = ?
         .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
         .execute(&mut *tx)
         .await?;
-
-        if disable_existing_threads {
-            sqlx::query(
-                r#"
-UPDATE threads
-SET memory_mode = 'disabled'
-WHERE memory_mode = 'enabled'
-                "#,
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
 
         tx.commit().await?;
         Ok(())
@@ -124,12 +99,9 @@ WHERE thread_id = ?
     ///   (`push_thread_filters`)
     /// - excludes threads with `memory_mode != 'enabled'`
     /// - excludes the current thread id
-    /// - keeps only threads in the age window:
-    ///   `updated_at >= now - max_age_days` and `updated_at <= now - min_rollout_idle_hours`
-    /// - keeps only threads whose memory is stale:
-    ///   `COALESCE(stage1_outputs.source_updated_at, -1) < threads.updated_at` and
-    ///   `COALESCE(jobs.last_success_watermark, -1) < threads.updated_at`
-    /// - orders by `updated_at DESC, id DESC` and applies `scan_limit`
+    /// - keeps only threads whose millisecond `updated_at` is in the age window
+    /// - keeps only threads whose memory is stale compared to millisecond `updated_at`
+    /// - orders by `updated_at_ms DESC` and applies `scan_limit`
     ///
     /// For each selected thread, this function calls [`Self::try_claim_stage1_job`]
     /// with `source_updated_at = thread.updated_at.timestamp()` and returns up to
@@ -153,31 +125,36 @@ WHERE thread_id = ?
 
         let worker_id = current_thread_id;
         let current_thread_id = worker_id.to_string();
-        let max_age_cutoff = (Utc::now() - Duration::days(max_age_days.max(0))).timestamp();
-        let idle_cutoff = (Utc::now() - Duration::hours(min_rollout_idle_hours.max(0))).timestamp();
+        let max_age_cutoff = (Utc::now() - Duration::days(max_age_days.max(0))).timestamp_millis();
+        let idle_cutoff =
+            (Utc::now() - Duration::hours(min_rollout_idle_hours.max(0))).timestamp_millis();
 
         let mut builder = QueryBuilder::<Sqlite>::new(
             r#"
 SELECT
-    id,
-    rollout_path,
-    created_at,
-    updated_at,
-    source,
-    agent_nickname,
-    agent_role,
-    model_provider,
-    cwd,
-    cli_version,
-    title,
-    sandbox_policy,
-    approval_mode,
-    tokens_used,
-    first_user_message,
-    archived_at,
-    git_sha,
-    git_branch,
-    git_origin_url
+    threads.id,
+    threads.rollout_path,
+    threads.created_at_ms AS created_at,
+    threads.updated_at_ms AS updated_at,
+    threads.source,
+    threads.thread_source,
+    threads.agent_path,
+    threads.agent_nickname,
+    threads.agent_role,
+    threads.model_provider,
+    threads.model,
+    threads.reasoning_effort,
+    threads.cwd,
+    threads.cli_version,
+    threads.title,
+    threads.sandbox_policy,
+    threads.approval_mode,
+    threads.tokens_used,
+    threads.first_user_message,
+    threads.archived_at,
+    threads.git_sha,
+    threads.git_branch,
+    threads.git_origin_url
 FROM threads
 LEFT JOIN stage1_outputs
     ON stage1_outputs.thread_id = threads.id
@@ -193,24 +170,42 @@ LEFT JOIN jobs
         );
         push_thread_filters(
             &mut builder,
-            false,
-            allowed_sources,
-            None,
-            None,
-            SortKey::UpdatedAt,
-            None,
+            ThreadFilterOptions {
+                archived_only: false,
+                allowed_sources,
+                model_providers: None,
+                cwd_filters: None,
+                anchor: None,
+                sort_key: SortKey::UpdatedAt,
+                sort_direction: SortDirection::Desc,
+                search_term: None,
+            },
         );
         builder.push(" AND threads.memory_mode = 'enabled'");
         builder
-            .push(" AND id != ")
+            .push(" AND threads.id != ")
             .push_bind(current_thread_id.as_str());
         builder
-            .push(" AND updated_at >= ")
+            .push(" AND ")
+            .push("threads.updated_at_ms")
+            .push(" >= ")
             .push_bind(max_age_cutoff);
-        builder.push(" AND updated_at <= ").push_bind(idle_cutoff);
-        builder.push(" AND COALESCE(stage1_outputs.source_updated_at, -1) < updated_at");
-        builder.push(" AND COALESCE(jobs.last_success_watermark, -1) < updated_at");
-        push_thread_order_and_limit(&mut builder, SortKey::UpdatedAt, scan_limit);
+        builder
+            .push(" AND ")
+            .push("threads.updated_at_ms")
+            .push(" <= ")
+            .push_bind(idle_cutoff);
+        let updated_at = "threads.updated_at_ms";
+        builder.push(" AND ((COALESCE(stage1_outputs.source_updated_at, -1) + 1) * 1000) <= ");
+        builder.push(updated_at);
+        builder.push(" AND ((COALESCE(jobs.last_success_watermark, -1) + 1) * 1000) <= ");
+        builder.push(updated_at);
+        push_thread_order_and_limit(
+            &mut builder,
+            SortKey::UpdatedAt,
+            SortDirection::Desc,
+            scan_limit,
+        );
 
         let items = builder
             .build()
@@ -343,57 +338,64 @@ WHERE thread_id IN (
     ///   `last_usage` is within `max_unused_days`, or whose
     ///   `source_updated_at` is within that window when the memory has never
     ///   been used
-    /// - eligible rows are ordered by `usage_count DESC`,
+    /// - eligible rows are ranked by `usage_count DESC`,
     ///   `COALESCE(last_usage, source_updated_at) DESC`, `source_updated_at DESC`,
     ///   `thread_id DESC`
-    /// - previously selected rows are identified by `selected_for_phase2 = 1`
-    /// - `previous_selected` contains the current persisted rows that belonged
-    ///   to the last successful phase-2 baseline, even if those threads are no
-    ///   longer memory-eligible
-    /// - `retained_thread_ids` records which current rows still match the exact
-    ///   snapshot selected in the last successful phase-2 run
-    /// - removed rows are previously selected rows that are still present in
-    ///   `stage1_outputs` but are no longer in the current selection, including
-    ///   threads that are no longer memory-eligible
+    /// - the selected top-N rows are returned in stable `thread_id ASC` order
+    ///
+    /// The returned rows are the complete Phase 2 filesystem input. Phase 2
+    /// syncs these rows directly; deletions are represented by the workspace
+    /// diff against the previous successful memory baseline.
     pub async fn get_phase2_input_selection(
         &self,
         n: usize,
         max_unused_days: i64,
-    ) -> anyhow::Result<Phase2InputSelection> {
+    ) -> anyhow::Result<Vec<Stage1Output>> {
         if n == 0 {
-            return Ok(Phase2InputSelection::default());
+            return Ok(Vec::new());
         }
         let cutoff = (Utc::now() - Duration::days(max_unused_days.max(0))).timestamp();
 
         let current_rows = sqlx::query(
             r#"
 SELECT
-    so.thread_id,
-    COALESCE(t.rollout_path, '') AS rollout_path,
-    so.source_updated_at,
-    so.raw_memory,
-    so.rollout_summary,
-    so.rollout_slug,
-    so.generated_at,
-    COALESCE(t.cwd, '') AS cwd,
-    t.git_branch AS git_branch,
-    so.selected_for_phase2,
-    so.selected_for_phase2_source_updated_at
-FROM stage1_outputs AS so
-LEFT JOIN threads AS t
-    ON t.id = so.thread_id
-WHERE t.memory_mode = 'enabled'
-  AND (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
-  AND (
-        (so.last_usage IS NOT NULL AND so.last_usage >= ?)
-        OR (so.last_usage IS NULL AND so.source_updated_at >= ?)
-  )
-ORDER BY
-    COALESCE(so.usage_count, 0) DESC,
-    COALESCE(so.last_usage, so.source_updated_at) DESC,
-    so.source_updated_at DESC,
-    so.thread_id DESC
-LIMIT ?
+    selected.thread_id,
+    selected.rollout_path,
+    selected.source_updated_at,
+    selected.raw_memory,
+    selected.rollout_summary,
+    selected.rollout_slug,
+    selected.generated_at,
+    selected.cwd,
+    selected.git_branch
+FROM (
+    SELECT
+        so.thread_id,
+        COALESCE(t.rollout_path, '') AS rollout_path,
+        so.source_updated_at,
+        so.raw_memory,
+        so.rollout_summary,
+        so.rollout_slug,
+        so.generated_at,
+        COALESCE(t.cwd, '') AS cwd,
+        t.git_branch AS git_branch
+    FROM stage1_outputs AS so
+    LEFT JOIN threads AS t
+        ON t.id = so.thread_id
+    WHERE t.memory_mode = 'enabled'
+      AND (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
+      AND (
+            (so.last_usage IS NOT NULL AND so.last_usage >= ?)
+            OR (so.last_usage IS NULL AND so.source_updated_at >= ?)
+      )
+    ORDER BY
+        COALESCE(so.usage_count, 0) DESC,
+        COALESCE(so.last_usage, so.source_updated_at) DESC,
+        so.source_updated_at DESC,
+        so.thread_id DESC
+    LIMIT ?
+) AS selected
+ORDER BY selected.thread_id ASC
             "#,
         )
         .bind(cutoff)
@@ -402,70 +404,14 @@ LIMIT ?
         .fetch_all(self.pool.as_ref())
         .await?;
 
-        let mut current_thread_ids = HashSet::with_capacity(current_rows.len());
         let mut selected = Vec::with_capacity(current_rows.len());
-        let mut retained_thread_ids = Vec::new();
         for row in current_rows {
-            let thread_id = row.try_get::<String, _>("thread_id")?;
-            current_thread_ids.insert(thread_id.clone());
-            let source_updated_at = row.try_get::<i64, _>("source_updated_at")?;
-            if row.try_get::<i64, _>("selected_for_phase2")? != 0
-                && row.try_get::<Option<i64>, _>("selected_for_phase2_source_updated_at")?
-                    == Some(source_updated_at)
-            {
-                retained_thread_ids.push(ThreadId::try_from(thread_id.clone())?);
-            }
             selected.push(Stage1Output::try_from(Stage1OutputRow::try_from_row(
                 &row,
             )?)?);
         }
 
-        let previous_rows = sqlx::query(
-            r#"
-SELECT
-    so.thread_id,
-    COALESCE(t.rollout_path, '') AS rollout_path,
-    so.source_updated_at,
-    so.raw_memory,
-    so.rollout_summary,
-    so.rollout_slug,
-    so.generated_at,
-    COALESCE(t.cwd, '') AS cwd,
-    t.git_branch AS git_branch
-FROM stage1_outputs AS so
-LEFT JOIN threads AS t
-    ON t.id = so.thread_id
-WHERE so.selected_for_phase2 = 1
-ORDER BY so.source_updated_at DESC, so.thread_id DESC
-            "#,
-        )
-        .fetch_all(self.pool.as_ref())
-        .await?;
-
-        let previous_selected = previous_rows
-            .iter()
-            .map(Stage1OutputRow::try_from_row)
-            .map(|row| row.and_then(Stage1Output::try_from))
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut removed = Vec::new();
-        for row in previous_rows {
-            let thread_id = row.try_get::<String, _>("thread_id")?;
-            if current_thread_ids.contains(thread_id.as_str()) {
-                continue;
-            }
-            removed.push(stage1_output_ref_from_parts(
-                thread_id,
-                row.try_get("source_updated_at")?,
-                row.try_get("rollout_slug")?,
-            )?);
-        }
-
-        Ok(Phase2InputSelection {
-            selected,
-            previous_selected,
-            retained_thread_ids,
-            removed,
-        })
+        Ok(selected)
     }
 
     /// Marks a thread as polluted and enqueues phase-2 forgetting when the
@@ -913,20 +859,25 @@ WHERE kind = ? AND job_key = ?
     /// Enqueues or advances the global phase-2 consolidation job watermark.
     ///
     /// The underlying upsert keeps the job `running` when already running, resets
-    /// `pending/error` jobs to `pending`, and advances `input_watermark` so each
-    /// enqueue marks new consolidation work even when `source_updated_at` is
-    /// older than prior maxima.
+    /// `pending/error` jobs to `pending`, and advances `input_watermark` as
+    /// bookkeeping even when `source_updated_at` is older than prior maxima.
+    /// Phase 2 does not use this watermark as a dirty check; git workspace diffing
+    /// decides whether consolidation work exists after the lock is claimed.
     pub async fn enqueue_global_consolidation(&self, input_watermark: i64) -> anyhow::Result<()> {
         enqueue_global_consolidation_with_executor(self.pool.as_ref(), input_watermark).await
     }
 
-    /// Attempts to claim the global phase-2 consolidation job.
+    /// Attempts to claim the global phase-2 consolidation lock.
     ///
     /// Claim semantics:
     /// - reads the singleton global job row (`kind='memory_consolidate_global'`)
-    /// - returns `SkippedNotDirty` when `input_watermark <= last_success_watermark`
-    /// - returns `SkippedNotDirty` when retries are exhausted or retry backoff is active
+    /// - creates and claims the singleton row when it does not exist yet
+    /// - does not use DB watermarks to decide whether Phase 2 has work; git workspace
+    ///   dirtiness is the source of truth after the caller materializes inputs
+    /// - returns `SkippedRetryUnavailable` when retry backoff is active
     /// - returns `SkippedRunning` when an active running lease exists
+    /// - returns `SkippedCooldown` when the latest successful run finished
+    ///   within the phase-2 success cooldown
     /// - otherwise updates the row to `running`, sets ownership + lease, and
     ///   returns `Claimed`
     pub async fn try_claim_global_phase2_job(
@@ -936,6 +887,7 @@ WHERE kind = ? AND job_key = ?
     ) -> anyhow::Result<Phase2JobClaimOutcome> {
         let now = Utc::now().timestamp();
         let lease_until = now.saturating_add(lease_seconds.max(0));
+        let cooldown_cutoff = now.saturating_sub(PHASE2_SUCCESS_COOLDOWN_SECONDS);
         let ownership_token = Uuid::new_v4().to_string();
         let worker_id = worker_id.to_string();
 
@@ -943,7 +895,7 @@ WHERE kind = ? AND job_key = ?
 
         let existing_job = sqlx::query(
             r#"
-SELECT status, lease_until, retry_at, retry_remaining, input_watermark, last_success_watermark
+SELECT status, lease_until, retry_at, input_watermark, finished_at, last_error
 FROM jobs
 WHERE kind = ? AND job_key = ?
             "#,
@@ -954,35 +906,68 @@ WHERE kind = ? AND job_key = ?
         .await?;
 
         let Some(existing_job) = existing_job else {
+            let rows_affected = sqlx::query(
+                r#"
+INSERT INTO jobs (
+    kind,
+    job_key,
+    status,
+    worker_id,
+    ownership_token,
+    started_at,
+    finished_at,
+    lease_until,
+    retry_at,
+    retry_remaining,
+    last_error,
+    input_watermark,
+    last_success_watermark
+) VALUES (?, ?, 'running', ?, ?, ?, NULL, ?, NULL, ?, NULL, 0, 0)
+                "#,
+            )
+            .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+            .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+            .bind(worker_id.as_str())
+            .bind(ownership_token.as_str())
+            .bind(now)
+            .bind(lease_until)
+            .bind(DEFAULT_RETRY_REMAINING)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+
             tx.commit().await?;
-            return Ok(Phase2JobClaimOutcome::SkippedNotDirty);
+            return if rows_affected == 0 {
+                Ok(Phase2JobClaimOutcome::SkippedRunning)
+            } else {
+                Ok(Phase2JobClaimOutcome::Claimed {
+                    ownership_token,
+                    input_watermark: 0,
+                })
+            };
         };
 
         let input_watermark: Option<i64> = existing_job.try_get("input_watermark")?;
         let input_watermark_value = input_watermark.unwrap_or(0);
-        let last_success_watermark: Option<i64> = existing_job.try_get("last_success_watermark")?;
-        if input_watermark_value <= last_success_watermark.unwrap_or(0) {
-            tx.commit().await?;
-            return Ok(Phase2JobClaimOutcome::SkippedNotDirty);
-        }
-
         let status: String = existing_job.try_get("status")?;
         let existing_lease_until: Option<i64> = existing_job.try_get("lease_until")?;
         let retry_at: Option<i64> = existing_job.try_get("retry_at")?;
-        let retry_remaining: i64 = existing_job.try_get("retry_remaining")?;
-
-        if retry_remaining <= 0 {
-            tx.commit().await?;
-            return Ok(Phase2JobClaimOutcome::SkippedNotDirty);
-        }
+        let finished_at: Option<i64> = existing_job.try_get("finished_at")?;
+        let last_error: Option<String> = existing_job.try_get("last_error")?;
         if retry_at.is_some_and(|retry_at| retry_at > now) {
             tx.commit().await?;
-            return Ok(Phase2JobClaimOutcome::SkippedNotDirty);
+            return Ok(Phase2JobClaimOutcome::SkippedRetryUnavailable);
         }
         if status == "running" && existing_lease_until.is_some_and(|lease_until| lease_until > now)
         {
             tx.commit().await?;
             return Ok(Phase2JobClaimOutcome::SkippedRunning);
+        }
+        if last_error.is_none()
+            && finished_at.is_some_and(|finished_at| finished_at > cooldown_cutoff)
+        {
+            tx.commit().await?;
+            return Ok(Phase2JobClaimOutcome::SkippedCooldown);
         }
 
         let rows_affected = sqlx::query(
@@ -998,10 +983,9 @@ SET
     retry_at = NULL,
     last_error = NULL
 WHERE kind = ? AND job_key = ?
-  AND input_watermark > COALESCE(last_success_watermark, 0)
   AND (status != 'running' OR lease_until IS NULL OR lease_until <= ?)
   AND (retry_at IS NULL OR retry_at <= ?)
-  AND retry_remaining > 0
+  AND (last_error IS NOT NULL OR finished_at IS NULL OR finished_at <= ?)
             "#,
         )
         .bind(worker_id.as_str())
@@ -1012,6 +996,7 @@ WHERE kind = ? AND job_key = ?
         .bind(MEMORY_CONSOLIDATION_JOB_KEY)
         .bind(now)
         .bind(now)
+        .bind(cooldown_cutoff)
         .execute(&mut *tx)
         .await?
         .rows_affected();
@@ -1067,37 +1052,17 @@ WHERE kind = ? AND job_key = ?
     ///   `max(existing_last_success_watermark, completed_watermark)`
     /// - rewrites `selected_for_phase2` so only the exact selected stage-1
     ///   snapshots remain marked as part of the latest successful phase-2
-    ///   selection, and persists each selected snapshot's
-    ///   `source_updated_at` for future retained-vs-added diffing
+    ///   selection, and persists each selected snapshot's `source_updated_at`
     pub async fn mark_global_phase2_job_succeeded(
         &self,
         ownership_token: &str,
         completed_watermark: i64,
         selected_outputs: &[Stage1Output],
     ) -> anyhow::Result<bool> {
-        let now = Utc::now().timestamp();
         let mut tx = self.pool.begin().await?;
-        let rows_affected = sqlx::query(
-            r#"
-UPDATE jobs
-SET
-    status = 'done',
-    finished_at = ?,
-    lease_until = NULL,
-    last_error = NULL,
-    last_success_watermark = max(COALESCE(last_success_watermark, 0), ?)
-WHERE kind = ? AND job_key = ?
-  AND status = 'running' AND ownership_token = ?
-            "#,
-        )
-        .bind(now)
-        .bind(completed_watermark)
-        .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
-        .bind(MEMORY_CONSOLIDATION_JOB_KEY)
-        .bind(ownership_token)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
+        let rows_affected =
+            mark_global_phase2_job_succeeded_row(&mut *tx, ownership_token, completed_watermark)
+                .await?;
 
         if rows_affected == 0 {
             tx.commit().await?;
@@ -1143,7 +1108,7 @@ WHERE thread_id = ? AND source_updated_at = ?
     /// - updates only the owned running singleton global row
     /// - sets `status='error'`, clears lease
     /// - writes failure reason and retry time
-    /// - decrements `retry_remaining`
+    /// - decrements `retry_remaining` without going below zero
     pub async fn mark_global_phase2_job_failed(
         &self,
         ownership_token: &str,
@@ -1160,7 +1125,7 @@ SET
     finished_at = ?,
     lease_until = NULL,
     retry_at = ?,
-    retry_remaining = retry_remaining - 1,
+    retry_remaining = max(retry_remaining - 1, 0),
     last_error = ?
 WHERE kind = ? AND job_key = ?
   AND status = 'running' AND ownership_token = ?
@@ -1201,7 +1166,7 @@ SET
     finished_at = ?,
     lease_until = NULL,
     retry_at = ?,
-    retry_remaining = retry_remaining - 1,
+    retry_remaining = max(retry_remaining - 1, 0),
     last_error = ?
 WHERE kind = ? AND job_key = ?
   AND status = 'running'
@@ -1220,6 +1185,40 @@ WHERE kind = ? AND job_key = ?
 
         Ok(rows_affected > 0)
     }
+}
+
+async fn mark_global_phase2_job_succeeded_row<'e, E>(
+    executor: E,
+    ownership_token: &str,
+    completed_watermark: i64,
+) -> anyhow::Result<u64>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    let now = Utc::now().timestamp();
+    let rows_affected = sqlx::query(
+        r#"
+UPDATE jobs
+SET
+    status = 'done',
+    finished_at = ?,
+    lease_until = NULL,
+    last_error = NULL,
+    last_success_watermark = max(COALESCE(last_success_watermark, 0), ?)
+WHERE kind = ? AND job_key = ?
+  AND status = 'running' AND ownership_token = ?
+            "#,
+    )
+    .bind(now)
+    .bind(completed_watermark)
+    .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+    .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+    .bind(ownership_token)
+    .execute(executor)
+    .await?
+    .rows_affected();
+
+    Ok(rows_affected)
 }
 
 async fn enqueue_global_consolidation_with_executor<'e, E>(
@@ -1277,6 +1276,8 @@ ON CONFLICT(kind, job_key) DO UPDATE SET
 mod tests {
     use super::JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL;
     use super::JOB_KIND_MEMORY_STAGE1;
+    use super::MEMORY_CONSOLIDATION_JOB_KEY;
+    use super::PHASE2_SUCCESS_COOLDOWN_SECONDS;
     use super::StateRuntime;
     use super::test_support::test_thread_metadata;
     use super::test_support::unique_temp_dir;
@@ -1290,6 +1291,20 @@ mod tests {
     use sqlx::Row;
     use std::sync::Arc;
     use uuid::Uuid;
+
+    fn stable_thread_id(value: &str) -> ThreadId {
+        ThreadId::from_string(value).expect("thread id")
+    }
+
+    async fn age_phase2_success_beyond_cooldown(runtime: &StateRuntime) {
+        sqlx::query("UPDATE jobs SET finished_at = ? WHERE kind = ? AND job_key = ?")
+            .bind(Utc::now().timestamp() - PHASE2_SUCCESS_COOLDOWN_SECONDS - 1)
+            .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+            .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("age phase2 success beyond cooldown");
+    }
 
     #[tokio::test]
     async fn stage1_claim_skips_when_up_to_date() {
@@ -1309,7 +1324,10 @@ mod tests {
         let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
 
         let claim = runtime
-            .try_claim_stage1_job(thread_id, owner_a, 100, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner_a, /*source_updated_at*/ 100, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim stage1 job");
         let ownership_token = match claim {
@@ -1322,10 +1340,10 @@ mod tests {
                 .mark_stage1_job_succeeded(
                     thread_id,
                     ownership_token.as_str(),
-                    100,
+                    /*source_updated_at*/ 100,
                     "raw",
                     "sum",
-                    None,
+                    /*rollout_slug*/ None,
                 )
                 .await
                 .expect("mark stage1 succeeded"),
@@ -1333,13 +1351,19 @@ mod tests {
         );
 
         let up_to_date = runtime
-            .try_claim_stage1_job(thread_id, owner_b, 100, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner_b, /*source_updated_at*/ 100, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim stage1 up-to-date");
         assert_eq!(up_to_date, Stage1JobClaimOutcome::SkippedUpToDate);
 
         let needs_rerun = runtime
-            .try_claim_stage1_job(thread_id, owner_b, 101, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner_b, /*source_updated_at*/ 101, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim stage1 newer source");
         assert!(
@@ -1367,13 +1391,19 @@ mod tests {
             .expect("upsert thread");
 
         let claim_a = runtime
-            .try_claim_stage1_job(thread_id, owner_a, 100, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner_a, /*source_updated_at*/ 100, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim a");
         assert!(matches!(claim_a, Stage1JobClaimOutcome::Claimed { .. }));
 
         let claim_b_fresh = runtime
-            .try_claim_stage1_job(thread_id, owner_b, 100, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner_b, /*source_updated_at*/ 100, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim b fresh");
         assert_eq!(claim_b_fresh, Stage1JobClaimOutcome::SkippedRunning);
@@ -1385,7 +1415,10 @@ mod tests {
             .expect("force stale lease");
 
         let claim_b_stale = runtime
-            .try_claim_stage1_job(thread_id, owner_b, 100, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner_b, /*source_updated_at*/ 100, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim b stale");
         assert!(matches!(
@@ -1424,7 +1457,10 @@ mod tests {
                                 owner: ThreadId| async move {
             for attempt in 0..5 {
                 match runtime
-                    .try_claim_stage1_job(thread_id, owner, 100, 3_600, 64)
+                    .try_claim_stage1_job(
+                        thread_id, owner, /*source_updated_at*/ 100,
+                        /*lease_seconds*/ 3_600, /*max_running_jobs*/ 64,
+                    )
                     .await
                 {
                     Ok(outcome) => return outcome,
@@ -1495,13 +1531,19 @@ mod tests {
         let (claim_a, claim_b) = tokio::join!(
             async move {
                 runtime_a
-                    .try_claim_stage1_job(thread_a, owner_a, 100, 3_600, 1)
+                    .try_claim_stage1_job(
+                        thread_a, owner_a, /*source_updated_at*/ 100,
+                        /*lease_seconds*/ 3_600, /*max_running_jobs*/ 1,
+                    )
                     .await
                     .expect("claim stage1 thread a")
             },
             async move {
                 runtime_b
-                    .try_claim_stage1_job(thread_b, owner_b, 101, 3_600, 1)
+                    .try_claim_stage1_job(
+                        thread_b, owner_b, /*source_updated_at*/ 101,
+                        /*lease_seconds*/ 3_600, /*max_running_jobs*/ 1,
+                    )
                     .await
                     .expect("claim stage1 thread b")
             },
@@ -1658,8 +1700,8 @@ mod tests {
                 up_to_date_thread_id,
                 worker_id,
                 up_to_date.updated_at.timestamp(),
-                3600,
-                64,
+                /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
             )
             .await
             .expect("claim up-to-date thread for seed");
@@ -1675,7 +1717,7 @@ mod tests {
                     up_to_date.updated_at.timestamp(),
                     "raw",
                     "summary",
-                    None,
+                    /*rollout_slug*/ None,
                 )
                 .await
                 .expect("mark up-to-date thread succeeded"),
@@ -1784,7 +1826,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reset_memory_data_for_fresh_start_clears_rows_and_disables_threads() {
+    async fn clear_memory_data_clears_rows_and_preserves_thread_memory_modes() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -1811,8 +1853,8 @@ mod tests {
                 enabled_thread_id,
                 worker_id,
                 enabled.updated_at.timestamp(),
-                3600,
-                64,
+                /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
             )
             .await
             .expect("claim enabled thread");
@@ -1828,7 +1870,7 @@ mod tests {
                     enabled.updated_at.timestamp(),
                     "raw",
                     "summary",
-                    None,
+                    /*rollout_slug*/ None,
                 )
                 .await
                 .expect("mark enabled thread succeeded"),
@@ -1854,9 +1896,9 @@ mod tests {
             .expect("disable existing thread");
 
         runtime
-            .reset_memory_data_for_fresh_start()
+            .clear_memory_data()
             .await
-            .expect("reset memory data");
+            .expect("clear memory data");
 
         let stage1_outputs_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stage1_outputs")
             .fetch_one(runtime.pool.as_ref())
@@ -1879,7 +1921,7 @@ mod tests {
                 .fetch_one(runtime.pool.as_ref())
                 .await
                 .expect("read enabled thread memory mode");
-        assert_eq!(enabled_memory_mode, "disabled");
+        assert_eq!(enabled_memory_mode, "enabled");
 
         let disabled_memory_mode: String =
             sqlx::query_scalar("SELECT memory_mode FROM threads WHERE id = ?")
@@ -2079,7 +2121,7 @@ WHERE kind = 'memory_stage1'
                         claim.thread.updated_at.timestamp(),
                         "raw",
                         "summary",
-                        None,
+                        /*rollout_slug*/ None,
                     )
                     .await
                     .expect("mark first-batch stage1 success"),
@@ -2122,7 +2164,10 @@ WHERE kind = 'memory_stage1'
             .expect("upsert thread");
 
         let claim = runtime
-            .try_claim_stage1_job(thread_id, owner, 100, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner, /*source_updated_at*/ 100, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim stage1");
         let ownership_token = match claim {
@@ -2134,10 +2179,10 @@ WHERE kind = 'memory_stage1'
                 .mark_stage1_job_succeeded(
                     thread_id,
                     ownership_token.as_str(),
-                    100,
+                    /*source_updated_at*/ 100,
                     "raw",
                     "sum",
-                    None,
+                    /*rollout_slug*/ None,
                 )
                 .await
                 .expect("mark stage1 succeeded"),
@@ -2193,7 +2238,10 @@ WHERE kind = 'memory_stage1'
             .expect("upsert thread");
 
         let claim = runtime
-            .try_claim_stage1_job(thread_id, owner, 100, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner, /*source_updated_at*/ 100, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim stage1");
         let ownership_token = match claim {
@@ -2222,7 +2270,10 @@ WHERE kind = 'memory_stage1'
         );
 
         let up_to_date = runtime
-            .try_claim_stage1_job(thread_id, owner_b, 100, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner_b, /*source_updated_at*/ 100, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim stage1 up-to-date");
         assert_eq!(up_to_date, Stage1JobClaimOutcome::SkippedUpToDate);
@@ -2237,16 +2288,6 @@ WHERE kind = 'memory_stage1'
         assert_eq!(
             global_job_row_count, 0,
             "no-output without an existing stage1 output should not enqueue phase2"
-        );
-
-        let claim_phase2 = runtime
-            .try_claim_global_phase2_job(owner, 3600)
-            .await
-            .expect("claim phase2");
-        assert_eq!(
-            claim_phase2,
-            Phase2JobClaimOutcome::SkippedNotDirty,
-            "phase2 should remain clean when no-output deleted nothing"
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -2272,7 +2313,10 @@ WHERE kind = 'memory_stage1'
             .expect("upsert thread");
 
         let first_claim = runtime
-            .try_claim_stage1_job(thread_id, owner, 100, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner, /*source_updated_at*/ 100, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim initial stage1");
         let first_token = match first_claim {
@@ -2281,14 +2325,21 @@ WHERE kind = 'memory_stage1'
         };
         assert!(
             runtime
-                .mark_stage1_job_succeeded(thread_id, first_token.as_str(), 100, "raw", "sum", None)
+                .mark_stage1_job_succeeded(
+                    thread_id,
+                    first_token.as_str(),
+                    /*source_updated_at*/ 100,
+                    "raw",
+                    "sum",
+                    /*rollout_slug*/ None
+                )
                 .await
                 .expect("mark initial stage1 succeeded"),
             "initial stage1 success should create stage1 output"
         );
 
         let phase2_claim = runtime
-            .try_claim_global_phase2_job(owner, 3600)
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
             .expect("claim phase2 after initial output");
         let (phase2_token, phase2_input_watermark) = match phase2_claim {
@@ -2308,11 +2359,14 @@ WHERE kind = 'memory_stage1'
                 )
                 .await
                 .expect("mark initial phase2 succeeded"),
-            "initial phase2 success should clear global dirty state"
+            "initial phase2 success should finalize the global job"
         );
 
         let no_output_claim = runtime
-            .try_claim_stage1_job(thread_id, owner_b, 101, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner_b, /*source_updated_at*/ 101, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim stage1 for no-output delete");
         let no_output_token = match no_output_claim {
@@ -2337,8 +2391,9 @@ WHERE kind = 'memory_stage1'
                 .expect("stage1 output count");
         assert_eq!(output_row_count, 0);
 
+        age_phase2_success_beyond_cooldown(&runtime).await;
         let claim_phase2 = runtime
-            .try_claim_global_phase2_job(owner, 3600)
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
             .expect("claim phase2 after no-output deletion");
         let (phase2_token, phase2_input_watermark) = match claim_phase2 {
@@ -2383,7 +2438,10 @@ WHERE kind = 'memory_stage1'
 
         for attempt in 0..3 {
             let claim = runtime
-                .try_claim_stage1_job(thread_id, owner, 100, 3_600, 64)
+                .try_claim_stage1_job(
+                    thread_id, owner, /*source_updated_at*/ 100, /*lease_seconds*/ 3_600,
+                    /*max_running_jobs*/ 64,
+                )
                 .await
                 .expect("claim stage1 for retry exhaustion");
             let ownership_token = match claim {
@@ -2395,7 +2453,12 @@ WHERE kind = 'memory_stage1'
             };
             assert!(
                 runtime
-                    .mark_stage1_job_failed(thread_id, ownership_token.as_str(), "boom", 0)
+                    .mark_stage1_job_failed(
+                        thread_id,
+                        ownership_token.as_str(),
+                        "boom",
+                        /*retry_delay_seconds*/ 0
+                    )
                     .await
                     .expect("mark stage1 failed"),
                 "attempt {} should decrement retry budget",
@@ -2404,7 +2467,10 @@ WHERE kind = 'memory_stage1'
         }
 
         let exhausted_claim = runtime
-            .try_claim_stage1_job(thread_id, owner, 100, 3_600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner, /*source_updated_at*/ 100, /*lease_seconds*/ 3_600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim stage1 after retry exhaustion");
         assert_eq!(
@@ -2413,7 +2479,10 @@ WHERE kind = 'memory_stage1'
         );
 
         let newer_source_claim = runtime
-            .try_claim_stage1_job(thread_id, owner, 101, 3_600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner, /*source_updated_at*/ 101, /*lease_seconds*/ 3_600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim stage1 with newer source watermark");
         assert!(
@@ -2446,7 +2515,7 @@ WHERE kind = 'memory_stage1'
     }
 
     #[tokio::test]
-    async fn phase2_global_consolidation_reruns_when_watermark_advances() {
+    async fn phase2_global_lock_respects_success_cooldown() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -2455,12 +2524,12 @@ WHERE kind = 'memory_stage1'
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
 
         runtime
-            .enqueue_global_consolidation(100)
+            .enqueue_global_consolidation(/*input_watermark*/ 100)
             .await
             .expect("enqueue global consolidation");
 
         let claim = runtime
-            .try_claim_global_phase2_job(owner, 3600)
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
             .expect("claim phase2");
         let (ownership_token, input_watermark) = match claim {
@@ -2478,24 +2547,100 @@ WHERE kind = 'memory_stage1'
             "phase2 success should finalize for current token"
         );
 
-        let claim_up_to_date = runtime
-            .try_claim_global_phase2_job(owner, 3600)
+        let claim_after_success = runtime
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
-            .expect("claim phase2 up-to-date");
-        assert_eq!(claim_up_to_date, Phase2JobClaimOutcome::SkippedNotDirty);
+            .expect("claim phase2 after success");
+        assert_eq!(claim_after_success, Phase2JobClaimOutcome::SkippedCooldown);
 
         runtime
-            .enqueue_global_consolidation(101)
+            .enqueue_global_consolidation(/*input_watermark*/ 101)
             .await
-            .expect("enqueue global consolidation again");
+            .expect("enqueue global consolidation after success");
+        let claim_after_enqueue = runtime
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
+            .await
+            .expect("claim phase2 after enqueue");
+        assert_eq!(claim_after_enqueue, Phase2JobClaimOutcome::SkippedCooldown);
 
-        let claim_rerun = runtime
-            .try_claim_global_phase2_job(owner, 3600)
+        age_phase2_success_beyond_cooldown(&runtime).await;
+        let claim_after_cooldown = runtime
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
-            .expect("claim phase2 rerun");
+            .expect("claim phase2 after cooldown");
+        assert!(matches!(
+            claim_after_cooldown,
+            Phase2JobClaimOutcome::Claimed { .. }
+        ));
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn phase2_global_lock_can_be_claimed_after_retry_budget_is_exhausted() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+
+        runtime
+            .enqueue_global_consolidation(/*input_watermark*/ 100)
+            .await
+            .expect("enqueue global consolidation");
+
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        for attempt in 0..3 {
+            let claim = runtime
+                .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3_600)
+                .await
+                .expect("claim phase2 before retry exhaustion");
+            let ownership_token = match claim {
+                Phase2JobClaimOutcome::Claimed {
+                    ownership_token, ..
+                } => ownership_token,
+                other => panic!(
+                    "attempt {} should claim phase2 before retries are exhausted: {other:?}",
+                    attempt + 1
+                ),
+            };
+            assert!(
+                runtime
+                    .mark_global_phase2_job_failed(
+                        ownership_token.as_str(),
+                        "boom",
+                        /*retry_delay_seconds*/ 0,
+                    )
+                    .await
+                    .expect("mark phase2 failed"),
+                "attempt {} should decrement retry budget",
+                attempt + 1
+            );
+        }
+
+        let job_row =
+            sqlx::query("SELECT retry_remaining FROM jobs WHERE kind = ? AND job_key = ?")
+                .bind("memory_consolidate_global")
+                .bind("global")
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("load phase2 job row after retry exhaustion");
+        assert_eq!(
+            job_row
+                .try_get::<i64, _>("retry_remaining")
+                .expect("retry_remaining"),
+            0
+        );
+
+        let claim_after_exhaustion = runtime
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3_600)
+            .await
+            .expect("claim phase2 after retry exhaustion");
         assert!(
-            matches!(claim_rerun, Phase2JobClaimOutcome::Claimed { .. }),
-            "advanced watermark should be claimable"
+            matches!(
+                claim_after_exhaustion,
+                Phase2JobClaimOutcome::Claimed { .. }
+            ),
+            "phase2 claim should only lock; workspace diffing decides whether there is work"
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -2528,7 +2673,13 @@ WHERE kind = 'memory_stage1'
             .expect("upsert thread b");
 
         let claim = runtime
-            .try_claim_stage1_job(thread_id_a, owner, 100, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id_a,
+                owner,
+                /*source_updated_at*/ 100,
+                /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim stage1 a");
         let ownership_token = match claim {
@@ -2540,10 +2691,10 @@ WHERE kind = 'memory_stage1'
                 .mark_stage1_job_succeeded(
                     thread_id_a,
                     ownership_token.as_str(),
-                    100,
+                    /*source_updated_at*/ 100,
                     "raw memory a",
                     "summary a",
-                    None,
+                    /*rollout_slug*/ None,
                 )
                 .await
                 .expect("mark stage1 succeeded a"),
@@ -2551,7 +2702,13 @@ WHERE kind = 'memory_stage1'
         );
 
         let claim = runtime
-            .try_claim_stage1_job(thread_id_b, owner, 101, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id_b,
+                owner,
+                /*source_updated_at*/ 101,
+                /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim stage1 b");
         let ownership_token = match claim {
@@ -2563,7 +2720,7 @@ WHERE kind = 'memory_stage1'
                 .mark_stage1_job_succeeded(
                     thread_id_b,
                     ownership_token.as_str(),
-                    101,
+                    /*source_updated_at*/ 101,
                     "raw memory b",
                     "summary b",
                     Some("rollout-b"),
@@ -2574,7 +2731,7 @@ WHERE kind = 'memory_stage1'
         );
 
         let outputs = runtime
-            .list_stage1_outputs_for_global(10)
+            .list_stage1_outputs_for_global(/*n*/ 10)
             .await
             .expect("list stage1 outputs for global");
         assert_eq!(outputs.len(), 2);
@@ -2650,7 +2807,7 @@ VALUES (?, ?, ?, ?, ?)
         .expect("insert empty stage1 output");
 
         let outputs = runtime
-            .list_stage1_outputs_for_global(1)
+            .list_stage1_outputs_for_global(/*n*/ 1)
             .await
             .expect("list stage1 outputs for global");
         assert_eq!(outputs.len(), 1);
@@ -2688,7 +2845,10 @@ VALUES (?, ?, ?, ?, ?)
                 .expect("upsert thread");
 
             let claim = runtime
-                .try_claim_stage1_job(thread_id, owner, 100, 3600, 64)
+                .try_claim_stage1_job(
+                    thread_id, owner, /*source_updated_at*/ 100, /*lease_seconds*/ 3600,
+                    /*max_running_jobs*/ 64,
+                )
                 .await
                 .expect("claim stage1");
             let ownership_token = match claim {
@@ -2700,10 +2860,10 @@ VALUES (?, ?, ?, ?, ?)
                     .mark_stage1_job_succeeded(
                         thread_id,
                         ownership_token.as_str(),
-                        100,
+                        /*source_updated_at*/ 100,
                         "raw memory",
                         "summary",
-                        None,
+                        /*rollout_slug*/ None,
                     )
                     .await
                     .expect("mark stage1 succeeded"),
@@ -2717,7 +2877,7 @@ VALUES (?, ?, ?, ?, ?)
             .expect("mark thread polluted");
 
         let outputs = runtime
-            .list_stage1_outputs_for_global(10)
+            .list_stage1_outputs_for_global(/*n*/ 10)
             .await
             .expect("list stage1 outputs for global");
         assert_eq!(outputs.len(), 1);
@@ -2727,15 +2887,15 @@ VALUES (?, ?, ?, ?, ?)
     }
 
     #[tokio::test]
-    async fn get_phase2_input_selection_reports_added_retained_and_removed_rows() {
+    async fn get_phase2_input_selection_returns_current_selected_rows() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
-        let thread_id_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
-        let thread_id_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
-        let thread_id_c = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let thread_id_a = stable_thread_id("00000000-0000-4000-8000-000000000001");
+        let thread_id_b = stable_thread_id("00000000-0000-4000-8000-000000000002");
+        let thread_id_c = stable_thread_id("00000000-0000-4000-8000-000000000003");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
 
         for (thread_id, workspace) in [
@@ -2759,7 +2919,10 @@ VALUES (?, ?, ?, ?, ?)
             (thread_id_c, 102, Some("rollout-c")),
         ] {
             let claim = runtime
-                .try_claim_stage1_job(thread_id, owner, updated_at, 3600, 64)
+                .try_claim_stage1_job(
+                    thread_id, owner, updated_at, /*lease_seconds*/ 3600,
+                    /*max_running_jobs*/ 64,
+                )
                 .await
                 .expect("claim stage1");
             let ownership_token = match claim {
@@ -2783,7 +2946,7 @@ VALUES (?, ?, ?, ?, ?)
         }
 
         let claim = runtime
-            .try_claim_global_phase2_job(owner, 3600)
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
             .expect("claim phase2");
         let (ownership_token, input_watermark) = match claim {
@@ -2795,7 +2958,7 @@ VALUES (?, ?, ?, ?, ?)
         };
         assert_eq!(input_watermark, 102);
         let selected_outputs = runtime
-            .list_stage1_outputs_for_global(10)
+            .list_stage1_outputs_for_global(/*n*/ 10)
             .await
             .expect("list stage1 outputs for global")
             .into_iter()
@@ -2814,32 +2977,32 @@ VALUES (?, ?, ?, ?, ?)
         );
 
         let selection = runtime
-            .get_phase2_input_selection(2, 36_500)
+            .get_phase2_input_selection(/*n*/ 2, /*max_unused_days*/ 36_500)
             .await
             .expect("load phase2 input selection");
 
-        assert_eq!(selection.selected.len(), 2);
-        assert_eq!(selection.previous_selected.len(), 2);
-        assert_eq!(selection.selected[0].thread_id, thread_id_c);
+        assert_eq!(selection.len(), 2);
         assert_eq!(
-            selection.selected[0].rollout_path,
-            codex_home.join(format!("rollout-{thread_id_c}.jsonl"))
+            selection
+                .iter()
+                .map(|output| output.thread_id)
+                .collect::<Vec<_>>(),
+            vec![thread_id_b, thread_id_c]
         );
-        assert_eq!(selection.selected[1].thread_id, thread_id_b);
-        assert_eq!(selection.retained_thread_ids, vec![thread_id_c]);
-
-        assert_eq!(selection.removed.len(), 1);
-        assert_eq!(selection.removed[0].thread_id, thread_id_a);
+        let selected_c = selection
+            .iter()
+            .find(|output| output.thread_id == thread_id_c)
+            .expect("thread c should be selected");
         assert_eq!(
-            selection.removed[0].rollout_slug.as_deref(),
-            Some("rollout-a")
+            selected_c.rollout_path,
+            codex_home.join(format!("rollout-{thread_id_c}.jsonl"))
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
 
     #[tokio::test]
-    async fn get_phase2_input_selection_marks_polluted_previous_selection_as_removed() {
+    async fn get_phase2_input_selection_excludes_polluted_previous_selection() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -2862,7 +3025,10 @@ VALUES (?, ?, ?, ?, ?)
                 .expect("upsert thread");
 
             let claim = runtime
-                .try_claim_stage1_job(thread_id, owner, updated_at, 3600, 64)
+                .try_claim_stage1_job(
+                    thread_id, owner, updated_at, /*lease_seconds*/ 3600,
+                    /*max_running_jobs*/ 64,
+                )
                 .await
                 .expect("claim stage1");
             let ownership_token = match claim {
@@ -2877,7 +3043,7 @@ VALUES (?, ?, ?, ?, ?)
                         updated_at,
                         &format!("raw-{updated_at}"),
                         &format!("summary-{updated_at}"),
-                        None,
+                        /*rollout_slug*/ None,
                     )
                     .await
                     .expect("mark stage1 succeeded"),
@@ -2886,7 +3052,7 @@ VALUES (?, ?, ?, ?, ?)
         }
 
         let claim = runtime
-            .try_claim_global_phase2_job(owner, 3600)
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
             .expect("claim phase2");
         let (ownership_token, input_watermark) = match claim {
@@ -2897,7 +3063,7 @@ VALUES (?, ?, ?, ?, ?)
             other => panic!("unexpected phase2 claim outcome: {other:?}"),
         };
         let selected_outputs = runtime
-            .list_stage1_outputs_for_global(10)
+            .list_stage1_outputs_for_global(/*n*/ 10)
             .await
             .expect("list stage1 outputs for global");
         assert!(
@@ -2918,28 +3084,12 @@ VALUES (?, ?, ?, ?, ?)
             .expect("mark thread polluted");
 
         let selection = runtime
-            .get_phase2_input_selection(2, 36_500)
+            .get_phase2_input_selection(/*n*/ 2, /*max_unused_days*/ 36_500)
             .await
             .expect("load phase2 input selection");
 
-        assert_eq!(selection.selected.len(), 1);
-        assert_eq!(selection.selected[0].thread_id, thread_id_enabled);
-        assert_eq!(selection.previous_selected.len(), 2);
-        assert!(
-            selection
-                .previous_selected
-                .iter()
-                .any(|item| item.thread_id == thread_id_enabled)
-        );
-        assert!(
-            selection
-                .previous_selected
-                .iter()
-                .any(|item| item.thread_id == thread_id_polluted)
-        );
-        assert_eq!(selection.retained_thread_ids, vec![thread_id_enabled]);
-        assert_eq!(selection.removed.len(), 1);
-        assert_eq!(selection.removed[0].thread_id, thread_id_polluted);
+        assert_eq!(selection.len(), 1);
+        assert_eq!(selection[0].thread_id, thread_id_enabled);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -2963,7 +3113,10 @@ VALUES (?, ?, ?, ?, ?)
             .expect("upsert thread");
 
         let claim = runtime
-            .try_claim_stage1_job(thread_id, owner, 100, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner, /*source_updated_at*/ 100, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim stage1");
         let ownership_token = match claim {
@@ -2975,10 +3128,10 @@ VALUES (?, ?, ?, ?, ?)
                 .mark_stage1_job_succeeded(
                     thread_id,
                     ownership_token.as_str(),
-                    100,
+                    /*source_updated_at*/ 100,
                     "raw",
                     "summary",
-                    None,
+                    /*rollout_slug*/ None,
                 )
                 .await
                 .expect("mark stage1 succeeded"),
@@ -2986,7 +3139,7 @@ VALUES (?, ?, ?, ?, ?)
         );
 
         let phase2_claim = runtime
-            .try_claim_global_phase2_job(owner, 3600)
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
             .expect("claim phase2");
         let (phase2_token, input_watermark) = match phase2_claim {
@@ -2997,7 +3150,7 @@ VALUES (?, ?, ?, ?, ?)
             other => panic!("unexpected phase2 claim outcome: {other:?}"),
         };
         let selected_outputs = runtime
-            .list_stage1_outputs_for_global(10)
+            .list_stage1_outputs_for_global(/*n*/ 10)
             .await
             .expect("list stage1 outputs");
         assert!(
@@ -3020,8 +3173,9 @@ VALUES (?, ?, ?, ?, ?)
             "thread should transition to polluted"
         );
 
+        age_phase2_success_beyond_cooldown(&runtime).await;
         let next_claim = runtime
-            .try_claim_global_phase2_job(owner, 3600)
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
             .expect("claim phase2 after pollution");
         assert!(matches!(next_claim, Phase2JobClaimOutcome::Claimed { .. }));
@@ -3030,7 +3184,7 @@ VALUES (?, ?, ?, ?, ?)
     }
 
     #[tokio::test]
-    async fn get_phase2_input_selection_treats_regenerated_selected_rows_as_added() {
+    async fn get_phase2_input_selection_returns_regenerated_selected_rows() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -3048,7 +3202,10 @@ VALUES (?, ?, ?, ?, ?)
             .expect("upsert thread");
 
         let first_claim = runtime
-            .try_claim_stage1_job(thread_id, owner, 100, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner, /*source_updated_at*/ 100, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim initial stage1");
         let first_token = match first_claim {
@@ -3060,7 +3217,7 @@ VALUES (?, ?, ?, ?, ?)
                 .mark_stage1_job_succeeded(
                     thread_id,
                     first_token.as_str(),
-                    100,
+                    /*source_updated_at*/ 100,
                     "raw-100",
                     "summary-100",
                     Some("rollout-100"),
@@ -3071,7 +3228,7 @@ VALUES (?, ?, ?, ?, ?)
         );
 
         let phase2_claim = runtime
-            .try_claim_global_phase2_job(owner, 3600)
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
             .expect("claim phase2");
         let (phase2_token, input_watermark) = match phase2_claim {
@@ -3082,7 +3239,7 @@ VALUES (?, ?, ?, ?, ?)
             other => panic!("unexpected phase2 claim outcome: {other:?}"),
         };
         let selected_outputs = runtime
-            .list_stage1_outputs_for_global(1)
+            .list_stage1_outputs_for_global(/*n*/ 1)
             .await
             .expect("list selected outputs");
         assert!(
@@ -3098,7 +3255,10 @@ VALUES (?, ?, ?, ?, ?)
         );
 
         let refreshed_claim = runtime
-            .try_claim_stage1_job(thread_id, owner, 101, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner, /*source_updated_at*/ 101, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim refreshed stage1");
         let refreshed_token = match refreshed_claim {
@@ -3110,7 +3270,7 @@ VALUES (?, ?, ?, ?, ?)
                 .mark_stage1_job_succeeded(
                     thread_id,
                     refreshed_token.as_str(),
-                    101,
+                    /*source_updated_at*/ 101,
                     "raw-101",
                     "summary-101",
                     Some("rollout-101"),
@@ -3121,15 +3281,12 @@ VALUES (?, ?, ?, ?, ?)
         );
 
         let selection = runtime
-            .get_phase2_input_selection(1, 36_500)
+            .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 36_500)
             .await
             .expect("load phase2 input selection");
-        assert_eq!(selection.selected.len(), 1);
-        assert_eq!(selection.previous_selected.len(), 1);
-        assert_eq!(selection.selected[0].thread_id, thread_id);
-        assert_eq!(selection.selected[0].source_updated_at.timestamp(), 101);
-        assert!(selection.retained_thread_ids.is_empty());
-        assert!(selection.removed.is_empty());
+        assert_eq!(selection.len(), 1);
+        assert_eq!(selection[0].thread_id, thread_id);
+        assert_eq!(selection[0].source_updated_at.timestamp(), 101);
 
         let (selected_for_phase2, selected_for_phase2_source_updated_at) =
             sqlx::query_as::<_, (i64, Option<i64>)>(
@@ -3146,16 +3303,16 @@ VALUES (?, ?, ?, ?, ?)
     }
 
     #[tokio::test]
-    async fn get_phase2_input_selection_reports_regenerated_previous_selection_as_removed() {
+    async fn get_phase2_input_selection_uses_current_ranking_after_refreshes() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
-        let thread_id_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread a");
-        let thread_id_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread b");
-        let thread_id_c = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread c");
-        let thread_id_d = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread d");
+        let thread_id_a = stable_thread_id("00000000-0000-4000-8000-000000000001");
+        let thread_id_b = stable_thread_id("00000000-0000-4000-8000-000000000002");
+        let thread_id_c = stable_thread_id("00000000-0000-4000-8000-000000000003");
+        let thread_id_d = stable_thread_id("00000000-0000-4000-8000-000000000004");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
 
         for (thread_id, workspace) in [
@@ -3181,7 +3338,10 @@ VALUES (?, ?, ?, ?, ?)
             (thread_id_d, 98, Some("rollout-d-98")),
         ] {
             let claim = runtime
-                .try_claim_stage1_job(thread_id, owner, updated_at, 3600, 64)
+                .try_claim_stage1_job(
+                    thread_id, owner, updated_at, /*lease_seconds*/ 3600,
+                    /*max_running_jobs*/ 64,
+                )
                 .await
                 .expect("claim initial stage1");
             let ownership_token = match claim {
@@ -3205,7 +3365,7 @@ VALUES (?, ?, ?, ?, ?)
         }
 
         let phase2_claim = runtime
-            .try_claim_global_phase2_job(owner, 3600)
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
             .expect("claim phase2");
         let (phase2_token, input_watermark) = match phase2_claim {
@@ -3216,7 +3376,7 @@ VALUES (?, ?, ?, ?, ?)
             other => panic!("unexpected phase2 claim outcome: {other:?}"),
         };
         let selected_outputs = runtime
-            .list_stage1_outputs_for_global(2)
+            .list_stage1_outputs_for_global(/*n*/ 2)
             .await
             .expect("list selected outputs");
         assert_eq!(
@@ -3244,7 +3404,10 @@ VALUES (?, ?, ?, ?, ?)
             (thread_id_d, 104, Some("rollout-d-104")),
         ] {
             let claim = runtime
-                .try_claim_stage1_job(thread_id, owner, updated_at, 3600, 64)
+                .try_claim_stage1_job(
+                    thread_id, owner, updated_at, /*lease_seconds*/ 3600,
+                    /*max_running_jobs*/ 64,
+                )
                 .await
                 .expect("claim refreshed stage1");
             let ownership_token = match claim {
@@ -3268,33 +3431,15 @@ VALUES (?, ?, ?, ?, ?)
         }
 
         let selection = runtime
-            .get_phase2_input_selection(2, 36_500)
+            .get_phase2_input_selection(/*n*/ 2, /*max_unused_days*/ 36_500)
             .await
             .expect("load phase2 input selection");
         assert_eq!(
             selection
-                .selected
                 .iter()
                 .map(|output| output.thread_id)
                 .collect::<Vec<_>>(),
-            vec![thread_id_d, thread_id_c]
-        );
-        assert_eq!(
-            selection
-                .previous_selected
-                .iter()
-                .map(|output| output.thread_id)
-                .collect::<Vec<_>>(),
-            vec![thread_id_a, thread_id_b]
-        );
-        assert!(selection.retained_thread_ids.is_empty());
-        assert_eq!(
-            selection
-                .removed
-                .iter()
-                .map(|output| (output.thread_id, output.source_updated_at.timestamp()))
-                .collect::<Vec<_>>(),
-            vec![(thread_id_a, 102), (thread_id_b, 101)]
+            vec![thread_id_c, thread_id_d]
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -3319,7 +3464,10 @@ VALUES (?, ?, ?, ?, ?)
             .expect("upsert thread");
 
         let initial_claim = runtime
-            .try_claim_stage1_job(thread_id, owner, 100, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner, /*source_updated_at*/ 100, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim initial stage1");
         let initial_token = match initial_claim {
@@ -3331,7 +3479,7 @@ VALUES (?, ?, ?, ?, ?)
                 .mark_stage1_job_succeeded(
                     thread_id,
                     initial_token.as_str(),
-                    100,
+                    /*source_updated_at*/ 100,
                     "raw-100",
                     "summary-100",
                     Some("rollout-100"),
@@ -3342,7 +3490,7 @@ VALUES (?, ?, ?, ?, ?)
         );
 
         let first_phase2_claim = runtime
-            .try_claim_global_phase2_job(owner, 3600)
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
             .expect("claim first phase2");
         let (first_phase2_token, first_input_watermark) = match first_phase2_claim {
@@ -3353,7 +3501,7 @@ VALUES (?, ?, ?, ?, ?)
             other => panic!("unexpected first phase2 claim outcome: {other:?}"),
         };
         let first_selected_outputs = runtime
-            .list_stage1_outputs_for_global(1)
+            .list_stage1_outputs_for_global(/*n*/ 1)
             .await
             .expect("list first selected outputs");
         assert!(
@@ -3369,7 +3517,10 @@ VALUES (?, ?, ?, ?, ?)
         );
 
         let refreshed_claim = runtime
-            .try_claim_stage1_job(thread_id, owner, 101, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner, /*source_updated_at*/ 101, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim refreshed stage1");
         let refreshed_token = match refreshed_claim {
@@ -3381,7 +3532,7 @@ VALUES (?, ?, ?, ?, ?)
                 .mark_stage1_job_succeeded(
                     thread_id,
                     refreshed_token.as_str(),
-                    101,
+                    /*source_updated_at*/ 101,
                     "raw-101",
                     "summary-101",
                     Some("rollout-101"),
@@ -3391,8 +3542,9 @@ VALUES (?, ?, ?, ?, ?)
             "refreshed stage1 success should persist output"
         );
 
+        age_phase2_success_beyond_cooldown(&runtime).await;
         let second_phase2_claim = runtime
-            .try_claim_global_phase2_job(owner, 3600)
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
             .expect("claim second phase2");
         let (second_phase2_token, second_input_watermark) = match second_phase2_claim {
@@ -3403,7 +3555,7 @@ VALUES (?, ?, ?, ?, ?)
             other => panic!("unexpected second phase2 claim outcome: {other:?}"),
         };
         let second_selected_outputs = runtime
-            .list_stage1_outputs_for_global(1)
+            .list_stage1_outputs_for_global(/*n*/ 1)
             .await
             .expect("list second selected outputs");
         assert_eq!(
@@ -3423,10 +3575,11 @@ VALUES (?, ?, ?, ?, ?)
         );
 
         let selection = runtime
-            .get_phase2_input_selection(1, 36_500)
+            .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 36_500)
             .await
             .expect("load phase2 input selection after refresh");
-        assert_eq!(selection.retained_thread_ids, vec![thread_id]);
+        assert_eq!(selection.len(), 1);
+        assert_eq!(selection[0].thread_id, thread_id);
 
         let (selected_for_phase2, selected_for_phase2_source_updated_at) =
             sqlx::query_as::<_, (i64, Option<i64>)>(
@@ -3461,7 +3614,10 @@ VALUES (?, ?, ?, ?, ?)
             .expect("upsert thread");
 
         let initial_claim = runtime
-            .try_claim_stage1_job(thread_id, owner, 100, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner, /*source_updated_at*/ 100, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim initial stage1");
         let initial_token = match initial_claim {
@@ -3473,7 +3629,7 @@ VALUES (?, ?, ?, ?, ?)
                 .mark_stage1_job_succeeded(
                     thread_id,
                     initial_token.as_str(),
-                    100,
+                    /*source_updated_at*/ 100,
                     "raw-100",
                     "summary-100",
                     Some("rollout-100"),
@@ -3484,7 +3640,7 @@ VALUES (?, ?, ?, ?, ?)
         );
 
         let phase2_claim = runtime
-            .try_claim_global_phase2_job(owner, 3600)
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
             .expect("claim phase2");
         let (phase2_token, input_watermark) = match phase2_claim {
@@ -3495,13 +3651,16 @@ VALUES (?, ?, ?, ?, ?)
             other => panic!("unexpected phase2 claim outcome: {other:?}"),
         };
         let selected_outputs = runtime
-            .list_stage1_outputs_for_global(1)
+            .list_stage1_outputs_for_global(/*n*/ 1)
             .await
             .expect("list selected outputs");
         assert_eq!(selected_outputs[0].source_updated_at.timestamp(), 100);
 
         let refreshed_claim = runtime
-            .try_claim_stage1_job(thread_id, owner, 101, 3600, 64)
+            .try_claim_stage1_job(
+                thread_id, owner, /*source_updated_at*/ 101, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim refreshed stage1");
         let refreshed_token = match refreshed_claim {
@@ -3513,7 +3672,7 @@ VALUES (?, ?, ?, ?, ?)
                 .mark_stage1_job_succeeded(
                     thread_id,
                     refreshed_token.as_str(),
-                    101,
+                    /*source_updated_at*/ 101,
                     "raw-101",
                     "summary-101",
                     Some("rollout-101"),
@@ -3547,12 +3706,11 @@ VALUES (?, ?, ?, ?, ?)
         assert_eq!(selected_for_phase2_source_updated_at, None);
 
         let selection = runtime
-            .get_phase2_input_selection(1, 36_500)
+            .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 36_500)
             .await
             .expect("load phase2 input selection");
-        assert_eq!(selection.selected.len(), 1);
-        assert_eq!(selection.selected[0].source_updated_at.timestamp(), 101);
-        assert!(selection.retained_thread_ids.is_empty());
+        assert_eq!(selection.len(), 1);
+        assert_eq!(selection[0].source_updated_at.timestamp(), 101);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -3587,7 +3745,10 @@ VALUES (?, ?, ?, ?, ?)
             .expect("upsert thread b");
 
         let claim_a = runtime
-            .try_claim_stage1_job(thread_a, owner, 100, 3600, 64)
+            .try_claim_stage1_job(
+                thread_a, owner, /*source_updated_at*/ 100, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim stage1 a");
         let token_a = match claim_a {
@@ -3596,13 +3757,23 @@ VALUES (?, ?, ?, ?, ?)
         };
         assert!(
             runtime
-                .mark_stage1_job_succeeded(thread_a, token_a.as_str(), 100, "raw a", "sum a", None)
+                .mark_stage1_job_succeeded(
+                    thread_a,
+                    token_a.as_str(),
+                    /*source_updated_at*/ 100,
+                    "raw a",
+                    "sum a",
+                    /*rollout_slug*/ None
+                )
                 .await
                 .expect("mark stage1 succeeded a")
         );
 
         let claim_b = runtime
-            .try_claim_stage1_job(thread_b, owner, 101, 3600, 64)
+            .try_claim_stage1_job(
+                thread_b, owner, /*source_updated_at*/ 101, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim stage1 b");
         let token_b = match claim_b {
@@ -3611,7 +3782,14 @@ VALUES (?, ?, ?, ?, ?)
         };
         assert!(
             runtime
-                .mark_stage1_job_succeeded(thread_b, token_b.as_str(), 101, "raw b", "sum b", None)
+                .mark_stage1_job_succeeded(
+                    thread_b,
+                    token_b.as_str(),
+                    /*source_updated_at*/ 101,
+                    "raw b",
+                    "sum b",
+                    /*rollout_slug*/ None
+                )
                 .await
                 .expect("mark stage1 succeeded b")
         );
@@ -3665,9 +3843,9 @@ VALUES (?, ?, ?, ?, ?)
 
         let now = Utc::now();
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
-        let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id a");
-        let thread_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id b");
-        let thread_c = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id c");
+        let thread_a = stable_thread_id("00000000-0000-4000-8000-000000000001");
+        let thread_b = stable_thread_id("00000000-0000-4000-8000-000000000002");
+        let thread_c = stable_thread_id("00000000-0000-4000-8000-000000000003");
 
         for (thread_id, workspace) in [
             (thread_a, "workspace-a"),
@@ -3691,7 +3869,13 @@ VALUES (?, ?, ?, ?, ?)
         ] {
             let source_updated_at = generated_at.timestamp();
             let claim = runtime
-                .try_claim_stage1_job(thread_id, owner, source_updated_at, 3600, 64)
+                .try_claim_stage1_job(
+                    thread_id,
+                    owner,
+                    source_updated_at,
+                    /*lease_seconds*/ 3600,
+                    /*max_running_jobs*/ 64,
+                )
                 .await
                 .expect("claim stage1");
             let ownership_token = match claim {
@@ -3706,7 +3890,7 @@ VALUES (?, ?, ?, ?, ?)
                         source_updated_at,
                         &format!("raw-{summary}"),
                         summary,
-                        None,
+                        /*rollout_slug*/ None,
                     )
                     .await
                     .expect("mark stage1 success"),
@@ -3731,17 +3915,16 @@ VALUES (?, ?, ?, ?, ?)
         }
 
         let selection = runtime
-            .get_phase2_input_selection(3, 30)
+            .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 30)
             .await
             .expect("load phase2 input selection");
 
         assert_eq!(
             selection
-                .selected
                 .iter()
                 .map(|output| output.thread_id)
                 .collect::<Vec<_>>(),
-            vec![thread_b, thread_a, thread_c]
+            vec![thread_b]
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -3756,9 +3939,9 @@ VALUES (?, ?, ?, ?, ?)
 
         let now = Utc::now();
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
-        let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id a");
-        let thread_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id b");
-        let thread_c = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id c");
+        let thread_a = stable_thread_id("00000000-0000-4000-8000-000000000001");
+        let thread_b = stable_thread_id("00000000-0000-4000-8000-000000000002");
+        let thread_c = stable_thread_id("00000000-0000-4000-8000-000000000003");
 
         for (thread_id, workspace) in [
             (thread_a, "workspace-a"),
@@ -3782,7 +3965,13 @@ VALUES (?, ?, ?, ?, ?)
         ] {
             let source_updated_at = generated_at.timestamp();
             let claim = runtime
-                .try_claim_stage1_job(thread_id, owner, source_updated_at, 3600, 64)
+                .try_claim_stage1_job(
+                    thread_id,
+                    owner,
+                    source_updated_at,
+                    /*lease_seconds*/ 3600,
+                    /*max_running_jobs*/ 64,
+                )
                 .await
                 .expect("claim stage1");
             let ownership_token = match claim {
@@ -3797,7 +3986,7 @@ VALUES (?, ?, ?, ?, ?)
                         source_updated_at,
                         &format!("raw-{summary}"),
                         summary,
-                        None,
+                        /*rollout_slug*/ None,
                     )
                     .await
                     .expect("mark stage1 success"),
@@ -3822,17 +4011,16 @@ VALUES (?, ?, ?, ?, ?)
         }
 
         let selection = runtime
-            .get_phase2_input_selection(3, 30)
+            .get_phase2_input_selection(/*n*/ 3, /*max_unused_days*/ 30)
             .await
             .expect("load phase2 input selection");
 
         assert_eq!(
             selection
-                .selected
                 .iter()
                 .map(|output| output.thread_id)
                 .collect::<Vec<_>>(),
-            vec![thread_c, thread_b]
+            vec![thread_b, thread_c]
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -3870,7 +4058,13 @@ VALUES (?, ?, ?, ?, ?)
             (newer_thread, 200_i64, "summary-newer"),
         ] {
             let claim = runtime
-                .try_claim_stage1_job(thread_id, owner, source_updated_at, 3600, 64)
+                .try_claim_stage1_job(
+                    thread_id,
+                    owner,
+                    source_updated_at,
+                    /*lease_seconds*/ 3600,
+                    /*max_running_jobs*/ 64,
+                )
                 .await
                 .expect("claim stage1");
             let ownership_token = match claim {
@@ -3885,7 +4079,7 @@ VALUES (?, ?, ?, ?, ?)
                         source_updated_at,
                         &format!("raw-{summary}"),
                         summary,
-                        None,
+                        /*rollout_slug*/ None,
                     )
                     .await
                     .expect("mark stage1 success"),
@@ -3907,13 +4101,233 @@ VALUES (?, ?, ?, ?, ?)
             .expect("update newer generated_at");
 
         let selection = runtime
-            .get_phase2_input_selection(1, 36_500)
+            .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 36_500)
             .await
             .expect("load phase2 input selection");
 
-        assert_eq!(selection.selected.len(), 1);
-        assert_eq!(selection.selected[0].thread_id, newer_thread);
-        assert_eq!(selection.selected[0].source_updated_at.timestamp(), 200);
+        assert_eq!(selection.len(), 1);
+        assert_eq!(selection[0].thread_id, newer_thread);
+        assert_eq!(selection[0].source_updated_at.timestamp(), 200);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn prune_stage1_outputs_for_retention_prunes_stale_unselected_rows_only() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let stale_unused =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("stale unused");
+        let stale_used = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("stale used");
+        let stale_selected =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("stale selected");
+        let fresh_used = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("fresh used");
+
+        for (thread_id, workspace) in [
+            (stale_unused, "workspace-stale-unused"),
+            (stale_used, "workspace-stale-used"),
+            (stale_selected, "workspace-stale-selected"),
+            (fresh_used, "workspace-fresh-used"),
+        ] {
+            runtime
+                .upsert_thread(&test_thread_metadata(
+                    &codex_home,
+                    thread_id,
+                    codex_home.join(workspace),
+                ))
+                .await
+                .expect("upsert thread");
+        }
+
+        let now = Utc::now().timestamp();
+        for (thread_id, source_updated_at, summary) in [
+            (
+                stale_unused,
+                now - Duration::days(60).num_seconds(),
+                "stale-unused",
+            ),
+            (
+                stale_used,
+                now - Duration::days(50).num_seconds(),
+                "stale-used",
+            ),
+            (
+                stale_selected,
+                now - Duration::days(45).num_seconds(),
+                "stale-selected",
+            ),
+            (
+                fresh_used,
+                now - Duration::days(10).num_seconds(),
+                "fresh-used",
+            ),
+        ] {
+            let claim = runtime
+                .try_claim_stage1_job(
+                    thread_id,
+                    owner,
+                    source_updated_at,
+                    /*lease_seconds*/ 3600,
+                    /*max_running_jobs*/ 64,
+                )
+                .await
+                .expect("claim stage1");
+            let ownership_token = match claim {
+                Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+                other => panic!("unexpected stage1 claim outcome: {other:?}"),
+            };
+            assert!(
+                runtime
+                    .mark_stage1_job_succeeded(
+                        thread_id,
+                        ownership_token.as_str(),
+                        source_updated_at,
+                        &format!("raw-{summary}"),
+                        summary,
+                        /*rollout_slug*/ None,
+                    )
+                    .await
+                    .expect("mark stage1 success"),
+                "stage1 success should persist output"
+            );
+        }
+
+        sqlx::query(
+            "UPDATE stage1_outputs SET usage_count = ?, last_usage = ? WHERE thread_id = ?",
+        )
+        .bind(3_i64)
+        .bind(now - Duration::days(40).num_seconds())
+        .bind(stale_used.to_string())
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("set stale used metadata");
+        sqlx::query(
+            "UPDATE stage1_outputs SET selected_for_phase2 = 1, selected_for_phase2_source_updated_at = source_updated_at WHERE thread_id = ?",
+        )
+        .bind(stale_selected.to_string())
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("mark selected for phase2");
+        sqlx::query(
+            "UPDATE stage1_outputs SET usage_count = ?, last_usage = ? WHERE thread_id = ?",
+        )
+        .bind(8_i64)
+        .bind(now - Duration::days(2).num_seconds())
+        .bind(fresh_used.to_string())
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("set fresh used metadata");
+
+        let before_jobs_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM jobs WHERE kind = 'memory_stage1'")
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("count stage1 jobs before prune");
+
+        let pruned = runtime
+            .prune_stage1_outputs_for_retention(/*max_unused_days*/ 30, /*limit*/ 100)
+            .await
+            .expect("prune stage1 outputs");
+        assert_eq!(pruned, 2);
+
+        let remaining = sqlx::query_scalar::<_, String>(
+            "SELECT thread_id FROM stage1_outputs ORDER BY thread_id",
+        )
+        .fetch_all(runtime.pool.as_ref())
+        .await
+        .expect("load remaining stage1 outputs");
+        let mut expected_remaining = vec![fresh_used.to_string(), stale_selected.to_string()];
+        expected_remaining.sort();
+        assert_eq!(remaining, expected_remaining);
+
+        let after_jobs_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM jobs WHERE kind = 'memory_stage1'")
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("count stage1 jobs after prune");
+        assert_eq!(after_jobs_count, before_jobs_count);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn prune_stage1_outputs_for_retention_respects_batch_limit() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread a");
+        let thread_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread b");
+        let thread_c = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread c");
+
+        for (thread_id, workspace) in [
+            (thread_a, "workspace-a"),
+            (thread_b, "workspace-b"),
+            (thread_c, "workspace-c"),
+        ] {
+            runtime
+                .upsert_thread(&test_thread_metadata(
+                    &codex_home,
+                    thread_id,
+                    codex_home.join(workspace),
+                ))
+                .await
+                .expect("upsert thread");
+        }
+
+        let now = Utc::now().timestamp();
+        for (thread_id, source_updated_at, summary) in [
+            (thread_a, now - Duration::days(60).num_seconds(), "stale-a"),
+            (thread_b, now - Duration::days(50).num_seconds(), "stale-b"),
+            (thread_c, now - Duration::days(40).num_seconds(), "stale-c"),
+        ] {
+            let claim = runtime
+                .try_claim_stage1_job(
+                    thread_id,
+                    owner,
+                    source_updated_at,
+                    /*lease_seconds*/ 3600,
+                    /*max_running_jobs*/ 64,
+                )
+                .await
+                .expect("claim stage1");
+            let ownership_token = match claim {
+                Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+                other => panic!("unexpected stage1 claim outcome: {other:?}"),
+            };
+            assert!(
+                runtime
+                    .mark_stage1_job_succeeded(
+                        thread_id,
+                        ownership_token.as_str(),
+                        source_updated_at,
+                        &format!("raw-{summary}"),
+                        summary,
+                        /*rollout_slug*/ None,
+                    )
+                    .await
+                    .expect("mark stage1 success"),
+                "stage1 success should persist output"
+            );
+        }
+
+        let pruned = runtime
+            .prune_stage1_outputs_for_retention(/*max_unused_days*/ 30, /*limit*/ 2)
+            .await
+            .expect("prune stage1 outputs with limit");
+        assert_eq!(pruned, 2);
+
+        let remaining_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stage1_outputs")
+            .fetch_one(runtime.pool.as_ref())
+            .await
+            .expect("count remaining stage1 outputs");
+        assert_eq!(remaining_count, 1);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -4155,7 +4569,10 @@ VALUES (?, ?, ?, ?, ?)
             .expect("upsert thread b");
 
         let claim_a = runtime
-            .try_claim_stage1_job(thread_a, owner, 100, 3600, 64)
+            .try_claim_stage1_job(
+                thread_a, owner, /*source_updated_at*/ 100, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim stage1 a");
         let token_a = match claim_a {
@@ -4167,10 +4584,10 @@ VALUES (?, ?, ?, ?, ?)
                 .mark_stage1_job_succeeded(
                     thread_a,
                     token_a.as_str(),
-                    100,
+                    /*source_updated_at*/ 100,
                     "raw-a",
                     "summary-a",
-                    None,
+                    /*rollout_slug*/ None,
                 )
                 .await
                 .expect("mark stage1 succeeded a"),
@@ -4178,7 +4595,10 @@ VALUES (?, ?, ?, ?, ?)
         );
 
         let claim_b = runtime
-            .try_claim_stage1_job(thread_b, owner, 101, 3600, 64)
+            .try_claim_stage1_job(
+                thread_b, owner, /*source_updated_at*/ 101, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
             .await
             .expect("claim stage1 b");
         let token_b = match claim_b {
@@ -4190,10 +4610,10 @@ VALUES (?, ?, ?, ?, ?)
                 .mark_stage1_job_succeeded(
                     thread_b,
                     token_b.as_str(),
-                    101,
+                    /*source_updated_at*/ 101,
                     "raw-b",
                     "summary-b",
-                    None,
+                    /*rollout_slug*/ None,
                 )
                 .await
                 .expect("mark stage1 succeeded b"),
@@ -4201,7 +4621,7 @@ VALUES (?, ?, ?, ?, ?)
         );
 
         let claim = runtime
-            .try_claim_global_phase2_job(owner, 3600)
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
             .expect("claim global consolidation");
         let input_watermark = match claim {
@@ -4223,7 +4643,7 @@ VALUES (?, ?, ?, ?, ?)
             .expect("initialize runtime");
 
         runtime
-            .enqueue_global_consolidation(200)
+            .enqueue_global_consolidation(/*input_watermark*/ 200)
             .await
             .expect("enqueue global consolidation");
 
@@ -4231,7 +4651,7 @@ VALUES (?, ?, ?, ?, ?)
         let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner b");
 
         let running_claim = runtime
-            .try_claim_global_phase2_job(owner_a, 3600)
+            .try_claim_global_phase2_job(owner_a, /*lease_seconds*/ 3600)
             .await
             .expect("claim global lock");
         assert!(
@@ -4240,10 +4660,60 @@ VALUES (?, ?, ?, ?, ?)
         );
 
         let second_claim = runtime
-            .try_claim_global_phase2_job(owner_b, 3600)
+            .try_claim_global_phase2_job(owner_b, /*lease_seconds*/ 3600)
             .await
             .expect("claim global lock from second owner");
         assert_eq!(second_claim, Phase2JobClaimOutcome::SkippedRunning);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn phase2_global_lock_creates_missing_job_row() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+
+        let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner a");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner b");
+
+        let claim = runtime
+            .try_claim_global_phase2_job(owner_a, /*lease_seconds*/ 3_600)
+            .await
+            .expect("claim global phase2 lock");
+        let ownership_token = match claim {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token,
+                input_watermark,
+            } => {
+                assert_eq!(input_watermark, 0);
+                ownership_token
+            }
+            other => panic!("unexpected phase2 lock claim outcome: {other:?}"),
+        };
+
+        let second_claim = runtime
+            .try_claim_global_phase2_job(owner_b, /*lease_seconds*/ 3_600)
+            .await
+            .expect("claim global phase2 lock from second owner");
+        assert_eq!(second_claim, Phase2JobClaimOutcome::SkippedRunning);
+
+        assert!(
+            runtime
+                .mark_global_phase2_job_succeeded(
+                    ownership_token.as_str(),
+                    /*completed_watermark*/ 0,
+                    &[]
+                )
+                .await
+                .expect("mark phase2 lock success")
+        );
+        let claim_after_success = runtime
+            .try_claim_global_phase2_job(owner_b, /*lease_seconds*/ 3_600)
+            .await
+            .expect("claim global phase2 lock after success");
+        assert_eq!(claim_after_success, Phase2JobClaimOutcome::SkippedCooldown);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -4256,7 +4726,7 @@ VALUES (?, ?, ?, ?, ?)
             .expect("initialize runtime");
 
         runtime
-            .enqueue_global_consolidation(300)
+            .enqueue_global_consolidation(/*input_watermark*/ 300)
             .await
             .expect("enqueue global consolidation");
 
@@ -4264,7 +4734,7 @@ VALUES (?, ?, ?, ?, ?)
         let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner b");
 
         let initial_claim = runtime
-            .try_claim_global_phase2_job(owner_a, 3600)
+            .try_claim_global_phase2_job(owner_a, /*lease_seconds*/ 3600)
             .await
             .expect("claim initial global lock");
         let token_a = match initial_claim {
@@ -4283,7 +4753,7 @@ VALUES (?, ?, ?, ?, ?)
             .expect("expire global consolidation lease");
 
         let takeover_claim = runtime
-            .try_claim_global_phase2_job(owner_b, 3600)
+            .try_claim_global_phase2_job(owner_b, /*lease_seconds*/ 3600)
             .await
             .expect("claim stale global lock");
         let (token_b, input_watermark) = match takeover_claim {
@@ -4298,7 +4768,11 @@ VALUES (?, ?, ?, ?, ?)
 
         assert_eq!(
             runtime
-                .mark_global_phase2_job_succeeded(token_a.as_str(), 300, &[])
+                .mark_global_phase2_job_succeeded(
+                    token_a.as_str(),
+                    /*completed_watermark*/ 300,
+                    &[]
+                )
                 .await
                 .expect("mark stale owner success result"),
             false,
@@ -4306,7 +4780,11 @@ VALUES (?, ?, ?, ?, ?)
         );
         assert!(
             runtime
-                .mark_global_phase2_job_succeeded(token_b.as_str(), 300, &[])
+                .mark_global_phase2_job_succeeded(
+                    token_b.as_str(),
+                    /*completed_watermark*/ 300,
+                    &[]
+                )
                 .await
                 .expect("mark takeover owner success"),
             "takeover owner should finalize consolidation"
@@ -4316,19 +4794,19 @@ VALUES (?, ?, ?, ?, ?)
     }
 
     #[tokio::test]
-    async fn phase2_backfilled_inputs_below_last_success_still_become_dirty() {
+    async fn enqueue_global_consolidation_keeps_phase2_input_watermark_monotonic() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
         runtime
-            .enqueue_global_consolidation(500)
+            .enqueue_global_consolidation(/*input_watermark*/ 500)
             .await
             .expect("enqueue initial consolidation");
         let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner a");
         let claim_a = runtime
-            .try_claim_global_phase2_job(owner_a, 3_600)
+            .try_claim_global_phase2_job(owner_a, /*lease_seconds*/ 3_600)
             .await
             .expect("claim initial consolidation");
         let token_a = match claim_a {
@@ -4343,32 +4821,37 @@ VALUES (?, ?, ?, ?, ?)
         };
         assert!(
             runtime
-                .mark_global_phase2_job_succeeded(token_a.as_str(), 500, &[])
+                .mark_global_phase2_job_succeeded(
+                    token_a.as_str(),
+                    /*completed_watermark*/ 500,
+                    &[]
+                )
                 .await
                 .expect("mark initial phase2 success"),
             "initial phase2 success should finalize"
         );
 
         runtime
-            .enqueue_global_consolidation(400)
+            .enqueue_global_consolidation(/*input_watermark*/ 400)
             .await
-            .expect("enqueue backfilled consolidation");
+            .expect("enqueue lower-watermark consolidation");
 
+        age_phase2_success_beyond_cooldown(&runtime).await;
         let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner b");
         let claim_b = runtime
-            .try_claim_global_phase2_job(owner_b, 3_600)
+            .try_claim_global_phase2_job(owner_b, /*lease_seconds*/ 3_600)
             .await
-            .expect("claim backfilled consolidation");
+            .expect("claim lower-watermark consolidation");
         match claim_b {
             Phase2JobClaimOutcome::Claimed {
                 input_watermark, ..
             } => {
                 assert!(
                     input_watermark > 500,
-                    "backfilled enqueue should advance dirty watermark beyond last success"
+                    "lower-watermark enqueue should still advance the bookkeeping watermark"
                 );
             }
-            other => panic!("unexpected backfilled phase2 claim outcome: {other:?}"),
+            other => panic!("unexpected lower-watermark phase2 claim outcome: {other:?}"),
         }
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -4382,13 +4865,13 @@ VALUES (?, ?, ?, ?, ?)
             .expect("initialize runtime");
 
         runtime
-            .enqueue_global_consolidation(400)
+            .enqueue_global_consolidation(/*input_watermark*/ 400)
             .await
             .expect("enqueue global consolidation");
 
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner");
         let claim = runtime
-            .try_claim_global_phase2_job(owner, 3_600)
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3_600)
             .await
             .expect("claim global consolidation");
         let ownership_token = match claim {
@@ -4407,7 +4890,11 @@ VALUES (?, ?, ?, ?, ?)
 
         assert_eq!(
             runtime
-                .mark_global_phase2_job_failed(ownership_token.as_str(), "lost", 3_600)
+                .mark_global_phase2_job_failed(
+                    ownership_token.as_str(),
+                    "lost",
+                    /*retry_delay_seconds*/ 3_600
+                )
                 .await
                 .expect("mark phase2 failed with strict ownership"),
             false,
@@ -4415,17 +4902,21 @@ VALUES (?, ?, ?, ?, ?)
         );
         assert!(
             runtime
-                .mark_global_phase2_job_failed_if_unowned(ownership_token.as_str(), "lost", 3_600)
+                .mark_global_phase2_job_failed_if_unowned(
+                    ownership_token.as_str(),
+                    "lost",
+                    /*retry_delay_seconds*/ 3_600
+                )
                 .await
                 .expect("fallback failure update should match unowned running job"),
             "fallback failure update should transition the unowned running job"
         );
 
         let claim = runtime
-            .try_claim_global_phase2_job(ThreadId::new(), 3_600)
+            .try_claim_global_phase2_job(ThreadId::new(), /*lease_seconds*/ 3_600)
             .await
             .expect("claim after fallback failure");
-        assert_eq!(claim, Phase2JobClaimOutcome::SkippedNotDirty);
+        assert_eq!(claim, Phase2JobClaimOutcome::SkippedRetryUnavailable);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

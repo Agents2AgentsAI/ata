@@ -31,8 +31,9 @@ use mcp_test_support::create_mock_responses_server;
 use mcp_test_support::create_shell_command_sse_response;
 use mcp_test_support::format_with_current_shell;
 
-// Allow ample time on slower CI or under load to avoid flakes.
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+// Windows CI can spend tens of seconds in session startup before the first
+// mock model request is sent.
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Test that a shell command that is not on the "trusted" list triggers an
 /// elicitation request to the MCP and that sending the approval runs the
@@ -85,7 +86,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
         create_shell_command_sse_response(
             shell_command.clone(),
             Some(workdir_for_shell_function_call.path()),
-            Some(5_000),
+            Some(timeout_ms),
             "call1234",
         )?,
         create_final_assistant_message_sse_response("File created!")?,
@@ -289,8 +290,8 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         elicitation_request.request.params,
         Some(create_expected_patch_approval_elicitation_request_params(
             expected_changes,
-            None, // No grant_root expected
-            None, // No reason expected
+            /*grant_root*/ None, // No grant_root expected
+            /*reason*/ None, // No reason expected
             codex_request_id.to_string(),
             params.codex_event_id.clone(),
             params.thread_id,

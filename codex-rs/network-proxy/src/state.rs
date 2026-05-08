@@ -1,6 +1,9 @@
+use crate::config::NetworkDomainPermissions;
 use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
+use crate::config::NetworkUnixSocketPermissions;
 use crate::mitm::MitmState;
+use crate::mitm::MitmUpstreamConfig;
 use crate::policy::DomainPattern;
 use crate::policy::compile_globset;
 use crate::policy::is_global_wildcard_domain_pattern;
@@ -45,12 +48,9 @@ pub struct PartialNetworkConfig {
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
     #[serde(default)]
-    pub allowed_domains: Option<Vec<String>>,
+    pub domains: Option<NetworkDomainPermissions>,
     #[serde(default)]
-    pub denied_domains: Option<Vec<String>>,
-    #[serde(default)]
-    pub allow_unix_sockets: Option<Vec<String>>,
-    #[serde(default)]
+    pub unix_sockets: Option<NetworkUnixSocketPermissions>,
     pub allow_local_binding: Option<bool>,
 }
 
@@ -66,9 +66,10 @@ pub fn build_config_state(
     let deny_set = compile_globset(&config.network.denied_domains)?;
     let allow_set = compile_globset(&config.network.allowed_domains)?;
     let mitm = if config.network.mitm {
-        Some(Arc::new(MitmState::new(
-            config.network.allow_upstream_proxy,
-        )?))
+        Some(Arc::new(MitmState::new(MitmUpstreamConfig {
+            allow_upstream_proxy: config.network.allow_upstream_proxy,
+            allow_local_binding: config.network.allow_local_binding,
+        })?))
     } else {
         None
     };
@@ -339,26 +340,23 @@ pub fn validate_policy_against_constraints(
             .iter()
             .map(|s| s.to_ascii_lowercase())
             .collect();
-        validate(
-            config.network.allow_unix_sockets.clone(),
-            move |candidate| {
-                let mut invalid = Vec::new();
-                for entry in candidate {
-                    if !allowed_set.contains(&entry.to_ascii_lowercase()) {
-                        invalid.push(entry.clone());
-                    }
+        validate(config_allow_unix_sockets, move |candidate| {
+            let mut invalid = Vec::new();
+            for entry in candidate {
+                if !allowed_set.contains(&entry.to_ascii_lowercase()) {
+                    invalid.push(entry.clone());
                 }
-                if invalid.is_empty() {
-                    Ok(())
-                } else {
-                    Err(invalid_value(
-                        "network.allow_unix_sockets",
-                        format!("{invalid:?}"),
-                        "subset of managed allow_unix_sockets",
-                    ))
-                }
-            },
-        )?;
+            }
+            if invalid.is_empty() {
+                Ok(())
+            } else {
+                Err(invalid_value(
+                    "network.allow_unix_sockets",
+                    format!("{invalid:?}"),
+                    "subset of managed allow_unix_sockets",
+                ))
+            }
+        })?;
     }
 
     Ok(())
@@ -404,3 +402,6 @@ fn network_mode_rank(mode: NetworkMode) -> u8 {
         NetworkMode::Full => 1,
     }
 }
+
+#[cfg(test)]
+mod tests {}

@@ -4,6 +4,7 @@
 //! are used to preserve compatibility when older payloads omit newly introduced attributes.
 
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -19,6 +20,7 @@ use crate::config_types::ReasoningSummary;
 use crate::config_types::Verbosity;
 
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
+pub const SPEED_TIER_FAST: &str = "fast";
 
 /// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning
 #[derive(
@@ -47,6 +49,15 @@ pub enum ReasoningEffort {
     High,
     XHigh,
     Adaptive,
+}
+
+impl FromStr for ReasoningEffort {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_value(serde_json::Value::String(s.to_string()))
+            .map_err(|_| format!("invalid reasoning_effort: {s}"))
+    }
 }
 
 /// Canonical user-input modality tags advertised by a model.
@@ -105,6 +116,13 @@ pub struct ModelAvailabilityNux {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+pub struct ModelServiceTier {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
 /// Metadata describing a Codex-supported model.
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct ModelPreset {
@@ -123,6 +141,12 @@ pub struct ModelPreset {
     /// Whether this model supports personality-specific instructions.
     #[serde(default)]
     pub supports_personality: bool,
+    /// Deprecated: use `service_tiers` instead.
+    #[serde(default)]
+    pub additional_speed_tiers: Vec<String>,
+    /// Service tiers this model can run with.
+    #[serde(default)]
+    pub service_tiers: Vec<ModelServiceTier>,
     /// Whether this is the default model for new users.
     pub is_default: bool,
     /// recommended upgrade model
@@ -247,6 +271,10 @@ pub struct ModelInfo {
     pub visibility: ModelVisibility,
     pub supported_in_api: bool,
     pub priority: i32,
+    #[serde(default)]
+    pub additional_speed_tiers: Vec<String>,
+    #[serde(default)]
+    pub service_tiers: Vec<ModelServiceTier>,
     pub availability_nux: Option<ModelAvailabilityNux>,
     pub upgrade: Option<ModelInfoUpgrade>,
     pub base_instructions: String,
@@ -266,6 +294,9 @@ pub struct ModelInfo {
     pub supports_image_detail_original: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<i64>,
+    /// Maximum context window allowed for config overrides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_context_window: Option<i64>,
     /// Token threshold for automatic compaction. When omitted, core derives it
     /// from `context_window` (90%). When provided, core clamps it to 90% of the
     /// context window when available.
@@ -279,9 +310,6 @@ pub struct ModelInfo {
     /// Input modalities accepted by the backend for this model.
     #[serde(default = "default_input_modalities")]
     pub input_modalities: Vec<InputModality>,
-    /// When true, this model should use websocket transport even when websocket features are off.
-    #[serde(default)]
-    pub prefer_websockets: bool,
     /// Internal-only marker set by core when a model slug resolved to fallback metadata.
     #[serde(default, skip_serializing, skip_deserializing)]
     #[schemars(skip)]
@@ -292,9 +320,13 @@ pub struct ModelInfo {
 }
 
 impl ModelInfo {
+    pub fn resolved_context_window(&self) -> Option<i64> {
+        self.context_window.or(self.max_context_window)
+    }
+
     pub fn auto_compact_token_limit(&self) -> Option<i64> {
         let context_limit = self
-            .context_window
+            .resolved_context_window()
             .map(|context_window| (context_window * 9) / 10);
         let config_limit = self.auto_compact_token_limit;
         if let Some(context_limit) = context_limit {
@@ -426,6 +458,8 @@ impl From<ModelInfo> for ModelPreset {
                 .unwrap_or(ReasoningEffort::None),
             supported_reasoning_efforts: info.supported_reasoning_levels.clone(),
             supports_personality,
+            additional_speed_tiers: info.additional_speed_tiers,
+            service_tiers: info.service_tiers,
             is_default: false, // default is the highest priority available model
             upgrade: info.upgrade.as_ref().map(|upgrade| ModelUpgrade {
                 id: upgrade.model.clone(),
@@ -541,6 +575,8 @@ mod tests {
             visibility: ModelVisibility::List,
             supported_in_api: true,
             priority: 1,
+            additional_speed_tiers: Vec::new(),
+            service_tiers: Vec::new(),
             availability_nux: None,
             upgrade: None,
             base_instructions: "base".to_string(),
@@ -551,15 +587,15 @@ mod tests {
             default_verbosity: None,
             apply_patch_tool_type: None,
             web_search_tool_type: WebSearchToolType::Text,
-            truncation_policy: TruncationPolicyConfig::bytes(10_000),
+            truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
             supports_parallel_tool_calls: false,
             supports_image_detail_original: false,
             context_window: None,
+            max_context_window: None,
             auto_compact_token_limit: None,
             effective_context_window_percent: 95,
             experimental_supported_tools: vec![],
             input_modalities: default_input_modalities(),
-            prefer_websockets: false,
             used_fallback_model_metadata: false,
             supports_search_tool: false,
         }
@@ -571,6 +607,20 @@ mod tests {
             personality_friendly: Some("friendly".to_string()),
             personality_pragmatic: Some("pragmatic".to_string()),
         }
+    }
+
+    #[test]
+    fn reasoning_effort_from_str_accepts_known_values() {
+        assert_eq!("high".parse(), Ok(ReasoningEffort::High));
+        assert_eq!("minimal".parse(), Ok(ReasoningEffort::Minimal));
+    }
+
+    #[test]
+    fn reasoning_effort_from_str_rejects_unknown_values() {
+        assert_eq!(
+            "unsupported".parse::<ReasoningEffort>(),
+            Err("invalid reasoning_effort: unsupported".to_string())
+        );
     }
 
     #[test]
@@ -607,7 +657,10 @@ mod tests {
             model.get_model_instructions(Some(Personality::None)),
             "Hello\n"
         );
-        assert_eq!(model.get_model_instructions(None), "Hello\n");
+        assert_eq!(
+            model.get_model_instructions(/*personality*/ None),
+            "Hello\n"
+        );
 
         let model_no_personality = test_model(Some(ModelMessages {
             instructions_template: Some("Hello\n{{ personality }}".to_string()),
@@ -629,7 +682,10 @@ mod tests {
             model_no_personality.get_model_instructions(Some(Personality::None)),
             "Hello\n"
         );
-        assert_eq!(model_no_personality.get_model_instructions(None), "Hello\n");
+        assert_eq!(
+            model_no_personality.get_model_instructions(/*personality*/ None),
+            "Hello\n"
+        );
     }
 
     #[test]
@@ -652,7 +708,7 @@ mod tests {
     fn get_personality_message_returns_default_when_personality_is_none() {
         let personality_template = personality_variables();
         assert_eq!(
-            personality_template.get_personality_message(None),
+            personality_template.get_personality_message(/*personality*/ None),
             Some("default".to_string())
         );
     }
@@ -673,7 +729,7 @@ mod tests {
             Some(String::new())
         );
         assert_eq!(
-            personality_variables.get_personality_message(None),
+            personality_variables.get_personality_message(/*personality*/ None),
             Some("default".to_string())
         );
 
@@ -695,7 +751,7 @@ mod tests {
             Some(String::new())
         );
         assert_eq!(
-            personality_variables.get_personality_message(None),
+            personality_variables.get_personality_message(/*personality*/ None),
             Some("default".to_string())
         );
 
@@ -716,7 +772,10 @@ mod tests {
             personality_variables.get_personality_message(Some(Personality::None)),
             Some(String::new())
         );
-        assert_eq!(personality_variables.get_personality_message(None), None);
+        assert_eq!(
+            personality_variables.get_personality_message(/*personality*/ None),
+            None
+        );
     }
 
     #[test]
@@ -748,8 +807,7 @@ mod tests {
             "auto_compact_token_limit": null,
             "effective_context_window_percent": 95,
             "experimental_supported_tools": [],
-            "input_modalities": ["text", "image"],
-            "prefer_websockets": false
+            "input_modalities": ["text", "image"]
         }))
         .expect("deserialize model info");
 
@@ -765,7 +823,9 @@ mod tests {
             availability_nux: Some(ModelAvailabilityNux {
                 message: "Try Spark.".to_string(),
             }),
-            ..test_model(None)
+            additional_speed_tiers: vec![SPEED_TIER_FAST.to_string()],
+            service_tiers: Vec::new(),
+            ..test_model(/*spec*/ None)
         });
 
         assert_eq!(
@@ -774,5 +834,20 @@ mod tests {
                 message: "Try Spark.".to_string(),
             })
         );
+        assert!(preset.supports_fast_mode());
+    }
+
+    #[test]
+    fn model_preset_supports_fast_mode_from_service_tiers() {
+        let preset = ModelPreset::from(ModelInfo {
+            service_tiers: vec![ModelServiceTier {
+                id: SPEED_TIER_FAST.to_string(),
+                name: "Fast".to_string(),
+                description: "Priority processing.".to_string(),
+            }],
+            ..test_model(/*spec*/ None)
+        });
+
+        assert!(preset.supports_fast_mode());
     }
 }

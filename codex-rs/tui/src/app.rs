@@ -1,10 +1,23 @@
+//! Top-level TUI application state and runtime wiring.
+//!
+//! This module owns the `App` struct, shared imports, and the high-level run loop that coordinates
+//! the focused app submodules.
+
 use crate::app_backtrack::BacktrackState;
+use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
+use crate::app_event::FeedbackCategory;
+use crate::app_event::HistoryLookupResponse;
+use crate::app_event::RateLimitRefreshOrigin;
 use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
+use crate::app_server_session::AppServerSession;
+use crate::app_server_session::AppServerStartedThread;
+use crate::app_server_session::app_server_rate_limit_snapshots;
+use crate::bottom_pane::AppLinkViewParams;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::McpServerElicitationFormRequest;
@@ -13,16 +26,30 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
+use crate::chatwidget::ReplayKind;
 use crate::chatwidget::ThreadInputState;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
+use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::external_agent_config_migration_startup::ExternalAgentConfigMigrationStartupOutcome;
+use crate::external_agent_config_migration_startup::handle_external_agent_config_migration_prompt_if_needed;
 use crate::external_editor;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
+use crate::key_hint::KeyBindingListExt;
+use crate::keymap::RuntimeKeymap;
+use crate::legacy_core::config::Config;
+use crate::legacy_core::config::ConfigBuilder;
+use crate::legacy_core::config::ConfigOverrides;
+use crate::legacy_core::config::edit::ConfigEdit;
+use crate::legacy_core::config::edit::ConfigEditsBuilder;
+#[cfg(target_os = "windows")]
+use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
+use crate::model_catalog::ModelCatalog;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
@@ -34,10 +61,22 @@ use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
+use crate::resume_picker::SessionTarget;
+use crate::session_state::ThreadSessionState;
+#[cfg(test)]
+use crate::test_support::PathBufExt;
+#[cfg(test)]
+use crate::test_support::test_path_buf;
+#[cfg(test)]
+use crate::test_support::test_path_display;
+use crate::token_usage::TokenUsage;
+use crate::transcript_reflow::TranscriptReflowState;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
+use crate::workspace_command::AppServerWorkspaceCommandRunner;
+use crate::workspace_command::WorkspaceCommandRunner;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -65,36 +104,31 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::items::TurnItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::FinalOutput;
-use codex_protocol::protocol::ListSkillsResponseEvent;
-use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::SessionConfiguredEvent;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SkillErrorInfo;
-use codex_protocol::protocol::TokenUsage;
+#[cfg(target_os = "windows")]
+use codex_protocol::permissions::FileSystemSandboxKind;
+use codex_rollout::StateDbHandle;
+use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
+use ratatui::backend::Backend;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -105,7 +139,6 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio::select;
 use tokio::sync::Mutex;
-use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::error::TrySendError;
@@ -116,10 +149,26 @@ use toml::Value as TomlValue;
 mod agent_navigation;
 mod app_server_adapter;
 mod pending_interactive_replay;
+mod platform_actions;
+mod replay_filter;
+mod resize_reflow;
+mod session_lifecycle;
+mod side;
+mod startup_prompts;
+mod thread_events;
+mod thread_goal_actions;
+mod thread_routing;
+mod thread_session_state;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
+use self::platform_actions::*;
+use self::side::SideParentStatus;
+use self::side::SideParentStatusChange;
+use self::side::SideThreadState;
+use self::startup_prompts::*;
+use self::thread_events::*;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
@@ -191,95 +240,59 @@ fn session_summary(
     token_usage: TokenUsage,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
+    rollout_path: Option<&Path>,
 ) -> Option<SessionSummary> {
-    if token_usage.is_zero() {
+    let usage_line = (!token_usage.is_zero()).then(|| token_usage.to_string());
+    let thread_id =
+        resumable_thread(thread_id, thread_name, rollout_path).map(|thread| thread.thread_id);
+    let resume_command =
+        crate::legacy_core::util::resume_command(/*thread_name*/ None, thread_id);
+
+    if usage_line.is_none() && resume_command.is_none() {
         return None;
     }
 
-    let usage_line = FinalOutput::from(token_usage).to_string();
-    let resume_command = codex_core::util::resume_command(thread_name.as_deref(), thread_id);
     Some(SessionSummary {
         usage_line,
         resume_command,
     })
 }
 
-fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillErrorInfo> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResumableThread {
+    thread_id: ThreadId,
+    thread_name: Option<String>,
+}
+
+fn resumable_thread(
+    thread_id: Option<ThreadId>,
+    thread_name: Option<String>,
+    rollout_path: Option<&Path>,
+) -> Option<ResumableThread> {
+    let thread_id = thread_id?;
+    let rollout_path = rollout_path?;
+    rollout_path_is_resumable(rollout_path).then_some(ResumableThread {
+        thread_id,
+        thread_name,
+    })
+}
+
+fn rollout_path_is_resumable(rollout_path: &Path) -> bool {
+    std::fs::metadata(rollout_path).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
+}
+
+fn errors_for_cwd(cwd: &Path, response: &SkillsListResponse) -> Vec<SkillErrorInfo> {
     response
-        .skills
+        .data
         .iter()
         .find(|entry| entry.cwd.as_path() == cwd)
         .map(|entry| entry.errors.clone())
         .unwrap_or_default()
 }
 
-fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[SkillErrorInfo]) {
-    if errors.is_empty() {
-        return;
-    }
-
-    let error_count = errors.len();
-    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-        crate::history_cell::new_warning_event(format!(
-            "Skipped loading {error_count} skill(s) due to invalid SKILL.md files."
-        )),
-    )));
-
-    for error in errors {
-        let path = error.path.display();
-        let message = error.message.as_str();
-        app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-            crate::history_cell::new_warning_event(format!("{path}: {message}")),
-        )));
-    }
-}
-
-fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) {
-    let mut disabled_folders = Vec::new();
-
-    for layer in config
-        .config_layer_stack
-        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
-    {
-        let ConfigLayerSource::Project { dot_codex_folder } = &layer.name else {
-            continue;
-        };
-        if layer.disabled_reason.is_none() {
-            continue;
-        }
-        disabled_folders.push((
-            dot_codex_folder.as_path().display().to_string(),
-            layer
-                .disabled_reason
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "config.toml is disabled.".to_string()),
-        ));
-    }
-
-    if disabled_folders.is_empty() {
-        return;
-    }
-
-    let mut message = concat!(
-        "Project config.toml files are disabled in the following folders. ",
-        "Settings in those files are ignored, but skills and exec policies still load.\n",
-    )
-    .to_string();
-    for (index, (folder, reason)) in disabled_folders.iter().enumerate() {
-        let display_index = index + 1;
-        message.push_str(&format!("    {display_index}. {folder}\n"));
-        message.push_str(&format!("       {reason}\n"));
-    }
-
-    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-        history_cell::new_warning_event(message),
-    )));
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionSummary {
-    usage_line: String,
+    usage_line: Option<String>,
     resume_command: Option<String>,
 }
 
@@ -667,14 +680,15 @@ pub(crate) struct App {
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
-    pub(crate) auth_manager: Arc<AuthManager>,
+    workspace_command_runner: Option<WorkspaceCommandRunner>,
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
+    pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) active_profile: Option<String>,
     cli_kv_overrides: Vec<(String, TomlValue)>,
     harness_overrides: ConfigOverrides,
     runtime_approval_policy_override: Option<AskForApproval>,
-    runtime_sandbox_policy_override: Option<SandboxPolicy>,
+    runtime_permission_profile_override: Option<PermissionProfile>,
 
     pub(crate) file_search: FileSearchManager,
 
@@ -684,13 +698,18 @@ pub(crate) struct App {
     pub(crate) overlay: Option<Overlay>,
     pub(crate) deferred_history_lines: Vec<Line<'static>>,
     has_emitted_history_lines: bool,
+    transcript_reflow: TranscriptReflowState,
+    initial_history_replay_buffer: Option<InitialHistoryReplayBuffer>,
 
     pub(crate) enhanced_keys_supported: bool,
+    pub(crate) keymap: RuntimeKeymap,
 
     /// Controls the animation thread that sends CommitTick events.
     pub(crate) commit_anim_running: Arc<AtomicBool>,
     // Shared across ChatWidget instances so invalid status-line config warnings only emit once.
     status_line_invalid_items_warned: Arc<AtomicBool>,
+    // Shared across ChatWidget instances so invalid terminal-title config warnings only emit once.
+    terminal_title_invalid_items_warned: Arc<AtomicBool>,
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
@@ -701,15 +720,12 @@ pub(crate) struct App {
     pub(crate) backtrack_render_pending: bool,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     feedback_audience: FeedbackAudience,
+    environment_manager: Arc<EnvironmentManager>,
+    remote_app_server_url: Option<String>,
+    remote_app_server_auth_token: Option<String>,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
 
-    /// One-shot guard used while switching threads.
-    ///
-    /// We set this when intentionally stopping the current thread before moving
-    /// to another one, then ignore exactly one `ShutdownComplete` so it is not
-    /// misclassified as an unexpected sub-agent death.
-    suppress_shutdown_complete: bool,
     /// Tracks the thread we intentionally shut down while exiting the app.
     ///
     /// When this matches the active thread, its `ShutdownComplete` should lead to
@@ -726,7 +742,7 @@ pub(crate) struct App {
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_navigation: AgentNavigationState,
     active_thread_id: Option<ThreadId>,
-    active_thread_rx: Option<mpsc::Receiver<Event>>,
+    active_thread_rx: Option<mpsc::Receiver<ThreadBufferedEvent>>,
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
@@ -744,48 +760,84 @@ pub(crate) struct App {
     coordination_watcher_spawned: bool,
 }
 
-#[derive(Default)]
-struct WindowsSandboxState {
-    setup_started_at: Option<Instant>,
-    // One-shot suppression of the next world-writable scan after user confirmation.
-    skip_world_writable_scan_once: bool,
+fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<AppServerTurnError> {
+    let TypedRequestError::Server { source, .. } = error else {
+        return None;
+    };
+    let turn_error: AppServerTurnError = serde_json::from_value(source.data.clone()?).ok()?;
+    matches!(
+        turn_error.codex_error_info,
+        Some(AppServerCodexErrorInfo::ActiveTurnNotSteerable { .. })
+    )
+    .then_some(turn_error)
 }
 
-fn normalize_harness_overrides_for_cwd(
-    mut overrides: ConfigOverrides,
-    base_cwd: &Path,
-) -> Result<ConfigOverrides> {
-    if overrides.additional_writable_roots.is_empty() {
-        return Ok(overrides);
+async fn resolve_runtime_model_provider_base_url(provider: &ModelProviderInfo) -> Option<String> {
+    let provider = create_model_provider(provider.clone(), /*auth_manager*/ None);
+    match provider.runtime_base_url().await {
+        Ok(base_url) => base_url,
+        Err(err) => {
+            tracing::warn!(%err, "failed to resolve runtime model provider base URL for status");
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ActiveTurnSteerRace {
+    Missing,
+    ExpectedTurnMismatch { actual_turn_id: String },
+}
+
+fn active_turn_steer_race(error: &TypedRequestError) -> Option<ActiveTurnSteerRace> {
+    let TypedRequestError::Server { method, source } = error else {
+        return None;
+    };
+    if method != "turn/steer" {
+        return None;
+    }
+    if source.message == "no active turn to steer" {
+        return Some(ActiveTurnSteerRace::Missing);
     }
 
-    let mut normalized = Vec::with_capacity(overrides.additional_writable_roots.len());
-    for root in overrides.additional_writable_roots.drain(..) {
-        let absolute = AbsolutePathBuf::resolve_path_against_base(root, base_cwd)?;
-        normalized.push(absolute.into_path_buf());
-    }
-    overrides.additional_writable_roots = normalized;
-    Ok(overrides)
+    // App-server steer mismatches mean our cached active turn id is stale, but the response
+    // includes the server's current active turn so we can resynchronize and retry once.
+    let mismatch_prefix = "expected active turn id `";
+    let mismatch_separator = "` but found `";
+    let actual_turn_id = source
+        .message
+        .strip_prefix(mismatch_prefix)?
+        .split_once(mismatch_separator)?
+        .1
+        .strip_suffix('`')?
+        .to_string();
+    Some(ActiveTurnSteerRace::ExpectedTurnMismatch { actual_turn_id })
 }
 
 impl App {
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
         tui: &mut tui::Tui,
-        cfg: codex_core::config::Config,
+        cfg: crate::legacy_core::config::Config,
+        initial_user_message: Option<crate::chatwidget::UserMessage>,
     ) -> crate::chatwidget::ChatWidgetInit {
         crate::chatwidget::ChatWidgetInit {
             config: cfg,
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
-            // Fork/resume bootstraps here don't carry any prefilled message content.
-            initial_user_message: None,
+            workspace_command_runner: self.workspace_command_runner.clone(),
+            initial_user_message,
             enhanced_keys_supported: self.enhanced_keys_supported,
-            auth_manager: self.auth_manager.clone(),
-            models_manager: self.server.get_models_manager(),
+            has_chatgpt_account: self.chat_widget.has_chatgpt_account(),
+            model_catalog: self.model_catalog.clone(),
             feedback: self.feedback.clone(),
             is_first_run: false,
-            feedback_audience: self.feedback_audience,
+            status_account_display: self.chat_widget.status_account_display().cloned(),
+            runtime_model_provider_base_url: self
+                .chat_widget
+                .runtime_model_provider_base_url()
+                .map(str::to_string),
+            initial_plan_type: self.chat_widget.current_plan_type(),
             model: Some(self.chat_widget.current_model().to_string()),
             startup_tooltip_override: None,
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
@@ -2052,6 +2104,7 @@ impl App {
         session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
+        entered_trust_nux: bool,
         should_prompt_windows_sandbox_nux_at_startup: bool,
         remote_control_settings: Option<crate::remote_control::RemoteControlSettings>,
     ) -> Result<AppExitInfo> {
@@ -2059,7 +2112,11 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_project_config_warnings(&app_event_tx, &config);
-        tui.set_notification_method(config.tui_notification_method);
+        emit_system_bwrap_warning(&app_event_tx, &config);
+        tui.set_notification_settings(
+            config.tui_notifications.method,
+            config.tui_notifications.condition,
+        );
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
@@ -2140,13 +2197,14 @@ impl App {
             ThreadId::new(),
             model.as_str(),
             model.as_str(),
-            auth_ref.and_then(CodexAuth::get_account_id),
-            auth_ref.and_then(CodexAuth::get_account_email),
+            /*account_id*/ None,
+            bootstrap.account_email.clone(),
             auth_mode,
-            codex_core::default_client::originator().value,
+            codex_login::default_client::originator().value,
             config.otel.log_user_prompt,
-            codex_core::terminal::user_agent(),
-            SessionSource::Cli,
+            user_agent(),
+            serde_json::from_value(serde_json::json!("cli"))
+                .unwrap_or_else(|err| panic!("cli session source should deserialize: {err}")),
         );
         if config
             .tui_status_line
@@ -2157,12 +2215,25 @@ impl App {
         }
 
         let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
+        let terminal_title_invalid_items_warned = Arc::new(AtomicBool::new(false));
+        let workspace_command_runner: WorkspaceCommandRunner = Arc::new(
+            AppServerWorkspaceCommandRunner::new(app_server.request_handle()),
+        );
+        let runtime_model_provider_base_url =
+            resolve_runtime_model_provider_base_url(&config.model_provider).await;
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
             Self::should_wait_for_initial_session(&session_selection);
-        let mut chat_widget = match session_selection {
+        let should_prompt_for_paused_goal_after_startup_resume =
+            Self::should_prompt_for_paused_goal_after_startup_resume(
+                &session_selection,
+                &initial_prompt,
+                &initial_images,
+            );
+        let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
+                let started = app_server.start_thread(&config).await?;
                 let startup_tooltip_override =
                     prepare_startup_tooltip_override(&mut config, &available_models, is_first_run)
                         .await;
@@ -2170,6 +2241,7 @@ impl App {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
+                    workspace_command_runner: Some(workspace_command_runner.clone()),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
                         initial_images.clone(),
@@ -2177,17 +2249,19 @@ impl App {
                         Vec::new(),
                     ),
                     enhanced_keys_supported,
-                    auth_manager: auth_manager.clone(),
-                    models_manager: thread_manager.get_models_manager(),
+                    has_chatgpt_account,
+                    model_catalog: model_catalog.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    feedback_audience,
+                    status_account_display: status_account_display.clone(),
+                    runtime_model_provider_base_url: runtime_model_provider_base_url.clone(),
+                    initial_plan_type,
                     model: Some(model.clone()),
                     startup_tooltip_override,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                ChatWidget::new(init, thread_manager.clone())
+                (ChatWidget::new_with_app_event(init), Some(started))
             }
             SessionSelection::Resume(target_session) => {
                 let resumed = thread_manager
@@ -2199,13 +2273,14 @@ impl App {
                     )
                     .await
                     .wrap_err_with(|| {
-                        let path_display = target_session.path.display();
-                        format!("Failed to resume session from {path_display}")
+                        let target_label = target_session.display_label();
+                        format!("Failed to resume session from {target_label}")
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
+                    workspace_command_runner: Some(workspace_command_runner.clone()),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
                         initial_images.clone(),
@@ -2213,17 +2288,19 @@ impl App {
                         Vec::new(),
                     ),
                     enhanced_keys_supported,
-                    auth_manager: auth_manager.clone(),
-                    models_manager: thread_manager.get_models_manager(),
+                    has_chatgpt_account,
+                    model_catalog: model_catalog.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    feedback_audience,
+                    status_account_display: status_account_display.clone(),
+                    runtime_model_provider_base_url: runtime_model_provider_base_url.clone(),
+                    initial_plan_type,
                     model: config.model.clone(),
                     startup_tooltip_override: None,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
+                (ChatWidget::new_with_app_event(init), Some(resumed))
             }
             SessionSelection::Fork(target_session) => {
                 session_telemetry.counter("codex.thread.fork", 1, &[("source", "cli_subcommand")]);
@@ -2237,13 +2314,14 @@ impl App {
                     )
                     .await
                     .wrap_err_with(|| {
-                        let path_display = target_session.path.display();
-                        format!("Failed to fork session from {path_display}")
+                        let target_label = target_session.display_label();
+                        format!("Failed to fork session from {target_label}")
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
+                    workspace_command_runner: Some(workspace_command_runner.clone()),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
                         initial_images.clone(),
@@ -2251,24 +2329,36 @@ impl App {
                         Vec::new(),
                     ),
                     enhanced_keys_supported,
-                    auth_manager: auth_manager.clone(),
-                    models_manager: thread_manager.get_models_manager(),
+                    has_chatgpt_account,
+                    model_catalog: model_catalog.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    feedback_audience,
+                    status_account_display: status_account_display.clone(),
+                    runtime_model_provider_base_url: runtime_model_provider_base_url.clone(),
+                    initial_plan_type,
                     model: config.model.clone(),
                     startup_tooltip_override: None,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
+                (ChatWidget::new_with_app_event(init), Some(forked))
             }
         };
+        if let Some(message) = external_agent_config_migration_message {
+            chat_widget.add_info_message(message, /*hint*/ None);
+        }
 
         chat_widget
             .maybe_prompt_windows_sandbox_enable(should_prompt_windows_sandbox_nux_at_startup);
 
-        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
+        let runtime_keymap = RuntimeKeymap::from_config(&config.tui_keymap).map_err(|err| {
+            color_eyre::eyre::eyre!(
+                "Invalid `tui.keymap` configuration: {err}\n\
+Fix the config and retry.\n\
+See the Codex keymap documentation for supported actions and examples."
+            )
+        })?;
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
@@ -2277,27 +2367,34 @@ impl App {
             session_telemetry: session_telemetry.clone(),
             app_event_tx,
             chat_widget,
-            auth_manager: auth_manager.clone(),
+            workspace_command_runner: Some(workspace_command_runner),
             config,
+            state_db,
             active_profile,
             cli_kv_overrides,
             harness_overrides,
             runtime_approval_policy_override: None,
-            runtime_sandbox_policy_override: None,
+            runtime_permission_profile_override: None,
             file_search,
             enhanced_keys_supported,
+            keymap: runtime_keymap,
             transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
+            transcript_reflow: TranscriptReflowState::default(),
+            initial_history_replay_buffer: None,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
+            terminal_title_invalid_items_warned: terminal_title_invalid_items_warned.clone(),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
             feedback: feedback.clone(),
             feedback_audience,
+            environment_manager,
+            remote_app_server_url,
+            remote_app_server_auth_token,
             pending_update_action: None,
-            suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
@@ -2306,12 +2403,22 @@ impl App {
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
+            last_subagent_backfill_attempt: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             thread_closed_document_ids: HashMap::new(),
             _remote_control_handle: remote_control_handle,
             coordination_watcher_spawned: false,
         };
+        if let Some(started) = initial_started_thread {
+            let thread_id = started.session.thread_id;
+            app.enqueue_primary_thread_session(started.session, started.turns)
+                .await?;
+            if should_prompt_for_paused_goal_after_startup_resume {
+                app.maybe_prompt_resume_paused_goal_after_resume(&mut app_server, thread_id)
+                    .await;
+            }
+        }
 
         if let Some(handle) = &app._remote_control_handle {
             app.chat_widget.set_remote_control_state(
@@ -2324,13 +2431,10 @@ impl App {
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
         {
+            let startup_permission_profile = app.config.permissions.permission_profile();
             let should_check = WindowsSandboxLevel::from_config(&app.config)
                 != WindowsSandboxLevel::Disabled
-                && matches!(
-                    app.config.permissions.sandbox_policy.get(),
-                    codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_protocol::protocol::SandboxPolicy::ReadOnly { .. }
-                )
+                && managed_filesystem_sandbox_is_restricted(&startup_permission_profile)
                 && !app
                     .config
                     .notices
@@ -2471,8 +2575,8 @@ impl App {
         };
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
-            thread_id: app.chat_widget.thread_id(),
-            thread_name: app.chat_widget.thread_name(),
+            thread_id: resumable_thread.as_ref().map(|thread| thread.thread_id),
+            thread_name: resumable_thread.and_then(|thread| thread.thread_name),
             update_action: app.pending_update_action,
             exit_reason,
         })
@@ -2481,9 +2585,13 @@ impl App {
     pub(crate) async fn handle_tui_event(
         &mut self,
         tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
-        if matches!(event, TuiEvent::Draw) {
+        let terminal_resize_reflow_enabled = self.terminal_resize_reflow_enabled();
+        if terminal_resize_reflow_enabled && matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
+            self.handle_draw_pre_render(tui)?;
+        } else if matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
             let size = tui.terminal.size()?;
             if size != tui.terminal.last_known_screen_size {
                 self.refresh_status_line();
@@ -2495,7 +2603,7 @@ impl App {
         } else {
             match event {
                 TuiEvent::Key(key_event) => {
-                    self.handle_key_event(tui, key_event).await;
+                    self.handle_key_event(tui, app_server, key_event).await;
                 }
                 TuiEvent::Paste(pasted) => {
                     // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
@@ -2505,7 +2613,7 @@ impl App {
                     let pasted = pasted.replace("\r", "\n");
                     self.chat_widget.handle_paste(pasted);
                 }
-                TuiEvent::Draw => {
+                TuiEvent::Draw | TuiEvent::Resize => {
                     if self.backtrack_render_pending {
                         self.backtrack_render_pending = false;
                         self.render_transcript_once(tui);
@@ -2539,8 +2647,17 @@ impl App {
                             if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
                                 frame.set_cursor_position((x, y));
                             }
-                        },
-                    )?;
+                        })?;
+                    } else {
+                        tui.draw(desired_height, |frame| {
+                            let area = frame.area();
+                            self.chat_widget.render(area, frame.buffer);
+                            if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
+                                frame.set_cursor_style(self.chat_widget.cursor_style(area));
+                                frame.set_cursor_position((x, y));
+                            }
+                        })?;
+                    }
                     if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
                         self.chat_widget
                             .set_external_editor_state(ExternalEditorState::Active);
@@ -2551,6 +2668,7 @@ impl App {
         }
         Ok(AppRunControl::Continue)
     }
+}
 
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
         match event {

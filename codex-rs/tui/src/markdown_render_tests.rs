@@ -671,7 +671,20 @@ fn file_link_hides_destination() {
         "[codex-rs/tui/src/markdown_render.rs](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs)",
         Path::new("/Users/example/code/codex"),
     );
-    let expected = Text::from(Line::from_iter(["codex-rs/tui/src/markdown_render.rs".cyan()]));
+    let expected =
+        Text::from(Line::from_iter(["codex-rs/tui/src/markdown_render.rs".cyan()]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_decodes_percent_encoded_bare_path_destination() {
+    let text = render_markdown_text_for_cwd(
+        "[report](/Users/example/code/codex/Example%20Folder/R%C3%A9sum%C3%A9/report.md)",
+        Path::new("/Users/example/code/codex"),
+    );
+    let expected = Text::from(Line::from_iter([
+        "Example Folder/Résumé/report.md".cyan(),
+    ]));
     assert_eq!(text, expected);
 }
 
@@ -1099,6 +1112,46 @@ fn code_block_inside_unordered_list_item_multiple_lines() {
         })
         .collect();
     assert_eq!(lines, vec!["- Item", "", "  first", "  second"]);
+}
+
+#[test]
+fn list_item_after_code_block_keeps_blank_separator() {
+    let md = "1. First:\n\n   ```rust\n   fn first() {}\n   ```\n\n2. Second:\n";
+    let text = render_markdown_text(md);
+    let lines = plain_lines(&text);
+    assert_eq!(
+        lines,
+        vec!["1. First:", "", "   fn first() {}", "", "2. Second:"]
+    );
+    assert_snapshot!(
+        "list_item_after_code_block_keeps_blank_separator",
+        lines.join("\n")
+    );
+}
+
+#[test]
+fn outer_list_item_after_nested_code_block_keeps_blank_separator() {
+    let md = "1. First:\n   - Nested:\n\n     ```rust\n     fn first() {}\n     ```\n\n2. Second:\n";
+    let text = render_markdown_text(md);
+    let lines = plain_lines(&text);
+    assert_eq!(
+        lines,
+        vec![
+            "1. First:",
+            "    - Nested:",
+            "",
+            "      fn first() {}",
+            "",
+            "2. Second:",
+        ]
+    );
+}
+
+#[test]
+fn list_item_after_simple_item_stays_compact() {
+    let md = "1. First\n\n2. Second\n";
+    let text = render_markdown_text(md);
+    assert_eq!(plain_lines(&text), vec!["1. First", "2. Second"]);
 }
 
 #[test]

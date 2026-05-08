@@ -18,7 +18,11 @@ pub(crate) mod lsp;
 pub(crate) mod lsp_workspace_edit;
 mod mcp;
 mod mcp_resource;
+pub(crate) mod mcp_resource_spec;
 pub(crate) mod multi_agents;
+pub(crate) mod multi_agents_common;
+pub(crate) mod multi_agents_spec;
+pub(crate) mod multi_agents_v2;
 mod plan;
 #[cfg(feature = "ata-plus")]
 pub(crate) mod plus_tool;
@@ -27,18 +31,22 @@ mod request_permissions;
 mod request_user_input;
 pub(crate) mod research;
 mod shell;
+pub(crate) mod shell_spec;
 mod test_sync;
 mod tool_search;
 mod tool_suggest;
 pub(crate) mod unified_exec;
 mod view_image;
+pub(crate) mod view_image_spec;
 
+use codex_sandboxing::policy_transforms::intersect_permission_profiles;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
+use codex_sandboxing::policy_transforms::normalize_additional_permissions;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
-pub use plan::PLAN_TOOL;
 use serde::Deserialize;
 use serde_json::Value;
 use std::path::Path;
-use std::path::PathBuf;
 
 use crate::codex::Session;
 use crate::function_tool::FunctionCallError;
@@ -48,8 +56,7 @@ use crate::sandboxing::normalize_additional_permissions;
 pub(crate) use crate::tools::code_mode::CodeModeExecuteHandler;
 pub(crate) use crate::tools::code_mode::CodeModeWaitHandler;
 pub use apply_patch::ApplyPatchHandler;
-pub use artifacts::ArtifactsHandler;
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 pub use crop_figure::CropFigureHandler;
 #[cfg(feature = "data")]
@@ -61,10 +68,9 @@ pub use document_reader::reading_view_display_mode_state;
 pub use document_reader::reading_view_section_follow_up_guidance;
 pub use document_reader::reading_view_selection_follow_up_guidance;
 pub use dynamic::DynamicToolHandler;
-pub use grep_files::GrepFilesHandler;
-pub use js_repl::JsReplHandler;
-pub use js_repl::JsReplResetHandler;
-pub use list_dir::ListDirHandler;
+pub use goal::CreateGoalHandler;
+pub use goal::GetGoalHandler;
+pub use goal::UpdateGoalHandler;
 pub use mcp::McpHandler;
 pub use mcp_resource::McpResourceHandler;
 pub use plan::PlanHandler;
@@ -152,7 +158,7 @@ pub(super) fn require_absolute_path_argument(
 
 fn parse_arguments_with_base_path<T>(
     arguments: &str,
-    base_path: &Path,
+    base_path: &AbsolutePathBuf,
 ) -> Result<T, FunctionCallError>
 where
     T: for<'de> Deserialize<'de>,
@@ -163,18 +169,35 @@ where
 
 fn resolve_workdir_base_path(
     arguments: &str,
-    default_cwd: &Path,
-) -> Result<PathBuf, FunctionCallError> {
+    default_cwd: &AbsolutePathBuf,
+) -> Result<AbsolutePathBuf, FunctionCallError> {
     let arguments: Value = parse_arguments(arguments)?;
     Ok(arguments
         .get("workdir")
         .and_then(Value::as_str)
         .filter(|workdir| !workdir.is_empty())
-        .map(PathBuf::from)
-        .map_or_else(
-            || default_cwd.to_path_buf(),
-            |workdir| crate::util::resolve_path(default_cwd, &workdir),
-        ))
+        .map_or_else(|| default_cwd.clone(), |workdir| default_cwd.join(workdir)))
+}
+
+fn resolve_tool_environment<'a>(
+    turn: &'a TurnContext,
+    environment_id: Option<&str>,
+) -> Result<Option<&'a TurnEnvironment>, FunctionCallError> {
+    environment_id.map_or_else(
+        || Ok(turn.environments.primary()),
+        |environment_id| {
+            turn.environments
+                .turn_environments
+                .iter()
+                .find(|environment| environment.environment_id == environment_id)
+                .map(Some)
+                .ok_or_else(|| {
+                    FunctionCallError::RespondToModel(format!(
+                        "unknown turn environment id `{environment_id}`"
+                    ))
+                })
+        },
+    )
 }
 
 /// Validates feature/policy constraints for `with_additional_permissions` and
@@ -186,7 +209,7 @@ pub(crate) fn normalize_and_validate_additional_permissions(
     additional_permissions: Option<PermissionProfile>,
     permissions_preapproved: bool,
     _cwd: &Path,
-) -> Result<Option<PermissionProfile>, String> {
+) -> Result<Option<AdditionalPermissionProfile>, String> {
     let uses_additional_permissions = matches!(
         sandbox_permissions,
         SandboxPermissions::WithAdditionalPermissions

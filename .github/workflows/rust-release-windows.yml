@@ -71,17 +71,21 @@ jobs:
           Write-Host "Total RAM: $ramGiB GiB"
           Write-Host "Disk usage:"
           Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize Name, @{Name='Size(GB)';Expression={[math]::Round(($_.Used + $_.Free) / 1GB, 1)}}, @{Name='Free(GB)';Expression={[math]::Round($_.Free / 1GB, 1)}}
-      - uses: dtolnay/rust-toolchain@1.93.0
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
         with:
           targets: ${{ matrix.target }}
 
       - name: Cargo build (Windows binaries)
         shell: bash
         run: |
-          cargo build --target ${{ matrix.target }} --release --timings ${{ matrix.build_args }}
+          build_args=()
+          for binary in ${{ matrix.binaries }}; do
+            build_args+=(--bin "$binary")
+          done
+          cargo build --target ${{ matrix.target }} --release --timings "${build_args[@]}"
 
       - name: Upload Cargo timings
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: cargo-timings-rust-release-windows-${{ matrix.target }}-${{ matrix.bundle }}
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
@@ -101,7 +105,7 @@ jobs:
           fi
 
       - name: Upload Windows binaries
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: windows-binaries-${{ matrix.target }}-${{ matrix.bundle }}
           path: |
@@ -139,15 +143,21 @@ jobs:
         uses: runs-on/action@v2
 
       - name: Download prebuilt Windows primary binaries
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: windows-binaries-${{ matrix.target }}-primary
           path: codex-rs/target/${{ matrix.target }}/release
 
       - name: Download prebuilt Windows helper binaries
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: windows-binaries-${{ matrix.target }}-helpers
+          path: codex-rs/target/${{ matrix.target }}/release
+
+      - name: Download prebuilt Windows app-server binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: windows-binaries-${{ matrix.target }}-app-server
           path: codex-rs/target/${{ matrix.target }}/release
 
       - name: Verify binaries
@@ -164,6 +174,7 @@ jobs:
         uses: ./.github/actions/windows-code-sign
         with:
           target: ${{ matrix.target }}
+          binaries: ${{ env.WINDOWS_BINARIES }}
           client-id: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
@@ -183,7 +194,7 @@ jobs:
           cp target/${{ matrix.target }}/release/ata-command-runner.exe "$dest/ata-command-runner-${{ matrix.target }}.exe"
 
       - name: Install DotSlash
-        uses: facebook/install-dotslash@v2
+        uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
 
       - name: Compress artifacts
         shell: bash
@@ -247,7 +258,7 @@ jobs:
             "${GITHUB_WORKSPACE}/.github/workflows/zstd" -T0 -19 "$dest/$base"
           done
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: ${{ matrix.target }}
           path: |

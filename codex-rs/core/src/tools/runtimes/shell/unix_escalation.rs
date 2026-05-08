@@ -1,9 +1,7 @@
 use super::ShellRequest;
-use crate::error::CodexErr;
-use crate::error::SandboxErr;
+use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
-use crate::exec::ExecToolCallOutput;
-use crate::exec::SandboxType;
+use crate::exec::cancel_when_either;
 use crate::exec::is_likely_sandbox_denied;
 use crate::features::Feature;
 use crate::guardian::GuardianApprovalRequest;
@@ -16,16 +14,22 @@ use crate::skills::SkillMetadata;
 use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::runtimes::build_command_spec_from_resolved_command;
 use crate::tools::sandboxing::SandboxAttempt;
-use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
+use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::MatchOptions;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
+use codex_features::Feature;
+use codex_hooks::PermissionRequestDecision;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::models::MacOsSeatbeltProfileExtensions;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::SandboxErr;
+use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::exec_output::StreamOutput;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -33,7 +37,11 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ExecApprovalRequestSkillMetadata;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxTransformRequest;
+use codex_sandboxing::SandboxType;
+use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::bash::parse_shell_lc_plain_commands;
 use codex_shell_command::bash::parse_shell_lc_single_command_prefix;
 use codex_shell_escalation::EscalateServer;
@@ -44,12 +52,13 @@ use codex_shell_escalation::EscalationPolicy;
 use codex_shell_escalation::EscalationSession;
 use codex_shell_escalation::ExecParams;
 use codex_shell_escalation::ExecResult;
-use codex_shell_escalation::Permissions as EscalatedPermissions;
 use codex_shell_escalation::PreparedExec;
+use codex_shell_escalation::ResolvedPermissionProfile;
 use codex_shell_escalation::ShellCommandExecutor;
 use codex_shell_escalation::Stopwatch;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -117,15 +126,22 @@ pub(super) async fn try_run_zsh_fork(
     )?;
     spec.workspace_kb_root = req.workspace_kb_root.clone();
     let sandbox_exec_request = attempt
-        .env_for(spec, req.network.as_ref())
+        .env_for(
+            command,
+            options,
+            managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions),
+        )
         .map_err(|err| ToolError::Codex(err.into()))?;
     let crate::sandboxing::ExecRequest {
         command,
         cwd: sandbox_cwd,
         env: sandbox_env,
+        exec_server_env_config: _,
         network: sandbox_network,
         expiration: _sandbox_expiration,
+        capture_policy: _capture_policy,
         sandbox,
+        windows_sandbox_policy_cwd: sandbox_policy_cwd,
         windows_sandbox_level,
         windows_sandbox_private_desktop: _windows_sandbox_private_desktop,
         sandbox_permissions,
@@ -153,16 +169,8 @@ pub(super) async fn try_run_zsh_fork(
         env: sandbox_env,
         network: sandbox_network,
         windows_sandbox_level,
-        sandbox_permissions,
-        justification,
         arg0,
-        sandbox_policy_cwd: ctx.turn.cwd.clone(),
-        macos_seatbelt_profile_extensions: ctx
-            .turn
-            .config
-            .permissions
-            .macos_seatbelt_profile_extensions
-            .clone(),
+        sandbox_policy_cwd,
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
@@ -259,16 +267,8 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         env: exec_request.env.clone(),
         network: exec_request.network.clone(),
         windows_sandbox_level: exec_request.windows_sandbox_level,
-        sandbox_permissions: exec_request.sandbox_permissions,
-        justification: exec_request.justification.clone(),
         arg0: exec_request.arg0.clone(),
-        sandbox_policy_cwd: ctx.turn.cwd.clone(),
-        macos_seatbelt_profile_extensions: ctx
-            .turn
-            .config
-            .permissions
-            .macos_seatbelt_profile_extensions
-            .clone(),
+        sandbox_policy_cwd: exec_request.windows_sandbox_policy_cwd.clone(),
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
@@ -309,8 +309,8 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
 
 struct CoreShellActionProvider {
     policy: Arc<RwLock<Policy>>,
-    session: Arc<crate::codex::Session>,
-    turn: Arc<crate::codex::TurnContext>,
+    session: Arc<crate::session::session::Session>,
+    turn: Arc<crate::session::turn_context::TurnContext>,
     call_id: String,
     tool_name: &'static str,
     approval_policy: AskForApproval,
@@ -325,9 +325,6 @@ struct CoreShellActionProvider {
 
 #[allow(clippy::large_enum_variant)]
 enum DecisionSource {
-    SkillScript {
-        skill: SkillMetadata,
-    },
     PrefixRule,
     /// Often, this is `is_safe_command()`.
     UnmatchedCommandFallback,
@@ -412,11 +409,10 @@ impl CoreShellActionProvider {
         argv: &[String],
         workdir: &AbsolutePathBuf,
         stopwatch: &Stopwatch,
-        additional_permissions: Option<PermissionProfile>,
-        decision_source: &DecisionSource,
-    ) -> anyhow::Result<ReviewDecision> {
+        additional_permissions: Option<AdditionalPermissionProfile>,
+    ) -> anyhow::Result<PromptDecision> {
         let command = join_program_and_argv(program, argv);
-        let workdir = workdir.to_path_buf();
+        let workdir = workdir.clone();
         let session = self.session.clone();
         let turn = self.turn.clone();
         let call_id = self.call_id.clone();
@@ -468,43 +464,22 @@ impl CoreShellActionProvider {
                         call_id,
                         approval_id,
                         command,
-                        workdir,
-                        None,
-                        None,
-                        None,
+                        workdir.clone(),
+                        /*reason*/ None,
+                        /*network_approval_context*/ None,
+                        /*proposed_execpolicy_amendment*/ None,
                         additional_permissions,
                         skill_metadata,
                         Some(available_decisions),
                     )
-                    .await
+                    .await;
+                PromptDecision {
+                    decision,
+                    guardian_review_id: None,
+                    rejection_message: None,
+                }
             })
             .await)
-    }
-
-    /// Because we should be intercepting execve(2) calls, `program` should be
-    /// an absolute path. The idea is that we check to see whether it matches
-    /// any skills.
-    async fn find_skill(&self, program: &AbsolutePathBuf) -> Option<SkillMetadata> {
-        let force_reload = false;
-        let skills_outcome = self
-            .session
-            .services
-            .skills_manager
-            .skills_for_cwd(&self.turn.cwd, force_reload)
-            .await;
-
-        let program_path = program.as_path();
-        for skill in skills_outcome.skills {
-            // We intentionally ignore "enabled" status here for now.
-            let Some(skill_root) = skill.path_to_skills_md.parent() else {
-                continue;
-            };
-            if program_path.starts_with(skill_root.join("scripts")) {
-                return Some(skill);
-            }
-        }
-
-        None
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -515,7 +490,7 @@ impl CoreShellActionProvider {
         program: &AbsolutePathBuf,
         argv: &[String],
         workdir: &AbsolutePathBuf,
-        prompt_permissions: Option<PermissionProfile>,
+        prompt_permissions: Option<AdditionalPermissionProfile>,
         escalation_execution: EscalationExecution,
         decision_source: DecisionSource,
     ) -> anyhow::Result<EscalationDecision> {
@@ -529,46 +504,13 @@ impl CoreShellActionProvider {
                 {
                     EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
                 } else {
-                    match self
-                        .prompt(
-                            program,
-                            argv,
-                            workdir,
-                            &self.stopwatch,
-                            prompt_permissions,
-                            &decision_source,
-                        )
-                        .await?
-                    {
+                    let prompt_decision = self
+                        .prompt(program, argv, workdir, &self.stopwatch, prompt_permissions)
+                        .await?;
+                    match prompt_decision.decision {
                         ReviewDecision::Approved
+                        | ReviewDecision::ApprovedForSession
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
-                            if needs_escalation {
-                                EscalationDecision::escalate(escalation_execution.clone())
-                            } else {
-                                EscalationDecision::run()
-                            }
-                        }
-                        ReviewDecision::ApprovedForSession => {
-                            // Currently, we only add session approvals for
-                            // skill scripts because we are storing only the
-                            // `program` whereas prefix rules may be restricted by a longer prefix.
-                            if let DecisionSource::SkillScript { skill } = decision_source {
-                                tracing::debug!(
-                                    "Adding session approval for {program:?} due to user approval of skill script {skill:?}"
-                                );
-                                self.session
-                                    .services
-                                    .execve_session_approvals
-                                    .write()
-                                    .await
-                                    .insert(
-                                        program.clone(),
-                                        ExecveSessionApproval {
-                                            skill: Some(skill.clone()),
-                                        },
-                                    );
-                            }
-
                             if needs_escalation {
                                 EscalationDecision::escalate(escalation_execution.clone())
                             } else {
@@ -590,7 +532,21 @@ impl CoreShellActionProvider {
                             }
                         },
                         ReviewDecision::Denied => {
-                            EscalationDecision::deny(Some("User denied execution".to_string()))
+                            let message = if let Some(message) =
+                                prompt_decision.rejection_message.clone()
+                            {
+                                message
+                            } else if let Some(review_id) =
+                                prompt_decision.guardian_review_id.as_deref()
+                            {
+                                guardian_rejection_message(self.session.as_ref(), review_id).await
+                            } else {
+                                "User denied execution".to_string()
+                            };
+                            EscalationDecision::deny(Some(message))
+                        }
+                        ReviewDecision::TimedOut => {
+                            EscalationDecision::deny(Some(guardian_timeout_message()))
                         }
                         ReviewDecision::Abort => {
                             EscalationDecision::deny(Some("User cancelled execution".to_string()))
@@ -730,13 +686,7 @@ impl EscalationPolicy for CoreShellActionProvider {
                 &self.file_system_sandbox_policy,
                 self.network_sandbox_policy,
                 self.prompt_permissions.as_ref(),
-                self.turn
-                    .config
-                    .permissions
-                    .macos_seatbelt_profile_extensions
-                    .as_ref(),
             ),
-            DecisionSource::SkillScript { .. } => unreachable!("handled above"),
         };
         self.process_decision(
             evaluation.decision,
@@ -788,8 +738,15 @@ fn evaluate_intercepted_exec_policy(
             sandbox_policy,
             file_system_sandbox_policy,
             cmd,
-            sandbox_permissions,
-            used_complex_parsing,
+            crate::exec_policy::UnmatchedCommandContext {
+                approval_policy,
+                permission_profile: &permission_profile,
+                file_system_sandbox_policy,
+                sandbox_cwd,
+                sandbox_permissions,
+                used_complex_parsing,
+                command_origin: crate::exec_policy::ExecPolicyCommandOrigin::Generic,
+            },
         )
     };
 
@@ -856,8 +813,6 @@ struct CoreShellCommandExecutor {
     env: HashMap<String, String>,
     network: Option<codex_network_proxy::NetworkProxy>,
     windows_sandbox_level: WindowsSandboxLevel,
-    sandbox_permissions: SandboxPermissions,
-    justification: Option<String>,
     arg0: Option<String>,
     sandbox_policy_cwd: PathBuf,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -891,7 +846,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
         let mut exec_env = self.env.clone();
         // `env_overlay` comes from `EscalationSession::env()`, so merge only the
         // wrapper/socket variables into the base shell environment.
-        for var in ["CODEX_ESCALATE_SOCKET", "EXEC_WRAPPER", "BASH_EXEC_WRAPPER"] {
+        for var in ["CODEX_ESCALATE_SOCKET", "EXEC_WRAPPER"] {
             if let Some(value) = env_overlay.get(var) {
                 exec_env.insert(var.to_string(), value.clone());
             }
@@ -902,9 +857,12 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 command: self.command.clone(),
                 cwd: self.cwd.clone(),
                 env: exec_env,
+                exec_server_env_config: None,
                 network: self.network.clone(),
                 expiration: ExecExpiration::Cancellation(cancel_rx),
+                capture_policy: ExecCapturePolicy::ShellTool,
                 sandbox: self.sandbox,
+                windows_sandbox_policy_cwd: self.sandbox_policy_cwd.clone(),
                 windows_sandbox_level: self.windows_sandbox_level,
                 windows_sandbox_private_desktop: false,
                 sandbox_permissions: self.sandbox_permissions,
@@ -914,7 +872,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 justification: self.justification.clone(),
                 arg0: self.arg0.clone(),
             },
-            None,
+            /*stdout_stream*/ None,
             after_spawn,
         )
         .await?;
@@ -1027,7 +985,7 @@ impl CoreShellCommandExecutor {
         let (program, args) = command
             .split_first()
             .ok_or_else(|| anyhow::anyhow!("prepared command must not be empty"))?;
-        let sandbox_manager = crate::sandboxing::SandboxManager::new();
+        let sandbox_manager = SandboxManager::new();
         let sandbox = sandbox_manager.select_initial(
             file_system_sandbox_policy,
             network_sandbox_policy,
@@ -1072,7 +1030,7 @@ impl CoreShellCommandExecutor {
 
         Ok(PreparedExec {
             command: exec_request.command,
-            cwd: exec_request.cwd,
+            cwd: exec_request.cwd.to_path_buf(),
             env: exec_request.env,
             arg0: exec_request.arg0,
         })
@@ -1117,9 +1075,9 @@ fn map_exec_result(
 ) -> Result<ExecToolCallOutput, ToolError> {
     let output = ExecToolCallOutput {
         exit_code: result.exit_code,
-        stdout: crate::exec::StreamOutput::new(result.stdout.clone()),
-        stderr: crate::exec::StreamOutput::new(result.stderr.clone()),
-        aggregated_output: crate::exec::StreamOutput::new(result.output.clone()),
+        stdout: StreamOutput::new(result.stdout.clone()),
+        stderr: StreamOutput::new(result.stderr.clone()),
+        aggregated_output: StreamOutput::new(result.output.clone()),
         duration: result.duration,
         timed_out: result.timed_out,
     };

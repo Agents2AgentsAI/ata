@@ -21,6 +21,7 @@ use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouter;
 use codex_protocol::models::ResponseInputItem;
+use codex_tools::ToolSpec;
 
 #[derive(Clone)]
 pub(crate) struct ToolCallRuntime {
@@ -75,12 +76,14 @@ impl ToolCallRuntime {
         let turn = Arc::clone(&self.turn_context);
         let tracker = Arc::clone(&self.tracker);
         let lock = Arc::clone(&self.parallel_execution);
+        let invocation_cancellation_token = cancellation_token.clone();
         let started = Instant::now();
+        let display_name = call.tool_name.display();
 
         let dispatch_span = trace_span!(
-            "dispatch_tool_call",
-            otel.name = call.tool_name.as_str(),
-            tool_name = call.tool_name.as_str(),
+            "dispatch_tool_call_with_code_mode_result",
+            otel.name = display_name.as_str(),
+            tool_name = display_name.as_str(),
             call_id = call.call_id.as_str(),
             aborted = false,
         );
@@ -104,6 +107,7 @@ impl ToolCallRuntime {
                             .dispatch_tool_call_with_code_mode_result(
                                 session,
                                 turn,
+                                invocation_cancellation_token,
                                 tracker,
                                 call.clone(),
                                 source,
@@ -115,14 +119,9 @@ impl ToolCallRuntime {
             }));
 
         async move {
-            match handle.await {
-                Ok(Ok(response)) => Ok(response),
-                Ok(Err(FunctionCallError::Fatal(message))) => Err(CodexErr::Fatal(message)),
-                Ok(Err(other)) => Err(CodexErr::Fatal(other.to_string())),
-                Err(err) => Err(CodexErr::Fatal(format!(
-                    "tool task failed to receive: {err:?}"
-                ))),
-            }
+            handle.await.map_err(|err| {
+                FunctionCallError::Fatal(format!("tool task failed to receive: {err:?}"))
+            })?
         }
         .in_current_span()
     }
@@ -139,12 +138,27 @@ impl ToolCallRuntime {
         }
     }
 
+    fn aborted_response(call: &ToolCall, secs: f32) -> AnyToolResult {
+        AnyToolResult {
+            call_id: call.call_id.clone(),
+            payload: call.payload.clone(),
+            result: Box::new(AbortedToolOutput {
+                message: Self::abort_message(call, secs),
+            }),
+            post_tool_use_payload: None,
+        }
+    }
+
     fn abort_message(call: &ToolCall, secs: f32) -> String {
-        match call.tool_name.as_str() {
-            "shell" | "container.exec" | "local_shell" | "shell_command" | "unified_exec" => {
-                format!("Wall time: {secs:.1} seconds\naborted by user")
-            }
-            _ => format!("aborted by user after {secs:.1}s"),
+        if call.tool_name.namespace.is_none()
+            && matches!(
+                call.tool_name.name.as_str(),
+                "shell" | "container.exec" | "local_shell" | "shell_command" | "unified_exec"
+            )
+        {
+            format!("Wall time: {secs:.1} seconds\naborted by user")
+        } else {
+            format!("aborted by user after {secs:.1}s")
         }
     }
 }

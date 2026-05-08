@@ -49,11 +49,24 @@ denied_domains = ["evil.example"]
 # Hostnames that resolve to local/private IPs are still blocked even if allowlisted.
 allow_local_binding = false
 
-# macOS-only: allows proxying to a unix socket when request includes `x-unix-socket: /path`.
-allow_unix_sockets = ["/tmp/example.sock"]
 # DANGEROUS (macOS-only): bypasses unix socket allowlisting and permits any
 # absolute socket path from `x-unix-socket`.
 dangerously_allow_all_unix_sockets = false
+
+# Hosts must match the allowlist (unless denied).
+# Use exact hosts or scoped wildcards like `*.openai.com` or `**.openai.com`.
+# The global `*` wildcard is rejected.
+# If no domain entries are marked `allow`, the proxy blocks requests until an allowlist is configured.
+[permissions.workspace.network.domains]
+"*.openai.com" = "allow"
+"localhost" = "allow"
+"127.0.0.1" = "allow"
+"::1" = "allow"
+"evil.example" = "deny"
+
+# macOS-only: allows proxying to a unix socket when request includes `x-unix-socket: /path`.
+[permissions.workspace.network.unix_sockets]
+"/tmp/example.sock" = "allow"
 ```
 
 ### 2) Run the proxy

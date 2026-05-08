@@ -1,7 +1,8 @@
+use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::render::renderable::Renderable;
-use codex_protocol::request_user_input::RequestUserInputEvent;
+use codex_app_server_protocol::ToolRequestUserInputParams;
 use crossterm::event::KeyEvent;
 
 use super::CancellationEvent;
@@ -34,6 +35,19 @@ pub(crate) trait BottomPaneView: Renderable {
     fn is_complete(&self) -> bool {
         false
     }
+
+    /// Return the completion reason once the view has finished.
+    fn completion(&self) -> Option<ViewCompletion> {
+        None
+    }
+
+    /// Return true when this view should be removed after a child view is accepted.
+    fn dismiss_after_child_accept(&self) -> bool {
+        false
+    }
+
+    /// Clear any pending child-flow cleanup marker after a child view is cancelled.
+    fn clear_dismiss_after_child_accept(&mut self) {}
 
     /// Stable identifier for views that need external refreshes while open.
     fn view_id(&self) -> Option<&'static str> {
@@ -92,8 +106,8 @@ pub(crate) trait BottomPaneView: Renderable {
     /// consumed.
     fn try_consume_user_input_request(
         &mut self,
-        request: RequestUserInputEvent,
-    ) -> Option<RequestUserInputEvent> {
+        request: ToolRequestUserInputParams,
+    ) -> Option<ToolRequestUserInputParams> {
         Some(request)
     }
 

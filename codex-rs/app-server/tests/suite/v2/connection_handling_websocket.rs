@@ -1,7 +1,11 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+use app_test_support::DISABLE_PLUGIN_STARTUP_TASKS_ARG;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
+use app_test_support::to_response;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCError;
@@ -10,14 +14,20 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadLoadedListResponse;
+use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartResponse;
 use futures::SinkExt;
 use futures::StreamExt;
 use reqwest::StatusCode;
 use serde_json::json;
+use sha2::Sha256;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::process::Stdio;
 use tempfile::TempDir;
+use time::OffsetDateTime;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
@@ -29,11 +39,23 @@ use tokio::time::timeout;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
+use tokio_tungstenite::tungstenite::http::header::ORIGIN;
 
-pub(super) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(5);
+// macOS and Windows CI can spend tens of seconds starting the app-server test
+// binary under Bazel before it accepts JSON-RPC or reports its websocket bind
+// address.
+#[cfg(any(target_os = "macos", windows))]
+pub(super) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(not(any(target_os = "macos", windows)))]
+pub(super) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(super) type WsClient = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+type HmacSha256 = Hmac<Sha256>;
 
 #[tokio::test]
 async fn websocket_transport_routes_per_connection_handshake_and_responses() -> Result<()> {
@@ -46,27 +68,27 @@ async fn websocket_transport_routes_per_connection_handshake_and_responses() -> 
     let mut ws1 = connect_websocket(bind_addr).await?;
     let mut ws2 = connect_websocket(bind_addr).await?;
 
-    send_initialize_request(&mut ws1, 1, "ws_client_one").await?;
-    let first_init = read_response_for_id(&mut ws1, 1).await?;
+    send_initialize_request(&mut ws1, /*id*/ 1, "ws_client_one").await?;
+    let first_init = read_response_for_id(&mut ws1, /*id*/ 1).await?;
     assert_eq!(first_init.id, RequestId::Integer(1));
 
     // Initialize responses are request-scoped and must not leak to other
     // connections.
     assert_no_message(&mut ws2, Duration::from_millis(250)).await?;
 
-    send_config_read_request(&mut ws2, 2).await?;
-    let not_initialized = read_error_for_id(&mut ws2, 2).await?;
+    send_config_read_request(&mut ws2, /*id*/ 2).await?;
+    let not_initialized = read_error_for_id(&mut ws2, /*id*/ 2).await?;
     assert_eq!(not_initialized.error.message, "Not initialized");
 
-    send_initialize_request(&mut ws2, 3, "ws_client_two").await?;
-    let second_init = read_response_for_id(&mut ws2, 3).await?;
+    send_initialize_request(&mut ws2, /*id*/ 3, "ws_client_two").await?;
+    let second_init = read_response_for_id(&mut ws2, /*id*/ 3).await?;
     assert_eq!(second_init.id, RequestId::Integer(3));
 
     // Same request-id on different connections must route independently.
-    send_config_read_request(&mut ws1, 77).await?;
-    send_config_read_request(&mut ws2, 77).await?;
-    let ws1_config = read_response_for_id(&mut ws1, 77).await?;
-    let ws2_config = read_response_for_id(&mut ws2, 77).await?;
+    send_config_read_request(&mut ws1, /*id*/ 77).await?;
+    send_config_read_request(&mut ws2, /*id*/ 77).await?;
+    let ws1_config = read_response_for_id(&mut ws1, /*id*/ 77).await?;
+    let ws2_config = read_response_for_id(&mut ws2, /*id*/ 77).await?;
 
     assert_eq!(ws1_config.id, RequestId::Integer(77));
     assert_eq!(ws2_config.id, RequestId::Integer(77));
@@ -117,7 +139,7 @@ pub(super) async fn spawn_websocket_server(codex_home: &Path) -> Result<(Child, 
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .env("CODEX_HOME", codex_home)
-        .env("RUST_LOG", "debug");
+        .env("RUST_LOG", "warn");
     let mut process = cmd
         .kill_on_drop(true)
         .spawn()
@@ -177,10 +199,18 @@ pub(super) async fn spawn_websocket_server(codex_home: &Path) -> Result<(Child, 
 }
 
 pub(super) async fn connect_websocket(bind_addr: SocketAddr) -> Result<WsClient> {
-    let url = format!("ws://{bind_addr}");
-    let deadline = Instant::now() + Duration::from_secs(10);
+    connect_websocket_with_bearer(bind_addr, /*bearer_token*/ None).await
+}
+
+pub(super) async fn connect_websocket_with_bearer(
+    bind_addr: SocketAddr,
+    bearer_token: Option<&str>,
+) -> Result<WsClient> {
+    let url = format!("ws://{}", connectable_bind_addr(bind_addr));
+    let request = websocket_request(url.as_str(), bearer_token, /*origin*/ None)?;
+    let deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
     loop {
-        match connect_async(&url).await {
+        match connect_async(request.clone()).await {
             Ok((stream, _response)) => return Ok(stream),
             Err(err) => {
                 if Instant::now() >= deadline {
@@ -236,6 +266,78 @@ pub(super) async fn send_initialize_request(
         Some(serde_json::to_value(params)?),
     )
     .await
+}
+
+async fn start_thread(stream: &mut WsClient, id: i64) -> Result<String> {
+    send_request(
+        stream,
+        "thread/start",
+        id,
+        Some(serde_json::to_value(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })?),
+    )
+    .await?;
+    let response = read_response_for_id(stream, id).await?;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(response)?;
+    Ok(thread.id)
+}
+
+async fn assert_loaded_threads(stream: &mut WsClient, id: i64, expected: &[&str]) -> Result<()> {
+    let response = request_loaded_threads(stream, id).await?;
+    let mut actual = response.data;
+    actual.sort();
+    let mut expected = expected
+        .iter()
+        .map(|thread_id| (*thread_id).to_string())
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(actual, expected);
+    assert_eq!(response.next_cursor, None);
+    Ok(())
+}
+
+async fn wait_for_loaded_threads(
+    stream: &mut WsClient,
+    first_id: i64,
+    expected: &[&str],
+) -> Result<()> {
+    let mut next_id = first_id;
+    let expected = expected
+        .iter()
+        .map(|thread_id| (*thread_id).to_string())
+        .collect::<Vec<_>>();
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let response = request_loaded_threads(stream, next_id).await?;
+            next_id += 1;
+            let mut actual = response.data;
+            actual.sort();
+            if actual == expected {
+                return Ok::<(), anyhow::Error>(());
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .context("timed out waiting for loaded thread list")??;
+    Ok(())
+}
+
+async fn request_loaded_threads(
+    stream: &mut WsClient,
+    id: i64,
+) -> Result<ThreadLoadedListResponse> {
+    send_request(
+        stream,
+        "thread/loaded/list",
+        id,
+        Some(serde_json::to_value(ThreadLoadedListParams::default())?),
+    )
+    .await?;
+    let response = read_response_for_id(stream, id).await?;
+    to_response::<ThreadLoadedListResponse>(response)
 }
 
 async fn send_config_read_request(stream: &mut WsClient, id: i64) -> Result<()> {
@@ -405,4 +507,26 @@ stream_max_retries = 0
 "#
         ),
     )
+}
+
+fn connectable_bind_addr(bind_addr: SocketAddr) -> SocketAddr {
+    match bind_addr {
+        SocketAddr::V4(addr) if addr.ip().is_unspecified() => {
+            SocketAddr::from(([127, 0, 0, 1], addr.port()))
+        }
+        SocketAddr::V6(addr) if addr.ip().is_unspecified() => {
+            SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], addr.port()))
+        }
+        _ => bind_addr,
+    }
+}
+
+fn signed_bearer_token(shared_secret: &[u8], claims: serde_json::Value) -> Result<String> {
+    let header_segment = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
+    let claims_segment = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims)?);
+    let payload = format!("{header_segment}.{claims_segment}");
+    let mut mac = HmacSha256::new_from_slice(shared_secret).context("failed to create hmac")?;
+    mac.update(payload.as_bytes());
+    let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+    Ok(format!("{payload}.{signature}"))
 }

@@ -28,6 +28,21 @@ pub fn command_might_be_dangerous(command: &[String]) -> bool {
     false
 }
 
+/// Returns whether already-tokenized PowerShell words should be treated as
+/// dangerous by the Windows unmatched-command heuristics.
+pub fn is_dangerous_powershell_words(command: &[String]) -> bool {
+    #[cfg(windows)]
+    {
+        windows_dangerous_commands::is_dangerous_powershell_words(command)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = command;
+        false
+    }
+}
+
 fn is_git_global_option_with_value(arg: &str) -> bool {
     matches!(
         arg,
@@ -157,5 +172,16 @@ mod tests {
     #[test]
     fn rm_f_is_dangerous() {
         assert!(command_might_be_dangerous(&vec_str(&["rm", "-f", "/"])));
+    }
+
+    #[test]
+    fn direct_powershell_words_reuse_windows_dangerous_detection() {
+        let command = vec_str(&["Remove-Item", "test", "-Force"]);
+
+        if cfg!(windows) {
+            assert!(is_dangerous_powershell_words(&command));
+        } else {
+            assert!(!is_dangerous_powershell_words(&command));
+        }
     }
 }

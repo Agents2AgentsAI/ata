@@ -298,6 +298,22 @@ fn scope_background_rgb(highlighter: &Highlighter<'_>, scope_name: &str) -> Opti
     Some((bg.r, bg.g, bg.b))
 }
 
+/// Query the active syntax theme for the first foreground style provided by the
+/// supplied TextMate scopes.
+pub(crate) fn foreground_style_for_scopes(scope_names: &[&str]) -> Option<Style> {
+    let theme = current_syntax_theme();
+    foreground_style_for_scopes_with_theme(&theme, scope_names)
+}
+
+fn foreground_style_for_scopes_with_theme(theme: &Theme, scope_names: &[&str]) -> Option<Style> {
+    let highlighter = Highlighter::new(theme);
+    scope_names.iter().find_map(|scope_name| {
+        let scope = Scope::new(scope_name).ok()?;
+        let fg = highlighter.style_mod_for_stack(&[scope]).foreground?;
+        convert_syntect_color(fg).map(|fg| Style::default().fg(fg))
+    })
+}
+
 /// Return the configured kebab-case theme name when it resolves; otherwise
 /// return the adaptive auto-detected default theme name.
 ///
@@ -750,7 +766,7 @@ mod tests {
     }
 
     fn unique_foreground_colors_for_theme(theme_name: &str) -> Vec<String> {
-        let theme = resolve_theme_by_name(theme_name, None)
+        let theme = resolve_theme_by_name(theme_name, /*codex_home*/ None)
             .unwrap_or_else(|| panic!("expected built-in theme {theme_name} to resolve"));
         let lines = highlight_to_line_spans_with_theme(
             "fn main() { let answer = 42; println!(\"hello\"); }\n",
@@ -776,6 +792,28 @@ mod tests {
                 ..StyleModifier::default()
             },
         }
+    }
+
+    fn theme_item_with_foreground(scope: &str, foreground: (u8, u8, u8)) -> ThemeItem {
+        ThemeItem {
+            scope: ScopeSelectors::from_str(scope).expect("scope selector should parse"),
+            style: StyleModifier {
+                foreground: Some(SyntectColor {
+                    r: foreground.0,
+                    g: foreground.1,
+                    b: foreground.2,
+                    a: 255,
+                }),
+                ..StyleModifier::default()
+            },
+        }
+    }
+
+    fn assert_rgb(color: Option<RtColor>, expected: (u8, u8, u8)) {
+        let Some(RtColor::Rgb(r, g, b)) = color else {
+            panic!("expected RGB color {expected:?}, got {color:?}");
+        };
+        assert_eq!((r, g, b), expected);
     }
 
     #[test]
@@ -1000,13 +1038,13 @@ mod tests {
 
     #[test]
     fn ansi_palette_color_maps_ansi_white_to_gray() {
-        assert_eq!(ansi_palette_color(0x07), RtColor::Gray);
+        assert_eq!(ansi_palette_color(/*index*/ 0x07), RtColor::Gray);
     }
 
     #[test]
     fn ansi_family_themes_use_terminal_palette_colors_not_rgb() {
         for theme_name in ["ansi", "base16", "base16-256"] {
-            let theme = resolve_theme_by_name(theme_name, None)
+            let theme = resolve_theme_by_name(theme_name, /*codex_home*/ None)
                 .unwrap_or_else(|| panic!("expected built-in theme {theme_name} to resolve"));
             let lines = highlight_to_line_spans_with_theme(
                 "fn main() { let answer = 42; println!(\"hello\"); }\n",
@@ -1211,9 +1249,37 @@ mod tests {
     }
 
     #[test]
+    fn foreground_style_for_scopes_reads_matching_theme_scope() {
+        let theme = Theme {
+            settings: ThemeSettings::default(),
+            scopes: vec![theme_item_with_foreground("keyword", (10, 20, 30))],
+            ..Theme::default()
+        };
+
+        let style = foreground_style_for_scopes_with_theme(&theme, &["keyword"])
+            .expect("expected keyword foreground style");
+
+        assert_rgb(style.fg, (10, 20, 30));
+    }
+
+    #[test]
+    fn foreground_style_for_scopes_uses_first_scope_with_foreground() {
+        let theme = Theme {
+            settings: ThemeSettings::default(),
+            scopes: vec![theme_item_with_foreground("string", (40, 50, 60))],
+            ..Theme::default()
+        };
+
+        let style = foreground_style_for_scopes_with_theme(&theme, &["keyword", "string"])
+            .expect("expected string foreground style");
+
+        assert_rgb(style.fg, (40, 50, 60));
+    }
+
+    #[test]
     fn bundled_theme_can_provide_diff_scope_backgrounds() {
-        let theme =
-            resolve_theme_by_name("github", None).expect("expected built-in GitHub theme to load");
+        let theme = resolve_theme_by_name("github", /*codex_home*/ None)
+            .expect("expected built-in GitHub theme to load");
         let rgbs = diff_scope_background_rgbs_for_theme(&theme);
         assert!(
             rgbs.inserted.is_some() && rgbs.deleted.is_some(),
@@ -1331,13 +1397,13 @@ mod tests {
     #[test]
     fn validate_theme_name_none_for_bundled() {
         // Bundled themes should never produce a warning.
-        assert!(validate_theme_name(Some("dracula"), None).is_none());
+        assert!(validate_theme_name(Some("dracula"), /*codex_home*/ None).is_none());
         assert!(validate_theme_name(Some("nord"), Some(Path::new("/nonexistent"))).is_none());
     }
 
     #[test]
     fn validate_theme_name_none_when_no_override() {
-        assert!(validate_theme_name(None, None).is_none());
+        assert!(validate_theme_name(/*name*/ None, /*codex_home*/ None).is_none());
     }
 
     #[test]

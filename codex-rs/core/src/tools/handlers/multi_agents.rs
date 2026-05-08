@@ -7,21 +7,16 @@
 
 use crate::agent::AgentStatus;
 use crate::agent::exceeds_thread_spawn_depth_limit;
-use crate::codex::Session;
-use crate::codex::TurnContext;
-use crate::config::Config;
-use crate::error::CodexErr;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::models_manager::manager::RefreshStrategy;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+pub(crate) use crate::tools::handlers::multi_agents_common::*;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseInputItem;
@@ -32,16 +27,14 @@ use codex_protocol::protocol::CollabAgentInteractionEndEvent;
 use codex_protocol::protocol::CollabAgentRef;
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
 use codex_protocol::protocol::CollabAgentSpawnEndEvent;
-use codex_protocol::protocol::CollabAgentStatusEntry;
 use codex_protocol::protocol::CollabCloseBeginEvent;
 use codex_protocol::protocol::CollabCloseEndEvent;
 use codex_protocol::protocol::CollabResumeBeginEvent;
 use codex_protocol::protocol::CollabResumeEndEvent;
 use codex_protocol::protocol::CollabWaitingBeginEvent;
 use codex_protocol::protocol::CollabWaitingEndEvent;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
+use codex_tools::ToolName;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -190,53 +183,26 @@ fn thread_spawn_source(
     })
 }
 
-fn parse_collab_input(
-    message: Option<String>,
-    items: Option<Vec<UserInput>>,
-) -> Result<Vec<UserInput>, FunctionCallError> {
-    match (message, items) {
-        (Some(_), Some(_)) => Err(FunctionCallError::RespondToModel(
-            "Provide either message or items, but not both".to_string(),
-        )),
-        (None, None) => Err(FunctionCallError::RespondToModel(
-            "Provide one of: message or items".to_string(),
-        )),
-        (Some(message), None) => {
-            if message.trim().is_empty() {
-                return Err(FunctionCallError::RespondToModel(
-                    "Empty message can't be sent to an agent".to_string(),
-                ));
-            }
-            Ok(vec![UserInput::Text {
-                text: message,
-                text_elements: Vec::new(),
-            }])
-        }
-        (None, Some(items)) => {
-            if items.is_empty() {
-                return Err(FunctionCallError::RespondToModel(
-                    "Items can't be empty".to_string(),
-                ));
-            }
-            Ok(items)
-        }
+pub(crate) fn parse_agent_id_targets(
+    targets: Vec<String>,
+) -> Result<Vec<ThreadId>, FunctionCallError> {
+    if targets.is_empty() {
+        return Err(FunctionCallError::RespondToModel(
+            "agent ids must be non-empty".to_string(),
+        ));
     }
+
+    targets
+        .into_iter()
+        .map(|target| parse_agent_id_target(&target))
+        .collect()
 }
 
-fn input_preview(items: &[UserInput]) -> String {
-    let parts: Vec<String> = items
-        .iter()
-        .map(|item| match item {
-            UserInput::Text { text, .. } => text.clone(),
-            UserInput::Image { .. } => "[image]".to_string(),
-            UserInput::LocalImage { path } => format!("[local_image:{}]", path.display()),
-            UserInput::Skill { name, path } => {
-                format!("[skill:${name}]({})", path.display())
-            }
-            UserInput::Mention { name, path } => format!("[mention:${name}]({path})"),
-            _ => "[input]".to_string(),
-        })
-        .collect();
+pub(crate) use close_agent::Handler as CloseAgentHandler;
+pub(crate) use resume_agent::Handler as ResumeAgentHandler;
+pub(crate) use send_input::Handler as SendInputHandler;
+pub(crate) use spawn::Handler as SpawnAgentHandler;
+pub(crate) use wait::Handler as WaitAgentHandler;
 
     parts.join("\n")
 }

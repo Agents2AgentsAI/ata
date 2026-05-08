@@ -4,6 +4,9 @@ inputs:
   target:
     description: Rust compilation target triple (e.g. aarch64-apple-darwin).
     required: true
+  binaries:
+    description: Space-delimited binary basenames to sign and notarize.
+    default: "codex codex-responses-api-proxy"
   sign-binaries:
     description: Whether to sign and notarize the macOS binaries.
     required: false
@@ -117,6 +120,9 @@ runs:
     - name: Sign macOS binaries
       if: ${{ inputs.sign-binaries == 'true' }}
       shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        BINARIES: ${{ inputs.binaries }}
       run: |
         set -euo pipefail
 
@@ -139,6 +145,8 @@ runs:
       if: ${{ inputs.sign-binaries == 'true' }}
       shell: bash
       env:
+        TARGET: ${{ inputs.target }}
+        BINARIES: ${{ inputs.binaries }}
         APPLE_NOTARIZATION_KEY_P8: ${{ inputs.apple-notarization-key-p8 }}
         APPLE_NOTARIZATION_KEY_ID: ${{ inputs.apple-notarization-key-id }}
         APPLE_NOTARIZATION_ISSUER_ID: ${{ inputs.apple-notarization-issuer-id }}
@@ -163,7 +171,7 @@ runs:
 
         notarize_binary() {
           local binary="$1"
-          local source_path="codex-rs/target/${{ inputs.target }}/release/${binary}"
+          local source_path="codex-rs/target/${TARGET}/release/${binary}"
           local archive_path="${RUNNER_TEMP}/${binary}.zip"
 
           if [[ ! -f "$source_path" ]]; then
@@ -184,6 +192,7 @@ runs:
       if: ${{ inputs.sign-dmg == 'true' }}
       shell: bash
       env:
+        TARGET: ${{ inputs.target }}
         APPLE_NOTARIZATION_KEY_P8: ${{ inputs.apple-notarization-key-p8 }}
         APPLE_NOTARIZATION_KEY_ID: ${{ inputs.apple-notarization-key-id }}
         APPLE_NOTARIZATION_ISSUER_ID: ${{ inputs.apple-notarization-issuer-id }}

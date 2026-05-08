@@ -1,17 +1,17 @@
 /*
 Module: sandboxing
 
-Build platform wrappers and produce ExecRequest for execution. Owns low-level
-sandbox placement and transformation of portable CommandSpec into a
-ready‑to‑spawn environment.
+Core-owned adapter types for exec/runtime plumbing. Policy selection and
+command transformation live in the codex-sandboxing crate; this module keeps
+the exec-only metadata and translates transformed sandbox commands back into
+ExecRequest for execution.
 */
 
 pub(crate) mod macos_permissions;
 
 use crate::exec::ExecExpiration;
-use crate::exec::ExecToolCallOutput;
-use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
+use crate::exec::WindowsSandboxFilesystemOverrides;
 use crate::exec::execute_exec_request;
 use crate::landlock::allow_network_for_proxy;
 use crate::landlock::create_linux_sandbox_command_args_for_policies;
@@ -23,7 +23,6 @@ use crate::seatbelt::create_seatbelt_command_args_for_policies_with_extensions;
 #[cfg(target_os = "macos")]
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use crate::tools::sandboxing::SandboxablePreference;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::FileSystemPermissions;
@@ -44,9 +43,6 @@ use dunce::canonicalize;
 use macos_permissions::intersect_macos_seatbelt_profile_extensions;
 use macos_permissions::merge_macos_seatbelt_profile_extensions;
 use std::collections::HashMap;
-use std::collections::HashSet;
-use std::path::Path;
-use std::path::PathBuf;
 
 #[derive(Debug)]
 pub struct CommandSpec {
@@ -64,11 +60,14 @@ pub struct CommandSpec {
 #[derive(Debug)]
 pub struct ExecRequest {
     pub command: Vec<String>,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub env: HashMap<String, String>,
+    pub(crate) exec_server_env_config: Option<ExecServerEnvConfig>,
     pub network: Option<NetworkProxy>,
     pub expiration: ExecExpiration,
+    pub capture_policy: ExecCapturePolicy,
     pub sandbox: SandboxType,
+    pub windows_sandbox_policy_cwd: AbsolutePathBuf,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
     pub sandbox_permissions: SandboxPermissions,
@@ -707,11 +706,14 @@ impl SandboxManager {
 
         Ok(ExecRequest {
             command,
-            cwd: spec.cwd,
+            cwd,
             env,
-            network: network.cloned(),
-            expiration: spec.expiration,
+            exec_server_env_config: None,
+            network,
+            expiration,
+            capture_policy,
             sandbox,
+            windows_sandbox_policy_cwd,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
             sandbox_permissions: spec.sandbox_permissions,
@@ -731,9 +733,8 @@ impl SandboxManager {
 pub async fn execute_env(
     exec_request: ExecRequest,
     stdout_stream: Option<StdoutStream>,
-) -> crate::error::Result<ExecToolCallOutput> {
-    let effective_policy = exec_request.sandbox_policy.clone();
-    execute_exec_request(exec_request, &effective_policy, stdout_stream, None).await
+) -> codex_protocol::error::Result<ExecToolCallOutput> {
+    execute_exec_request(exec_request, stdout_stream, /*after_spawn*/ None).await
 }
 
 pub async fn execute_exec_request_with_after_spawn(

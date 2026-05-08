@@ -1,5 +1,6 @@
 //! Turn-scoped state and active turn metadata scaffolding.
 
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -29,6 +30,27 @@ pub(crate) struct ActiveTurn {
     pub(crate) turn_state: Arc<Mutex<TurnState>>,
 }
 
+/// Whether mailbox deliveries should still be folded into the current turn.
+///
+/// State machine:
+/// - A turn starts in `CurrentTurn`, so queued child mail can join the next
+///   model request for that turn.
+/// - After user-visible terminal output is recorded, we switch to `NextTurn`
+///   to leave late child mail queued instead of extending an already shown
+///   answer.
+/// - If the same task later gets explicit same-turn work again (a steered user
+///   prompt or a tool call after an untagged preamble), we reopen `CurrentTurn`
+///   so that pending child mail is drained into that follow-up request.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum MailboxDeliveryPhase {
+    /// Incoming mailbox messages can still be consumed by the current turn.
+    #[default]
+    CurrentTurn,
+    /// The current turn already emitted visible final answer text; mailbox
+    /// messages should remain queued for a later turn.
+    NextTurn,
+}
+
 impl Default for ActiveTurn {
     fn default() -> Self {
         Self {
@@ -48,12 +70,17 @@ pub(crate) enum TaskKind {
 pub(crate) struct RunningTask {
     pub(crate) done: Arc<Notify>,
     pub(crate) kind: TaskKind,
-    pub(crate) task: Arc<dyn SessionTask>,
+    pub(crate) task: Arc<dyn AnySessionTask>,
     pub(crate) cancellation_token: CancellationToken,
-    pub(crate) handle: Arc<AbortOnDropHandle<()>>,
+    pub(crate) handle: AbortOnDropHandle<()>,
     pub(crate) turn_context: Arc<TurnContext>,
     // Timer recorded when the task drops to capture the full turn duration.
     pub(crate) _timer: Option<codex_otel::Timer>,
+}
+
+pub(crate) struct RemovedTask {
+    pub(crate) records_turn_token_usage_on_span: bool,
+    pub(crate) active_turn_is_empty: bool,
 }
 
 impl ActiveTurn {
@@ -62,9 +89,14 @@ impl ActiveTurn {
         self.tasks.insert(sub_id, task);
     }
 
-    pub(crate) fn remove_task(&mut self, sub_id: &str) -> bool {
-        self.tasks.swap_remove(sub_id);
-        self.tasks.is_empty()
+    pub(crate) fn remove_task(&mut self, sub_id: &str) -> Option<RemovedTask> {
+        let task = self.tasks.swap_remove(sub_id)?;
+        let records_turn_token_usage_on_span = task.task.records_turn_token_usage_on_span();
+        task.handle.detach();
+        Some(RemovedTask {
+            records_turn_token_usage_on_span,
+            active_turn_is_empty: self.tasks.is_empty(),
+        })
     }
 
     pub(crate) fn drain_tasks(&mut self) -> Vec<RunningTask> {
@@ -84,7 +116,14 @@ pub(crate) struct TurnState {
     url_attachments_injected: usize,
     granted_permissions: Option<PermissionProfile>,
     pub(crate) tool_calls: u64,
+    pub(crate) has_memory_citation: bool,
     pub(crate) token_usage_at_turn_start: TokenUsage,
+}
+
+pub(crate) struct PendingRequestPermissions {
+    pub(crate) tx_response: oneshot::Sender<RequestPermissionsResponse>,
+    pub(crate) requested_permissions: RequestPermissionProfile,
+    pub(crate) cwd: AbsolutePathBuf,
 }
 
 impl TurnState {
@@ -125,6 +164,22 @@ impl TurnState {
         &mut self,
         key: &str,
     ) -> Option<oneshot::Sender<RequestPermissionsResponse>> {
+        self.pending_request_permissions.remove(key)
+    }
+
+    pub(crate) fn insert_pending_request_permissions(
+        &mut self,
+        key: String,
+        pending_request_permissions: PendingRequestPermissions,
+    ) -> Option<PendingRequestPermissions> {
+        self.pending_request_permissions
+            .insert(key, pending_request_permissions)
+    }
+
+    pub(crate) fn remove_pending_request_permissions(
+        &mut self,
+        key: &str,
+    ) -> Option<PendingRequestPermissions> {
         self.pending_request_permissions.remove(key)
     }
 
@@ -179,6 +234,15 @@ impl TurnState {
 
     pub(crate) fn push_pending_input(&mut self, input: ResponseInputItem) {
         self.pending_input.push(input);
+    }
+
+    pub(crate) fn prepend_pending_input(&mut self, mut input: Vec<ResponseInputItem>) {
+        if input.is_empty() {
+            return;
+        }
+
+        input.append(&mut self.pending_input);
+        self.pending_input = input;
     }
 
     pub(crate) fn take_pending_input(&mut self) -> Vec<ResponseInputItem> {

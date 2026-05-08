@@ -1,6 +1,8 @@
 set working-directory := "codex-rs"
 set positional-arguments
 
+rust_min_stack := "8388608" # 8 MiB
+
 # Display help
 help:
     just -l
@@ -13,6 +15,11 @@ codex *args:
 # `codex exec`
 exec *args:
     cargo run --bin codex -- exec "$@"
+
+# Start `codex exec-server` and run codex-tui.
+[no-cd]
+tui-with-exec-server *args:
+    {{ justfile_directory() }}/scripts/run_tui_with_exec_server.sh "$@"
 
 # Run the CLI version of the file-search crate.
 file-search *args:
@@ -49,10 +56,10 @@ install:
 # --no-fail-fast is important to ensure all tests are run.
 #
 # Run `cargo install cargo-nextest` if you don't have it installed.
-# Prefer this for routine local runs; use explicit `cargo test --all-features`
-# only when you specifically need full feature coverage.
+# Prefer this for routine local runs. Workspace crate features are banned, so
+# there should be no need to add `--all-features`.
 test:
-    cargo nextest run --no-fail-fast
+    RUST_MIN_STACK={{ rust_min_stack }} cargo nextest run --no-fail-fast
 
 # Test all workspace members
 test-all:
@@ -90,13 +97,21 @@ bazel-lock-update:
 
 [no-cd]
 bazel-lock-check:
-    ./scripts/check-module-bazel-lock.sh
+    {{ justfile_directory() }}/scripts/check-module-bazel-lock.sh
 
 bazel-test:
-    bazel test //... --keep_going
+    bazel test --test_tag_filters=-argument-comment-lint //... --keep_going
+
+[no-cd]
+bazel-clippy:
+    bazel_targets="$({{ justfile_directory() }}/scripts/list-bazel-clippy-targets.sh)" && bazel build --config=clippy -- ${bazel_targets}
+
+[no-cd]
+bazel-argument-comment-lint:
+    bazel build --config=argument-comment-lint -- $({{ justfile_directory() }}/tools/argument-comment-lint/list-bazel-targets.sh)
 
 bazel-remote-test:
-    bazel test //... --config=remote --platforms=//:rbe --keep_going
+    bazel test --test_tag_filters=-argument-comment-lint //... --config=remote --platforms=//:rbe --keep_going
 
 build-for-release:
     bazel build //codex-rs/cli:release_binaries --config=remote

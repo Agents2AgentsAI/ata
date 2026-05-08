@@ -14,7 +14,7 @@
 //! - Git information (branch name)
 //! - Context usage (remaining %, used %, window size)
 //! - Usage limits (5-hour, weekly)
-//! - Session info (ID, tokens used)
+//! - Session info (thread title, ID, tokens used)
 //! - Application version
 
 use ratatui::buffer::Buffer;
@@ -33,7 +33,11 @@ use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::multi_select_picker::MultiSelectItem;
 use crate::bottom_pane::multi_select_picker::MultiSelectPicker;
+use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewData;
+use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewItem;
 use crate::render::renderable::Renderable;
+
+const STATUS_LINE_USE_THEME_COLORS_ITEM_ID: &str = "status-line-use-theme-colors";
 
 /// Available items that can be displayed in the status line.
 ///
@@ -49,6 +53,7 @@ use crate::render::renderable::Renderable;
 #[strum(serialize_all = "kebab_case")]
 pub(crate) enum StatusLineItem {
     /// The current model name.
+    #[strum(to_string = "model", serialize = "model-name")]
     ModelName,
 
     /// Model name with reasoning level suffix.
@@ -58,15 +63,33 @@ pub(crate) enum StatusLineItem {
     CurrentDir,
 
     /// Project root directory (if detected).
+    #[strum(
+        to_string = "project-name",
+        serialize = "project",
+        serialize = "project-root"
+    )]
     ProjectRoot,
 
     /// Current git branch name (if in a repository).
     GitBranch,
 
+    /// Open pull request number for the current branch.
+    PullRequestNumber,
+
+    /// Committed branch diff stats relative to the default branch.
+    BranchChanges,
+
+    /// Compact runtime run-state text.
+    #[strum(to_string = "run-state", serialize = "status")]
+    Status,
+
     /// Percentage of context window remaining.
     ContextRemaining,
 
     /// Percentage of context window used.
+    ///
+    /// Also accepts the legacy `context-usage` config value.
+    #[strum(to_string = "context-used", serialize = "context-usage")]
     ContextUsed,
 
     /// Remaining usage on the 5-hour rate limit.
@@ -99,13 +122,20 @@ pub(crate) enum StatusLineItem {
 
 impl StatusLineItem {
     /// User-visible description shown in the popup.
-    pub(crate) fn description(&self) -> &'static str {
+    pub(crate) fn description(self) -> &'static str {
         match self {
             StatusLineItem::ModelName => "Current model name",
             StatusLineItem::ModelWithReasoning => "Current model name with reasoning level",
             StatusLineItem::CurrentDir => "Current working directory",
-            StatusLineItem::ProjectRoot => "Project root directory (omitted when unavailable)",
+            StatusLineItem::ProjectRoot => "Project name (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
+            StatusLineItem::PullRequestNumber => {
+                "Open pull request number for the current branch (omitted when unavailable)"
+            }
+            StatusLineItem::BranchChanges => {
+                "Committed branch changes against the default branch (omitted when unavailable)"
+            }
+            StatusLineItem::Status => "Compact session run-state text (Ready, Working, Thinking)",
             StatusLineItem::ContextRemaining => {
                 "Percentage of context window remaining (omitted when unknown)"
             }
@@ -184,6 +214,8 @@ impl StatusLineSetupView {
     ///
     /// * `status_line_items` - Currently configured item IDs (in display order),
     ///   or `None` to start with all items disabled
+    /// * `use_theme_colors` - Whether the preview and saved status line use colors from
+    ///   the active theme
     /// * `app_event_tx` - Event sender for dispatching configuration changes
     ///
     /// Items from `status_line_items` are shown first (in order) and marked as
@@ -194,7 +226,14 @@ impl StatusLineSetupView {
         app_event_tx: AppEventSender,
     ) -> Self {
         let mut used_ids = HashSet::new();
-        let mut items = Vec::new();
+        let mut items = vec![MultiSelectItem {
+            id: STATUS_LINE_USE_THEME_COLORS_ITEM_ID.to_string(),
+            name: "Use theme colors".to_string(),
+            description: Some("Apply colors from the active /theme".to_string()),
+            enabled: use_theme_colors,
+            orderable: false,
+            section_break_after: true,
+        }];
 
         if let Some(selected_items) = status_line_items.as_ref() {
             for id in *selected_items {
@@ -205,7 +244,7 @@ impl StatusLineSetupView {
                 if !used_ids.insert(item_id.clone()) {
                     continue;
                 }
-                items.push(Self::status_line_select_item(item, true));
+                items.push(Self::status_line_select_item(item, /*enabled*/ true));
             }
         }
 
@@ -214,7 +253,7 @@ impl StatusLineSetupView {
             if used_ids.contains(&item_id) {
                 continue;
             }
-            items.push(Self::status_line_select_item(item, false));
+            items.push(Self::status_line_select_item(item, /*enabled*/ false));
         }
 
         Self {
@@ -231,12 +270,17 @@ impl StatusLineSetupView {
             .enable_ordering()
             .on_preview(move |items| preview_data.line_for_items(items))
             .on_confirm(|ids, app_event| {
+                let use_theme_colors = ids
+                    .iter()
+                    .any(|id| id == STATUS_LINE_USE_THEME_COLORS_ITEM_ID);
                 let items = ids
                     .iter()
-                    .map(|id| id.parse::<StatusLineItem>())
-                    .collect::<Result<Vec<_>, _>>()
-                    .unwrap_or_default();
-                app_event.send(AppEvent::StatusLineSetup { items });
+                    .filter_map(|id| id.parse::<StatusLineItem>().ok())
+                    .collect::<Vec<_>>();
+                app_event.send(AppEvent::StatusLineSetup {
+                    items,
+                    use_theme_colors,
+                });
             })
             .on_cancel(|app_event| {
                 app_event.send(AppEvent::StatusLineSetupCancelled);
@@ -252,6 +296,8 @@ impl StatusLineSetupView {
             name: item.to_string(),
             description: Some(item.description().to_string()),
             enabled,
+            orderable: true,
+            section_break_after: false,
         }
     }
 }

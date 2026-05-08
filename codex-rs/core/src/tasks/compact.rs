@@ -2,16 +2,14 @@ use std::sync::Arc;
 
 use super::SessionTask;
 use super::SessionTaskContext;
-use crate::codex::TurnContext;
+use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
-use async_trait::async_trait;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct CompactTask;
 
-#[async_trait]
 impl SessionTask for CompactTask {
     fn kind(&self) -> TaskKind {
         TaskKind::Compact
@@ -32,14 +30,21 @@ impl SessionTask for CompactTask {
         let _ = if crate::compact::should_use_remote_compact_task(&ctx.provider) {
             let _ = session.services.session_telemetry.counter(
                 "codex.task.compact",
-                1,
+                /*inc*/ 1,
                 &[("type", "remote")],
             );
-            crate::compact_remote::run_remote_compact_task(session.clone(), ctx).await
+            if ctx
+                .features
+                .enabled(codex_features::Feature::RemoteCompactionV2)
+            {
+                crate::compact_remote_v2::run_remote_compact_task(session.clone(), ctx).await
+            } else {
+                crate::compact_remote::run_remote_compact_task(session.clone(), ctx).await
+            }
         } else {
             let _ = session.services.session_telemetry.counter(
                 "codex.task.compact",
-                1,
+                /*inc*/ 1,
                 &[("type", "local")],
             );
             crate::compact::run_compact_task(session.clone(), ctx, input).await

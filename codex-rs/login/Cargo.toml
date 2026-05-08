@@ -8,11 +8,22 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-client = { workspace = true }
 codex-core = { workspace = true }
 codex-app-server-protocol = { workspace = true }
+codex-client = { workspace = true }
+codex-config = { workspace = true }
+codex-keyring-store = { workspace = true }
+codex-model-provider-info = { workspace = true }
+codex-otel = { workspace = true }
+codex-protocol = { workspace = true }
+codex-terminal-detection = { workspace = true }
+codex-utils-template = { workspace = true }
+once_cell = { workspace = true }
+os_info = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "blocking"] }
 serde = { workspace = true, features = ["derive"] }

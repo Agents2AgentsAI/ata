@@ -491,8 +491,9 @@ impl ToolsConfig {
     }
 }
 
-fn supports_image_generation(model_info: &ModelInfo) -> bool {
-    model_info.input_modalities.contains(&InputModality::Image)
+struct McpToolPlanInputs<'a> {
+    mcp_tools: Vec<ToolRegistryBuildMcpTool<'a>>,
+    tool_namespaces: HashMap<String, ToolNamespace>,
 }
 
 /// Generic JSON‑Schema subset needed for our tool definitions
@@ -1989,8 +1990,10 @@ fn sanitize_json_schema(value: &mut JsonValue) {
 #[cfg(test)]
 pub(crate) fn build_specs(
     config: &ToolsConfig,
-    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
-    app_tools: Option<HashMap<String, ToolInfo>>,
+    mcp_tools: Option<HashMap<String, ToolInfo>>,
+    deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
+    unavailable_called_tools: Vec<ToolName>,
+    discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     build_specs_with_discoverable_tools(config, mcp_tools, app_tools, None, dynamic_tools)
@@ -2373,6 +2376,44 @@ pub(crate) fn build_specs_with_discoverable_tools(
         Some(WebSearchMode::Live) => Some(true),
         Some(WebSearchMode::Disabled) | None => None,
     };
+    let default_wait_timeout_ms =
+        DEFAULT_WAIT_TIMEOUT_MS.clamp(min_wait_timeout_ms, MAX_WAIT_TIMEOUT_MS);
+    let deferred_dynamic_tools = dynamic_tools
+        .iter()
+        .filter(|tool| tool.defer_loading && (config.namespace_tools || tool.namespace.is_none()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let tool_search_entries = build_tool_search_entries_for_config(
+        config,
+        deferred_mcp_tools.as_ref(),
+        &deferred_dynamic_tools,
+    );
+    let mut builder = build_tool_registry_builder(
+        config,
+        ToolRegistryBuildParams {
+            mcp_tools: mcp_tool_plan_inputs
+                .as_ref()
+                .map(|inputs| inputs.mcp_tools.as_slice()),
+            deferred_mcp_tools: deferred_mcp_tool_sources.as_deref(),
+            tool_namespaces: mcp_tool_plan_inputs
+                .as_ref()
+                .map(|inputs| &inputs.tool_namespaces),
+            discoverable_tools: discoverable_tools.as_deref(),
+            dynamic_tools,
+            default_agent_type_description: &default_agent_type_description,
+            wait_agent_timeouts: WaitAgentTimeoutOptions {
+                default_timeout_ms: default_wait_timeout_ms,
+                min_timeout_ms: min_wait_timeout_ms,
+                max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
+            },
+            tool_search_entries: &tool_search_entries,
+        },
+    );
+    let mut existing_spec_names = builder
+        .specs()
+        .iter()
+        .map(|configured_tool| configured_tool.name().to_string())
+        .collect::<HashSet<_>>();
 
     if let Some(external_web_access) = external_web_access {
         let search_content_types = match config.web_search_tool_type {
@@ -2495,6 +2536,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             );
             builder.register_handler("report_agent_job_result", agent_jobs_handler);
         }
+        builder.register_handler(Arc::new(UnavailableToolHandler::new(unavailable_tool)));
     }
 
     if let Some(mcp_tools) = mcp_tools {

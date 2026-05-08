@@ -25,6 +25,16 @@
         },
         {
           "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "image_url": {
               "type": "string"
             },
@@ -207,56 +217,6 @@
         }
       ]
     },
-    "FunctionCallOutputPayload": {
-      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`body` serializes directly as the wire value for `function_call_output.output`. `success` remains internal metadata for downstream handling.",
-      "properties": {
-        "body": {
-          "$ref": "#/definitions/FunctionCallOutputBody"
-        },
-        "success": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "body"
-      ],
-      "type": "object"
-    },
-    "GhostCommit": {
-      "description": "Details of a ghost commit created from a repository state.",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "parent": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "preexisting_untracked_dirs": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "preexisting_untracked_files": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "id",
-        "preexisting_untracked_dirs",
-        "preexisting_untracked_files"
-      ],
-      "type": "object"
-    },
     "ImageDetail": {
       "enum": [
         "auto",
@@ -427,12 +387,6 @@
               },
               "type": "array"
             },
-            "end_turn": {
-              "type": [
-                "boolean",
-                "null"
-              ]
-            },
             "id": {
               "type": [
                 "string",
@@ -487,10 +441,6 @@
                 "null"
               ]
             },
-            "id": {
-              "type": "string",
-              "writeOnly": true
-            },
             "summary": {
               "items": {
                 "$ref": "#/definitions/ReasoningItemReasoningSummary"
@@ -506,7 +456,6 @@
             }
           },
           "required": [
-            "id",
             "summary",
             "type"
           ],
@@ -647,7 +596,7 @@
               "type": "string"
             },
             "output": {
-              "$ref": "#/definitions/FunctionCallOutputPayload"
+              "$ref": "#/definitions/FunctionCallOutputBody"
             },
             "type": {
               "enum": [
@@ -711,8 +660,14 @@
             "call_id": {
               "type": "string"
             },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "output": {
-              "$ref": "#/definitions/FunctionCallOutputPayload"
+              "$ref": "#/definitions/FunctionCallOutputBody"
             },
             "type": {
               "enum": [
@@ -840,26 +795,6 @@
         },
         {
           "properties": {
-            "ghost_commit": {
-              "$ref": "#/definitions/GhostCommit"
-            },
-            "type": {
-              "enum": [
-                "ghost_snapshot"
-              ],
-              "title": "GhostSnapshotResponseItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "ghost_commit",
-            "type"
-          ],
-          "title": "GhostSnapshotResponseItem",
-          "type": "object"
-        },
-        {
-          "properties": {
             "encrypted_content": {
               "type": "string"
             },
@@ -876,6 +811,28 @@
             "type"
           ],
           "title": "CompactionResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "encrypted_content": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "context_compaction"
+              ],
+              "title": "ContextCompactionResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ContextCompactionResponseItem",
           "type": "object"
         },
         {

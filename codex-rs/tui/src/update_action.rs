@@ -1,3 +1,8 @@
+#[cfg(any(not(debug_assertions), test))]
+use codex_install_context::InstallContext;
+#[cfg(any(not(debug_assertions), test))]
+use codex_install_context::StandalonePlatform;
+
 /// Update action the CLI should perform after the TUI exits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateAction {
@@ -12,6 +17,20 @@ pub enum UpdateAction {
 }
 
 impl UpdateAction {
+    #[cfg(any(not(debug_assertions), test))]
+    pub(crate) fn from_install_context(context: &InstallContext) -> Option<Self> {
+        match context {
+            InstallContext::Npm => Some(UpdateAction::NpmGlobalLatest),
+            InstallContext::Bun => Some(UpdateAction::BunGlobalLatest),
+            InstallContext::Brew => Some(UpdateAction::BrewUpgrade),
+            InstallContext::Standalone { platform, .. } => Some(match platform {
+                StandalonePlatform::Unix => UpdateAction::StandaloneUnix,
+                StandalonePlatform::Windows => UpdateAction::StandaloneWindows,
+            }),
+            InstallContext::Other => None,
+        }
+    }
+
     /// Returns the list of command-line arguments for invoking the update.
     pub fn command_args(self) -> (&'static str, &'static [&'static str]) {
         match self {
@@ -75,6 +94,8 @@ fn detect_update_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
 
     #[test]
     fn detects_update_action_without_env_mutation() {
@@ -88,11 +109,11 @@ mod tests {
             }
         );
         assert_eq!(
-            detect_update_action(false, std::path::Path::new("/any/path"), true, false),
+            UpdateAction::from_install_context(&InstallContext::Npm),
             Some(UpdateAction::NpmGlobalLatest)
         );
         assert_eq!(
-            detect_update_action(false, std::path::Path::new("/any/path"), false, true),
+            UpdateAction::from_install_context(&InstallContext::Bun),
             Some(UpdateAction::BunGlobalLatest)
         );
         assert_eq!(

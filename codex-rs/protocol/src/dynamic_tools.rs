@@ -8,6 +8,8 @@ use ts_rs::TS;
 #[derive(Debug, Clone, Serialize, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DynamicToolSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
     pub name: String,
     pub description: String,
     pub input_schema: JsonValue,
@@ -20,6 +22,10 @@ pub struct DynamicToolSpec {
 pub struct DynamicToolCallRequest {
     pub call_id: String,
     pub turn_id: String,
+    #[serde(default)]
+    pub started_at_ms: i64,
+    #[serde(default)]
+    pub namespace: Option<String>,
     pub tool: String,
     pub arguments: JsonValue,
 }

@@ -5,8 +5,6 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use crate::chatgpt_client::chatgpt_get_request_with_timeout;
-use crate::chatgpt_token::get_chatgpt_token_data;
-use crate::chatgpt_token::init_chatgpt_token_from_auth;
 
 use codex_connectors::AllConnectorsCacheKey;
 use codex_connectors::DirectoryListResponse;
@@ -15,11 +13,10 @@ pub use codex_core::connectors::AppInfo;
 pub use codex_core::connectors::connector_display_label;
 use codex_core::connectors::filter_disallowed_connectors;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools;
+pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status;
 pub use codex_core::connectors::list_cached_accessible_connectors_from_mcp_tools;
-use codex_core::connectors::merge_connectors;
-use codex_core::connectors::merge_plugin_apps;
 pub use codex_core::connectors::with_app_enabled_state;
 use codex_core::plugins::AppConnectorId;
 use codex_core::plugins::PluginsManager;
@@ -45,13 +42,15 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     let connectors = connectors_result?;
     let accessible = accessible_result?;
     Ok(with_app_enabled_state(
-        merge_connectors_with_accessible(connectors, accessible, true),
+        merge_connectors_with_accessible(
+            connectors, accessible, /*all_connectors_loaded*/ true,
+        ),
         config,
     ))
 }
 
 pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
-    list_all_connectors_with_options(config, false).await
+    list_all_connectors_with_options(config, /*force_refetch*/ false).await
 }
 
 pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>> {
@@ -152,7 +151,7 @@ pub fn merge_connectors_with_accessible(
         accessible_connectors
     };
     let merged = merge_connectors(connectors, accessible_connectors);
-    filter_disallowed_connectors(merged)
+    filter_disallowed_connectors(merged, originator().value.as_str())
 }
 
 #[cfg(test)]
@@ -180,46 +179,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn allows_asdk_connectors() {
-        let filtered = filter_disallowed_connectors(vec![app("asdk_app_hidden"), app("alpha")]);
-        assert_eq!(filtered, vec![app("asdk_app_hidden"), app("alpha")]);
-    }
-
-    #[test]
-    fn allows_whitelisted_asdk_connectors() {
-        let filtered = filter_disallowed_connectors(vec![
-            app("asdk_app_69781557cc1481919cf5e9824fa2e792"),
-            app("beta"),
-        ]);
-        assert_eq!(
-            filtered,
-            vec![
-                app("asdk_app_69781557cc1481919cf5e9824fa2e792"),
-                app("beta")
-            ]
-        );
-    }
-
-    #[test]
-    fn filters_openai_prefixed_connectors() {
-        let filtered = filter_disallowed_connectors(vec![
-            app("connector_openai_foo"),
-            app("connector_openai_bar"),
-            app("gamma"),
-        ]);
-        assert_eq!(filtered, vec![app("gamma")]);
-    }
-
-    #[test]
-    fn filters_disallowed_connector_ids() {
-        let filtered = filter_disallowed_connectors(vec![
-            app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
-            app("delta"),
-        ]);
-        assert_eq!(filtered, vec![app("delta")]);
-    }
-
     fn merged_app(id: &str, is_accessible: bool) -> AppInfo {
         AppInfo {
             id: id.to_string(),
@@ -243,9 +202,9 @@ mod tests {
         let merged = merge_connectors_with_accessible(
             vec![app("alpha")],
             vec![app("alpha"), app("beta")],
-            true,
+            /*all_connectors_loaded*/ true,
         );
-        assert_eq!(merged, vec![merged_app("alpha", true)]);
+        assert_eq!(merged, vec![merged_app("alpha", /*is_accessible*/ true)]);
     }
 
     #[test]
@@ -253,11 +212,14 @@ mod tests {
         let merged = merge_connectors_with_accessible(
             vec![app("alpha")],
             vec![app("alpha"), app("beta")],
-            false,
+            /*all_connectors_loaded*/ false,
         );
         assert_eq!(
             merged,
-            vec![merged_app("alpha", true), merged_app("beta", true)]
+            vec![
+                merged_app("alpha", /*is_accessible*/ true),
+                merged_app("beta", /*is_accessible*/ true)
+            ]
         );
     }
 

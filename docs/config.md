@@ -6,17 +6,18 @@ For advanced configuration instructions, see [this documentation](https://github
 
 For a full configuration reference, see [this documentation](https://github.com/Agents2AgentsAI/ata/blob/main/docs/config.md).
 
-## Connecting to MCP servers
+## Commit attribution
 
 Ata can connect to MCP servers configured in `~/.ata/config.toml`. See the configuration reference for the latest MCP server options:
 
 - https://github.com/Agents2AgentsAI/ata/blob/main/docs/config.md
 
-## Apps (Connectors)
+```toml
+commit_attribution = "Codex <noreply@openai.com>"
 
-Use `$` in the composer to insert a ChatGPT connector; the popover lists accessible
-apps. The `/apps` command lists available and installed apps. Connected apps appear first
-and are labeled as connected; others are marked as can be installed.
+[features]
+codex_git_commit = true
+```
 
 ## Notify
 

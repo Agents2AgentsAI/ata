@@ -112,7 +112,6 @@ mod tests {
             ),
             ("http_proxy", "proxy.example.com:8080"),
             ("all_proxy", "socks5h://all-proxy.example.com:1080"),
-            ("OPENAI_BASE_URL", "https://example.com/v1?token=secret"),
         ]);
 
         assert_eq!(

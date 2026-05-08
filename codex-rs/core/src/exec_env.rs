@@ -1,9 +1,9 @@
-use crate::config::types::EnvironmentVariablePattern;
-use crate::config::types::ShellEnvironmentPolicy;
-use crate::config::types::ShellEnvironmentPolicyInherit;
 use codex_protocol::ThreadId;
+#[cfg(test)]
+use codex_protocol::config_types::EnvironmentVariablePattern;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::shell_environment;
 use std::collections::HashMap;
-use std::collections::HashSet;
 
 pub const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
 pub const CODEX_SESSION_ID_ENV_VAR: &str = "CODEX_SESSION_ID";
@@ -23,9 +23,24 @@ pub fn create_env(
     policy: &ShellEnvironmentPolicy,
     thread_id: Option<ThreadId>,
 ) -> HashMap<String, String> {
-    populate_env(std::env::vars(), policy, thread_id)
+    let thread_id = thread_id.map(|thread_id| thread_id.to_string());
+    shell_environment::create_env(policy, thread_id.as_deref())
 }
 
+#[cfg(all(test, target_os = "windows"))]
+fn create_env_from_vars<I>(
+    vars: I,
+    policy: &ShellEnvironmentPolicy,
+    thread_id: Option<ThreadId>,
+) -> HashMap<String, String>
+where
+    I: IntoIterator<Item = (String, String)>,
+{
+    let thread_id = thread_id.map(|thread_id| thread_id.to_string());
+    shell_environment::create_env_from_vars(vars, policy, thread_id.as_deref())
+}
+
+#[cfg(test)]
 fn populate_env<I>(
     vars: I,
     policy: &ShellEnvironmentPolicy,

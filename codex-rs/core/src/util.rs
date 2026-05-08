@@ -5,10 +5,9 @@ use std::time::Duration;
 use codex_protocol::ThreadId;
 use codex_secrets::redact_secrets;
 use rand::Rng;
-use tracing::debug;
 use tracing::error;
 
-use crate::parse_command::shlex_join;
+use codex_shell_command::parse_command::shlex_join;
 
 const INITIAL_DELAY_MS: u64 = 200;
 const BACKOFF_FACTOR: f64 = 2.0;

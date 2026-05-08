@@ -25,6 +25,7 @@ describe("Ata", () => {
       statusCode: 200,
       responseBodies: [sse(responseStarted(), assistantMessage("Hi!"), responseCompleted())],
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
       const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
@@ -44,9 +45,11 @@ describe("Ata", () => {
         cached_input_tokens: 12,
         input_tokens: 42,
         output_tokens: 5,
+        reasoning_output_tokens: 0,
       });
       expect(thread.id).toEqual(expect.any(String));
     } finally {
+      cleanup();
       await close();
     }
   });
@@ -67,6 +70,7 @@ describe("Ata", () => {
         ),
       ],
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
       const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
@@ -90,6 +94,7 @@ describe("Ata", () => {
       )?.text;
       expect(assistantText).toBe("First response");
     } finally {
+      cleanup();
       await close();
     }
   });
@@ -110,6 +115,7 @@ describe("Ata", () => {
         ),
       ],
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
       const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
@@ -134,6 +140,7 @@ describe("Ata", () => {
       )?.text;
       expect(assistantText).toBe("First response");
     } finally {
+      cleanup();
       await close();
     }
   });
@@ -154,6 +161,7 @@ describe("Ata", () => {
         ),
       ],
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
       const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
@@ -181,6 +189,7 @@ describe("Ata", () => {
       )?.text;
       expect(assistantText).toBe("First response");
     } finally {
+      cleanup();
       await close();
     }
   });
@@ -219,6 +228,7 @@ describe("Ata", () => {
       expectPair(commandArgs, ["--sandbox", "workspace-write"]);
       expectPair(commandArgs, ["--model", "gpt-test-1"]);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -250,6 +260,7 @@ describe("Ata", () => {
       expect(commandArgs).toBeDefined();
       expectPair(commandArgs, ["--config", 'model_reasoning_effort="high"']);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -281,6 +292,7 @@ describe("Ata", () => {
       expect(commandArgs).toBeDefined();
       expectPair(commandArgs, ["--config", "sandbox_workspace_write.network_access=true"]);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -312,6 +324,7 @@ describe("Ata", () => {
       expect(commandArgs).toBeDefined();
       expectPair(commandArgs, ["--config", 'web_search="live"']);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -343,6 +356,7 @@ describe("Ata", () => {
       expect(commandArgs).toBeDefined();
       expectPair(commandArgs, ["--config", 'web_search="cached"']);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -374,6 +388,7 @@ describe("Ata", () => {
       expect(commandArgs).toBeDefined();
       expectPair(commandArgs, ["--config", 'web_search="disabled"']);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -405,6 +420,7 @@ describe("Ata", () => {
       expect(commandArgs).toBeDefined();
       expectPair(commandArgs, ["--config", 'approval_policy="on-request"']);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -447,6 +463,7 @@ describe("Ata", () => {
       expectPair(commandArgs, ["--config", "retry_budget=3"]);
       expectPair(commandArgs, ["--config", 'tool_rules.allow=["git status", "git diff"]']);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -577,6 +594,7 @@ describe("Ata", () => {
       }
       expect(addDirArgs).toEqual(["../backend", "/tmp/shared"]);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -608,6 +626,7 @@ describe("Ata", () => {
     try {
       const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
 
+    try {
       const thread = client.startThread();
       await thread.run("structured", { outputSchema: schema });
 
@@ -634,6 +653,7 @@ describe("Ata", () => {
       }
       expect(fs.existsSync(schemaPath)).toBe(false);
     } finally {
+      cleanup();
       restore();
       await close();
     }
@@ -649,6 +669,7 @@ describe("Ata", () => {
         ),
       ],
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
       const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
@@ -664,6 +685,7 @@ describe("Ata", () => {
       const lastUser = payload!.json.input.at(-1);
       expect(lastUser?.content?.[0]?.text).toBe("Describe file changes\n\nFocus on impacted tests");
     } finally {
+      cleanup();
       await close();
     }
   });
@@ -688,6 +710,7 @@ describe("Ata", () => {
     imagesDirectoryEntries.forEach((image, index) => {
       fs.writeFileSync(image, `image-${index}`);
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
       const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
@@ -709,6 +732,7 @@ describe("Ata", () => {
       }
       expect(forwardedImages).toEqual(imagesDirectoryEntries);
     } finally {
+      cleanup();
       fs.rmSync(tempDir, { recursive: true, force: true });
       restore();
       await close();
@@ -745,6 +769,8 @@ describe("Ata", () => {
       const commandArgs = spawnArgs[0];
       expectPair(commandArgs, ["--cd", workingDirectory]);
     } finally {
+      cleanup();
+      fs.rmSync(workingDirectory, { recursive: true, force: true });
       restore();
       await close();
     }
@@ -760,6 +786,11 @@ describe("Ata", () => {
           responseCompleted("response_1"),
         ),
       ],
+    });
+    const workingDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-working-dir-"));
+    const { client, cleanup } = createTestClient({
+      baseUrl: url,
+      apiKey: "test",
     });
 
     try {
@@ -777,6 +808,8 @@ describe("Ata", () => {
         /Not inside a trusted directory/,
       );
     } finally {
+      cleanup();
+      fs.rmSync(workingDirectory, { recursive: true, force: true });
       await close();
     }
   });
@@ -786,6 +819,7 @@ describe("Ata", () => {
       statusCode: 200,
       responseBodies: [sse(responseStarted(), assistantMessage("Hi!"), responseCompleted())],
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
       const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
@@ -801,6 +835,7 @@ describe("Ata", () => {
         expect(originatorHeader).toBe("codex_sdk_ts");
       }
     } finally {
+      cleanup();
       await close();
     }
   });
@@ -814,12 +849,14 @@ describe("Ata", () => {
         }
       })(),
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
       const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
       const thread = client.startThread();
       await expect(thread.run("fail")).rejects.toThrow("stream disconnected before completion:");
     } finally {
+      cleanup();
       await close();
     }
   }, 10000); // TODO(pakrym): remove timeout

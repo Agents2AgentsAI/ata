@@ -19,10 +19,9 @@ fn find_python() -> Option<String> {
         if let Ok(output) = std::process::Command::new(candidate)
             .arg("--version")
             .output()
+            && output.status.success()
         {
-            if output.status.success() {
-                return Some(candidate.to_string());
-            }
+            return Some(candidate.to_string());
         }
     }
     None
@@ -659,7 +658,7 @@ async fn pty_terminate_kills_background_children_in_same_process_group() -> anyh
 
     session.terminate();
 
-    let exited = wait_for_process_exit(bg_pid, 3_000).await?;
+    let exited = wait_for_process_exit(bg_pid, /*timeout_ms*/ 3_000).await?;
     if !exited {
         let _ = unsafe { libc::kill(bg_pid, libc::SIGKILL) };
     }

@@ -42,6 +42,7 @@ class BinaryComponent:
 
 
 WINDOWS_TARGETS = tuple(target for target in BINARY_TARGETS if "windows" in target)
+LINUX_TARGETS = tuple(target for target in BINARY_TARGETS if "linux" in target)
 
 BINARY_COMPONENTS = {
     "ata": BinaryComponent(
