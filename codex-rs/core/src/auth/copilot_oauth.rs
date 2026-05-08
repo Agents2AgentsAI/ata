@@ -280,7 +280,8 @@ pub async fn get_or_refresh_copilot_token(
     let credential = get_provider_oauth_credential(codex_home, PROVIDER_COPILOT, store_mode)
         .ok_or_else(|| {
             CodexErr::Api(
-                "Not signed in to GitHub Copilot. Run `ata login` and choose GitHub Copilot.".into(),
+                "Not signed in to GitHub Copilot. Run `ata login` and choose GitHub Copilot."
+                    .into(),
             )
         })?;
 

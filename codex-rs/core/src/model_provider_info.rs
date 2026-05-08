@@ -74,7 +74,12 @@ impl<'de> Deserialize<'de> for WireApi {
             "chat" => Err(serde::de::Error::custom(CHAT_WIRE_API_REMOVED_ERROR)),
             _ => Err(serde::de::Error::unknown_variant(
                 &value,
-                &["responses", "anthropic_messages", "gemini_generate", "copilot_inline"],
+                &[
+                    "responses",
+                    "anthropic_messages",
+                    "gemini_generate",
+                    "copilot_inline",
+                ],
             )),
         }
     }

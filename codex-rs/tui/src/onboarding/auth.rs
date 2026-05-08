@@ -1326,10 +1326,7 @@ impl AuthModeWidget {
         state: &CopilotDeviceCodeUiState,
     ) {
         let mut lines: Vec<Line> = vec![
-            Line::from(vec![
-                "> ".into(),
-                "Sign in with GitHub Copilot".bold(),
-            ]),
+            Line::from(vec!["> ".into(), "Sign in with GitHub Copilot".bold()]),
             "".into(),
         ];
 

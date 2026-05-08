@@ -383,7 +383,8 @@ unwrap_used = "deny"
 [workspace.metadata.cargo-shear]
 ignored = [
     "icu_provider",
-    "openssl-sys"
+    "openssl-sys",
+    "redis"
 ]
 
 [profile.release]

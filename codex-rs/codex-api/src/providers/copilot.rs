@@ -86,7 +86,10 @@ fn responses_tools_to_chat_tools(tools: &[Value]) -> Vec<Value> {
             continue;
         }
 
-        let kind = tool.get("type").and_then(Value::as_str).unwrap_or("function");
+        let kind = tool
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("function");
         if kind != "function" {
             continue;
         }
@@ -122,10 +125,10 @@ fn extract_message_text(item: &Value) -> String {
     let mut out = String::new();
     for part in content {
         let part_type = part.get("type").and_then(Value::as_str).unwrap_or("");
-        if part_type == "input_text" || part_type == "output_text" {
-            if let Some(text) = part.get("text").and_then(Value::as_str) {
-                out.push_str(text);
-            }
+        if (part_type == "input_text" || part_type == "output_text")
+            && let Some(text) = part.get("text").and_then(Value::as_str)
+        {
+            out.push_str(text);
         }
     }
     out
@@ -171,10 +174,7 @@ impl ProviderAdapter for CopilotAdapter {
     ) -> Result<Value, ApiError> {
         let mut rewritten_input = serde_json::json!(input);
         rewrite_openai_url_file_blocks_in_payload(&mut rewritten_input);
-        let input_items: Vec<Value> = rewritten_input
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
+        let input_items: Vec<Value> = rewritten_input.as_array().cloned().unwrap_or_default();
         let messages = responses_input_to_chat_messages(instructions, &input_items);
 
         let mut body = json!({
@@ -215,7 +215,10 @@ impl ProviderAdapter for CopilotAdapter {
             "Copilot-Integration-Id",
             HeaderValue::from_static(COPILOT_INTEGRATION_ID),
         );
-        headers.insert("Openai-Intent", HeaderValue::from_static("conversation-edits"));
+        headers.insert(
+            "Openai-Intent",
+            HeaderValue::from_static("conversation-edits"),
+        );
         headers
     }
 }
@@ -245,7 +248,13 @@ mod tests {
             "content": [{"type": "input_text", "text": "Hello"}]
         })];
         let body = adapter
-            .build_request_body("gpt-4o", "be terse", &input, &[], &RequestOptions::default())
+            .build_request_body(
+                "gpt-4o",
+                "be terse",
+                &input,
+                &[],
+                &RequestOptions::default(),
+            )
             .expect("request body");
 
         assert_eq!(body["model"], "gpt-4o");
@@ -298,7 +307,10 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0]["role"], "assistant");
         assert_eq!(messages[0]["tool_calls"][0]["id"], "abc");
-        assert_eq!(messages[0]["tool_calls"][0]["function"]["name"], "get_weather");
+        assert_eq!(
+            messages[0]["tool_calls"][0]["function"]["name"],
+            "get_weather"
+        );
         assert_eq!(messages[1]["role"], "tool");
         assert_eq!(messages[1]["tool_call_id"], "abc");
         assert_eq!(messages[1]["content"], "sunny");

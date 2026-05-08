@@ -26,12 +26,12 @@ use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 
 pub use crate::auth::copilot_oauth::COPILOT_EDITOR_PLUGIN_VERSION;
-pub use crate::auth::copilot_oauth::complete_login as complete_copilot_login;
 pub use crate::auth::copilot_oauth::COPILOT_EDITOR_VERSION;
 pub use crate::auth::copilot_oauth::COPILOT_INTEGRATION_ID;
 pub use crate::auth::copilot_oauth::COPILOT_OAUTH_CLIENT_ID;
 pub use crate::auth::copilot_oauth::COPILOT_USER_AGENT;
 pub use crate::auth::copilot_oauth::DeviceCodeResponse as CopilotDeviceCodeResponse;
+pub use crate::auth::copilot_oauth::complete_login as complete_copilot_login;
 pub use crate::auth::copilot_oauth::get_or_refresh_copilot_token;
 pub use crate::auth::copilot_oauth::logout as copilot_logout;
 pub use crate::auth::copilot_oauth::poll_for_access_token as poll_copilot_access_token;

@@ -13,7 +13,6 @@ pub const PROVIDER_GEMINI: &str = "gemini";
 pub const PROVIDER_COPILOT: &str = "copilot";
 pub const ANTHROPIC_API_KEY_ENV_VAR: &str = "ANTHROPIC_API_KEY";
 pub const GOOGLE_API_KEY_ENV_VAR: &str = "GOOGLE_API_KEY";
-pub const GITHUB_COPILOT_TOKEN_ENV_VAR: &str = "GITHUB_COPILOT_TOKEN";
 
 /// OAuth credential payload stored for provider-based login.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]

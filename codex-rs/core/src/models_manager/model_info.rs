@@ -1,5 +1,6 @@
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelInstructionsVariables;
 use codex_protocol::openai_models::ModelMessages;
@@ -7,7 +8,6 @@ use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::WebSearchToolType;
-use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::default_input_modalities;
 
 use crate::config::Config;
@@ -65,25 +65,24 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
 /// Returns `None` for slugs we don't recognize so callers fall through to
 /// the generic fallback.
 pub(crate) fn copilot_model_info(slug: &str) -> Option<ModelInfo> {
-    let (display_name, context_window, supports_vision, supports_parallel_tool_calls) =
-        match slug {
-            "gpt-4o" | "gpt-4o-2024-11-20" | "gpt-4o-2024-08-06" | "gpt-4o-2024-05-13" => {
-                ("GPT-4o", 128_000, true, true)
-            }
-            "gpt-4o-mini" | "gpt-4o-mini-2024-07-18" => ("GPT-4o mini", 128_000, false, true),
-            "gpt-4.1" | "gpt-4.1-2025-04-14" => ("GPT-4.1", 1_000_000, true, true),
-            "gpt-4" | "gpt-4-0613" | "gpt-4-0125-preview" => ("GPT-4", 128_000, false, false),
-            "gpt-3.5-turbo" | "gpt-3.5-turbo-0613" => ("GPT-3.5 Turbo", 16_000, false, false),
-            "gpt-5-mini" => ("GPT-5 mini", 400_000, true, true),
-            "gpt-5.4" => ("GPT-5.4", 400_000, true, true),
-            "gpt-5.5" => ("GPT-5.5", 400_000, true, true),
-            "gpt-5.2-codex" => ("GPT-5.2 Codex", 400_000, true, true),
-            "claude-sonnet-4.6" => ("Claude Sonnet 4.6", 200_000, true, true),
-            "claude-opus-4.7" => ("Claude Opus 4.7", 200_000, true, true),
-            "claude-haiku-4.5" => ("Claude Haiku 4.5", 200_000, true, true),
-            "gemini-3.1-pro-preview" => ("Gemini 3.1 Pro", 2_000_000, true, true),
-            _ => return None,
-        };
+    let (display_name, context_window, supports_vision, supports_parallel_tool_calls) = match slug {
+        "gpt-4o" | "gpt-4o-2024-11-20" | "gpt-4o-2024-08-06" | "gpt-4o-2024-05-13" => {
+            ("GPT-4o", 128_000, true, true)
+        }
+        "gpt-4o-mini" | "gpt-4o-mini-2024-07-18" => ("GPT-4o mini", 128_000, false, true),
+        "gpt-4.1" | "gpt-4.1-2025-04-14" => ("GPT-4.1", 1_000_000, true, true),
+        "gpt-4" | "gpt-4-0613" | "gpt-4-0125-preview" => ("GPT-4", 128_000, false, false),
+        "gpt-3.5-turbo" | "gpt-3.5-turbo-0613" => ("GPT-3.5 Turbo", 16_000, false, false),
+        "gpt-5-mini" => ("GPT-5 mini", 400_000, true, true),
+        "gpt-5.4" => ("GPT-5.4", 400_000, true, true),
+        "gpt-5.5" => ("GPT-5.5", 400_000, true, true),
+        "gpt-5.2-codex" => ("GPT-5.2 Codex", 400_000, true, true),
+        "claude-sonnet-4.6" => ("Claude Sonnet 4.6", 200_000, true, true),
+        "claude-opus-4.7" => ("Claude Opus 4.7", 200_000, true, true),
+        "claude-haiku-4.5" => ("Claude Haiku 4.5", 200_000, true, true),
+        "gemini-3.1-pro-preview" => ("Gemini 3.1 Pro", 2_000_000, true, true),
+        _ => return None,
+    };
 
     Some(ModelInfo {
         slug: slug.to_string(),

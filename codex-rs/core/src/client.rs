@@ -1150,10 +1150,7 @@ impl ModelClientSession {
                 "failed to serialize prompt input for Copilot: {e}"
             ))
         })?;
-        let input_array = input_value
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
+        let input_array = input_value.as_array().cloned().unwrap_or_default();
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
 
         let options = codex_api::RequestOptions {
@@ -1162,7 +1159,13 @@ impl ModelClientSession {
         };
         use codex_api::ProviderAdapter;
         let body = adapter
-            .build_request_body(&model_info.slug, &instructions, &input_array, &tools, &options)
+            .build_request_body(
+                &model_info.slug,
+                &instructions,
+                &input_array,
+                &tools,
+                &options,
+            )
             .map_err(map_api_error)?;
         let extra_headers = adapter.extra_headers();
 
