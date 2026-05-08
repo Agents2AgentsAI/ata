@@ -2374,12 +2374,14 @@ name = "codex-protocol"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "chardetng",
  "codex-execpolicy",
  "codex-utils-absolute-path",
  "codex-utils-file",
  "codex-utils-git",
  "codex-utils-home-dir",
  "codex-utils-image",
+ "encoding_rs",
  "icu_decimal",
  "icu_locale_core",
  "icu_provider",

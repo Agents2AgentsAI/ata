@@ -12,12 +12,14 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+chardetng = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-utils-git = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 codex-utils-file = { workspace = true }
 codex-utils-image = { workspace = true }
+encoding_rs = { workspace = true }
 icu_decimal = { workspace = true }
 icu_locale_core = { workspace = true }
 icu_provider = { workspace = true, features = ["sync"] }

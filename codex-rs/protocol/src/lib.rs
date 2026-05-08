@@ -6,6 +6,7 @@ pub mod config_types;
 pub mod custom_prompts;
 pub mod document_reader;
 pub mod dynamic_tools;
+pub mod exec_output;
 pub mod items;
 pub mod mcp;
 pub mod message_history;
