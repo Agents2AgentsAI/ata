@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { describe, expect, it } from "@jest/globals";
 
 import { Ata } from "../src/ata";
@@ -19,7 +21,6 @@ describe("Ata", () => {
       statusCode: 200,
       responseBodies: [sse(responseStarted(), assistantMessage("Hi!"), responseCompleted())],
     });
-    const { client, cleanup } = createMockClient(url);
 
     try {
       const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
@@ -54,13 +55,11 @@ describe("Ata", () => {
             cached_input_tokens: 12,
             input_tokens: 42,
             output_tokens: 5,
-            reasoning_output_tokens: 0,
           },
         },
       ]);
       expect(thread.id).toEqual(expect.any(String));
     } finally {
-      cleanup();
       await close();
     }
   });
@@ -81,7 +80,6 @@ describe("Ata", () => {
         ),
       ],
     });
-    const { client, cleanup } = createMockClient(url);
 
     try {
       const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
@@ -108,7 +106,6 @@ describe("Ata", () => {
       )?.text;
       expect(assistantText).toBe("First response");
     } finally {
-      cleanup();
       await close();
     }
   });
@@ -129,7 +126,6 @@ describe("Ata", () => {
         ),
       ],
     });
-    const { client, cleanup } = createMockClient(url);
 
     try {
       const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
@@ -158,7 +154,6 @@ describe("Ata", () => {
       )?.text;
       expect(assistantText).toBe("First response");
     } finally {
-      cleanup();
       await close();
     }
   });
@@ -174,7 +169,6 @@ describe("Ata", () => {
         ),
       ],
     });
-    const { client, cleanup } = createMockClient(url);
 
     const schema = {
       type: "object",
@@ -204,7 +198,6 @@ describe("Ata", () => {
         schema,
       });
     } finally {
-      cleanup();
       await close();
     }
   });

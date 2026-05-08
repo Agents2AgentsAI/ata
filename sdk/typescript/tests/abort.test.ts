@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { describe, expect, it } from "@jest/globals";
 
 import { Ata } from "../src/ata";
@@ -26,7 +28,6 @@ describe("AbortSignal support", () => {
       statusCode: 200,
       responseBodies: infiniteShellCall(),
     });
-    const { client, cleanup } = createMockClient(url);
 
     try {
       const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
@@ -39,7 +40,6 @@ describe("AbortSignal support", () => {
       // The operation should fail because the signal is already aborted
       await expect(thread.run("Hello, world!", { signal: controller.signal })).rejects.toThrow();
     } finally {
-      cleanup();
       await close();
     }
   });
@@ -49,7 +49,6 @@ describe("AbortSignal support", () => {
       statusCode: 200,
       responseBodies: infiniteShellCall(),
     });
-    const { client, cleanup } = createMockClient(url);
 
     try {
       const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
@@ -79,7 +78,6 @@ describe("AbortSignal support", () => {
         expect(error).toBeDefined();
       }
     } finally {
-      cleanup();
       await close();
     }
   });
@@ -89,7 +87,6 @@ describe("AbortSignal support", () => {
       statusCode: 200,
       responseBodies: infiniteShellCall(),
     });
-    const { client, cleanup } = createMockClient(url);
 
     try {
       const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
@@ -106,7 +103,6 @@ describe("AbortSignal support", () => {
       // The operation should fail
       await expect(runPromise).rejects.toThrow();
     } finally {
-      cleanup();
       await close();
     }
   });
@@ -116,7 +112,6 @@ describe("AbortSignal support", () => {
       statusCode: 200,
       responseBodies: infiniteShellCall(),
     });
-    const { client, cleanup } = createMockClient(url);
 
     try {
       const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
@@ -142,7 +137,6 @@ describe("AbortSignal support", () => {
         })(),
       ).rejects.toThrow();
     } finally {
-      cleanup();
       await close();
     }
   });
@@ -152,7 +146,6 @@ describe("AbortSignal support", () => {
       statusCode: 200,
       responseBodies: [sse(responseStarted(), assistantMessage("Hi!"), responseCompleted())],
     });
-    const { client, cleanup } = createMockClient(url);
 
     try {
       const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
@@ -166,7 +159,6 @@ describe("AbortSignal support", () => {
       expect(result.finalResponse).toBe("Hi!");
       expect(result.items).toHaveLength(1);
     } finally {
-      cleanup();
       await close();
     }
   });
