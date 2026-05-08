@@ -60,11 +60,8 @@ codex-research-tools = { workspace = true }
 codex-data-tools = { workspace = true, optional = true }
 codex-lsp-client = { workspace = true, optional = true }
 codex-treesitter = { workspace = true, optional = true }
-codex-elevenlabs = { workspace = true }
 codex-git = { workspace = true }
 codex-artifacts = { workspace = true }
-codex-package-manager = { workspace = true }
-codex-reading-view-server = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
 codex-terminal-detection = { workspace = true }

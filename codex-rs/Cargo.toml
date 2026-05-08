@@ -514,6 +514,9 @@ ignored = [
     "codex-utils-readiness",
     "codex-utils-template",
     "codex-v8-poc",
+    # ATA crates kept available for follow-up PRs that re-enable disabled features:
+    "codex-workspace",
+    "hound",
 ]
 
 [profile.dev]

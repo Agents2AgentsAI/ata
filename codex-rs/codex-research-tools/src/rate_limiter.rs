@@ -109,7 +109,10 @@ impl RateLimiter {
 
             let now = Instant::now();
             let acquired = {
-                let mut window = limiter.window.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut window = limiter
+                    .window
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 while let Some(oldest) = window.front() {
                     if now.duration_since(*oldest) >= limiter.rule.per {
                         window.pop_front();
@@ -130,7 +133,10 @@ impl RateLimiter {
             }
 
             let wait_for = {
-                let window = limiter.window.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let window = limiter
+                    .window
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if let Some(oldest) = window.front().copied() {
                     limiter.rule.per.saturating_sub(now.duration_since(oldest))
                 } else {

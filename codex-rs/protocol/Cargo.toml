@@ -19,7 +19,6 @@ codex-execpolicy = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-home-dir = { workspace = true }
-codex-utils-file = { workspace = true }
 codex-utils-image = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-utils-template = { workspace = true }
@@ -45,7 +44,6 @@ ts-rs = { workspace = true, features = [
     "serde-json-impl",
     "no-serde-warnings",
 ] }
-url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v7", "v4"] }
 wildmatch = { workspace = true }
 
