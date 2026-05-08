@@ -1472,6 +1472,9 @@ impl Session {
         }
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     #[instrument(name = "session_init", level = "info", skip_all)]
     #[allow(clippy::too_many_arguments)]
     async fn new(
@@ -2525,6 +2528,9 @@ impl Session {
         }
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub(crate) async fn new_turn_with_sub_id(
         &self,
         sub_id: String,
@@ -2586,6 +2592,9 @@ impl Session {
             .await)
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     async fn new_turn_from_configuration(
         &self,
         sub_id: String,
@@ -3111,6 +3120,9 @@ impl Session {
     /// Note that if `available_decisions` is `None`, then the other fields will
     /// be used to derive the available decisions via
     /// [ExecApprovalRequestEvent::default_available_decisions].
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     #[allow(clippy::too_many_arguments)]
     pub async fn request_command_approval(
         &self,
@@ -3185,6 +3197,9 @@ impl Session {
         rx_approve.await.unwrap_or(ReviewDecision::Abort)
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn request_patch_approval(
         &self,
         turn_context: &TurnContext,
@@ -3221,6 +3236,9 @@ impl Session {
         rx_approve
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn request_permissions(
         &self,
         turn_context: &TurnContext,
@@ -3276,6 +3294,9 @@ impl Session {
         rx_response.await.ok()
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn request_user_input(
         &self,
         turn_context: &TurnContext,
@@ -3308,6 +3329,9 @@ impl Session {
         rx_response.await.ok()
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn request_mcp_server_elicitation(
         &self,
         turn_context: &TurnContext,
@@ -3387,6 +3411,9 @@ impl Session {
         rx_response.await.ok()
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn notify_user_input_response(
         &self,
         sub_id: &str,
@@ -3412,6 +3439,9 @@ impl Session {
         }
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn notify_request_permissions_response(
         &self,
         call_id: &str,
@@ -3453,6 +3483,9 @@ impl Session {
         }
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub(crate) async fn granted_turn_permissions(&self) -> Option<PermissionProfile> {
         let active = self.active_turn.lock().await;
         let active = active.as_ref()?;
@@ -3465,6 +3498,9 @@ impl Session {
         state.granted_permissions()
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn notify_dynamic_tool_response(&self, call_id: &str, response: DynamicToolResponse) {
         let entry = {
             let mut active = self.active_turn.lock().await;
@@ -3486,6 +3522,9 @@ impl Session {
         }
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
         let entry = {
             let mut active = self.active_turn.lock().await;
@@ -3507,6 +3546,9 @@ impl Session {
         }
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn resolve_elicitation(
         &self,
         server_name: String,
@@ -4118,6 +4160,9 @@ impl Session {
     /// Inject additional user input into the currently active turn.
     ///
     /// Returns the active turn id when accepted.
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn steer_input(
         &self,
         mut input: Vec<UserInput>,
@@ -4174,6 +4219,9 @@ impl Session {
     }
 
     /// Returns the input if there was no task running to inject into
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn inject_response_items(
         &self,
         input: Vec<ResponseInputItem>,
@@ -4191,6 +4239,9 @@ impl Session {
         }
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
@@ -4202,6 +4253,9 @@ impl Session {
         }
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn has_pending_input(&self) -> bool {
         let active = self.active_turn.lock().await;
         match active.as_ref() {
@@ -4213,6 +4267,9 @@ impl Session {
         }
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn list_resources(
         &self,
         server: &str,
@@ -4226,6 +4283,9 @@ impl Session {
             .await
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn list_resource_templates(
         &self,
         server: &str,
@@ -4239,6 +4299,9 @@ impl Session {
             .await
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn read_resource(
         &self,
         server: &str,
@@ -4252,6 +4315,9 @@ impl Session {
             .await
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn call_tool(
         &self,
         server: &str,
@@ -4267,6 +4333,9 @@ impl Session {
             .await
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub(crate) async fn parse_mcp_tool_name(
         &self,
         name: &str,
@@ -5071,6 +5140,9 @@ mod handlers {
         sess.reload_user_config_layer().await;
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
         let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
         let auth = sess.services.auth_manager.auth().await;
@@ -5790,6 +5862,9 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
 /// - If the model sends only an assistant message, we record it in the
 ///   conversation history and consider the turn complete.
 ///
+// SAFETY: tokio guard intentionally held across .await; protected state must stay
+// consistent with downstream IO. Re-audited after removing crate-level allow.
+#[allow(clippy::await_holding_invalid_type)]
 pub(crate) async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -6868,6 +6943,9 @@ async fn run_sampling_request(
     }
 }
 
+// SAFETY: tokio guard intentionally held across .await; protected state must stay
+// consistent with downstream IO. Re-audited after removing crate-level allow.
+#[allow(clippy::await_holding_invalid_type)]
 pub(crate) async fn built_tools(
     sess: &Session,
     turn_context: &TurnContext,

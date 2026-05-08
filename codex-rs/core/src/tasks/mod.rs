@@ -229,6 +229,9 @@ impl Session {
         }
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn on_task_finished(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
@@ -367,6 +370,9 @@ impl Session {
         self.send_event(turn_context.as_ref(), event).await;
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     async fn register_new_active_task(
         &self,
         task: RunningTask,

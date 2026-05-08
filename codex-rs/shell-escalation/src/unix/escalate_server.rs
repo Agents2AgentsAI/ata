@@ -646,6 +646,9 @@ mod tests {
     }
 
     #[tokio::test]
+    // SAFETY: serialization guard for test-only globals; held across .await intentionally
+    // to keep parallel tokio tests serialized — no real lock contention beyond test ordering.
+    #[allow(clippy::await_holding_invalid_type)]
     async fn exec_closes_parent_socket_after_shell_spawn() -> anyhow::Result<()> {
         let _guard = ESCALATE_SERVER_TEST_LOCK.lock().await;
         let after_spawn_invoked = Arc::new(AtomicBool::new(false));
@@ -680,6 +683,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // SAFETY: serialization guard for test-only globals; held across .await to serialize tests.
+    #[allow(clippy::await_holding_invalid_type)]
     async fn handle_escalate_session_respects_run_in_sandbox_decision() -> anyhow::Result<()> {
         let _guard = ESCALATE_SERVER_TEST_LOCK.lock().await;
         let (server, client) = AsyncSocket::pair()?;
@@ -719,6 +724,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // SAFETY: serialization guard for test-only globals; held across .await to serialize tests.
+    #[allow(clippy::await_holding_invalid_type)]
     async fn handle_escalate_session_resolves_relative_file_against_request_workdir()
     -> anyhow::Result<()> {
         let _guard = ESCALATE_SERVER_TEST_LOCK.lock().await;
@@ -759,6 +766,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // SAFETY: serialization guard for test-only globals; held across .await to serialize tests.
+    #[allow(clippy::await_holding_invalid_type)]
     async fn handle_escalate_session_executes_escalated_command() -> anyhow::Result<()> {
         let _guard = ESCALATE_SERVER_TEST_LOCK.lock().await;
         let (server, client) = AsyncSocket::pair()?;
@@ -851,6 +860,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // SAFETY: serialization guard for test-only globals; held across .await to serialize tests.
+    #[allow(clippy::await_holding_invalid_type)]
     async fn handle_escalate_session_accepts_received_fds_that_overlap_destinations()
     -> anyhow::Result<()> {
         let _guard = ESCALATE_SERVER_TEST_LOCK.lock().await;
@@ -924,6 +935,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // SAFETY: serialization guard for test-only globals; held across .await to serialize tests.
+    #[allow(clippy::await_holding_invalid_type)]
     async fn handle_escalate_session_passes_permissions_to_executor() -> anyhow::Result<()> {
         let _guard = ESCALATE_SERVER_TEST_LOCK.lock().await;
         let (server, client) = AsyncSocket::pair()?;
@@ -979,6 +992,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // SAFETY: serialization guard for test-only globals; held across .await to serialize tests.
+    #[allow(clippy::await_holding_invalid_type)]
     async fn dropping_session_aborts_intercept_workers_and_kills_spawned_child()
     -> anyhow::Result<()> {
         let _guard = ESCALATE_SERVER_TEST_LOCK.lock().await;

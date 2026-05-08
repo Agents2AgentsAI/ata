@@ -213,6 +213,9 @@ pub(crate) async fn force_refresh_gemini_oauth_context(
     .await
 }
 
+// SAFETY: tokio guard intentionally held across .await; protected state must stay
+// consistent with downstream IO. Re-audited after removing crate-level allow.
+#[allow(clippy::await_holding_invalid_type)]
 async fn ensure_gemini_oauth_context_with_refresh(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,

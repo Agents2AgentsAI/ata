@@ -125,6 +125,9 @@ impl ToolHandler for AttachUrlFilesHandler {
         ToolKind::Function
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
@@ -587,6 +590,9 @@ mod tests {
         assert!(text.contains("Skipped duplicate URL: https://example.com/doc.pdf"));
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     #[tokio::test]
     async fn download_path_fails_fast_when_per_turn_budget_is_exhausted() {
         let (session, mut turn_context) = make_session_and_context().await;

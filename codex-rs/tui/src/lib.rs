@@ -1,6 +1,7 @@
-// The optional  feature is intentionally not declared in Cargo.toml
+// The optional 'coordination' feature is intentionally not declared in Cargo.toml
 // on the public release branch (its codex-coordination dep lives in the
-// private repo). Allow the resulting unexpected-cfg warning so the \ blocks still type-check on the public branch.
+// private repo). Allow the resulting unexpected-cfg warning so the
+// `#[cfg(feature = "coordination")]` blocks still type-check on the public branch.
 #![allow(unexpected_cfgs)]
 // Forbid accidental stdout/stderr writes in the *library* portion of the TUI.
 // The standalone `codex-tui` binary prints a short help message before the

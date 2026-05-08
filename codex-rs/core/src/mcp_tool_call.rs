@@ -732,6 +732,9 @@ fn is_full_access_mode(turn_context: &TurnContext) -> bool {
         )
 }
 
+// SAFETY: tokio guard intentionally held across .await; protected state must stay
+// consistent with downstream IO. Re-audited after removing crate-level allow.
+#[allow(clippy::await_holding_invalid_type)]
 pub(crate) async fn lookup_mcp_tool_metadata(
     sess: &Session,
     turn_context: &TurnContext,
@@ -790,6 +793,9 @@ pub(crate) async fn lookup_mcp_tool_metadata(
     })
 }
 
+// SAFETY: tokio guard intentionally held across .await; protected state must stay
+// consistent with downstream IO. Re-audited after removing crate-level allow.
+#[allow(clippy::await_holding_invalid_type)]
 async fn lookup_mcp_app_usage_metadata(
     sess: &Session,
     server: &str,

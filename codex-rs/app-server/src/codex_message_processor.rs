@@ -2893,6 +2893,10 @@ impl CodexMessageProcessor {
         }
     }
 
+    // SAFETY: tokio guard intentionally held across .await; thread-state mutations
+    // must remain consistent with downstream notifications. Re-audited after
+    // removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     async fn thread_rollback(
         &mut self,
         request_id: ConnectionRequestId,
@@ -6842,6 +6846,10 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    // SAFETY: tokio guard intentionally held across .await; thread-state mutations
+    // must remain consistent with downstream notifications. Re-audited after
+    // removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     async fn fuzzy_file_search_session_start(
         &mut self,
         request_id: ConnectionRequestId,
@@ -8663,6 +8671,10 @@ mod tests {
         Ok(())
     }
 
+    // SAFETY: tokio guard intentionally held across .await; thread-state mutations
+    // must remain consistent with downstream notifications. Re-audited after
+    // removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     #[tokio::test]
     async fn removing_thread_state_clears_listener_and_active_turn_history() -> Result<()> {
         let manager = ThreadStateManager::new();

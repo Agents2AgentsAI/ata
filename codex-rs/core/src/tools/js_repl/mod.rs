@@ -829,6 +829,9 @@ impl JsReplManager {
         }
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn execute(
         &self,
         session: Arc<Session>,
@@ -1163,6 +1166,9 @@ impl JsReplManager {
         Ok(kernel_path)
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     async fn write_message(
         stdin: &Arc<Mutex<ChildStdin>>,
         msg: &HostToKernel,
@@ -1210,6 +1216,9 @@ impl JsReplManager {
         }
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     async fn kill_kernel_child(child: &Arc<Mutex<Child>>, reason: &'static str) {
         let mut guard = child.lock().await;
         let pid = guard.id();
@@ -1265,6 +1274,9 @@ impl JsReplManager {
         output
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     #[allow(clippy::too_many_arguments)]
     async fn read_stdout(
         stdout: tokio::process::ChildStdout,
@@ -1530,6 +1542,9 @@ impl JsReplManager {
         }
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     async fn run_tool_request(exec: ExecContext, req: RunToolRequest) -> RunToolResult {
         if is_js_repl_internal_tool(&req.tool_name) {
             let error = "js_repl cannot invoke itself".to_string();

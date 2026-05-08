@@ -242,6 +242,9 @@ impl ToolHandler for McpResourceHandler {
     }
 }
 
+// SAFETY: tokio guard intentionally held across .await; protected state must stay
+// consistent with downstream IO. Re-audited after removing crate-level allow.
+#[allow(clippy::await_holding_invalid_type)]
 async fn handle_list_resources(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
@@ -346,6 +349,9 @@ async fn handle_list_resources(
     }
 }
 
+// SAFETY: tokio guard intentionally held across .await; protected state must stay
+// consistent with downstream IO. Re-audited after removing crate-level allow.
+#[allow(clippy::await_holding_invalid_type)]
 async fn handle_list_resource_templates(
     session: Arc<Session>,
     turn: Arc<TurnContext>,

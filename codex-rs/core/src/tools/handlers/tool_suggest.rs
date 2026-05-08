@@ -70,6 +70,9 @@ impl ToolHandler for ToolSuggestHandler {
         ToolKind::Function
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             payload,

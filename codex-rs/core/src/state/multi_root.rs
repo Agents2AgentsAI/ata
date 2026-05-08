@@ -321,6 +321,9 @@ impl MultiRootState {
         self.roots.read().await.clone()
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn root_statuses(&self) -> Vec<RootStatus> {
         let roots = self.roots().await;
         #[cfg(feature = "lsp")]
@@ -380,6 +383,9 @@ impl MultiRootState {
             .cloned()
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     #[cfg(feature = "treesitter")]
     pub async fn treesitter_index_for_file(
         &self,
@@ -407,6 +413,9 @@ impl MultiRootState {
     /// - the file is not under a registered root,
     /// - the root has no tree-sitter index,
     /// - the index is still building or has failed.
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     #[cfg(feature = "treesitter")]
     pub async fn try_treesitter_index_for_file(
         &self,
@@ -423,6 +432,9 @@ impl MultiRootState {
         Some((root.name, index))
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     #[cfg(feature = "treesitter")]
     pub async fn treesitter_indices(
         &self,
@@ -453,6 +465,9 @@ impl MultiRootState {
         Ok(out)
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     #[cfg(feature = "treesitter")]
     pub async fn reindex_file(&self, file: &Path) {
         // Best-effort; don't block tool calls waiting for background index build.

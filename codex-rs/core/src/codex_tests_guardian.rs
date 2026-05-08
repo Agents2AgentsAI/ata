@@ -294,6 +294,9 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
     assert_eq!(developer_messages.last(), Some(&guardian_policy));
 }
 
+// SAFETY: tokio guard intentionally held across .await; protected state must stay
+// consistent with downstream IO. Re-audited after removing crate-level allow.
+#[allow(clippy::await_holding_invalid_type)]
 #[tokio::test]
 #[cfg(unix)]
 async fn shell_handler_allows_sticky_turn_permissions_without_inline_request_permissions_feature() {

@@ -1,6 +1,7 @@
-// The optional  feature is intentionally not declared in Cargo.toml
+// The optional 'coordination' feature is intentionally not declared in Cargo.toml
 // on the public release branch (its codex-coordination dep lives in the
-// private repo). Allow the resulting unexpected-cfg warning so the \ blocks still type-check on the public branch.
+// private repo). Allow the resulting unexpected-cfg warning so the
+// `#[cfg(feature = "coordination")]` blocks still type-check on the public branch.
 #![allow(unexpected_cfgs)]
 //! Root of the `codex-core` library.
 
@@ -8,12 +9,6 @@
 // user-visible output must go through the appropriate abstraction (e.g.,
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
-// codex-core's session/turn machinery serializes many critical sections
-// through tokio::sync::Mutex / RwLock and intentionally awaits while holding
-// the guard so the protected state stays consistent across IO. Auditing each
-// site individually has been done; we allow the lint at crate level rather
-// than dotting every async function with #[allow].
-#![allow(clippy::await_holding_invalid_type)]
 
 mod analytics_client;
 pub mod api_bridge;

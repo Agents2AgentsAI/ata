@@ -1871,6 +1871,10 @@ async fn emit_turn_completed_with_status(
         .await;
 }
 
+// SAFETY: tokio guard intentionally held across .await; thread-state mutations
+// must remain consistent with downstream notifications. Re-audited after
+// removing crate-level allow.
+#[allow(clippy::await_holding_invalid_type)]
 async fn complete_file_change_item(
     conversation_id: ThreadId,
     item_id: String,

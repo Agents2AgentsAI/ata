@@ -206,6 +206,9 @@ impl NetworkApprovalService {
         );
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub(crate) async fn unregister_call(&self, registration_id: &str) {
         let mut active_calls = self.active_calls.lock().await;
         active_calls.shift_remove(registration_id);
@@ -285,6 +288,9 @@ impl NetworkApprovalService {
         format!("network#{}#{}#{}", key.protocol, key.host, key.port)
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub(crate) async fn handle_inline_policy_request(
         &self,
         session: Arc<Session>,

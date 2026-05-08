@@ -11,6 +11,9 @@ use super::ToolCallSource;
 use super::ToolRouter;
 use super::ToolRouterParams;
 
+// SAFETY: tokio guard intentionally held across .await; protected state must stay
+// consistent with downstream IO. Re-audited after removing crate-level allow.
+#[allow(clippy::await_holding_invalid_type)]
 #[tokio::test]
 async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
     let (session, mut turn) = make_session_and_context().await;
@@ -68,6 +71,9 @@ async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
     Ok(())
 }
 
+// SAFETY: tokio guard intentionally held across .await; protected state must stay
+// consistent with downstream IO. Re-audited after removing crate-level allow.
+#[allow(clippy::await_holding_invalid_type)]
 #[tokio::test]
 async fn js_repl_tools_only_allows_js_repl_source_calls() -> anyhow::Result<()> {
     let (session, mut turn) = make_session_and_context().await;

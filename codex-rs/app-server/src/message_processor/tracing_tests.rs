@@ -495,6 +495,10 @@ where
     spans.into_iter().skip(baseline_len).collect()
 }
 
+// SAFETY: tokio guard intentionally held across .await; thread-state mutations
+// must remain consistent with downstream notifications. Re-audited after
+// removing crate-level allow.
+#[allow(clippy::await_holding_invalid_type)]
 #[tokio::test(flavor = "current_thread")]
 async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() -> Result<()> {
     let _guard = tracing_test_guard().lock().await;
@@ -566,6 +570,10 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
     Ok(())
 }
 
+// SAFETY: tokio guard intentionally held across .await; thread-state mutations
+// must remain consistent with downstream notifications. Re-audited after
+// removing crate-level allow.
+#[allow(clippy::await_holding_invalid_type)]
 #[tokio::test(flavor = "current_thread")]
 async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
     let _guard = tracing_test_guard().lock().await;

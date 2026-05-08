@@ -233,6 +233,9 @@ impl GuardianReviewSessionManager {
         }
     }
 
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub(crate) async fn run_review(
         &self,
         params: GuardianReviewSessionParams,

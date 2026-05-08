@@ -151,6 +151,9 @@ impl UrlFileRecoveryState {
 
 /// Drops URL file attachments from the last turn in history.
 /// Returns metadata about each dropped item for potential cache-based recovery.
+// SAFETY: tokio guard intentionally held across .await; protected state must stay
+// consistent with downstream IO. Re-audited after removing crate-level allow.
+#[allow(clippy::await_holding_invalid_type)]
 async fn drop_last_turn_url_file_attachments(sess: &Arc<Session>) -> Vec<DroppedUrlFileInfo> {
     let url_attachments_in_turn = {
         let mut active = sess.active_turn.lock().await;

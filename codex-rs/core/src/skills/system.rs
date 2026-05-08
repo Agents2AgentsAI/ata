@@ -1,8 +1,6 @@
 pub(crate) use codex_skills::custom_skill_cache_root_dirs;
 pub(crate) use codex_skills::install_custom_skills;
-pub(crate) use codex_skills::install_research_skills;
 pub(crate) use codex_skills::install_system_skills;
-pub(crate) use codex_skills::install_workspace_skills;
 pub(crate) use codex_skills::system_cache_root_dir;
 
 use std::path::Path;

@@ -72,6 +72,9 @@ impl ToolHandler for DynamicToolHandler {
     }
 }
 
+// SAFETY: tokio guard intentionally held across .await; protected state must stay
+// consistent with downstream IO. Re-audited after removing crate-level allow.
+#[allow(clippy::await_holding_invalid_type)]
 async fn request_dynamic_tool(
     session: &Session,
     turn_context: &TurnContext,

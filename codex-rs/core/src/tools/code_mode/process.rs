@@ -159,6 +159,9 @@ pub(super) async fn spawn_code_mode_process(
     })
 }
 
+// SAFETY: tokio guard intentionally held across .await; protected state must stay
+// consistent with downstream IO. Re-audited after removing crate-level allow.
+#[allow(clippy::await_holding_invalid_type)]
 pub(super) async fn write_message(
     stdin: &Arc<Mutex<tokio::process::ChildStdin>>,
     message: &HostToNodeMessage,

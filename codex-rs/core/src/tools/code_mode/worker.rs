@@ -22,6 +22,9 @@ impl Drop for CodeModeWorker {
 }
 
 impl CodeModeProcess {
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub(super) fn worker(
         &self,
         exec: ExecContext,

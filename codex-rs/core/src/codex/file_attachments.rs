@@ -563,6 +563,9 @@ pub(super) async fn refresh_uploaded_file_references(
 
 impl Session {
     /// Injects response items while atomically enforcing a per-turn URL attachment cap.
+    // SAFETY: tokio guard intentionally held across .await; protected state must stay
+    // consistent with downstream IO. Re-audited after removing crate-level allow.
+    #[allow(clippy::await_holding_invalid_type)]
     pub(crate) async fn inject_response_items_with_url_attachment_budget(
         &self,
         input: Vec<ResponseInputItem>,
