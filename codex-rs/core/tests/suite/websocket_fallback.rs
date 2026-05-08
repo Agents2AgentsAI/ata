@@ -1,9 +1,9 @@
 use anyhow::Result;
-use codex_model_provider_info::WireApi;
-use codex_protocol::models::PermissionProfile;
+use codex_core::features::Feature;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
@@ -14,7 +14,6 @@ use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
-use core_test_support::test_codex::turn_permission_fields;
 use pretty_assertions::assert_eq;
 use tokio::time::Duration;
 use tokio::time::timeout;
@@ -45,8 +44,11 @@ async fn websocket_fallback_switches_to_http_on_upgrade_required_connect() -> Re
         let base_url = format!("{}/v1", server.uri());
         move |config| {
             config.model_provider.base_url = Some(base_url);
-            config.model_provider.wire_api = WireApi::Responses;
-            config.model_provider.supports_websockets = true;
+            config.model_provider.wire_api = codex_core::WireApi::Responses;
+            config
+                .features
+                .enable(Feature::ResponsesWebsockets)
+                .expect("test config should allow feature update");
             // If we don't treat 426 specially, the sampling loop would retry the WebSocket
             // handshake before switching to the HTTP transport.
             config.model_provider.stream_max_retries = Some(2);
@@ -91,8 +93,11 @@ async fn websocket_fallback_switches_to_http_after_retries_exhausted() -> Result
         let base_url = format!("{}/v1", server.uri());
         move |config| {
             config.model_provider.base_url = Some(base_url);
-            config.model_provider.wire_api = WireApi::Responses;
-            config.model_provider.supports_websockets = true;
+            config.model_provider.wire_api = codex_core::WireApi::Responses;
+            config
+                .features
+                .enable(Feature::ResponsesWebsockets)
+                .expect("test config should allow feature update");
             config.model_provider.stream_max_retries = Some(2);
             config.model_provider.request_max_retries = Some(0);
         }
@@ -136,8 +141,11 @@ async fn websocket_fallback_hides_first_websocket_retry_stream_error() -> Result
         let base_url = format!("{}/v1", server.uri());
         move |config| {
             config.model_provider.base_url = Some(base_url);
-            config.model_provider.wire_api = WireApi::Responses;
-            config.model_provider.supports_websockets = true;
+            config.model_provider.wire_api = codex_core::WireApi::Responses;
+            config
+                .features
+                .enable(Feature::ResponsesWebsockets)
+                .expect("test config should allow feature update");
             config.model_provider.stream_max_retries = Some(2);
             config.model_provider.request_max_retries = Some(0);
         }
@@ -148,12 +156,9 @@ async fn websocket_fallback_hides_first_websocket_retry_stream_error() -> Result
         cwd,
         ..
     } = builder.build(&server).await?;
-    let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::Disabled, cwd.path());
 
     codex
         .submit(Op::UserTurn {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -161,9 +166,7 @@ async fn websocket_fallback_hides_first_websocket_retry_stream_error() -> Result
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_configured.model.clone(),
             model_provider: None,
             effort: None,
@@ -218,8 +221,11 @@ async fn websocket_fallback_is_sticky_across_turns() -> Result<()> {
         let base_url = format!("{}/v1", server.uri());
         move |config| {
             config.model_provider.base_url = Some(base_url);
-            config.model_provider.wire_api = WireApi::Responses;
-            config.model_provider.supports_websockets = true;
+            config.model_provider.wire_api = codex_core::WireApi::Responses;
+            config
+                .features
+                .enable(Feature::ResponsesWebsockets)
+                .expect("test config should allow feature update");
             config.model_provider.stream_max_retries = Some(2);
             config.model_provider.request_max_retries = Some(0);
         }

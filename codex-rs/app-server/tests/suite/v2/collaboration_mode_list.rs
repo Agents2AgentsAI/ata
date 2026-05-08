@@ -1,7 +1,8 @@
 //! Validates that the collaboration mode list endpoint returns the expected default presets.
 //!
 //! The test drives the app server through the MCP harness and asserts that the list response
-//! includes the plan and default modes, which keeps the API contract visible in one place.
+//! includes the plan and default modes with their default model and reasoning effort
+//! settings, which keeps the API contract visible in one place.
 
 #![allow(clippy::unwrap_used)]
 
@@ -20,9 +21,7 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-// Bazel CI can spend tens of seconds starting app-server subprocesses or
-// processing list RPCs under load.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Confirms the server returns the default collaboration mode presets in a stable order.
 #[tokio::test]

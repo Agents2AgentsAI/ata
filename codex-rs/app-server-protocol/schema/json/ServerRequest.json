@@ -7,25 +7,7 @@
     },
     "AdditionalFileSystemPermissions": {
       "properties": {
-        "entries": {
-          "items": {
-            "$ref": "#/definitions/FileSystemSandboxEntry"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "globScanMaxDepth": {
-          "format": "uint",
-          "minimum": 1.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "read": {
-          "description": "This will be removed in favor of `entries`.",
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
           },
@@ -35,7 +17,6 @@
           ]
         },
         "write": {
-          "description": "This will be removed in favor of `entries`.",
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
           },
@@ -105,6 +86,16 @@
             }
           ]
         },
+        "macos": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalMacOsPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "network": {
           "anyOf": [
             {
@@ -113,8 +104,7 @@
             {
               "type": "null"
             }
-          ],
-          "description": "Partial overlay used for per-command permission requests."
+          ]
         }
       },
       "type": "object"
@@ -196,7 +186,7 @@
               "type": "string"
             },
             "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "type": "string"
             },
             "type": {
               "enum": [
@@ -401,15 +391,11 @@
           ]
         },
         "cwd": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "The command's working directory."
+          "description": "The command's working directory.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "itemId": {
           "type": "string"
@@ -482,12 +468,6 @@
         "arguments": true,
         "callId": {
           "type": "string"
-        },
-        "namespace": {
-          "type": [
-            "string",
-            "null"
-          ]
         },
         "threadId": {
           "type": "string"
@@ -1502,32 +1482,6 @@
           "type": "integer"
         }
       ]
-    },
-    "RequestPermissionProfile": {
-      "additionalProperties": false,
-      "properties": {
-        "fileSystem": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AdditionalFileSystemPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "network": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AdditionalNetworkPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
     },
     "ThreadId": {
       "type": "string"

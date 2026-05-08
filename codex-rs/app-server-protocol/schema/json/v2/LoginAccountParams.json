@@ -23,9 +23,6 @@
     },
     {
       "properties": {
-        "codexStreamlinedLogin": {
-          "type": "boolean"
-        },
         "type": {
           "enum": [
             "chatgpt"

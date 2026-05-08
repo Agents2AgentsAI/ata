@@ -3,6 +3,7 @@
 export type { AbsolutePathBuf } from "./AbsolutePathBuf";
 export type { ApplyPatchApprovalParams } from "./ApplyPatchApprovalParams";
 export type { ApplyPatchApprovalResponse } from "./ApplyPatchApprovalResponse";
+export type { AskForApproval } from "./AskForApproval";
 export type { AuthMode } from "./AuthMode";
 export type { ClientInfo } from "./ClientInfo";
 export type { ClientNotification } from "./ClientNotification";
@@ -18,7 +19,7 @@ export type { FileChange } from "./FileChange";
 export type { ForcedLoginMethod } from "./ForcedLoginMethod";
 export type { FunctionCallOutputBody } from "./FunctionCallOutputBody";
 export type { FunctionCallOutputContentItem } from "./FunctionCallOutputContentItem";
-export type { FuzzyFileSearchMatchType } from "./FuzzyFileSearchMatchType";
+export type { FunctionCallOutputPayload } from "./FunctionCallOutputPayload";
 export type { FuzzyFileSearchParams } from "./FuzzyFileSearchParams";
 export type { FuzzyFileSearchResponse } from "./FuzzyFileSearchResponse";
 export type { FuzzyFileSearchResult } from "./FuzzyFileSearchResult";
@@ -59,7 +60,6 @@ export type { ReasoningItemReasoningSummary } from "./ReasoningItemReasoningSumm
 export type { ReasoningSummary } from "./ReasoningSummary";
 export type { RequestId } from "./RequestId";
 export type { Resource } from "./Resource";
-export type { ResourceContent } from "./ResourceContent";
 export type { ResourceTemplate } from "./ResourceTemplate";
 export type { ResponseItem } from "./ResponseItem";
 export type { ReviewDecision } from "./ReviewDecision";

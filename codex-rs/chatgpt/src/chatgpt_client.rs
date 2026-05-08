@@ -1,6 +1,8 @@
 use codex_core::config::Config;
-use codex_login::AuthManager;
-use codex_login::default_client::create_client;
+use codex_core::default_client::create_client;
+
+use crate::chatgpt_token::get_chatgpt_token_data;
+use crate::chatgpt_token::init_chatgpt_token_from_auth;
 
 use anyhow::Context;
 use serde::de::DeserializeOwned;
@@ -11,7 +13,7 @@ pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(
     config: &Config,
     path: String,
 ) -> anyhow::Result<T> {
-    chatgpt_get_request_with_timeout(config, path, /*timeout*/ None).await
+    chatgpt_get_request_with_timeout(config, path, None).await
 }
 
 pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
@@ -20,20 +22,8 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
     timeout: Option<Duration>,
 ) -> anyhow::Result<T> {
     let chatgpt_base_url = &config.chatgpt_base_url;
-    let auth_manager =
-        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
-    let auth = auth_manager
-        .auth()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("ChatGPT auth not available"))?;
-    anyhow::ensure!(
-        auth.uses_codex_backend(),
-        "ChatGPT backend requests require Codex backend auth"
-    );
-    anyhow::ensure!(
-        auth.get_account_id().is_some(),
-        "ChatGPT account ID not available, please re-run `codex login`"
-    );
+    init_chatgpt_token_from_auth(&config.codex_home, config.cli_auth_credentials_store_mode)
+        .await?;
 
     // Make direct HTTP request to ChatGPT backend API with the token
     let client = create_client();
@@ -48,7 +38,8 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
 
     let mut request = client
         .get(&url)
-        .headers(codex_model_provider::auth_provider_from_auth(&auth).to_auth_headers())
+        .bearer_auth(&token.access_token)
+        .header("chatgpt-account-id", account_id?)
         .header("Content-Type", "application/json");
 
     if let Some(timeout) = timeout {

@@ -8,8 +8,6 @@ use app_test_support::ChatGptIdTokenClaims;
 use app_test_support::encode_id_token;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_models_cache;
-use chrono::Duration as ChronoDuration;
-use chrono::Utc;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::CancelLoginAccountParams;
@@ -19,8 +17,6 @@ use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountResponse;
-use codex_app_server_protocol::GetAuthStatusParams;
-use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -46,14 +42,10 @@ use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
-use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-const LOGIN_ISSUER_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
 
 // Helper to create a minimal config.toml for the app server
 #[derive(Default)]
@@ -88,23 +80,6 @@ fn create_config_toml(codex_home: &Path, params: CreateConfigTomlParams) -> std:
         Some(false) => String::new(),
         None => String::new(),
     };
-    let model_provider_id = params
-        .model_provider_id
-        .unwrap_or_else(|| "mock_provider".to_string());
-    let provider_section = if model_provider_id == "mock_provider" {
-        format!(
-            r#"[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{base_url}"
-wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-{requires_line}
-"#
-        )
-    } else {
-        params.extra_provider_config.unwrap_or_default()
-    };
     let contents = format!(
         r#"
 model = "mock-model"
@@ -114,7 +89,7 @@ cli_auth_credentials_store = "file"
 {forced_line}
 {forced_workspace_line}
 
-model_provider = "{model_provider_id}"
+model_provider = "mock_provider"
 
 [features]
 shell_snapshot = false
@@ -129,58 +104,6 @@ stream_max_retries = 0
 "#
     );
     std::fs::write(config_toml, contents)
-}
-
-async fn mock_device_code_usercode(server: &MockServer, interval_seconds: u64) {
-    Mock::given(method("POST"))
-        .and(path("/api/accounts/deviceauth/usercode"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "device_auth_id": "device-auth-123",
-            "user_code": "CODE-12345",
-            "interval": interval_seconds.to_string(),
-        })))
-        .mount(server)
-        .await;
-}
-
-async fn mock_device_code_usercode_failure(server: &MockServer, status: u16) {
-    Mock::given(method("POST"))
-        .and(path("/api/accounts/deviceauth/usercode"))
-        .respond_with(ResponseTemplate::new(status))
-        .mount(server)
-        .await;
-}
-
-async fn mock_device_code_token_success(server: &MockServer) {
-    Mock::given(method("POST"))
-        .and(path("/api/accounts/deviceauth/token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "authorization_code": "poll-code-321",
-            "code_challenge": "code-challenge-321",
-            "code_verifier": "code-verifier-321",
-        })))
-        .mount(server)
-        .await;
-}
-
-async fn mock_device_code_token_failure(server: &MockServer, status: u16) {
-    Mock::given(method("POST"))
-        .and(path("/api/accounts/deviceauth/token"))
-        .respond_with(ResponseTemplate::new(status))
-        .mount(server)
-        .await;
-}
-
-async fn mock_device_code_oauth_token(server: &MockServer, id_token: &str) {
-    Mock::given(method("POST"))
-        .and(path("/oauth/token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id_token": id_token,
-            "access_token": "access-token-123",
-            "refresh_token": "refresh-token-123",
-        })))
-        .mount(server)
-        .await;
 }
 
 #[tokio::test]
@@ -1426,47 +1349,6 @@ async fn get_account_with_gemini_oauth() -> Result<()> {
 }
 
 #[tokio::test]
-async fn get_account_with_aws_provider() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    create_config_toml(
-        codex_home.path(),
-        CreateConfigTomlParams {
-            model_provider_id: Some("amazon-bedrock".to_string()),
-            extra_provider_config: Some(
-                r#"[model_providers.amazon-bedrock.aws]
-profile = "codex-bedrock"
-region = "us-west-2"
-"#
-                .to_string(),
-            ),
-            ..Default::default()
-        },
-    )?;
-
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let params = GetAccountParams {
-        refresh_token: false,
-    };
-    let request_id = mcp.send_get_account_request(params).await?;
-
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let received: GetAccountResponse = to_response(resp)?;
-
-    let expected = GetAccountResponse {
-        account: Some(Account::AmazonBedrock {}),
-        requires_openai_auth: false,
-    };
-    assert_eq!(received, expected);
-    Ok(())
-}
-
-#[tokio::test]
 async fn get_account_with_chatgpt() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(
@@ -1508,90 +1390,6 @@ async fn get_account_with_chatgpt() -> Result<()> {
         requires_gemini_auth: false,
     };
     assert_eq!(received, expected);
-    Ok(())
-}
-
-#[tokio::test]
-async fn get_account_omits_chatgpt_after_permanent_refresh_failure() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    create_config_toml(
-        codex_home.path(),
-        CreateConfigTomlParams {
-            requires_openai_auth: Some(true),
-            ..Default::default()
-        },
-    )?;
-    write_chatgpt_auth(
-        codex_home.path(),
-        ChatGptAuthFixture::new("stale-access-token")
-            .refresh_token("stale-refresh-token")
-            .account_id("acct_123")
-            .email("user@example.com")
-            .plan_type("pro")
-            .last_refresh(Some(Utc::now() - ChronoDuration::days(9))),
-        AuthCredentialsStoreMode::File,
-    )?;
-
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/oauth/token"))
-        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
-            "error": {
-                "code": "refresh_token_reused"
-            }
-        })))
-        .expect(1..=2)
-        .mount(&server)
-        .await;
-
-    let refresh_url = format!("{}/oauth/token", server.uri());
-    let mut mcp = McpProcess::new_with_env(
-        codex_home.path(),
-        &[
-            ("OPENAI_API_KEY", None),
-            (
-                REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
-                Some(refresh_url.as_str()),
-            ),
-        ],
-    )
-    .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let auth_status_request_id = mcp
-        .send_get_auth_status_request(GetAuthStatusParams {
-            include_token: Some(true),
-            refresh_token: Some(true),
-        })
-        .await?;
-    let auth_status_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(auth_status_request_id)),
-    )
-    .await??;
-    let _: GetAuthStatusResponse = to_response(auth_status_resp)?;
-
-    let request_id = mcp
-        .send_get_account_request(GetAccountParams {
-            refresh_token: false,
-        })
-        .await?;
-
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let received: GetAccountResponse = to_response(resp)?;
-
-    assert_eq!(
-        received,
-        GetAccountResponse {
-            account: None,
-            requires_openai_auth: true,
-        }
-    );
-    server.verify().await;
     Ok(())
 }
 

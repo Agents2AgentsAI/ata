@@ -16,7 +16,6 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 use textwrap::wrap;
-use url::Url;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -24,7 +23,6 @@ use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height;
 use super::selection_popup_common::render_rows;
-use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
@@ -33,13 +31,6 @@ use crate::render::RectExt as _;
 use crate::style::user_message_style;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
-
-const MCP_CODEX_APPS_SERVER_NAME: &str = "codex_apps";
-const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
-const CONNECTOR_AUTH_FAILURE_META_KEY: &str = "connector_auth_failure";
-const CONNECTOR_AUTH_FAILURE_IS_AUTH_FAILURE_KEY: &str = "is_auth_failure";
-const CONNECTOR_AUTH_FAILURE_CONNECTOR_ID_KEY: &str = "connector_id";
-const CONNECTOR_AUTH_FAILURE_CONNECTOR_NAME_KEY: &str = "connector_name";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AppLinkScreen {
@@ -123,19 +114,6 @@ impl AppLinkView {
     }
 
     fn action_labels(&self) -> Vec<&'static str> {
-        if self.is_auth_suggestion() {
-            return match self.screen {
-                AppLinkScreen::Link => vec!["Open sign-in URL", "Back"],
-                AppLinkScreen::InstallConfirmation => vec!["I already signed in", "Back"],
-            };
-        }
-        if self.is_external_action_suggestion() {
-            return match self.screen {
-                AppLinkScreen::Link => vec!["Open link", "Back"],
-                AppLinkScreen::InstallConfirmation => vec!["I finished", "Back"],
-            };
-        }
-
         match self.screen {
             AppLinkScreen::Link => {
                 if self.is_installed {
@@ -193,7 +171,7 @@ impl AppLinkView {
         self.app_event_tx.send(AppEvent::OpenUrlInBrowser {
             url: self.url.clone(),
         });
-        if !self.is_installed || self.is_browser_action_suggestion() {
+        if !self.is_installed {
             self.screen = AppLinkScreen::InstallConfirmation;
             self.selected_action = 0;
         }
@@ -256,12 +234,12 @@ impl AppLinkView {
 
         match self.screen {
             AppLinkScreen::Link => match self.selected_action {
-                0 => self.open_external_url(),
+                0 => self.open_chatgpt_link(),
                 1 if self.is_installed => self.toggle_enabled(),
                 _ => self.complete = true,
             },
             AppLinkScreen::InstallConfirmation => match self.selected_action {
-                0 => self.complete_external_flow_and_close(),
+                0 => self.refresh_connectors_and_close(),
                 _ => self.back_to_link_screen(),
             },
         }
@@ -309,33 +287,23 @@ impl AppLinkView {
             lines.push(Line::from(""));
         }
 
-        if is_browser_action_suggestion {
-            lines.push(Line::from("URL".dim()));
-            for line in wrap(&self.url, usable_width) {
-                lines.push(Line::from(line.into_owned()));
-            }
-            lines.push(Line::from(""));
-        }
-
         let instructions = self.instructions.trim();
         if !instructions.is_empty() {
             for line in wrap(instructions, usable_width) {
                 lines.push(Line::from(line.into_owned()));
             }
-            if !is_browser_action_suggestion {
+            for line in wrap(
+                "Newly installed apps can take a few minutes to appear in /apps.",
+                usable_width,
+            ) {
+                lines.push(Line::from(line.into_owned()));
+            }
+            if !self.is_installed {
                 for line in wrap(
-                    "Newly installed apps can take a few minutes to appear in /apps.",
+                    "After installed, use $ to insert this app into the prompt.",
                     usable_width,
                 ) {
                     lines.push(Line::from(line.into_owned()));
-                }
-                if !self.is_installed {
-                    for line in wrap(
-                        "After installed, use $ to insert this app into the prompt.",
-                        usable_width,
-                    ) {
-                        lines.push(Line::from(line.into_owned()));
-                    }
                 }
             }
             lines.push(Line::from(""));
@@ -348,82 +316,24 @@ impl AppLinkView {
         let usable_width = width.max(1) as usize;
         let mut lines: Vec<Line<'static>> = Vec::new();
 
-        let is_auth_suggestion = self.is_auth_suggestion();
-        let is_external_action_suggestion = self.is_external_action_suggestion();
-        let is_codex_apps_auth = is_auth_suggestion
-            && self
-                .elicitation_target
-                .as_ref()
-                .is_some_and(|target| target.server_name == MCP_CODEX_APPS_SERVER_NAME);
-        lines.push(Line::from(
-            if is_auth_suggestion {
-                if is_codex_apps_auth {
-                    "Finish App Sign In"
-                } else {
-                    "Finish Authentication"
-                }
-            } else if is_external_action_suggestion {
-                "Finish in Browser"
-            } else {
-                "Finish App Setup"
-            }
-            .bold(),
-        ));
+        lines.push(Line::from("Finish App Setup".bold()));
         lines.push(Line::from(""));
 
-        if is_auth_suggestion {
-            for line in wrap(
-                if is_codex_apps_auth {
-                    "Sign in to the app on ChatGPT in the browser window that just opened."
-                } else {
-                    "Complete authentication in the browser window that just opened."
-                },
-                usable_width,
-            ) {
-                lines.push(Line::from(line.into_owned()));
-            }
-            for line in wrap(
-                "Then return here and select \"I already signed in\".",
-                usable_width,
-            ) {
-                lines.push(Line::from(line.into_owned()));
-            }
-        } else if is_external_action_suggestion {
-            for line in wrap(
-                "Complete the requested action in the browser window that just opened.",
-                usable_width,
-            ) {
-                lines.push(Line::from(line.into_owned()));
-            }
-            for line in wrap("Then return here and select \"I finished\".", usable_width) {
-                lines.push(Line::from(line.into_owned()));
-            }
-        } else {
-            for line in wrap(
-                "Complete app setup on ChatGPT in the browser window that just opened.",
-                usable_width,
-            ) {
-                lines.push(Line::from(line.into_owned()));
-            }
-            for line in wrap(
-                "Sign in there if needed, then return here and select \"I already Installed it\".",
-                usable_width,
-            ) {
-                lines.push(Line::from(line.into_owned()));
-            }
+        for line in wrap(
+            "Complete app setup on ChatGPT in the browser window that just opened.",
+            usable_width,
+        ) {
+            lines.push(Line::from(line.into_owned()));
+        }
+        for line in wrap(
+            "Sign in there if needed, then return here and select \"I already Installed it\".",
+            usable_width,
+        ) {
+            lines.push(Line::from(line.into_owned()));
         }
 
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            if is_auth_suggestion {
-                "Sign-in URL:"
-            } else if is_external_action_suggestion {
-                "Link:"
-            } else {
-                "Setup URL:"
-            }
-            .dim(),
-        ]));
+        lines.push(Line::from(vec!["Setup URL:".dim()]));
         let url_line = Line::from(vec![self.url.clone().cyan().underlined()]);
         lines.extend(adaptive_wrap_lines(
             vec![url_line],
@@ -565,29 +475,6 @@ impl BottomPaneView for AppLinkView {
     fn is_complete(&self) -> bool {
         self.complete
     }
-
-    fn dismiss_app_server_request(&mut self, request: &ResolvedAppServerRequest) -> bool {
-        let ResolvedAppServerRequest::McpElicitation {
-            server_name,
-            request_id,
-        } = request
-        else {
-            return false;
-        };
-        let Some(target) = self.elicitation_target.as_ref() else {
-            return false;
-        };
-        if target.server_name != *server_name || target.request_id != *request_id {
-            return false;
-        }
-
-        self.complete = true;
-        true
-    }
-
-    fn terminal_title_requires_action(&self) -> bool {
-        self.is_tool_suggestion()
-    }
 }
 
 impl crate::render::renderable::Renderable for AppLinkView {
@@ -619,7 +506,7 @@ impl crate::render::renderable::Renderable for AppLinkView {
         ])
         .areas(area);
 
-        let inner = content_area.inset(Insets::vh(/*v*/ 1, /*h*/ 2));
+        let inner = content_area.inset(Insets::vh(1, 2));
         let content_width = inner.width.max(1);
         let lines = self.content_lines(content_width);
         Paragraph::new(lines)
@@ -660,7 +547,6 @@ impl crate::render::renderable::Renderable for AppLinkView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::app_server_requests::ResolvedAppServerRequest;
     use crate::app_event::AppEvent;
     use crate::render::renderable::Renderable;
     use insta::assert_snapshot;
@@ -724,52 +610,6 @@ mod tests {
     }
 
     #[test]
-    fn regular_app_link_does_not_require_terminal_title_action() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let view = AppLinkView::new(
-            AppLinkViewParams {
-                app_id: "connector_1".to_string(),
-                title: "Notion".to_string(),
-                description: None,
-                instructions: "Manage app".to_string(),
-                url: "https://example.test/notion".to_string(),
-                is_installed: true,
-                is_enabled: true,
-                suggest_reason: None,
-                suggestion_type: None,
-                elicitation_target: None,
-            },
-            tx,
-        );
-
-        assert!(!view.terminal_title_requires_action());
-    }
-
-    #[test]
-    fn tool_suggestion_requires_terminal_title_action() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let view = AppLinkView::new(
-            AppLinkViewParams {
-                app_id: "connector_google_calendar".to_string(),
-                title: "Google Calendar".to_string(),
-                description: Some("Plan events and schedules.".to_string()),
-                instructions: "Enable this app to use it for the current request.".to_string(),
-                url: "https://example.test/google-calendar".to_string(),
-                is_installed: true,
-                is_enabled: false,
-                suggest_reason: Some("Plan and reference events from your calendar".to_string()),
-                suggestion_type: Some(AppLinkSuggestionType::Enable),
-                elicitation_target: Some(suggestion_target()),
-            },
-            tx,
-        );
-
-        assert!(view.terminal_title_requires_action());
-    }
-
-    #[test]
     fn toggle_action_sends_set_app_enabled_and_updates_label() {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -807,58 +647,6 @@ mod tests {
     }
 
     #[test]
-    fn generic_url_elicitation_resolves_without_connector_refresh() {
-        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let target = generic_url_target();
-        let request = codex_app_server_protocol::McpServerElicitationRequest::Url {
-            meta: None,
-            message: "Review the payment details to continue.".to_string(),
-            url: "https://payments.example/checkout/123".to_string(),
-            elicitation_id: "payment-123".to_string(),
-        };
-        let params = AppLinkViewParams::from_url_app_server_request(
-            target.thread_id,
-            &target.server_name,
-            target.request_id.clone(),
-            &request,
-        )
-        .expect("expected generic URL app link params");
-        let mut view = AppLinkView::new(params, tx);
-
-        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        match rx.try_recv() {
-            Ok(AppEvent::OpenUrlInBrowser { url }) => {
-                assert_eq!(url, "https://payments.example/checkout/123");
-            }
-            Ok(other) => panic!("unexpected app event: {other:?}"),
-            Err(err) => panic!("missing app event: {err}"),
-        }
-        assert_eq!(view.screen, AppLinkScreen::InstallConfirmation);
-
-        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        match rx.try_recv() {
-            Ok(AppEvent::SubmitThreadOp { thread_id, op }) => {
-                assert_eq!(thread_id, target.thread_id);
-                assert_eq!(
-                    op,
-                    Op::ResolveElicitation {
-                        server_name: "payments".to_string(),
-                        request_id: AppServerRequestId::String("request-2".to_string()),
-                        decision: McpServerElicitationAction::Accept,
-                        content: None,
-                        meta: None,
-                    }
-                );
-            }
-            Ok(other) => panic!("unexpected app event: {other:?}"),
-            Err(err) => panic!("missing app event: {err}"),
-        }
-        assert!(rx.try_recv().is_err());
-        assert!(view.is_complete());
-    }
-
-    #[test]
     fn install_confirmation_does_not_split_long_url_like_token_without_scheme() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -882,7 +670,7 @@ mod tests {
         view.screen = AppLinkScreen::InstallConfirmation;
 
         let rendered: Vec<String> = view
-            .content_lines(/*width*/ 40)
+            .content_lines(40)
             .into_iter()
             .map(|line| {
                 line.spans

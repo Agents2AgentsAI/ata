@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
@@ -15,19 +16,16 @@ use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
 use crate::transport::AppServerTransport;
-use crate::transport::ConnectionOrigin;
-use crate::transport::RemoteControlHandle;
 use async_trait::async_trait;
-use codex_analytics::AnalyticsEventsClient;
-use codex_analytics::AppServerRpcTransport;
-use codex_app_server_protocol::AuthMode as LoginAuthMode;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::ClientResponsePayload;
+use codex_app_server_protocol::ConfigBatchWriteParams;
+use codex_app_server_protocol::ConfigReadParams;
+use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::ExperimentalApi;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
@@ -45,34 +43,41 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::AnalyticsEventsClient;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
+use codex_core::auth::ExternalAuthRefreshContext;
+use codex_core::auth::ExternalAuthRefreshReason;
+use codex_core::auth::ExternalAuthRefresher;
+use codex_core::auth::ExternalAuthTokens;
 use codex_core::config::Config;
-use codex_core::thread_store_from_config;
-use codex_exec_server::EnvironmentManager;
+use codex_core::config_loader::CloudRequirementsLoader;
+use codex_core::config_loader::LoaderOverrides;
+use codex_core::default_client::SetOriginatorError;
+use codex_core::default_client::USER_AGENT_SUFFIX;
+use codex_core::default_client::get_codex_user_agent;
+use codex_core::default_client::set_default_client_residency_requirement;
+use codex_core::default_client::set_default_originator;
+use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_feedback::CodexFeedback;
-use codex_login::AuthManager;
-use codex_login::auth::ExternalAuth;
-use codex_login::auth::ExternalAuthRefreshContext;
-use codex_login::auth::ExternalAuthRefreshReason;
-use codex_login::auth::ExternalAuthTokens;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_state::log_db::LogDbLayer;
-use tokio::sync::Mutex;
-use tokio::sync::Semaphore;
+use futures::FutureExt;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::timeout;
+use toml::Value as TomlValue;
 use tracing::Instrument;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Clone)]
 struct ExternalAuthRefreshBridge {
     outgoing: Arc<OutgoingMessageSender>,
@@ -87,11 +92,7 @@ impl ExternalAuthRefreshBridge {
 }
 
 #[async_trait]
-impl ExternalAuth for ExternalAuthRefreshBridge {
-    fn auth_mode(&self) -> LoginAuthMode {
-        LoginAuthMode::Chatgpt
-    }
-
+impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
     async fn refresh(
         &self,
         context: ExternalAuthRefreshContext,
@@ -133,11 +134,11 @@ impl ExternalAuth for ExternalAuthRefreshBridge {
         let response: ChatgptAuthTokensRefreshResponse =
             serde_json::from_value(result).map_err(std::io::Error::other)?;
 
-        Ok(ExternalAuthTokens::chatgpt(
-            response.access_token,
-            response.chatgpt_account_id,
-            response.chatgpt_plan_type,
-        ))
+        Ok(ExternalAuthTokens {
+            access_token: response.access_token,
+            chatgpt_account_id: response.chatgpt_account_id,
+            chatgpt_plan_type: response.chatgpt_plan_type,
+        })
     }
 }
 
@@ -152,77 +153,17 @@ pub(crate) struct MessageProcessor {
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct ConnectionSessionState {
-    origin: ConnectionOrigin,
-    pub(crate) rpc_gate: Arc<ConnectionRpcGate>,
-    initialized: OnceLock<InitializedConnectionSessionState>,
-}
-
-#[derive(Debug)]
-pub(crate) struct InitializedConnectionSessionState {
+    pub(crate) initialized: bool,
     pub(crate) experimental_api_enabled: bool,
     pub(crate) opted_out_notification_methods: HashSet<String>,
-    pub(crate) app_server_client_name: String,
-    pub(crate) client_version: String,
-}
-
-impl Default for ConnectionSessionState {
-    fn default() -> Self {
-        Self::new(ConnectionOrigin::WebSocket)
-    }
-}
-
-impl ConnectionSessionState {
-    pub(crate) fn new(origin: ConnectionOrigin) -> Self {
-        Self {
-            origin,
-            rpc_gate: Arc::new(ConnectionRpcGate::new()),
-            initialized: OnceLock::new(),
-        }
-    }
-
-    pub(crate) fn initialized(&self) -> bool {
-        self.initialized.get().is_some()
-    }
-
-    fn allows_device_key_requests(&self) -> bool {
-        self.origin.allows_device_key_requests()
-    }
-
-    pub(crate) fn experimental_api_enabled(&self) -> bool {
-        self.initialized
-            .get()
-            .is_some_and(|session| session.experimental_api_enabled)
-    }
-
-    pub(crate) fn opted_out_notification_methods(&self) -> HashSet<String> {
-        self.initialized
-            .get()
-            .map(|session| session.opted_out_notification_methods.clone())
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn app_server_client_name(&self) -> Option<&str> {
-        self.initialized
-            .get()
-            .map(|session| session.app_server_client_name.as_str())
-    }
-
-    pub(crate) fn client_version(&self) -> Option<&str> {
-        self.initialized
-            .get()
-            .map(|session| session.client_version.as_str())
-    }
-
-    pub(crate) fn initialize(&self, session: InitializedConnectionSessionState) -> Result<(), ()> {
-        self.initialized.set(session).map_err(|_| ())
-    }
+    pub(crate) app_server_client_name: Option<String>,
+    pub(crate) client_version: Option<String>,
 }
 
 pub(crate) struct MessageProcessorArgs {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
-    pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) config: Arc<Config>,
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
@@ -232,7 +173,6 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) thread_manager: Option<Arc<ThreadManager>>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
-    pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
     pub(crate) enable_codex_api_key_env: bool,
@@ -244,7 +184,6 @@ impl MessageProcessor {
     pub(crate) fn new(args: MessageProcessorArgs) -> Self {
         let MessageProcessorArgs {
             outgoing,
-            analytics_events_client,
             arg0_paths,
             config,
             cli_overrides,
@@ -254,7 +193,6 @@ impl MessageProcessor {
             thread_manager,
             feedback,
             log_db,
-            state_db,
             config_warnings,
             session_source,
             enable_codex_api_key_env,
@@ -334,7 +272,7 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn process_request(
-        self: &Arc<Self>,
+        &mut self,
         connection_id: ConnectionId,
         request: JSONRPCRequest,
         transport: AppServerTransport,
@@ -473,22 +411,7 @@ impl MessageProcessor {
     }
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
-        self.thread_processor.thread_created_receiver()
-    }
-
-    pub(crate) async fn send_initialize_notifications_to_connection(
-        &self,
-        connection_id: ConnectionId,
-    ) {
-        self.initialize_processor
-            .send_initialize_notifications_to_connection(connection_id)
-            .await;
-    }
-
-    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
-        self.thread_processor
-            .connection_initialized(connection_id)
-            .await;
+        self.codex_message_processor.thread_created_receiver()
     }
 
     pub(crate) async fn send_initialize_notifications_to_connection(
@@ -512,17 +435,19 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn send_initialize_notifications(&self) {
-        self.initialize_processor
-            .send_initialize_notifications()
-            .await;
+        for notification in self.config_warnings.iter().cloned() {
+            self.outgoing
+                .send_server_notification(ServerNotification::ConfigWarning(notification))
+                .await;
+        }
     }
 
     pub(crate) async fn try_attach_thread_listener(
-        &self,
+        &mut self,
         thread_id: ThreadId,
         connection_ids: Vec<ConnectionId>,
     ) {
-        self.thread_processor
+        self.codex_message_processor
             .try_attach_thread_listener(thread_id, connection_ids)
             .await;
     }
@@ -552,26 +477,22 @@ impl MessageProcessor {
         self.codex_message_processor
             .connection_closed(connection_id)
             .await;
-        self.process_exec_processor
-            .connection_closed(connection_id)
-            .await;
-        self.thread_processor.connection_closed(connection_id).await;
     }
 
     pub(crate) fn subscribe_running_assistant_turn_count(&self) -> watch::Receiver<usize> {
-        self.thread_processor
+        self.codex_message_processor
             .subscribe_running_assistant_turn_count()
     }
 
     /// Handle a standalone JSON-RPC response originating from the peer.
-    pub(crate) async fn process_response(&self, response: JSONRPCResponse) {
+    pub(crate) async fn process_response(&mut self, response: JSONRPCResponse) {
         tracing::info!("<- response: {:?}", response);
         let JSONRPCResponse { id, result, .. } = response;
         self.outgoing.notify_client_response(id, result).await
     }
 
     /// Handle an error object received from the peer.
-    pub(crate) async fn process_error(&self, err: JSONRPCError) {
+    pub(crate) async fn process_error(&mut self, err: JSONRPCError) {
         tracing::error!("<- error: {:?}", err);
         self.outgoing.notify_client_error(err.id, err.error).await;
     }
@@ -860,14 +781,6 @@ impl MessageProcessor {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
-
-        self.dispatch_initialized_client_request(
-            connection_request_id,
-            codex_request,
-            session,
-            request_context,
-        )
-        .await
     }
 
     async fn handle_config_value_write(
@@ -885,59 +798,6 @@ impl MessageProcessor {
             }
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
-
-        if let Some(reason) = codex_request.experimental_reason()
-            && !session.experimental_api_enabled()
-        {
-            return Err(invalid_request(experimental_required_message(reason)));
-        }
-        let connection_id = connection_request_id.connection_id;
-        self.initialize_processor.track_initialized_request(
-            connection_id,
-            connection_request_id.request_id.clone(),
-            &codex_request,
-        );
-
-        let serialization_scope = codex_request.serialization_scope();
-        let app_server_client_name = session.app_server_client_name().map(str::to_string);
-        let client_version = session.client_version().map(str::to_string);
-        let device_key_requests_allowed = session.allows_device_key_requests();
-        let error_request_id = connection_request_id.clone();
-        let rpc_gate = Arc::clone(&session.rpc_gate);
-        let processor = Arc::clone(self);
-        let span = request_context.span();
-        let request = QueuedInitializedRequest::new(
-            rpc_gate,
-            async move {
-                let processor_for_request = Arc::clone(&processor);
-                let result = processor_for_request
-                    .handle_initialized_client_request(
-                        connection_request_id,
-                        codex_request,
-                        request_context,
-                        app_server_client_name,
-                        client_version,
-                        device_key_requests_allowed,
-                    )
-                    .await;
-                if let Err(error) = result {
-                    processor.outgoing.send_error(error_request_id, error).await;
-                }
-            }
-            .instrument(span),
-        );
-
-        if let Some(scope) = serialization_scope {
-            let (key, access) = RequestSerializationQueueKey::from_scope(connection_id, scope);
-            self.request_serialization_queues
-                .enqueue(key, access, request)
-                .await;
-        } else {
-            tokio::spawn(async move {
-                request.run().await;
-            });
-        }
-        Ok(())
     }
 
     async fn handle_config_batch_write(
@@ -957,487 +817,33 @@ impl MessageProcessor {
         }
     }
 
-        let result: Result<Option<ClientResponsePayload>, JSONRPCErrorError> = match codex_request {
-            ClientRequest::Initialize { .. } => {
-                panic!("Initialize should be handled before initialized request dispatch");
-            }
-            ClientRequest::ConfigRead { params, .. } => self
-                .config_processor
-                .read(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::WindowsSandboxReadiness { .. } => self
-                .windows_sandbox_processor
-                .windows_sandbox_readiness()
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::ExternalAgentConfigDetect { params, .. } => self
-                .external_agent_config_processor
-                .detect(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::ExternalAgentConfigImport { params, .. } => self
-                .external_agent_config_processor
-                .import(request_id.clone(), params)
-                .await
-                .map(|()| None),
-            ClientRequest::ConfigValueWrite { params, .. } => {
-                self.config_processor.value_write(params).await.map(Some)
-            }
-            ClientRequest::ConfigBatchWrite { params, .. } => {
-                self.config_processor.batch_write(params).await.map(Some)
-            }
-            ClientRequest::ExperimentalFeatureEnablementSet { params, .. } => {
-                self.config_processor
-                    .experimental_feature_enablement_set(request_id.clone(), params)
-                    .await
-            }
-            ClientRequest::ConfigRequirementsRead { params: _, .. } => self
-                .config_processor
-                .config_requirements_read()
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::DeviceKeyCreate { params, .. } => {
-                self.device_key_processor.create(
-                    request_id.clone(),
-                    params,
-                    device_key_requests_allowed,
-                );
-                Ok(None)
-            }
-            ClientRequest::DeviceKeyPublic { params, .. } => {
-                self.device_key_processor.public(
-                    request_id.clone(),
-                    params,
-                    device_key_requests_allowed,
-                );
-                Ok(None)
-            }
-            ClientRequest::DeviceKeySign { params, .. } => {
-                self.device_key_processor.sign(
-                    request_id.clone(),
-                    params,
-                    device_key_requests_allowed,
-                );
-                Ok(None)
-            }
-            ClientRequest::FsReadFile { params, .. } => self
-                .fs_processor
-                .read_file(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::FsWriteFile { params, .. } => self
-                .fs_processor
-                .write_file(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::FsCreateDirectory { params, .. } => self
-                .fs_processor
-                .create_directory(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::FsGetMetadata { params, .. } => self
-                .fs_processor
-                .get_metadata(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::FsReadDirectory { params, .. } => self
-                .fs_processor
-                .read_directory(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::FsRemove { params, .. } => self
-                .fs_processor
-                .remove(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::FsCopy { params, .. } => self
-                .fs_processor
-                .copy(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::FsWatch { params, .. } => self
-                .fs_processor
-                .watch(connection_id, params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::FsUnwatch { params, .. } => self
-                .fs_processor
-                .unwatch(connection_id, params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::ModelProviderCapabilitiesRead { params: _, .. } => self
-                .config_processor
-                .model_provider_capabilities_read()
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::ThreadStart { params, .. } => {
-                self.thread_processor
-                    .thread_start(
-                        request_id.clone(),
-                        params,
-                        app_server_client_name.clone(),
-                        client_version.clone(),
-                        request_context,
-                    )
-                    .await
-            }
-            ClientRequest::ThreadUnsubscribe { params, .. } => {
-                self.thread_processor
-                    .thread_unsubscribe(&request_id, params)
-                    .await
-            }
-            ClientRequest::ThreadResume { params, .. } => {
-                self.thread_processor
-                    .thread_resume(
-                        request_id.clone(),
-                        params,
-                        app_server_client_name.clone(),
-                        client_version.clone(),
-                    )
-                    .await
-            }
-            ClientRequest::ThreadFork { params, .. } => {
-                self.thread_processor
-                    .thread_fork(
-                        request_id.clone(),
-                        params,
-                        app_server_client_name.clone(),
-                        client_version.clone(),
-                    )
-                    .await
-            }
-            ClientRequest::ThreadArchive { params, .. } => {
-                self.thread_processor
-                    .thread_archive(request_id.clone(), params)
-                    .await
-            }
-            ClientRequest::ThreadIncrementElicitation { params, .. } => {
-                self.thread_processor
-                    .thread_increment_elicitation(params)
-                    .await
-            }
-            ClientRequest::ThreadDecrementElicitation { params, .. } => {
-                self.thread_processor
-                    .thread_decrement_elicitation(params)
-                    .await
-            }
-            ClientRequest::ThreadSetName { params, .. } => {
-                self.thread_processor
-                    .thread_set_name(request_id.clone(), params)
-                    .await
-            }
-            ClientRequest::ThreadGoalSet { params, .. } => {
-                self.thread_goal_processor
-                    .thread_goal_set(request_id.clone(), params)
-                    .await
-            }
-            ClientRequest::ThreadGoalGet { params, .. } => {
-                self.thread_goal_processor.thread_goal_get(params).await
-            }
-            ClientRequest::ThreadGoalClear { params, .. } => {
-                self.thread_goal_processor
-                    .thread_goal_clear(request_id.clone(), params)
-                    .await
-            }
-            ClientRequest::ThreadMetadataUpdate { params, .. } => {
-                self.thread_processor.thread_metadata_update(params).await
-            }
-            ClientRequest::ThreadMemoryModeSet { params, .. } => {
-                self.thread_processor.thread_memory_mode_set(params).await
-            }
-            ClientRequest::MemoryReset { .. } => self.thread_processor.memory_reset().await,
-            ClientRequest::ThreadUnarchive { params, .. } => {
-                self.thread_processor
-                    .thread_unarchive(request_id.clone(), params)
-                    .await
-            }
-            ClientRequest::ThreadCompactStart { params, .. } => {
-                self.thread_processor
-                    .thread_compact_start(&request_id, params)
-                    .await
-            }
-            ClientRequest::ThreadBackgroundTerminalsClean { params, .. } => {
-                self.thread_processor
-                    .thread_background_terminals_clean(&request_id, params)
-                    .await
-            }
-            ClientRequest::ThreadRollback { params, .. } => {
-                self.thread_processor
-                    .thread_rollback(&request_id, params)
-                    .await
-            }
-            ClientRequest::ThreadList { params, .. } => {
-                self.thread_processor.thread_list(params).await
-            }
-            ClientRequest::ThreadLoadedList { params, .. } => {
-                self.thread_processor.thread_loaded_list(params).await
-            }
-            ClientRequest::ThreadRead { params, .. } => {
-                self.thread_processor.thread_read(params).await
-            }
-            ClientRequest::ThreadTurnsList { params, .. } => {
-                self.thread_processor.thread_turns_list(params).await
-            }
-            ClientRequest::ThreadShellCommand { params, .. } => {
-                self.thread_processor
-                    .thread_shell_command(&request_id, params)
-                    .await
-            }
-            ClientRequest::ThreadApproveGuardianDeniedAction { params, .. } => {
-                self.thread_processor
-                    .thread_approve_guardian_denied_action(&request_id, params)
-                    .await
-            }
-            ClientRequest::GetConversationSummary { params, .. } => {
-                self.thread_processor.conversation_summary(params).await
-            }
-            ClientRequest::SkillsList { params, .. } => {
-                self.catalog_processor.skills_list(params).await
-            }
-            ClientRequest::HooksList { params, .. } => {
-                self.catalog_processor.hooks_list(params).await
-            }
-            ClientRequest::MarketplaceAdd { params, .. } => {
-                self.marketplace_processor.marketplace_add(params).await
-            }
-            ClientRequest::MarketplaceRemove { params, .. } => {
-                self.marketplace_processor.marketplace_remove(params).await
-            }
-            ClientRequest::MarketplaceUpgrade { params, .. } => {
-                self.marketplace_processor.marketplace_upgrade(params).await
-            }
-            ClientRequest::PluginList { params, .. } => {
-                self.plugin_processor.plugin_list(params).await
-            }
-            ClientRequest::PluginRead { params, .. } => {
-                self.plugin_processor.plugin_read(params).await
-            }
-            ClientRequest::PluginSkillRead { params, .. } => {
-                self.plugin_processor.plugin_skill_read(params).await
-            }
-            ClientRequest::PluginShareSave { params, .. } => {
-                self.plugin_processor.plugin_share_save(params).await
-            }
-            ClientRequest::PluginShareUpdateTargets { params, .. } => {
-                self.plugin_processor
-                    .plugin_share_update_targets(params)
-                    .await
-            }
-            ClientRequest::PluginShareList { params, .. } => {
-                self.plugin_processor.plugin_share_list(params).await
-            }
-            ClientRequest::PluginShareDelete { params, .. } => {
-                self.plugin_processor.plugin_share_delete(params).await
-            }
-            ClientRequest::AppsList { params, .. } => {
-                self.apps_processor.apps_list(&request_id, params).await
-            }
-            ClientRequest::SkillsConfigWrite { params, .. } => {
-                self.catalog_processor.skills_config_write(params).await
-            }
-            ClientRequest::PluginInstall { params, .. } => {
-                self.plugin_processor.plugin_install(params).await
-            }
-            ClientRequest::PluginUninstall { params, .. } => {
-                self.plugin_processor.plugin_uninstall(params).await
-            }
-            ClientRequest::ModelList { params, .. } => {
-                self.catalog_processor.model_list(params).await
-            }
-            ClientRequest::ExperimentalFeatureList { params, .. } => {
-                self.catalog_processor
-                    .experimental_feature_list(params)
-                    .await
-            }
-            ClientRequest::CollaborationModeList { params, .. } => {
-                self.catalog_processor.collaboration_mode_list(params).await
-            }
-            ClientRequest::MockExperimentalMethod { params, .. } => {
-                self.catalog_processor
-                    .mock_experimental_method(params)
-                    .await
-            }
-            ClientRequest::TurnStart { params, .. } => {
-                self.turn_processor
-                    .turn_start(
-                        request_id.clone(),
-                        params,
-                        app_server_client_name.clone(),
-                        client_version.clone(),
-                    )
-                    .await
-            }
-            ClientRequest::ThreadInjectItems { params, .. } => {
-                self.turn_processor.thread_inject_items(params).await
-            }
-            ClientRequest::TurnSteer { params, .. } => {
-                self.turn_processor.turn_steer(&request_id, params).await
-            }
-            ClientRequest::TurnInterrupt { params, .. } => {
-                self.turn_processor
-                    .turn_interrupt(&request_id, params)
-                    .await
-            }
-            ClientRequest::ThreadRealtimeStart { params, .. } => {
-                self.turn_processor
-                    .thread_realtime_start(&request_id, params)
-                    .await
-            }
-            ClientRequest::ThreadRealtimeAppendAudio { params, .. } => {
-                self.turn_processor
-                    .thread_realtime_append_audio(&request_id, params)
-                    .await
-            }
-            ClientRequest::ThreadRealtimeAppendText { params, .. } => {
-                self.turn_processor
-                    .thread_realtime_append_text(&request_id, params)
-                    .await
-            }
-            ClientRequest::ThreadRealtimeStop { params, .. } => {
-                self.turn_processor
-                    .thread_realtime_stop(&request_id, params)
-                    .await
-            }
-            ClientRequest::ThreadRealtimeListVoices { params: _, .. } => {
-                self.turn_processor.thread_realtime_list_voices().await
-            }
-            ClientRequest::ReviewStart { params, .. } => {
-                self.turn_processor.review_start(&request_id, params).await
-            }
-            ClientRequest::McpServerOauthLogin { params, .. } => {
-                self.mcp_processor.mcp_server_oauth_login(params).await
-            }
-            ClientRequest::McpServerRefresh { params, .. } => {
-                self.mcp_processor.mcp_server_refresh(params).await
-            }
-            ClientRequest::McpServerStatusList { params, .. } => {
-                self.mcp_processor
-                    .mcp_server_status_list(&request_id, params)
-                    .await
-            }
-            ClientRequest::McpResourceRead { params, .. } => {
-                self.mcp_processor
-                    .mcp_resource_read(&request_id, params)
-                    .await
-            }
-            ClientRequest::McpServerToolCall { params, .. } => {
-                self.mcp_processor
-                    .mcp_server_tool_call(&request_id, params)
-                    .await
-            }
-            ClientRequest::WindowsSandboxSetupStart { params, .. } => {
-                self.windows_sandbox_processor
-                    .windows_sandbox_setup_start(&request_id, params)
-                    .await
-            }
-            ClientRequest::LoginAccount { params, .. } => {
-                self.account_processor
-                    .login_account(request_id.clone(), params)
-                    .await
-            }
-            ClientRequest::LogoutAccount { .. } => {
-                self.account_processor
-                    .logout_account(request_id.clone())
-                    .await
-            }
-            ClientRequest::CancelLoginAccount { params, .. } => {
-                self.account_processor.cancel_login_account(params).await
-            }
-            ClientRequest::GetAccount { params, .. } => {
-                self.account_processor.get_account(params).await
-            }
-            ClientRequest::GetAuthStatus { params, .. } => {
-                self.account_processor.get_auth_status(params).await
-            }
-            ClientRequest::GetAccountRateLimits { .. } => {
-                self.account_processor.get_account_rate_limits().await
-            }
-            ClientRequest::SendAddCreditsNudgeEmail { params, .. } => {
-                self.account_processor
-                    .send_add_credits_nudge_email(params)
-                    .await
-            }
-            ClientRequest::GitDiffToRemote { params, .. } => {
-                self.git_processor.git_diff_to_remote(params).await
-            }
-            ClientRequest::FuzzyFileSearch { params, .. } => self
-                .search_processor
-                .fuzzy_file_search(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::FuzzyFileSearchSessionStart { params, .. } => self
-                .search_processor
-                .fuzzy_file_search_session_start_response(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::FuzzyFileSearchSessionUpdate { params, .. } => self
-                .search_processor
-                .fuzzy_file_search_session_update_response(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::FuzzyFileSearchSessionStop { params, .. } => self
-                .search_processor
-                .fuzzy_file_search_session_stop(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::OneOffCommandExec { params, .. } => {
-                self.command_exec_processor
-                    .one_off_command_exec(&request_id, params)
-                    .await
-            }
-            ClientRequest::CommandExecWrite { params, .. } => {
-                self.command_exec_processor
-                    .command_exec_write(request_id.clone(), params)
-                    .await
-            }
-            ClientRequest::CommandExecResize { params, .. } => {
-                self.command_exec_processor
-                    .command_exec_resize(request_id.clone(), params)
-                    .await
-            }
-            ClientRequest::CommandExecTerminate { params, .. } => {
-                self.command_exec_processor
-                    .command_exec_terminate(request_id.clone(), params)
-                    .await
-            }
-            ClientRequest::ProcessSpawn { params, .. } => self
-                .process_exec_processor
-                .process_spawn(request_id.clone(), params)
-                .await
-                .map(|()| None),
-            ClientRequest::ProcessWriteStdin { params, .. } => {
-                self.process_exec_processor
-                    .process_write_stdin(request_id.clone(), params)
-                    .await
-            }
-            ClientRequest::ProcessKill { params, .. } => {
-                self.process_exec_processor
-                    .process_kill(request_id.clone(), params)
-                    .await
-            }
-            ClientRequest::ProcessResizePty { params, .. } => {
-                self.process_exec_processor
-                    .process_resize_pty(request_id.clone(), params)
-                    .await
-            }
-            ClientRequest::FeedbackUpload { params, .. } => {
-                self.feedback_processor.feedback_upload(params).await
-            }
-        };
-
-        match result {
-            Ok(Some(response)) => {
-                self.outgoing
-                    .send_response_as(request_id.clone(), response)
-                    .await;
-            }
-            Ok(None) => {}
-            Err(error) => {
-                self.outgoing.send_error(request_id.clone(), error).await;
-            }
+    async fn handle_config_requirements_read(&self, request_id: ConnectionRequestId) {
+        match self.config_api.config_requirements_read().await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
         }
-        Ok(())
+    }
+
+    async fn handle_external_agent_config_detect(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ExternalAgentConfigDetectParams,
+    ) {
+        match self.external_agent_config_api.detect(params).await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_external_agent_config_import(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ExternalAgentConfigImportParams,
+    ) {
+        match self.external_agent_config_api.import(params).await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
     }
 
     async fn handle_fs_read_file(&self, request_id: ConnectionRequestId, params: FsReadFileParams) {

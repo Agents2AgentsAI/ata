@@ -10,7 +10,7 @@ use anyhow::anyhow;
 use sha1::digest::Output;
 use uuid::Uuid;
 
-use codex_protocol::protocol::FileChange;
+use crate::protocol::FileChange;
 
 const ZERO_OID: &str = "0000000000000000000000000000000000000000";
 const DEV_NULL: &str = "/dev/null";

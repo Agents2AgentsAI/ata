@@ -23,19 +23,13 @@ use crate::tools::spec::build_specs_with_toolkits;
 use crate::tools::spec::build_specs_with_toolkits_and_external;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::LocalShellAction;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
-use codex_tools::ConfiguredToolSpec;
-use codex_tools::DiscoverableTool;
-use codex_tools::ResponsesApiNamespaceTool;
-use codex_tools::ToolName;
-use codex_tools::ToolSpec;
-use codex_tools::ToolsConfig;
+use rmcp::model::Tool;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 pub use crate::tools::context::ToolCallSource;
@@ -225,25 +219,7 @@ impl ToolRouter {
         self.specs
             .iter()
             .filter(|config| config.supports_parallel_tool_calls)
-            .any(|config| match &config.spec {
-                ToolSpec::Function(tool) => tool.name == tool_name.name.as_str(),
-                ToolSpec::Freeform(tool) => tool.name == tool_name.name.as_str(),
-                ToolSpec::Namespace(_)
-                | ToolSpec::ToolSearch { .. }
-                | ToolSpec::LocalShell {}
-                | ToolSpec::ImageGeneration { .. }
-                | ToolSpec::WebSearch { .. } => false,
-            })
-    }
-
-    pub fn tool_supports_parallel(&self, call: &ToolCall) -> bool {
-        match &call.payload {
-            // MCP parallel support is configured per server, including for deferred
-            // tools that may not have a matching spec entry. Use the parsed payload
-            // server so similarly named servers/tools cannot collide.
-            ToolPayload::Mcp { server, .. } => self.parallel_mcp_server_names.contains(server),
-            _ => self.configured_tool_supports_parallel(&call.tool_name),
-        }
+            .any(|config| config.spec.name() == tool_name)
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -265,8 +241,8 @@ impl ToolRouter {
                         tool_namespace: namespace,
                         call_id,
                         payload: ToolPayload::Mcp {
-                            server: tool_info.server_name,
-                            tool: tool_info.tool.name.to_string(),
+                            server,
+                            tool,
                             raw_arguments: arguments,
                         },
                     }))
@@ -345,11 +321,10 @@ impl ToolRouter {
     }
 
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn dispatch_tool_call_with_code_mode_result(
+    pub async fn dispatch_tool_call(
         &self,
         session: Arc<Session>,
         turn: Arc<TurnContext>,
-        cancellation_token: CancellationToken,
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
         source: ToolCallSource,
@@ -398,7 +373,6 @@ impl ToolRouter {
         let invocation = ToolInvocation {
             session,
             turn,
-            cancellation_token,
             tracker,
             call_id,
             tool_name,
@@ -453,20 +427,6 @@ impl ToolRouter {
                 result: Box::new(FunctionToolOutput::from_text(message, Some(false))),
             }
         }
-        ToolSpec::Namespace(mut namespace) => {
-            let namespace_name = namespace.name.clone();
-            namespace.tools.retain(|tool| match tool {
-                ResponsesApiNamespaceTool::Function(tool) => !deferred_dynamic_tools.contains(
-                    &ToolName::namespaced(namespace_name.as_str(), tool.name.as_str()),
-                ),
-            });
-            if namespace.tools.is_empty() {
-                None
-            } else {
-                Some(ToolSpec::Namespace(namespace))
-            }
-        }
-        spec => Some(spec),
     }
 }
 #[cfg(test)]

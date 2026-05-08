@@ -90,7 +90,6 @@
             "contextWindowExceeded",
             "usageLimitExceeded",
             "serverOverloaded",
-            "cyberPolicy",
             "internalServerError",
             "unauthorized",
             "badRequest",
@@ -194,28 +193,6 @@
           ],
           "title": "ResponseTooManyFailedAttemptsCodexErrorInfo",
           "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Returned when `turn/start` or `turn/steer` is submitted while the current active turn cannot accept same-turn steering, for example `/review` or manual `/compact`.",
-          "properties": {
-            "activeTurnNotSteerable": {
-              "properties": {
-                "turnKind": {
-                  "$ref": "#/definitions/NonSteerableTurnKind"
-                }
-              },
-              "required": [
-                "turnKind"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "activeTurnNotSteerable"
-          ],
-          "title": "ActiveTurnNotSteerableCodexErrorInfo",
-          "type": "object"
         }
       ]
     },
@@ -277,7 +254,7 @@
               "type": "string"
             },
             "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "type": "string"
             },
             "type": {
               "enum": [
@@ -376,15 +353,6 @@
         }
       ]
     },
-    "CommandExecutionSource": {
-      "enum": [
-        "agent",
-        "userShell",
-        "unifiedExecStartup",
-        "unifiedExecInteraction"
-      ],
-      "type": "string"
-    },
     "CommandExecutionStatus": {
       "enum": [
         "inProgress",
@@ -446,202 +414,6 @@
       ],
       "type": "string"
     },
-    "FileSystemAccessMode": {
-      "enum": [
-        "read",
-        "write",
-        "none"
-      ],
-      "type": "string"
-    },
-    "FileSystemPath": {
-      "oneOf": [
-        {
-          "properties": {
-            "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
-            "type": {
-              "enum": [
-                "path"
-              ],
-              "title": "PathFileSystemPathType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "path",
-            "type"
-          ],
-          "title": "PathFileSystemPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "pattern": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "glob_pattern"
-              ],
-              "title": "GlobPatternFileSystemPathType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "pattern",
-            "type"
-          ],
-          "title": "GlobPatternFileSystemPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "special"
-              ],
-              "title": "SpecialFileSystemPathType",
-              "type": "string"
-            },
-            "value": {
-              "$ref": "#/definitions/FileSystemSpecialPath"
-            }
-          },
-          "required": [
-            "type",
-            "value"
-          ],
-          "title": "SpecialFileSystemPath",
-          "type": "object"
-        }
-      ]
-    },
-    "FileSystemSandboxEntry": {
-      "properties": {
-        "access": {
-          "$ref": "#/definitions/FileSystemAccessMode"
-        },
-        "path": {
-          "$ref": "#/definitions/FileSystemPath"
-        }
-      },
-      "required": [
-        "access",
-        "path"
-      ],
-      "type": "object"
-    },
-    "FileSystemSpecialPath": {
-      "oneOf": [
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "root"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "RootFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "minimal"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "MinimalFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "project_roots"
-              ],
-              "type": "string"
-            },
-            "subpath": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "KindFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "tmpdir"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "TmpdirFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "slash_tmp"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "SlashTmpFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "unknown"
-              ],
-              "type": "string"
-            },
-            "path": {
-              "type": "string"
-            },
-            "subpath": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "kind",
-            "path"
-          ],
-          "type": "object"
-        }
-      ]
-    },
     "FileUpdateChange": {
       "properties": {
         "diff": {
@@ -684,21 +456,6 @@
       },
       "type": "object"
     },
-    "HookPromptFragment": {
-      "properties": {
-        "hookRunId": {
-          "type": "string"
-        },
-        "text": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "hookRunId",
-        "text"
-      ],
-      "type": "object"
-    },
     "McpToolCallError": {
       "properties": {
         "message": {
@@ -712,7 +469,6 @@
     },
     "McpToolCallResult": {
       "properties": {
-        "_meta": true,
         "content": {
           "items": true,
           "type": "array"
@@ -731,54 +487,6 @@
         "failed"
       ],
       "type": "string"
-    },
-    "MemoryCitation": {
-      "properties": {
-        "entries": {
-          "items": {
-            "$ref": "#/definitions/MemoryCitationEntry"
-          },
-          "type": "array"
-        },
-        "threadIds": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "entries",
-        "threadIds"
-      ],
-      "type": "object"
-    },
-    "MemoryCitationEntry": {
-      "properties": {
-        "lineEnd": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "lineStart": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "note": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "lineEnd",
-        "lineStart",
-        "note",
-        "path"
-      ],
-      "type": "object"
     },
     "MessagePhase": {
       "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
@@ -803,13 +511,6 @@
       "enum": [
         "restricted",
         "enabled"
-      ],
-      "type": "string"
-    },
-    "NonSteerableTurnKind": {
-      "enum": [
-        "review",
-        "compact"
       ],
       "type": "string"
     },
@@ -880,134 +581,52 @@
         }
       ]
     },
-    "PermissionProfile": {
-      "oneOf": [
-        {
-          "description": "Codex owns sandbox construction for this profile.",
-          "properties": {
-            "fileSystem": {
-              "$ref": "#/definitions/PermissionProfileFileSystemPermissions"
-            },
-            "network": {
-              "$ref": "#/definitions/PermissionProfileNetworkPermissions"
-            },
-            "type": {
-              "enum": [
-                "managed"
-              ],
-              "title": "ManagedPermissionProfileType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "fileSystem",
-            "network",
-            "type"
-          ],
-          "title": "ManagedPermissionProfile",
-          "type": "object"
-        },
-        {
-          "description": "Do not apply an outer sandbox.",
-          "properties": {
-            "type": {
-              "enum": [
-                "disabled"
-              ],
-              "title": "DisabledPermissionProfileType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "DisabledPermissionProfile",
-          "type": "object"
-        },
-        {
-          "description": "Filesystem isolation is enforced by an external caller.",
-          "properties": {
-            "network": {
-              "$ref": "#/definitions/PermissionProfileNetworkPermissions"
-            },
-            "type": {
-              "enum": [
-                "external"
-              ],
-              "title": "ExternalPermissionProfileType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "network",
-            "type"
-          ],
-          "title": "ExternalPermissionProfile",
-          "type": "object"
-        }
-      ]
-    },
-    "PermissionProfileFileSystemPermissions": {
+    "ReadOnlyAccess": {
       "oneOf": [
         {
           "properties": {
-            "entries": {
+            "includePlatformDefaults": {
+              "default": true,
+              "type": "boolean"
+            },
+            "readableRoots": {
+              "default": [],
               "items": {
-                "$ref": "#/definitions/FileSystemSandboxEntry"
+                "$ref": "#/definitions/AbsolutePathBuf"
               },
               "type": "array"
-            },
-            "globScanMaxDepth": {
-              "format": "uint",
-              "minimum": 1.0,
-              "type": [
-                "integer",
-                "null"
-              ]
             },
             "type": {
               "enum": [
                 "restricted"
               ],
-              "title": "RestrictedPermissionProfileFileSystemPermissionsType",
+              "title": "RestrictedReadOnlyAccessType",
               "type": "string"
             }
           },
           "required": [
-            "entries",
             "type"
           ],
-          "title": "RestrictedPermissionProfileFileSystemPermissions",
+          "title": "RestrictedReadOnlyAccess",
           "type": "object"
         },
         {
           "properties": {
             "type": {
               "enum": [
-                "unrestricted"
+                "fullAccess"
               ],
-              "title": "UnrestrictedPermissionProfileFileSystemPermissionsType",
+              "title": "FullAccessReadOnlyAccessType",
               "type": "string"
             }
           },
           "required": [
             "type"
           ],
-          "title": "UnrestrictedPermissionProfileFileSystemPermissions",
+          "title": "FullAccessReadOnlyAccess",
           "type": "object"
         }
       ]
-    },
-    "PermissionProfileNetworkPermissions": {
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "enabled"
-      ],
-      "type": "object"
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
@@ -1042,6 +661,16 @@
         },
         {
           "properties": {
+            "access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess"
+                }
+              ],
+              "default": {
+                "type": "fullAccess"
+              }
+            },
             "networkAccess": {
               "default": false,
               "type": "boolean"
@@ -1098,6 +727,16 @@
               "default": false,
               "type": "boolean"
             },
+            "readOnlyAccess": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess"
+                }
+              ],
+              "default": {
+                "type": "fullAccess"
+              }
+            },
             "type": {
               "enum": [
                 "workspaceWrite"
@@ -1121,6 +760,13 @@
         }
       ]
     },
+    "ServiceTier": {
+      "enum": [
+        "fast",
+        "flex"
+      ],
+      "type": "string"
+    },
     "SessionSource": {
       "oneOf": [
         {
@@ -1132,19 +778,6 @@
             "unknown"
           ],
           "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "custom": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "custom"
-          ],
-          "title": "CustomSessionSource",
-          "type": "object"
         },
         {
           "additionalProperties": false,
@@ -1182,17 +815,6 @@
                     "string",
                     "null"
                   ]
-                },
-                "agent_path": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/definitions/AgentPath"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "default": null
                 },
                 "agent_role": {
                   "default": null,
@@ -1286,23 +908,12 @@
           "type": "integer"
         },
         "cwd": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            }
-          ],
-          "description": "Working directory captured for the thread."
+          "description": "Working directory captured for the thread.",
+          "type": "string"
         },
         "ephemeral": {
           "description": "Whether the thread is ephemeral and should not be materialized on disk.",
           "type": "boolean"
-        },
-        "forkedFromId": {
-          "description": "Source thread id when this thread was created by forking another thread.",
-          "type": [
-            "string",
-            "null"
-          ]
         },
         "gitInfo": {
           "anyOf": [
@@ -1340,10 +951,6 @@
           "description": "Usually the first user message in the thread, if available.",
           "type": "string"
         },
-        "sessionId": {
-          "description": "Session id shared by threads that belong to the same session tree.",
-          "type": "string"
-        },
         "source": {
           "allOf": [
             {
@@ -1359,17 +966,6 @@
             }
           ],
           "description": "Current runtime status for the thread."
-        },
-        "threadSource": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ThreadSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Optional analytics source classification for this thread."
         },
         "turns": {
           "description": "Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.",
@@ -1392,7 +988,6 @@
         "id",
         "modelProvider",
         "preview",
-        "sessionId",
         "source",
         "status",
         "turns",
@@ -1441,46 +1036,8 @@
         },
         {
           "properties": {
-            "fragments": {
-              "items": {
-                "$ref": "#/definitions/HookPromptFragment"
-              },
-              "type": "array"
-            },
             "id": {
               "type": "string"
-            },
-            "type": {
-              "enum": [
-                "hookPrompt"
-              ],
-              "title": "HookPromptThreadItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "fragments",
-            "id",
-            "type"
-          ],
-          "title": "HookPromptThreadItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "memoryCitation": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/MemoryCitation"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
             },
             "phase": {
               "anyOf": [
@@ -1592,12 +1149,8 @@
               "type": "array"
             },
             "cwd": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/AbsolutePathBuf"
-                }
-              ],
-              "description": "The command's working directory."
+              "description": "The command's working directory.",
+              "type": "string"
             },
             "durationMs": {
               "description": "The duration of the command execution in milliseconds.",
@@ -1624,14 +1177,6 @@
                 "string",
                 "null"
               ]
-            },
-            "source": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/CommandExecutionSource"
-                }
-              ],
-              "default": "agent"
             },
             "status": {
               "$ref": "#/definitions/CommandExecutionStatus"
@@ -1710,12 +1255,6 @@
             "id": {
               "type": "string"
             },
-            "mcpAppResourceUri": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "result": {
               "anyOf": [
                 {
@@ -1776,12 +1315,6 @@
             },
             "id": {
               "type": "string"
-            },
-            "namespace": {
-              "type": [
-                "string",
-                "null"
-              ]
             },
             "status": {
               "$ref": "#/definitions/DynamicToolCallStatus"
@@ -1938,7 +1471,7 @@
               "type": "string"
             },
             "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "type": "string"
             },
             "type": {
               "enum": [
@@ -1968,16 +1501,6 @@
               "type": [
                 "string",
                 "null"
-              ]
-            },
-            "savedPath": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/AbsolutePathBuf"
-                },
-                {
-                  "type": "null"
-                }
               ]
             },
             "status": {
@@ -2070,14 +1593,6 @@
         }
       ]
     },
-    "ThreadSource": {
-      "enum": [
-        "user",
-        "subagent",
-        "memory_consolidation"
-      ],
-      "type": "string"
-    },
     "ThreadStatus": {
       "oneOf": [
         {
@@ -2155,22 +1670,6 @@
     },
     "Turn": {
       "properties": {
-        "completedAt": {
-          "description": "Unix timestamp (in seconds) when the turn completed.",
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "durationMs": {
-          "description": "Duration between turn start and completion in milliseconds, if known.",
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "error": {
           "anyOf": [
             {
@@ -2186,28 +1685,11 @@
           "type": "string"
         },
         "items": {
-          "description": "Thread items currently included in this turn payload.",
+          "description": "Only populated on a `thread/resume` or `thread/fork` response. For all other responses and notifications returning a Turn, the items field will be an empty list.",
           "items": {
             "$ref": "#/definitions/ThreadItem"
           },
           "type": "array"
-        },
-        "itemsView": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/TurnItemsView"
-            }
-          ],
-          "default": "full",
-          "description": "Describes how much of `items` has been loaded for this turn."
-        },
-        "startedAt": {
-          "description": "Unix timestamp (in seconds) when the turn started.",
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
         },
         "status": {
           "$ref": "#/definitions/TurnStatus"
@@ -2247,31 +1729,6 @@
         "message"
       ],
       "type": "object"
-    },
-    "TurnItemsView": {
-      "oneOf": [
-        {
-          "description": "`items` was not loaded for this turn. The field is intentionally empty.",
-          "enum": [
-            "notLoaded"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "`items` contains only a display summary for this turn.",
-          "enum": [
-            "summary"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "`items` contains every ThreadItem available from persisted app-server history for this turn.",
-          "enum": [
-            "full"
-          ],
-          "type": "string"
-        }
-      ]
     },
     "TurnStatus": {
       "enum": [
@@ -2517,15 +1974,7 @@
       "description": "Reviewer currently used for approval requests on this thread."
     },
     "cwd": {
-      "$ref": "#/definitions/AbsolutePathBuf"
-    },
-    "instructionSources": {
-      "default": [],
-      "description": "Instruction source files currently loaded for this thread.",
-      "items": {
-        "$ref": "#/definitions/AbsolutePathBuf"
-      },
-      "type": "array"
+      "type": "string"
     },
     "model": {
       "type": "string"
@@ -2544,17 +1993,16 @@
       ]
     },
     "sandbox": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/SandboxPolicy"
-        }
-      ],
-      "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
+      "$ref": "#/definitions/SandboxPolicy"
     },
     "serviceTier": {
-      "type": [
-        "string",
-        "null"
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ServiceTier"
+        },
+        {
+          "type": "null"
+        }
       ]
     },
     "thread": {

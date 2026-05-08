@@ -16,7 +16,6 @@ pub(crate) struct DecodedHistoryText {
     pub(crate) mentions: Vec<LinkedMention>,
 }
 
-#[allow(dead_code)]
 pub(crate) fn encode_history_mentions(text: &str, mentions: &[LinkedMention]) -> String {
     if mentions.is_empty() || text.is_empty() {
         return text.to_string();

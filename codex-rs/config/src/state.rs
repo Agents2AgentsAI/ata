@@ -3,7 +3,6 @@ use crate::config_requirements::ConfigRequirementsToml;
 
 use super::fingerprint::record_origins;
 use super::fingerprint::version_for_toml;
-use super::key_aliases::normalized_with_key_aliases;
 use super::merge::merge_toml_values;
 use codex_app_server_protocol::ConfigLayer;
 use codex_app_server_protocol::ConfigLayerMetadata;
@@ -18,45 +17,10 @@ use toml::Value as TomlValue;
 #[derive(Debug, Default, Clone)]
 pub struct LoaderOverrides {
     pub managed_config_path: Option<PathBuf>,
-    pub system_config_path: Option<PathBuf>,
-    pub system_requirements_path: Option<PathBuf>,
-    pub ignore_managed_requirements: bool,
-    pub ignore_user_config: bool,
-    pub ignore_user_and_project_exec_policy_rules: bool,
     //TODO(gt): Add a macos_ prefix to this field and remove the target_os check.
     #[cfg(target_os = "macos")]
     pub managed_preferences_base64: Option<String>,
     pub macos_managed_config_requirements_base64: Option<String>,
-}
-
-impl LoaderOverrides {
-    /// Returns overrides that ignore host-managed configuration.
-    ///
-    /// This is intended for tests that should load only repo-controlled config fixtures.
-    pub fn without_managed_config_for_tests() -> Self {
-        let base = std::env::temp_dir().join("codex-config-tests");
-        Self {
-            managed_config_path: Some(base.join("managed_config.toml")),
-            system_config_path: Some(base.join("config.toml")),
-            system_requirements_path: Some(base.join("requirements.toml")),
-            ignore_managed_requirements: false,
-            ignore_user_config: false,
-            ignore_user_and_project_exec_policy_rules: false,
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: Some(String::new()),
-            macos_managed_config_requirements_base64: Some(String::new()),
-        }
-    }
-
-    /// Returns overrides with host MDM disabled and managed config loaded from `managed_config_path`.
-    ///
-    /// This is intended for tests that supply an explicit managed config fixture.
-    pub fn with_managed_config_path_for_tests(managed_config_path: PathBuf) -> Self {
-        Self {
-            managed_config_path: Some(managed_config_path),
-            ..Self::without_managed_config_for_tests()
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -167,15 +131,6 @@ pub struct ConfigLayerStack {
     /// sources. This preserves the original allow-lists so they can be
     /// surfaced via APIs.
     requirements_toml: ConfigRequirementsToml,
-
-    /// Whether execpolicy should skip `.rules` files from user and project config-layer folders.
-    ignore_user_and_project_exec_policy_rules: bool,
-
-    /// Startup warnings discovered while building this stack.
-    ///
-    /// `None` means the loader did not check for stack-level warnings, while
-    /// `Some(vec![])` means it checked and found nothing to report.
-    startup_warnings: Option<Vec<String>>,
 }
 
 impl ConfigLayerStack {
@@ -190,35 +145,10 @@ impl ConfigLayerStack {
             user_layer_index,
             requirements,
             requirements_toml,
-            ignore_user_and_project_exec_policy_rules: false,
-            startup_warnings: None,
         })
     }
 
-    pub fn with_user_and_project_exec_policy_rules_ignored(
-        mut self,
-        ignore_user_and_project_exec_policy_rules: bool,
-    ) -> Self {
-        self.ignore_user_and_project_exec_policy_rules = ignore_user_and_project_exec_policy_rules;
-        self
-    }
-
-    pub fn ignore_user_and_project_exec_policy_rules(&self) -> bool {
-        self.ignore_user_and_project_exec_policy_rules
-    }
-
-    pub(crate) fn with_startup_warnings(mut self, startup_warnings: Vec<String>) -> Self {
-        self.startup_warnings = Some(startup_warnings);
-        self
-    }
-
-    pub fn startup_warnings(&self) -> Option<&[String]> {
-        self.startup_warnings.as_deref()
-    }
-
-    /// Returns the raw user config layer, if any.
-    ///
-    /// This does not merge other config layers or apply any requirements.
+    /// Returns the user config layer, if any.
     pub fn get_user_layer(&self) -> Option<&ConfigLayerEntry> {
         self.user_layer_index
             .and_then(|index| self.layers.get(index))
@@ -253,9 +183,6 @@ impl ConfigLayerStack {
                     user_layer_index: self.user_layer_index,
                     requirements: self.requirements.clone(),
                     requirements_toml: self.requirements_toml.clone(),
-                    ignore_user_and_project_exec_policy_rules: self
-                        .ignore_user_and_project_exec_policy_rules,
-                    startup_warnings: self.startup_warnings.clone(),
                 }
             }
             None => {
@@ -277,60 +204,38 @@ impl ConfigLayerStack {
                     user_layer_index: Some(user_layer_index),
                     requirements: self.requirements.clone(),
                     requirements_toml: self.requirements_toml.clone(),
-                    ignore_user_and_project_exec_policy_rules: self
-                        .ignore_user_and_project_exec_policy_rules,
-                    startup_warnings: self.startup_warnings.clone(),
                 }
             }
         }
     }
 
-    /// Returns the merged config-layer view.
-    ///
-    /// This only merges ordinary config layers and does not apply requirements
-    /// such as cloud requirements.
     pub fn effective_config(&self) -> TomlValue {
         let mut merged = TomlValue::Table(toml::map::Map::new());
-        for layer in self.get_layers(
-            ConfigLayerStackOrdering::LowestPrecedenceFirst,
-            /*include_disabled*/ false,
-        ) {
+        for layer in self.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false) {
             merge_toml_values(&mut merged, &layer.config);
         }
         merged
     }
 
-    /// Returns field origins for the merged config-layer view.
-    ///
-    /// Requirement sources are tracked separately and are not included here.
     pub fn origins(&self) -> HashMap<String, ConfigLayerMetadata> {
         let mut origins = HashMap::new();
         let mut path = Vec::new();
 
-        for layer in self.get_layers(
-            ConfigLayerStackOrdering::LowestPrecedenceFirst,
-            /*include_disabled*/ false,
-        ) {
-            let config = normalized_with_key_aliases(&layer.config, &[]);
-            record_origins(&config, &layer.metadata(), &mut path, &mut origins);
+        for layer in self.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false) {
+            record_origins(&layer.config, &layer.metadata(), &mut path, &mut origins);
         }
 
         origins
     }
 
-    /// Returns config layers from highest precedence to lowest precedence.
-    ///
-    /// Requirement sources are tracked separately and are not included here.
+    /// Returns the highest-precedence to lowest-precedence layers, so
+    /// `ConfigLayerSource::SessionFlags` would be first, if present.
     pub fn layers_high_to_low(&self) -> Vec<&ConfigLayerEntry> {
-        self.get_layers(
-            ConfigLayerStackOrdering::HighestPrecedenceFirst,
-            /*include_disabled*/ false,
-        )
+        self.get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst, false)
     }
 
-    /// Returns config layers in the requested precedence order.
-    ///
-    /// Requirement sources are tracked separately and are not included here.
+    /// Returns the highest-precedence to lowest-precedence layers, so
+    /// `ConfigLayerSource::SessionFlags` would be first, if present.
     pub fn get_layers(
         &self,
         ordering: ConfigLayerStackOrdering,
@@ -404,7 +309,3 @@ fn verify_layer_ordering(layers: &[ConfigLayerEntry]) -> std::io::Result<Option<
 
     Ok(user_layer_index)
 }
-
-#[cfg(test)]
-#[path = "state_tests.rs"]
-mod tests;

@@ -28,7 +28,7 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_config::types::AuthCredentialsStoreMode;
+use codex_core::auth::AuthCredentialsStoreMode;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use core_test_support::responses;
@@ -38,11 +38,6 @@ use std::collections::BTreeMap;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-// macOS and Windows Bazel CI can spend tens of seconds starting app-server
-// subprocesses or processing test RPCs under load.
-#[cfg(any(target_os = "macos", windows))]
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-#[cfg(not(any(target_os = "macos", windows)))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const AUTO_COMPACT_LIMIT: i64 = 1_000;
 const COMPACT_PROMPT: &str = "Summarize the conversation.";
@@ -55,19 +50,19 @@ async fn auto_compaction_local_emits_started_and_completed_items() -> Result<()>
     let server = responses::start_mock_server().await;
     let sse1 = responses::sse(vec![
         responses::ev_assistant_message("m1", "FIRST_REPLY"),
-        responses::ev_completed_with_tokens("r1", /*total_tokens*/ 70_000),
+        responses::ev_completed_with_tokens("r1", 70_000),
     ]);
     let sse2 = responses::sse(vec![
         responses::ev_assistant_message("m2", "SECOND_REPLY"),
-        responses::ev_completed_with_tokens("r2", /*total_tokens*/ 330_000),
+        responses::ev_completed_with_tokens("r2", 330_000),
     ]);
     let sse3 = responses::sse(vec![
         responses::ev_assistant_message("m3", "LOCAL_SUMMARY"),
-        responses::ev_completed_with_tokens("r3", /*total_tokens*/ 200),
+        responses::ev_completed_with_tokens("r3", 200),
     ]);
     let sse4 = responses::sse(vec![
         responses::ev_assistant_message("m4", "FINAL_REPLY"),
-        responses::ev_completed_with_tokens("r4", /*total_tokens*/ 120),
+        responses::ev_completed_with_tokens("r4", 120),
     ]);
     responses::mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
 
@@ -77,7 +72,7 @@ async fn auto_compaction_local_emits_started_and_completed_items() -> Result<()>
         &server.uri(),
         &BTreeMap::default(),
         AUTO_COMPACT_LIMIT,
-        /*requires_openai_auth*/ None,
+        None,
         "mock_provider",
         COMPACT_PROMPT,
     )?;
@@ -115,15 +110,15 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
     let server = responses::start_mock_server().await;
     let sse1 = responses::sse(vec![
         responses::ev_assistant_message("m1", "FIRST_REPLY"),
-        responses::ev_completed_with_tokens("r1", /*total_tokens*/ 70_000),
+        responses::ev_completed_with_tokens("r1", 70_000),
     ]);
     let sse2 = responses::sse(vec![
         responses::ev_assistant_message("m2", "SECOND_REPLY"),
-        responses::ev_completed_with_tokens("r2", /*total_tokens*/ 330_000),
+        responses::ev_completed_with_tokens("r2", 330_000),
     ]);
     let sse3 = responses::sse(vec![
         responses::ev_assistant_message("m3", "FINAL_REPLY"),
-        responses::ev_completed_with_tokens("r3", /*total_tokens*/ 120),
+        responses::ev_completed_with_tokens("r3", 120),
     ]);
     let responses_log = responses::mount_sse_sequence(&server, vec![sse1, sse2, sse3]).await;
 
@@ -134,6 +129,7 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
             content: vec![ContentItem::OutputText {
                 text: "REMOTE_COMPACT_SUMMARY".to_string(),
             }],
+            end_turn: None,
             phase: None,
         },
         ResponseItem::Compaction {
@@ -153,7 +149,7 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
         &BTreeMap::default(),
         REMOTE_AUTO_COMPACT_LIMIT,
         Some(true),
-        "mock_provider",
+        "openai",
         COMPACT_PROMPT,
     )?;
     write_chatgpt_auth(
@@ -201,7 +197,7 @@ async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -
     let server = responses::start_mock_server().await;
     let sse = responses::sse(vec![
         responses::ev_assistant_message("m1", "MANUAL_COMPACT_SUMMARY"),
-        responses::ev_completed_with_tokens("r1", /*total_tokens*/ 200),
+        responses::ev_completed_with_tokens("r1", 200),
     ]);
     responses::mount_sse_sequence(&server, vec![sse]).await;
 
@@ -211,7 +207,7 @@ async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -
         &server.uri(),
         &BTreeMap::default(),
         AUTO_COMPACT_LIMIT,
-        /*requires_openai_auth*/ None,
+        None,
         "mock_provider",
         COMPACT_PROMPT,
     )?;
@@ -261,7 +257,7 @@ async fn thread_compact_start_rejects_invalid_thread_id() -> Result<()> {
         &server.uri(),
         &BTreeMap::default(),
         AUTO_COMPACT_LIMIT,
-        /*requires_openai_auth*/ None,
+        None,
         "mock_provider",
         COMPACT_PROMPT,
     )?;
@@ -297,7 +293,7 @@ async fn thread_compact_start_rejects_unknown_thread_id() -> Result<()> {
         &server.uri(),
         &BTreeMap::default(),
         AUTO_COMPACT_LIMIT,
-        /*requires_openai_auth*/ None,
+        None,
         "mock_provider",
         COMPACT_PROMPT,
     )?;

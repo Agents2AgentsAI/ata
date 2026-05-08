@@ -351,9 +351,13 @@
           ]
         },
         "service_tier": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "tools": {
@@ -653,15 +657,9 @@
           ]
         },
         "service_tier": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "tools": {
           "anyOf": [
             {
-              "$ref": "#/definitions/ToolsV2"
+              "$ref": "#/definitions/ServiceTier"
             },
             {
               "type": "null"
@@ -755,6 +753,13 @@
         }
       },
       "type": "object"
+    },
+    "ServiceTier": {
+      "enum": [
+        "fast",
+        "flex"
+      ],
+      "type": "string"
     },
     "ToolsV2": {
       "properties": {

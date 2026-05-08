@@ -23,8 +23,6 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
-use crate::key_hint::KeyBindingListExt;
-use crate::keymap::PagerKeymap;
 use crate::render::Insets;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
@@ -53,24 +51,19 @@ pub(crate) enum Overlay {
 }
 
 impl Overlay {
-    pub(crate) fn new_transcript(cells: Vec<Arc<dyn HistoryCell>>, keymap: PagerKeymap) -> Self {
-        Self::Transcript(TranscriptOverlay::new(cells, keymap))
+    pub(crate) fn new_transcript(cells: Vec<Arc<dyn HistoryCell>>) -> Self {
+        Self::Transcript(TranscriptOverlay::new(cells))
     }
 
-    pub(crate) fn new_static_with_lines(
-        lines: Vec<Line<'static>>,
-        title: String,
-        keymap: PagerKeymap,
-    ) -> Self {
-        Self::Static(StaticOverlay::with_title(lines, title, keymap))
+    pub(crate) fn new_static_with_lines(lines: Vec<Line<'static>>, title: String) -> Self {
+        Self::Static(StaticOverlay::with_title(lines, title))
     }
 
     pub(crate) fn new_static_with_renderables(
         renderables: Vec<Box<dyn Renderable>>,
         title: String,
-        keymap: PagerKeymap,
     ) -> Self {
-        Self::Static(StaticOverlay::with_renderables(renderables, title, keymap))
+        Self::Static(StaticOverlay::with_renderables(renderables, title))
     }
 
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
@@ -88,12 +81,37 @@ impl Overlay {
     }
 }
 
-fn first_or_empty(bindings: &[KeyBinding]) -> Vec<KeyBinding> {
-    bindings.first().copied().into_iter().collect()
-}
+const KEY_UP: KeyBinding = key_hint::plain(KeyCode::Up);
+const KEY_DOWN: KeyBinding = key_hint::plain(KeyCode::Down);
+const KEY_K: KeyBinding = key_hint::plain(KeyCode::Char('k'));
+const KEY_J: KeyBinding = key_hint::plain(KeyCode::Char('j'));
+const KEY_PAGE_UP: KeyBinding = key_hint::plain(KeyCode::PageUp);
+const KEY_PAGE_DOWN: KeyBinding = key_hint::plain(KeyCode::PageDown);
+const KEY_SPACE: KeyBinding = key_hint::plain(KeyCode::Char(' '));
+const KEY_SHIFT_SPACE: KeyBinding = key_hint::shift(KeyCode::Char(' '));
+const KEY_HOME: KeyBinding = key_hint::plain(KeyCode::Home);
+const KEY_END: KeyBinding = key_hint::plain(KeyCode::End);
+const KEY_LEFT: KeyBinding = key_hint::plain(KeyCode::Left);
+const KEY_RIGHT: KeyBinding = key_hint::plain(KeyCode::Right);
+const KEY_CTRL_F: KeyBinding = key_hint::ctrl(KeyCode::Char('f'));
+const KEY_CTRL_D: KeyBinding = key_hint::ctrl(KeyCode::Char('d'));
+const KEY_CTRL_B: KeyBinding = key_hint::ctrl(KeyCode::Char('b'));
+const KEY_CTRL_U: KeyBinding = key_hint::ctrl(KeyCode::Char('u'));
+const KEY_Q: KeyBinding = key_hint::plain(KeyCode::Char('q'));
+const KEY_ESC: KeyBinding = key_hint::plain(KeyCode::Esc);
+const KEY_ENTER: KeyBinding = key_hint::plain(KeyCode::Enter);
+const KEY_CTRL_T: KeyBinding = key_hint::ctrl(KeyCode::Char('t'));
+const KEY_CTRL_C: KeyBinding = key_hint::ctrl(KeyCode::Char('c'));
+
+// Common pager navigation hints rendered on the first line
+const PAGER_KEY_HINTS: &[(&[KeyBinding], &str)] = &[
+    (&[KEY_UP, KEY_DOWN], "to scroll"),
+    (&[KEY_PAGE_UP, KEY_PAGE_DOWN], "to page"),
+    (&[KEY_HOME, KEY_END], "to jump"),
+];
 
 // Render a single line of key hints from (key(s), description) pairs.
-fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(Vec<KeyBinding>, &str)]) {
+fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(&[KeyBinding], &str)]) {
     let mut spans: Vec<Span<'static>> = vec![" ".into()];
     let mut first = true;
     for (keys, desc) in pairs {
@@ -118,7 +136,6 @@ struct PagerView {
     renderables: Vec<Box<dyn Renderable>>,
     scroll_offset: usize,
     title: String,
-    keymap: PagerKeymap,
     last_content_height: Option<usize>,
     last_rendered_height: Option<usize>,
     /// If set, on next render ensure this chunk is visible.
@@ -126,17 +143,11 @@ struct PagerView {
 }
 
 impl PagerView {
-    fn new(
-        renderables: Vec<Box<dyn Renderable>>,
-        title: String,
-        scroll_offset: usize,
-        keymap: PagerKeymap,
-    ) -> Self {
+    fn new(renderables: Vec<Box<dyn Renderable>>, title: String, scroll_offset: usize) -> Self {
         Self {
             renderables,
             scroll_offset,
             title,
-            keymap,
             last_content_height: None,
             last_rendered_height: None,
             pending_scroll_chunk: None,
@@ -249,34 +260,37 @@ impl PagerView {
 
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
         match key_event {
-            e if self.keymap.scroll_up.is_pressed(e) => {
+            e if KEY_UP.is_press(e) || KEY_K.is_press(e) => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
             }
-            e if self.keymap.scroll_down.is_pressed(e) => {
+            e if KEY_DOWN.is_press(e) || KEY_J.is_press(e) => {
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
             }
-            e if self.keymap.page_up.is_pressed(e) => {
+            e if KEY_PAGE_UP.is_press(e)
+                || KEY_SHIFT_SPACE.is_press(e)
+                || KEY_CTRL_B.is_press(e) =>
+            {
                 let page_height = self.page_height(tui.terminal.viewport_area);
                 self.scroll_offset = self.scroll_offset.saturating_sub(page_height);
             }
-            e if self.keymap.page_down.is_pressed(e) => {
+            e if KEY_PAGE_DOWN.is_press(e) || KEY_SPACE.is_press(e) || KEY_CTRL_F.is_press(e) => {
                 let page_height = self.page_height(tui.terminal.viewport_area);
                 self.scroll_offset = self.scroll_offset.saturating_add(page_height);
             }
-            e if self.keymap.half_page_down.is_pressed(e) => {
+            e if KEY_CTRL_D.is_press(e) => {
                 let area = self.content_area(tui.terminal.viewport_area);
                 let half_page = (area.height as usize).saturating_add(1) / 2;
                 self.scroll_offset = self.scroll_offset.saturating_add(half_page);
             }
-            e if self.keymap.half_page_up.is_pressed(e) => {
+            e if KEY_CTRL_U.is_press(e) => {
                 let area = self.content_area(tui.terminal.viewport_area);
                 let half_page = (area.height as usize).saturating_add(1) / 2;
                 self.scroll_offset = self.scroll_offset.saturating_sub(half_page);
             }
-            e if self.keymap.jump_top.is_pressed(e) => {
+            e if KEY_HOME.is_press(e) => {
                 self.scroll_offset = 0;
             }
-            e if self.keymap.jump_bottom.is_pressed(e) => {
+            e if KEY_END.is_press(e) => {
                 self.scroll_offset = usize::MAX;
             }
             _ => {
@@ -440,13 +454,12 @@ impl TranscriptOverlay {
     ///
     /// This overlay does not own the "active cell"; callers may optionally append a live tail via
     /// `sync_live_tail` during draws to reflect in-flight activity.
-    pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>, keymap: PagerKeymap) -> Self {
+    pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>) -> Self {
         Self {
             view: PagerView::new(
-                Self::render_cells(&transcript_cells, /*highlight_cell*/ None),
+                Self::render_cells(&transcript_cells, None),
                 "T R A N S C R I P T".to_string(),
                 usize::MAX,
-                keymap,
             ),
             cells: transcript_cells,
             highlight_cell: None,
@@ -482,9 +495,7 @@ impl TranscriptOverlay {
                 if !c.is_stream_continuation() && i > 0 {
                     cell_renderable = Box::new(InsetRenderable::new(
                         cell_renderable,
-                        Insets::tlbr(
-                            /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
-                        ),
+                        Insets::tlbr(1, 0, 0, 0),
                     ));
                 }
                 v.push(cell_renderable);
@@ -517,12 +528,8 @@ impl TranscriptOverlay {
             {
                 // The tail was rendered as the only entry, so it lacks a top
                 // inset; add one now that it follows a committed cell.
-                Box::new(InsetRenderable::new(
-                    tail,
-                    Insets::tlbr(
-                        /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
-                    ),
-                )) as Box<dyn Renderable>
+                Box::new(InsetRenderable::new(tail, Insets::tlbr(1, 0, 0, 0)))
+                    as Box<dyn Renderable>
             } else {
                 tail
             };
@@ -548,49 +555,6 @@ impl TranscriptOverlay {
             self.highlight_cell = None;
         }
         self.rebuild_renderables();
-        if follow_bottom {
-            self.view.scroll_offset = usize::MAX;
-        }
-    }
-
-    /// Replace a range of committed cells with a single consolidated cell.
-    ///
-    /// Mirrors the splice performed on `App::transcript_cells` during
-    /// `ConsolidateAgentMessage` so the Ctrl+T overlay stays in sync with the
-    /// main transcript. The range is clamped defensively: cells may have been
-    /// inserted after the overlay opened, leaving it with fewer entries than
-    /// the main transcript.
-    pub(crate) fn consolidate_cells(
-        &mut self,
-        range: std::ops::Range<usize>,
-        consolidated: Arc<dyn HistoryCell>,
-    ) {
-        let follow_bottom = self.view.is_scrolled_to_bottom();
-        // Clamp the range to the overlay's cell count to avoid panic if the overlay has fewer
-        // cells than the main transcript (e.g. cells were inserted after the overlay has opened).
-        let clamped_end = range.end.min(self.cells.len());
-        let clamped_start = range.start.min(clamped_end);
-        if clamped_start < clamped_end {
-            let removed = clamped_end - clamped_start;
-            if let Some(highlight_cell) = self.highlight_cell.as_mut()
-                && *highlight_cell >= clamped_start
-            {
-                if *highlight_cell < clamped_end {
-                    *highlight_cell = clamped_start;
-                } else {
-                    *highlight_cell = highlight_cell.saturating_sub(removed.saturating_sub(1));
-                }
-            }
-            self.cells
-                .splice(clamped_start..clamped_end, std::iter::once(consolidated));
-            if self
-                .highlight_cell
-                .is_some_and(|highlight_cell| highlight_cell >= self.cells.len())
-            {
-                self.highlight_cell = None;
-            }
-            self.rebuild_renderables();
-        }
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
         }
@@ -685,12 +649,7 @@ impl TranscriptOverlay {
         let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
         let mut renderable: Box<dyn Renderable> = Box::new(CachedRenderable::new(paragraph));
         if has_prior_cells && !is_stream_continuation {
-            renderable = Box::new(InsetRenderable::new(
-                renderable,
-                Insets::tlbr(
-                    /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
-                ),
-            ));
+            renderable = Box::new(InsetRenderable::new(renderable, Insets::tlbr(1, 0, 0, 0)));
         }
         renderable
     }
@@ -698,48 +657,15 @@ impl TranscriptOverlay {
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
         let line1 = Rect::new(area.x, area.y, area.width, 1);
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
-        render_key_hints(
-            line1,
-            buf,
-            &[
-                (
-                    first_or_empty(&self.view.keymap.scroll_up)
-                        .into_iter()
-                        .chain(first_or_empty(&self.view.keymap.scroll_down))
-                        .collect(),
-                    "to scroll",
-                ),
-                (
-                    first_or_empty(&self.view.keymap.page_up)
-                        .into_iter()
-                        .chain(first_or_empty(&self.view.keymap.page_down))
-                        .collect(),
-                    "to page",
-                ),
-                (
-                    first_or_empty(&self.view.keymap.jump_top)
-                        .into_iter()
-                        .chain(first_or_empty(&self.view.keymap.jump_bottom))
-                        .collect(),
-                    "to jump",
-                ),
-            ],
-        );
+        render_key_hints(line1, buf, PAGER_KEY_HINTS);
 
-        let mut pairs: Vec<(Vec<KeyBinding>, &str)> =
-            vec![(first_or_empty(&self.view.keymap.close), "to quit")];
+        let mut pairs: Vec<(&[KeyBinding], &str)> = vec![(&[KEY_Q], "to quit")];
         if self.highlight_cell.is_some() {
-            pairs.push((
-                vec![
-                    key_hint::plain(KeyCode::Esc),
-                    key_hint::plain(KeyCode::Left),
-                ],
-                "to edit prev",
-            ));
-            pairs.push((vec![key_hint::plain(KeyCode::Right)], "to edit next"));
-            pairs.push((vec![key_hint::plain(KeyCode::Enter)], "to edit message"));
+            pairs.push((&[KEY_ESC, KEY_LEFT], "to edit prev"));
+            pairs.push((&[KEY_RIGHT], "to edit next"));
+            pairs.push((&[KEY_ENTER], "to edit message"));
         } else {
-            pairs.push((vec![key_hint::plain(KeyCode::Esc)], "to edit prev"));
+            pairs.push((&[KEY_ESC], "to edit prev"));
         }
         render_key_hints(line2, buf, &pairs);
     }
@@ -757,15 +683,13 @@ impl TranscriptOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
             TuiEvent::Key(key_event) => match key_event {
-                e if self.view.keymap.close.is_pressed(e)
-                    || self.view.keymap.close_transcript.is_pressed(e) =>
-                {
+                e if KEY_Q.is_press(e) || KEY_CTRL_C.is_press(e) || KEY_CTRL_T.is_press(e) => {
                     self.is_done = true;
                     Ok(())
                 }
                 other => self.view.handle_key_event(tui, other),
             },
-            TuiEvent::Draw | TuiEvent::Resize => {
+            TuiEvent::Draw => {
                 tui.draw(u16::MAX, |frame| {
                     self.render(frame.area(), frame.buffer);
                 })?;
@@ -790,26 +714,14 @@ pub(crate) struct StaticOverlay {
 }
 
 impl StaticOverlay {
-    pub(crate) fn with_title(
-        lines: Vec<Line<'static>>,
-        title: String,
-        keymap: PagerKeymap,
-    ) -> Self {
+    pub(crate) fn with_title(lines: Vec<Line<'static>>, title: String) -> Self {
         let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
-        Self::with_renderables(
-            vec![Box::new(CachedRenderable::new(paragraph))],
-            title,
-            keymap,
-        )
+        Self::with_renderables(vec![Box::new(CachedRenderable::new(paragraph))], title)
     }
 
-    pub(crate) fn with_renderables(
-        renderables: Vec<Box<dyn Renderable>>,
-        title: String,
-        keymap: PagerKeymap,
-    ) -> Self {
+    pub(crate) fn with_renderables(renderables: Vec<Box<dyn Renderable>>, title: String) -> Self {
         Self {
-            view: PagerView::new(renderables, title, /*scroll_offset*/ 0, keymap),
+            view: PagerView::new(renderables, title, 0),
             is_done: false,
         }
     }
@@ -817,35 +729,8 @@ impl StaticOverlay {
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
         let line1 = Rect::new(area.x, area.y, area.width, 1);
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
-        render_key_hints(
-            line1,
-            buf,
-            &[
-                (
-                    first_or_empty(&self.view.keymap.scroll_up)
-                        .into_iter()
-                        .chain(first_or_empty(&self.view.keymap.scroll_down))
-                        .collect(),
-                    "to scroll",
-                ),
-                (
-                    first_or_empty(&self.view.keymap.page_up)
-                        .into_iter()
-                        .chain(first_or_empty(&self.view.keymap.page_down))
-                        .collect(),
-                    "to page",
-                ),
-                (
-                    first_or_empty(&self.view.keymap.jump_top)
-                        .into_iter()
-                        .chain(first_or_empty(&self.view.keymap.jump_bottom))
-                        .collect(),
-                    "to jump",
-                ),
-            ],
-        );
-        let pairs: Vec<(Vec<KeyBinding>, &str)> =
-            vec![(first_or_empty(&self.view.keymap.close), "to quit")];
+        render_key_hints(line1, buf, PAGER_KEY_HINTS);
+        let pairs: Vec<(&[KeyBinding], &str)> = vec![(&[KEY_Q], "to quit")];
         render_key_hints(line2, buf, &pairs);
     }
 
@@ -862,13 +747,13 @@ impl StaticOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
             TuiEvent::Key(key_event) => match key_event {
-                e if self.view.keymap.close.is_pressed(e) => {
+                e if KEY_Q.is_press(e) || KEY_CTRL_C.is_press(e) => {
                     self.is_done = true;
                     Ok(())
                 }
                 other => self.view.handle_key_event(tui, other),
             },
-            TuiEvent::Draw | TuiEvent::Resize => {
+            TuiEvent::Draw => {
                 tui.draw(u16::MAX, |frame| {
                     self.render(frame.area(), frame.buffer);
                 })?;
@@ -912,8 +797,8 @@ fn render_offset_content(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::history_cell::ReviewDecision;
-    use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
+    use codex_protocol::protocol::ExecCommandSource;
+    use codex_protocol::protocol::ReviewDecision;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
@@ -921,12 +806,12 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use crate::diff_model::FileChange;
     use crate::exec_cell::CommandOutput;
     use crate::history_cell;
     use crate::history_cell::HistoryCell;
     use crate::history_cell::new_patch_event;
     use codex_protocol::parse_command::ParsedCommand;
+    use codex_protocol::protocol::FileChange;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::text::Text;
@@ -938,10 +823,6 @@ mod tests {
 
     impl crate::history_cell::HistoryCell for TestCell {
         fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-            self.lines.clone()
-        }
-
-        fn raw_lines(&self) -> Vec<Line<'static>> {
             self.lines.clone()
         }
 
@@ -959,34 +840,9 @@ mod tests {
         Box::new(Paragraph::new(text)) as Box<dyn Renderable>
     }
 
-    fn default_pager_keymap() -> crate::keymap::PagerKeymap {
-        crate::keymap::RuntimeKeymap::defaults().pager
-    }
-
-    fn transcript_overlay(cells: Vec<Arc<dyn HistoryCell>>) -> TranscriptOverlay {
-        TranscriptOverlay::new(cells, default_pager_keymap())
-    }
-
-    fn static_overlay(lines: Vec<Line<'static>>, title: &str) -> StaticOverlay {
-        StaticOverlay::with_title(lines, title.to_string(), default_pager_keymap())
-    }
-
-    fn pager_view(
-        renderables: Vec<Box<dyn Renderable>>,
-        title: &str,
-        scroll_offset: usize,
-    ) -> PagerView {
-        PagerView::new(
-            renderables,
-            title.to_string(),
-            scroll_offset,
-            default_pager_keymap(),
-        )
-    }
-
     #[test]
     fn edit_prev_hint_is_visible() {
-        let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
+        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
             lines: vec![Line::from("hello")],
         })]);
 
@@ -1004,7 +860,7 @@ mod tests {
 
     #[test]
     fn edit_next_hint_is_visible_when_highlighted() {
-        let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
+        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
             lines: vec![Line::from("hello")],
         })]);
         overlay.set_highlight_cell(Some(0));
@@ -1024,7 +880,7 @@ mod tests {
     #[test]
     fn transcript_overlay_snapshot_basic() {
         // Prepare a transcript overlay with a few lines
-        let mut overlay = transcript_overlay(vec![
+        let mut overlay = TranscriptOverlay::new(vec![
             Arc::new(TestCell {
                 lines: vec![Line::from("alpha")],
             }),
@@ -1043,11 +899,11 @@ mod tests {
 
     #[test]
     fn transcript_overlay_renders_live_tail() {
-        let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
+        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
             lines: vec![Line::from("alpha")],
         })]);
         overlay.sync_live_tail(
-            /*width*/ 40,
+            40,
             Some(ActiveCellTranscriptKey {
                 revision: 1,
                 is_stream_continuation: false,
@@ -1064,7 +920,7 @@ mod tests {
 
     #[test]
     fn transcript_overlay_sync_live_tail_is_noop_for_identical_key() {
-        let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
+        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
             lines: vec![Line::from("alpha")],
         })]);
 
@@ -1075,11 +931,11 @@ mod tests {
             animation_tick: None,
         };
 
-        overlay.sync_live_tail(/*width*/ 40, Some(key), |_| {
+        overlay.sync_live_tail(40, Some(key), |_| {
             calls.set(calls.get() + 1);
             Some(vec![Line::from("tail")])
         });
-        overlay.sync_live_tail(/*width*/ 40, Some(key), |_| {
+        overlay.sync_live_tail(40, Some(key), |_| {
             calls.set(calls.get() + 1);
             Some(vec![Line::from("tail2")])
         });
@@ -1145,8 +1001,8 @@ mod tests {
             vec!["bash".into(), "-lc".into(), "ls".into()],
             vec![ParsedCommand::Unknown { cmd: "ls".into() }],
             ExecCommandSource::Agent,
-            /*interaction_input*/ None,
-            /*animations_enabled*/ true,
+            None,
+            true,
         );
         exec_cell.complete_call(
             "exec-1",
@@ -1160,7 +1016,7 @@ mod tests {
         let exec_cell: Arc<dyn HistoryCell> = Arc::new(exec_cell);
         cells.push(exec_cell);
 
-        let mut overlay = transcript_overlay(cells);
+        let mut overlay = TranscriptOverlay::new(cells);
         let area = Rect::new(0, 0, 80, 12);
         let mut buf = Buffer::empty(area);
 
@@ -1174,7 +1030,7 @@ mod tests {
 
     #[test]
     fn transcript_overlay_keeps_scroll_pinned_at_bottom() {
-        let mut overlay = transcript_overlay(
+        let mut overlay = TranscriptOverlay::new(
             (0..20)
                 .map(|i| {
                     Arc::new(TestCell {
@@ -1201,7 +1057,7 @@ mod tests {
 
     #[test]
     fn transcript_overlay_preserves_manual_scroll_position() {
-        let mut overlay = transcript_overlay(
+        let mut overlay = TranscriptOverlay::new(
             (0..20)
                 .map(|i| {
                     Arc::new(TestCell {
@@ -1224,65 +1080,11 @@ mod tests {
     }
 
     #[test]
-    fn transcript_overlay_consolidation_remaps_highlight_inside_range() {
-        let mut overlay = transcript_overlay(
-            (0..6)
-                .map(|i| {
-                    Arc::new(TestCell {
-                        lines: vec![Line::from(format!("line{i}"))],
-                    }) as Arc<dyn HistoryCell>
-                })
-                .collect(),
-        );
-        overlay.set_highlight_cell(Some(3));
-
-        overlay.consolidate_cells(
-            2..5,
-            Arc::new(TestCell {
-                lines: vec![Line::from("consolidated")],
-            }),
-        );
-
-        assert_eq!(
-            overlay.highlight_cell,
-            Some(2),
-            "highlight inside consolidated range should point to replacement cell",
-        );
-    }
-
-    #[test]
-    fn transcript_overlay_consolidation_remaps_highlight_after_range() {
-        let mut overlay = transcript_overlay(
-            (0..7)
-                .map(|i| {
-                    Arc::new(TestCell {
-                        lines: vec![Line::from(format!("line{i}"))],
-                    }) as Arc<dyn HistoryCell>
-                })
-                .collect(),
-        );
-        overlay.set_highlight_cell(Some(6));
-
-        overlay.consolidate_cells(
-            2..5,
-            Arc::new(TestCell {
-                lines: vec![Line::from("consolidated")],
-            }),
-        );
-
-        assert_eq!(
-            overlay.highlight_cell,
-            Some(4),
-            "highlight after consolidated range should shift left by removed cells",
-        );
-    }
-
-    #[test]
     fn static_overlay_snapshot_basic() {
         // Prepare a static overlay with a few lines and a title
-        let mut overlay = static_overlay(
+        let mut overlay = StaticOverlay::with_title(
             vec!["one".into(), "two".into(), "three".into()],
-            "S T A T I C",
+            "S T A T I C".to_string(),
         );
         let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
@@ -1318,7 +1120,7 @@ mod tests {
 
     #[test]
     fn transcript_overlay_paging_is_continuous_and_round_trips() {
-        let mut overlay = transcript_overlay(
+        let mut overlay = TranscriptOverlay::new(
             (0..50)
                 .map(|i| {
                     Arc::new(TestCell {
@@ -1386,9 +1188,9 @@ mod tests {
 
     #[test]
     fn static_overlay_wraps_long_lines() {
-        let mut overlay = static_overlay(
+        let mut overlay = StaticOverlay::with_title(
             vec!["a very long line that should wrap when rendered within a narrow pager overlay width".into()],
-            "S T A T I C",
+            "S T A T I C".to_string(),
         );
         let mut term = Terminal::new(TestBackend::new(24, 8)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
@@ -1398,34 +1200,31 @@ mod tests {
 
     #[test]
     fn pager_view_content_height_counts_renderables() {
-        let pv = pager_view(
-            vec![
-                paragraph_block("a", /*lines*/ 2),
-                paragraph_block("b", /*lines*/ 3),
-            ],
-            "T",
-            /*scroll_offset*/ 0,
+        let pv = PagerView::new(
+            vec![paragraph_block("a", 2), paragraph_block("b", 3)],
+            "T".to_string(),
+            0,
         );
 
-        assert_eq!(pv.content_height(/*width*/ 80), 5);
+        assert_eq!(pv.content_height(80), 5);
     }
 
     #[test]
     fn pager_view_ensure_chunk_visible_scrolls_down_when_needed() {
-        let mut pv = pager_view(
+        let mut pv = PagerView::new(
             vec![
-                paragraph_block("a", /*lines*/ 1),
-                paragraph_block("b", /*lines*/ 3),
-                paragraph_block("c", /*lines*/ 3),
+                paragraph_block("a", 1),
+                paragraph_block("b", 3),
+                paragraph_block("c", 3),
             ],
-            "T",
-            /*scroll_offset*/ 0,
+            "T".to_string(),
+            0,
         );
         let area = Rect::new(0, 0, 20, 8);
 
         pv.scroll_offset = 0;
         let content_area = pv.content_area(area);
-        pv.ensure_chunk_visible(/*idx*/ 2, content_area);
+        pv.ensure_chunk_visible(2, content_area);
 
         let mut buf = Buffer::empty(area);
         pv.render(area, &mut buf);
@@ -1447,30 +1246,26 @@ mod tests {
 
     #[test]
     fn pager_view_ensure_chunk_visible_scrolls_up_when_needed() {
-        let mut pv = pager_view(
+        let mut pv = PagerView::new(
             vec![
-                paragraph_block("a", /*lines*/ 2),
-                paragraph_block("b", /*lines*/ 3),
-                paragraph_block("c", /*lines*/ 3),
+                paragraph_block("a", 2),
+                paragraph_block("b", 3),
+                paragraph_block("c", 3),
             ],
-            "T",
-            /*scroll_offset*/ 0,
+            "T".to_string(),
+            0,
         );
         let area = Rect::new(0, 0, 20, 3);
 
         pv.scroll_offset = 6;
-        pv.ensure_chunk_visible(/*idx*/ 0, area);
+        pv.ensure_chunk_visible(0, area);
 
         assert_eq!(pv.scroll_offset, 0);
     }
 
     #[test]
     fn pager_view_is_scrolled_to_bottom_accounts_for_wrapped_height() {
-        let mut pv = pager_view(
-            vec![paragraph_block("a", /*lines*/ 10)],
-            "T",
-            /*scroll_offset*/ 0,
-        );
+        let mut pv = PagerView::new(vec![paragraph_block("a", 10)], "T".to_string(), 0);
         let area = Rect::new(0, 0, 20, 8);
         let mut buf = Buffer::empty(area);
 

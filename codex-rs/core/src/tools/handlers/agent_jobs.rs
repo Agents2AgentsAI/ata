@@ -1,43 +1,41 @@
-use crate::agent::control::SpawnAgentOptions;
 use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::status::is_final;
+use crate::codex::Session;
+use crate::codex::TurnContext;
 use crate::config::Config;
+use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::multi_agents::build_agent_spawn_config;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::registry::ToolHandler;
+use crate::tools::registry::ToolKind;
+use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
-use codex_utils_absolute_path::AbsolutePathBuf;
-use futures::StreamExt;
-use futures::stream::FuturesUnordered;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::watch::Receiver;
 use tokio::time::Duration;
 use tokio::time::Instant;
-use tokio::time::timeout;
 use uuid::Uuid;
 
-mod report_agent_job_result;
-mod spawn_agents_on_csv;
-
-pub use report_agent_job_result::ReportAgentJobResultHandler;
-pub use spawn_agents_on_csv::SpawnAgentsOnCsvHandler;
+pub struct BatchJobHandler;
 
 const DEFAULT_AGENT_JOB_CONCURRENCY: usize = 16;
 const MAX_AGENT_JOB_CONCURRENCY: usize = 64;
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_AGENT_JOB_ITEM_TIMEOUT: Duration = Duration::from_secs(60 * 30);
 
 #[derive(Debug, Deserialize)]
@@ -77,6 +75,17 @@ struct AgentJobFailureSummary {
     item_id: String,
     source_id: Option<String>,
     last_error: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentJobProgressUpdate {
+    job_id: String,
+    total_items: usize,
+    pending_items: usize,
+    running_items: usize,
+    completed_items: usize,
+    failed_items: usize,
+    eta_seconds: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -519,11 +528,6 @@ async fn build_runner_options(
             "agent depth limit reached; this session cannot spawn more subagents".to_string(),
         ));
     }
-    if turn.config.agent_max_threads == Some(0) {
-        return Err(FunctionCallError::RespondToModel(
-            "agent thread limit reached; this session cannot spawn more subagents".to_string(),
-        ));
-    }
     let max_concurrency =
         normalize_concurrency(requested_concurrency, turn.config.agent_max_threads);
     let base_instructions = session.get_base_instructions().await;
@@ -569,6 +573,7 @@ async fn run_agent_job_loop(
         .ok_or_else(|| anyhow::anyhow!("agent job {job_id} was not found"))?;
     let runtime_timeout = job_runtime_timeout(&job);
     let mut active_items: HashMap<ThreadId, ActiveJobItem> = HashMap::new();
+    let mut progress_emitter = JobProgressEmitter::new();
     recover_running_items(
         session.clone(),
         db.clone(),
@@ -577,6 +582,10 @@ async fn run_agent_job_loop(
         runtime_timeout,
     )
     .await?;
+    let initial_progress = db.get_agent_job_progress(job_id.as_str()).await?;
+    progress_emitter
+        .maybe_emit(&session, &turn, job_id.as_str(), &initial_progress, true)
+        .await?;
 
     let mut cancel_requested = db.is_agent_job_cancelled(job_id.as_str()).await?;
     loop {
@@ -584,6 +593,12 @@ async fn run_agent_job_loop(
 
         if !cancel_requested && db.is_agent_job_cancelled(job_id.as_str()).await? {
             cancel_requested = true;
+            let _ = session
+                .notify_background_event(
+                    &turn,
+                    format!("agent job {job_id} cancellation requested; stopping new workers"),
+                )
+                .await;
         }
 
         if !cancel_requested && active_items.len() < options.max_concurrency {
@@ -604,25 +619,21 @@ async fn run_agent_job_loop(
                 let thread_id = match session
                     .services
                     .agent_control
-                    .spawn_agent_with_metadata(
+                    .spawn_agent(
                         options.spawn_config.clone(),
-                        items.into(),
+                        items,
                         Some(SessionSource::SubAgent(SubAgentSource::Other(format!(
                             "agent_job:{job_id}"
                         )))),
-                        SpawnAgentOptions {
-                            environments: Some(turn.environments.to_selections()),
-                            ..Default::default()
-                        },
                     )
                     .await
                 {
-                    Ok(spawned_agent) => spawned_agent.thread_id,
+                    Ok(thread_id) => thread_id,
                     Err(CodexErr::AgentLimitReached { .. }) => {
                         db.mark_agent_job_item_pending(
                             job_id.as_str(),
                             item.item_id.as_str(),
-                            /*error_message*/ None,
+                            None,
                         )
                         .await?;
                         break;
@@ -650,7 +661,7 @@ async fn run_agent_job_loop(
                     let _ = session
                         .services
                         .agent_control
-                        .shutdown_live_agent(thread_id)
+                        .shutdown_agent(thread_id)
                         .await;
                     continue;
                 }
@@ -659,12 +670,6 @@ async fn run_agent_job_loop(
                     ActiveJobItem {
                         item_id: item.item_id.clone(),
                         started_at: Instant::now(),
-                        status_rx: session
-                            .services
-                            .agent_control
-                            .subscribe_status(thread_id)
-                            .await
-                            .ok(),
                     },
                 );
                 progressed = true;
@@ -697,7 +702,7 @@ async fn run_agent_job_loop(
                 break;
             }
             if !progressed {
-                wait_for_status_change(&active_items).await;
+                tokio::time::sleep(STATUS_POLL_INTERVAL).await;
             }
             continue;
         }
@@ -712,9 +717,14 @@ async fn run_agent_job_loop(
             )
             .await?;
             active_items.remove(&thread_id);
+            let progress = db.get_agent_job_progress(job_id.as_str()).await?;
+            progress_emitter
+                .maybe_emit(&session, &turn, job_id.as_str(), &progress, false)
+                .await?;
         }
     }
 
+    let progress = db.get_agent_job_progress(job_id.as_str()).await?;
     if let Err(err) = export_job_csv_snapshot(db.clone(), &job).await {
         let message = format!("auto-export failed: {err}");
         db.mark_agent_job_failed(job_id.as_str(), message.as_str())
@@ -723,9 +733,25 @@ async fn run_agent_job_loop(
     }
     let cancelled = cancel_requested || db.is_agent_job_cancelled(job_id.as_str()).await?;
     if cancelled {
+        let pending_items = progress.pending_items;
+        let message =
+            format!("agent job {job_id} cancelled with {pending_items} unprocessed items");
+        let _ = session.notify_background_event(&turn, message).await;
+        progress_emitter
+            .maybe_emit(&session, &turn, job_id.as_str(), &progress, true)
+            .await?;
         return Ok(());
     }
+    if progress.failed_items > 0 {
+        let failed_items = progress.failed_items;
+        let message = format!("agent job completed with {failed_items} failed items");
+        let _ = session.notify_background_event(&turn, message).await;
+    }
     db.mark_agent_job_completed(job_id.as_str()).await?;
+    let progress = db.get_agent_job_progress(job_id.as_str()).await?;
+    progress_emitter
+        .maybe_emit(&session, &turn, job_id.as_str(), &progress, true)
+        .await?;
     Ok(())
 }
 
@@ -733,9 +759,7 @@ async fn export_job_csv_snapshot(
     db: Arc<codex_state::StateRuntime>,
     job: &codex_state::AgentJob,
 ) -> anyhow::Result<()> {
-    let items = db
-        .list_agent_job_items(job.id.as_str(), /*status*/ None, /*limit*/ None)
-        .await?;
+    let items = db.list_agent_job_items(job.id.as_str(), None, None).await?;
     let csv_content = render_job_csv(job.input_headers.as_slice(), items.as_slice())
         .map_err(|err| anyhow::anyhow!("failed to render job csv for auto-export: {err}"))?;
     let output_path = PathBuf::from(job.output_csv_path.clone());
@@ -754,11 +778,7 @@ async fn recover_running_items(
     runtime_timeout: Duration,
 ) -> anyhow::Result<()> {
     let running_items = db
-        .list_agent_job_items(
-            job_id,
-            Some(codex_state::AgentJobItemStatus::Running),
-            /*limit*/ None,
-        )
+        .list_agent_job_items(job_id, Some(codex_state::AgentJobItemStatus::Running), None)
         .await?;
     for item in running_items {
         if is_item_stale(&item, runtime_timeout) {
@@ -771,7 +791,7 @@ async fn recover_running_items(
                 let _ = session
                     .services
                     .agent_control
-                    .shutdown_live_agent(thread_id)
+                    .shutdown_agent(thread_id)
                     .await;
             }
             continue;
@@ -813,12 +833,6 @@ async fn recover_running_items(
                 ActiveJobItem {
                     item_id: item.item_id.clone(),
                     started_at: started_at_from_item(&item),
-                    status_rx: session
-                        .services
-                        .agent_control
-                        .subscribe_status(thread_id)
-                        .await
-                        .ok(),
                 },
             );
         }
@@ -832,42 +846,11 @@ async fn find_finished_threads(
 ) -> Vec<(ThreadId, String)> {
     let mut finished = Vec::new();
     for (thread_id, item) in active_items {
-        let status = active_item_status(session.as_ref(), *thread_id, item).await;
-        if is_final(&status) {
+        if is_final(&session.services.agent_control.get_status(*thread_id).await) {
             finished.push((*thread_id, item.item_id.clone()));
         }
     }
     finished
-}
-
-async fn active_item_status(
-    session: &Session,
-    thread_id: ThreadId,
-    item: &ActiveJobItem,
-) -> AgentStatus {
-    if let Some(status_rx) = item.status_rx.as_ref()
-        && status_rx.has_changed().is_ok()
-    {
-        return status_rx.borrow().clone();
-    }
-    session.services.agent_control.get_status(thread_id).await
-}
-
-async fn wait_for_status_change(active_items: &HashMap<ThreadId, ActiveJobItem>) {
-    let mut waiters = FuturesUnordered::new();
-    for item in active_items.values() {
-        if let Some(status_rx) = item.status_rx.as_ref() {
-            let mut status_rx = status_rx.clone();
-            waiters.push(async move {
-                let _ = status_rx.changed().await;
-            });
-        }
-    }
-    if waiters.is_empty() {
-        tokio::time::sleep(STATUS_POLL_INTERVAL).await;
-        return;
-    }
-    let _ = timeout(STATUS_POLL_INTERVAL, waiters.next()).await;
 }
 
 async fn reap_stale_active_items(
@@ -893,7 +876,7 @@ async fn reap_stale_active_items(
         let _ = session
             .services
             .agent_control
-            .shutdown_live_agent(thread_id)
+            .shutdown_agent(thread_id)
             .await;
         active_items.remove(&thread_id);
     }
@@ -907,29 +890,42 @@ async fn finalize_finished_item(
     item_id: &str,
     thread_id: ThreadId,
 ) -> anyhow::Result<()> {
-    let item = db
+    let mut item = db
         .get_agent_job_item(job_id, item_id)
         .await?
         .ok_or_else(|| {
             anyhow::anyhow!("job item not found for finalization: {job_id}/{item_id}")
         })?;
-    if matches!(item.status, codex_state::AgentJobItemStatus::Running) {
-        if item.result_json.is_some() {
-            let _ = db.mark_agent_job_item_completed(job_id, item_id).await?;
-        } else {
-            let _ = db
-                .mark_agent_job_item_failed(
-                    job_id,
-                    item_id,
-                    "worker finished without calling report_agent_job_result",
-                )
-                .await?;
+    if item.result_json.is_none() {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        item = db
+            .get_agent_job_item(job_id, item_id)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("job item not found after grace period: {job_id}/{item_id}")
+            })?;
+    }
+    if item.result_json.is_some() {
+        if !db.mark_agent_job_item_completed(job_id, item_id).await? {
+            db.mark_agent_job_item_failed(
+                job_id,
+                item_id,
+                "worker reported result but item could not transition to completed",
+            )
+            .await?;
         }
+    } else {
+        db.mark_agent_job_item_failed(
+            job_id,
+            item_id,
+            "worker finished without calling report_agent_job_result",
+        )
+        .await?;
     }
     let _ = session
         .services
         .agent_control
-        .shutdown_live_agent(thread_id)
+        .shutdown_agent(thread_id)
         .await;
     Ok(())
 }
@@ -1030,17 +1026,13 @@ fn is_item_stale(item: &codex_state::AgentJobItem, runtime_timeout: Duration) ->
     }
 }
 
-fn default_output_csv_path(input_csv_path: &AbsolutePathBuf, job_id: &str) -> AbsolutePathBuf {
+fn default_output_csv_path(input_csv_path: &Path, job_id: &str) -> PathBuf {
     let stem = input_csv_path
-        .as_path()
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("agent_job_output");
     let job_suffix = &job_id[..8];
-    let output_dir = input_csv_path
-        .parent()
-        .unwrap_or_else(|| input_csv_path.clone());
-    output_dir.join(format!("{stem}.agent-job-{job_suffix}.csv"))
+    input_csv_path.with_file_name(format!("{stem}.agent-job-{job_suffix}.csv"))
 }
 
 fn parse_csv(content: &str) -> Result<(Vec<String>, Vec<Vec<String>>), String> {

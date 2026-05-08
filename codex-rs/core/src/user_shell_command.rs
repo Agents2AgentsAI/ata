@@ -1,27 +1,45 @@
-use codex_protocol::exec_output::ExecToolCallOutput;
+use std::time::Duration;
+
 use codex_protocol::models::ResponseItem;
 
-use crate::context::ContextualUserFragment;
-use crate::context::UserShellCommand;
-use crate::session::turn_context::TurnContext;
+use crate::codex::TurnContext;
+use crate::contextual_user_message::USER_SHELL_COMMAND_FRAGMENT;
+use crate::exec::ExecToolCallOutput;
 use crate::tools::format_exec_output_str;
 
-fn user_shell_command_fragment(
+fn format_duration_line(duration: Duration) -> String {
+    let duration_seconds = duration.as_secs_f64();
+    format!("Duration: {duration_seconds:.4} seconds")
+}
+
+fn format_user_shell_command_body(
     command: &str,
     exec_output: &ExecToolCallOutput,
     turn_context: &TurnContext,
-) -> UserShellCommand {
-    let output = format_exec_output_str(exec_output, turn_context.truncation_policy);
-    UserShellCommand::new(command, exec_output.exit_code, exec_output.duration, output)
+) -> String {
+    let mut sections = Vec::new();
+    sections.push("<command>".to_string());
+    sections.push(command.to_string());
+    sections.push("</command>".to_string());
+    sections.push("<result>".to_string());
+    sections.push(format!("Exit code: {}", exec_output.exit_code));
+    sections.push(format_duration_line(exec_output.duration));
+    sections.push("Output:".to_string());
+    sections.push(format_exec_output_str(
+        exec_output,
+        turn_context.truncation_policy,
+    ));
+    sections.push("</result>".to_string());
+    sections.join("\n")
 }
 
-#[cfg(test)]
 pub fn format_user_shell_command_record(
     command: &str,
     exec_output: &ExecToolCallOutput,
     turn_context: &TurnContext,
 ) -> String {
-    user_shell_command_fragment(command, exec_output, turn_context).render()
+    let body = format_user_shell_command_body(command, exec_output, turn_context);
+    USER_SHELL_COMMAND_FRAGMENT.wrap(body)
 }
 
 pub fn user_shell_command_record_item(
@@ -29,7 +47,7 @@ pub fn user_shell_command_record_item(
     exec_output: &ExecToolCallOutput,
     turn_context: &TurnContext,
 ) -> ResponseItem {
-    ContextualUserFragment::into(user_shell_command_fragment(
+    USER_SHELL_COMMAND_FRAGMENT.into_message(format_user_shell_command_record(
         command,
         exec_output,
         turn_context,

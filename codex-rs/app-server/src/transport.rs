@@ -1,4 +1,6 @@
+use crate::error_code::OVERLOADED_ERROR_CODE;
 use crate::message_processor::ConnectionSessionState;
+use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingError;
 use crate::outgoing_message::OutgoingMessage;
@@ -15,15 +17,34 @@ use axum::routing::get;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::ServerRequest;
+use futures::SinkExt;
+use futures::StreamExt;
+use owo_colors::OwoColorize;
+use owo_colors::Stream;
+use owo_colors::Style;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::io::ErrorKind;
+use std::io::Result as IoResult;
+use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncWriteExt;
+use tokio::io::BufReader;
+use tokio::io::{self};
+use tokio::net::TcpListener;
+use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
+use tracing::error;
+use tracing::info;
 use tracing::warn;
 
 /// Size of the bounded channels used to communicate between tasks. The value
@@ -166,12 +187,11 @@ pub(crate) struct ConnectionState {
     pub(crate) outbound_initialized: Arc<AtomicBool>,
     pub(crate) outbound_experimental_api_enabled: Arc<AtomicBool>,
     pub(crate) outbound_opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
-    pub(crate) session: Arc<ConnectionSessionState>,
+    pub(crate) session: ConnectionSessionState,
 }
 
 impl ConnectionState {
     pub(crate) fn new(
-        origin: ConnectionOrigin,
         outbound_initialized: Arc<AtomicBool>,
         outbound_experimental_api_enabled: Arc<AtomicBool>,
         outbound_opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
@@ -180,7 +200,7 @@ impl ConnectionState {
             outbound_initialized,
             outbound_experimental_api_enabled,
             outbound_opted_out_notification_methods,
-            session: Arc::new(ConnectionSessionState::new(origin)),
+            session: ConnectionSessionState::default(),
         }
     }
 }
@@ -196,7 +216,7 @@ pub(crate) struct OutboundConnectionState {
 
 impl OutboundConnectionState {
     pub(crate) fn new(
-        writer: mpsc::Sender<QueuedOutgoingMessage>,
+        writer: mpsc::Sender<OutgoingMessage>,
         initialized: Arc<AtomicBool>,
         experimental_api_enabled: Arc<AtomicBool>,
         opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
@@ -669,15 +689,11 @@ fn should_skip_notification_for_connection(
     };
     match message {
         OutgoingMessage::AppServerNotification(notification) => {
-            if notification.experimental_reason().is_some()
-                && !connection_state
-                    .experimental_api_enabled
-                    .load(Ordering::Acquire)
-            {
-                return true;
-            }
             let method = notification.to_string();
             opted_out_notification_methods.contains(method.as_str())
+        }
+        OutgoingMessage::Notification(notification) => {
+            opted_out_notification_methods.contains(notification.method.as_str())
         }
         _ => false,
     }
@@ -698,7 +714,6 @@ async fn send_message_to_connection(
     connections: &mut HashMap<ConnectionId, OutboundConnectionState>,
     connection_id: ConnectionId,
     message: OutgoingMessage,
-    write_complete_tx: Option<tokio::sync::oneshot::Sender<()>>,
 ) -> bool {
     let Some(connection_state) = connections.get(&connection_id) else {
         warn!("dropping message for disconnected connection: {connection_id:?}");
@@ -710,12 +725,8 @@ async fn send_message_to_connection(
     }
 
     let writer = connection_state.writer.clone();
-    let queued_message = QueuedOutgoingMessage {
-        message,
-        write_complete_tx,
-    };
     if connection_state.can_disconnect() {
-        match writer.try_send(queued_message) {
+        match writer.try_send(message) {
             Ok(()) => false,
             Err(mpsc::error::TrySendError::Full(_)) => {
                 warn!(
@@ -727,7 +738,7 @@ async fn send_message_to_connection(
                 disconnect_connection(connections, connection_id)
             }
         }
-    } else if writer.send(queued_message).await.is_err() {
+    } else if writer.send(message).await.is_err() {
         disconnect_connection(connections, connection_id)
     } else {
         false
@@ -766,11 +777,8 @@ pub(crate) async fn route_outgoing_envelope(
         OutgoingEnvelope::ToConnection {
             connection_id,
             message,
-            write_complete_tx,
         } => {
-            let _ =
-                send_message_to_connection(connections, connection_id, message, write_complete_tx)
-                    .await;
+            let _ = send_message_to_connection(connections, connection_id, message).await;
         }
         OutgoingEnvelope::Broadcast { message } => {
             let target_connections: Vec<ConnectionId> = connections
@@ -787,13 +795,8 @@ pub(crate) async fn route_outgoing_envelope(
                 .collect();
 
             for connection_id in target_connections {
-                let _ = send_message_to_connection(
-                    connections,
-                    connection_id,
-                    message.clone(),
-                    /*write_complete_tx*/ None,
-                )
-                .await;
+                let _ =
+                    send_message_to_connection(connections, connection_id, message.clone()).await;
             }
         }
     }

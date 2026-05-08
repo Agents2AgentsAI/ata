@@ -17,7 +17,6 @@ use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
-use core_test_support::PathBufExt;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_sse_sequence;
@@ -70,8 +69,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
         ]"#;
     let review_json_escaped = serde_json::to_string(&review_json).unwrap();
     let sse_raw = sse_template.replace("__REVIEW__", &review_json_escaped);
-    let (server, _request_log) =
-        start_responses_server_with_sse(&sse_raw, /*expected_requests*/ 1).await;
+    let (server, _request_log) = start_responses_server_with_sse(&sse_raw, 1).await;
     let codex_home = Arc::new(TempDir::new().unwrap());
     let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
 
@@ -193,8 +191,7 @@ async fn review_op_with_plain_text_emits_review_fallback() {
         }},
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let (server, _request_log) =
-        start_responses_server_with_sse(sse_raw, /*expected_requests*/ 1).await;
+    let (server, _request_log) = start_responses_server_with_sse(sse_raw, 1).await;
     let codex_home = Arc::new(TempDir::new().unwrap());
     let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
 
@@ -233,6 +230,7 @@ async fn review_op_with_plain_text_emits_review_fallback() {
 
 /// Ensure review flow suppresses assistant-specific streaming/completion events:
 /// - AgentMessageContentDelta
+/// - AgentMessageDelta (legacy)
 /// - ItemCompleted for TurnItem::AgentMessage
 // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
@@ -254,8 +252,7 @@ async fn review_filters_agent_message_related_events() {
         }},
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let (server, _request_log) =
-        start_responses_server_with_sse(sse_raw, /*expected_requests*/ 1).await;
+    let (server, _request_log) = start_responses_server_with_sse(sse_raw, 1).await;
     let codex_home = Arc::new(TempDir::new().unwrap());
     let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
 
@@ -288,6 +285,9 @@ async fn review_filters_agent_message_related_events() {
         // The following must be filtered by review flow
         EventMsg::AgentMessageContentDelta(_) => {
             panic!("unexpected AgentMessageContentDelta surfaced during review")
+        }
+        EventMsg::AgentMessageDelta(_) => {
+            panic!("unexpected AgentMessageDelta surfaced during review")
         }
         _ => false,
     })
@@ -334,8 +334,7 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
         ]"#;
     let review_json_escaped = serde_json::to_string(&review_json).unwrap();
     let sse_raw = sse_template.replace("__REVIEW__", &review_json_escaped);
-    let (server, _request_log) =
-        start_responses_server_with_sse(&sse_raw, /*expected_requests*/ 1).await;
+    let (server, _request_log) = start_responses_server_with_sse(&sse_raw, 1).await;
     let codex_home = Arc::new(TempDir::new().unwrap());
     let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
 
@@ -390,13 +389,12 @@ async fn review_uses_custom_review_model_from_config() {
     let sse_raw = r#"[
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let (server, request_log) =
-        start_responses_server_with_sse(sse_raw, /*expected_requests*/ 1).await;
+    let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
     let codex_home = Arc::new(TempDir::new().unwrap());
     // Choose a review model different from the main model; ensure it is used.
     let codex = new_conversation_for_server(&server, codex_home.clone(), |cfg| {
         cfg.model = Some("gpt-4.1".to_string());
-        cfg.review_model = Some("gpt-5.4".to_string());
+        cfg.review_model = Some("gpt-5.1".to_string());
     })
     .await;
 
@@ -429,7 +427,7 @@ async fn review_uses_custom_review_model_from_config() {
     let request = request_log.single_request();
     assert_eq!(request.path(), "/v1/responses");
     let body = request.body_json();
-    assert_eq!(body["model"].as_str().unwrap(), "gpt-5.4");
+    assert_eq!(body["model"].as_str().unwrap(), "gpt-5.1");
 
     let _codex_home_guard = codex_home;
     server.verify().await;
@@ -445,8 +443,7 @@ async fn review_uses_session_model_when_review_model_unset() {
     let sse_raw = r#"[
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let (server, request_log) =
-        start_responses_server_with_sse(sse_raw, /*expected_requests*/ 1).await;
+    let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
     let codex_home = Arc::new(TempDir::new().unwrap());
     let codex = new_conversation_for_server(&server, codex_home.clone(), |cfg| {
         cfg.model = Some("gpt-4.1".to_string());
@@ -500,8 +497,7 @@ async fn review_input_isolated_from_parent_history() {
     let sse_raw = r#"[
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let (server, request_log) =
-        start_responses_server_with_sse(sse_raw, /*expected_requests*/ 1).await;
+    let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
 
     // Seed a parent session history via resume file with both user + assistant items.
     let codex_home = Arc::new(TempDir::new().unwrap());
@@ -534,6 +530,7 @@ async fn review_input_isolated_from_parent_history() {
             content: vec![codex_protocol::models::ContentItem::InputText {
                 text: "parent: earlier user message".to_string(),
             }],
+            end_turn: None,
             phase: None,
         };
         let user_json = serde_json::to_value(&user).unwrap();
@@ -553,6 +550,7 @@ async fn review_input_isolated_from_parent_history() {
             content: vec![codex_protocol::models::ContentItem::OutputText {
                 text: "parent: assistant reply".to_string(),
             }],
+            end_turn: None,
             phase: None,
         };
         let assistant_json = serde_json::to_value(&assistant).unwrap();
@@ -682,8 +680,7 @@ async fn review_history_surfaces_in_parent_session() {
         }},
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
-    let (server, request_log) =
-        start_responses_server_with_sse(sse_raw, /*expected_requests*/ 2).await;
+    let (server, request_log) = start_responses_server_with_sse(sse_raw, 2).await;
     let codex_home = Arc::new(TempDir::new().unwrap());
     let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
 
@@ -715,13 +712,11 @@ async fn review_history_surfaces_in_parent_session() {
     let followup = "back to parent".to_string();
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: followup.clone(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            responsesapi_client_metadata: None,
         })
         .await
         .unwrap();
@@ -777,8 +772,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
     skip_if_no_network!();
 
     let sse_raw = r#"[{"type":"response.completed", "response": {"id": "__ID__"}}]"#;
-    let (server, request_log) =
-        start_responses_server_with_sse(sse_raw, /*expected_requests*/ 1).await;
+    let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
 
     let initial_cwd = TempDir::new().unwrap();
 
@@ -823,7 +817,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
     let codex_home = Arc::new(TempDir::new().unwrap());
     let initial_cwd_path = initial_cwd.path().to_path_buf();
     let codex = new_conversation_for_server(&server, codex_home.clone(), move |config| {
-        config.cwd = initial_cwd_path.abs();
+        config.cwd = initial_cwd_path;
     })
     .await;
 
@@ -833,7 +827,6 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
-            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             model_provider: None,

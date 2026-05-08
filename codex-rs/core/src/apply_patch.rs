@@ -1,14 +1,12 @@
+use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::FileChange;
 use crate::protocol::FileSystemSandboxPolicy;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_patch_safety;
-use crate::session::turn_context::TurnContext;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
-use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::FileSystemSandboxPolicy;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -20,13 +18,16 @@ pub(crate) enum InternalApplyPatchInvocation {
 
     /// The `apply_patch` call was approved, either automatically because it
     /// appears that it should be allowed based on the user's sandbox policy
-    /// *or* because the user explicitly approved it. The runtime realizes the
-    /// patch through the selected environment filesystem.
-    DelegateToRuntime(ApplyPatchRuntimeInvocation),
+    /// *or* because the user explicitly approved it. In either case, we use
+    /// exec with [`codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1`] to realize
+    /// the `apply_patch` call,
+    /// but [`ApplyPatchExec::auto_approved`] is used to determine the sandbox
+    /// used with the `exec()`.
+    DelegateToExec(ApplyPatchExec),
 }
 
 #[derive(Debug)]
-pub(crate) struct ApplyPatchRuntimeInvocation {
+pub(crate) struct ApplyPatchExec {
     pub(crate) action: ApplyPatchAction,
     pub(crate) auto_approved: bool,
     pub(crate) exec_approval_requirement: ExecApprovalRequirement,
@@ -48,7 +49,7 @@ pub(crate) async fn apply_patch(
         SafetyCheck::AutoApprove {
             user_explicitly_approved,
             ..
-        } => InternalApplyPatchInvocation::DelegateToRuntime(ApplyPatchRuntimeInvocation {
+        } => InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
             action,
             auto_approved: !user_explicitly_approved,
             exec_approval_requirement: ExecApprovalRequirement::Skip {
@@ -60,7 +61,7 @@ pub(crate) async fn apply_patch(
             // Delegate the approval prompt (including cached approvals) to the
             // tool runtime, consistent with how shell/unified_exec approvals
             // are orchestrator-driven.
-            InternalApplyPatchInvocation::DelegateToRuntime(ApplyPatchRuntimeInvocation {
+            InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
                 action,
                 auto_approved: false,
                 exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {

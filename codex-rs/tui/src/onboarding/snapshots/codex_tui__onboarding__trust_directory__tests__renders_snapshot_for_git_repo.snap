@@ -5,9 +5,7 @@ expression: terminal.backend()
 > You are running Ata in /workspace/project
 
   Do you trust the contents of this directory? Working with untrusted
-  contents comes with higher risk of prompt injection. Trusting the
-  directory allows project-local config, hooks, and exec policies to
-  load.
+  contents comes with higher risk of prompt injection.
 
 › 1. Yes, continue                                                    
   2. No, quit

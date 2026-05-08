@@ -582,10 +582,7 @@ fn style_conversation_lines(
             speaker = Some(ConversationSpeaker::User);
             in_code = false;
             bullet_indent = None;
-            styled.push(conversation_header_line(
-                ConversationSpeaker::User,
-                /*attempt*/ None,
-            ));
+            styled.push(conversation_header_line(ConversationSpeaker::User, None));
             last_src = Some(src_idx);
             continue;
         }

@@ -66,7 +66,7 @@ impl RowBuilder {
                 if start < i {
                     self.current_line.push_str(&fragment[start..i]);
                 }
-                self.flush_current_line(/*explicit_break*/ true);
+                self.flush_current_line(true);
                 start = i + ch.len_utf8();
             }
         }
@@ -78,7 +78,12 @@ impl RowBuilder {
 
     /// Mark the end of the current logical line (equivalent to pushing a '\n').
     pub fn end_line(&mut self) {
-        self.flush_current_line(/*explicit_break*/ true);
+        self.flush_current_line(true);
+    }
+
+    /// Drain and return all produced rows.
+    pub fn drain_rows(&mut self) -> Vec<Row> {
+        std::mem::take(&mut self.rows)
     }
 
     /// Return a snapshot of produced rows (non-draining).
@@ -208,7 +213,7 @@ mod tests {
 
     #[test]
     fn rows_do_not_exceed_width_ascii() {
-        let mut rb = RowBuilder::new(/*target_width*/ 10);
+        let mut rb = RowBuilder::new(10);
         rb.push_fragment("hello whirl this is a test");
         let rows = rb.rows().to_vec();
         assert_eq!(
@@ -229,7 +234,7 @@ mod tests {
     #[test]
     fn rows_do_not_exceed_width_emoji_cjk() {
         // 😀 is width 2; 你/好 are width 2.
-        let mut rb = RowBuilder::new(/*target_width*/ 6);
+        let mut rb = RowBuilder::new(6);
         rb.push_fragment("😀😀 你好");
         let rows = rb.rows().to_vec();
         // At width 6, we expect the first row to fit exactly two emojis and a space
@@ -247,11 +252,11 @@ mod tests {
     #[test]
     fn fragmentation_invariance_long_token() {
         let s = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"; // 26 chars
-        let mut rb_all = RowBuilder::new(/*target_width*/ 7);
+        let mut rb_all = RowBuilder::new(7);
         rb_all.push_fragment(s);
         let all_rows = rb_all.rows().to_vec();
 
-        let mut rb_chunks = RowBuilder::new(/*target_width*/ 7);
+        let mut rb_chunks = RowBuilder::new(7);
         for i in (0..s.len()).step_by(3) {
             let end = (i + 3).min(s.len());
             rb_chunks.push_fragment(&s[i..end]);
@@ -263,7 +268,7 @@ mod tests {
 
     #[test]
     fn newline_splits_rows() {
-        let mut rb = RowBuilder::new(/*target_width*/ 10);
+        let mut rb = RowBuilder::new(10);
         rb.push_fragment("hello\nworld");
         let rows = rb.display_rows();
         assert!(rows.iter().any(|r| r.explicit_break));
@@ -274,10 +279,10 @@ mod tests {
 
     #[test]
     fn rewrap_on_width_change() {
-        let mut rb = RowBuilder::new(/*target_width*/ 10);
+        let mut rb = RowBuilder::new(10);
         rb.push_fragment("abcdefghijK");
         assert!(!rb.rows().is_empty());
-        rb.set_width(/*width*/ 5);
+        rb.set_width(5);
         for r in rb.rows() {
             assert!(r.width() <= 5);
         }

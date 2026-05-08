@@ -1,10 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "AbsolutePathBuf": {
-      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
-      "type": "string"
-    },
     "ByteRange": {
       "properties": {
         "end": {
@@ -32,7 +28,6 @@
             "contextWindowExceeded",
             "usageLimitExceeded",
             "serverOverloaded",
-            "cyberPolicy",
             "internalServerError",
             "unauthorized",
             "badRequest",
@@ -136,28 +131,6 @@
           ],
           "title": "ResponseTooManyFailedAttemptsCodexErrorInfo",
           "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Returned when `turn/start` or `turn/steer` is submitted while the current active turn cannot accept same-turn steering, for example `/review` or manual `/compact`.",
-          "properties": {
-            "activeTurnNotSteerable": {
-              "properties": {
-                "turnKind": {
-                  "$ref": "#/definitions/NonSteerableTurnKind"
-                }
-              },
-              "required": [
-                "turnKind"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "activeTurnNotSteerable"
-          ],
-          "title": "ActiveTurnNotSteerableCodexErrorInfo",
-          "type": "object"
         }
       ]
     },
@@ -219,7 +192,7 @@
               "type": "string"
             },
             "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "type": "string"
             },
             "type": {
               "enum": [
@@ -318,15 +291,6 @@
         }
       ]
     },
-    "CommandExecutionSource": {
-      "enum": [
-        "agent",
-        "userShell",
-        "unifiedExecStartup",
-        "unifiedExecInteraction"
-      ],
-      "type": "string"
-    },
     "CommandExecutionStatus": {
       "enum": [
         "inProgress",
@@ -407,21 +371,6 @@
       ],
       "type": "object"
     },
-    "HookPromptFragment": {
-      "properties": {
-        "hookRunId": {
-          "type": "string"
-        },
-        "text": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "hookRunId",
-        "text"
-      ],
-      "type": "object"
-    },
     "McpToolCallError": {
       "properties": {
         "message": {
@@ -435,7 +384,6 @@
     },
     "McpToolCallResult": {
       "properties": {
-        "_meta": true,
         "content": {
           "items": true,
           "type": "array"
@@ -455,54 +403,6 @@
       ],
       "type": "string"
     },
-    "MemoryCitation": {
-      "properties": {
-        "entries": {
-          "items": {
-            "$ref": "#/definitions/MemoryCitationEntry"
-          },
-          "type": "array"
-        },
-        "threadIds": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "entries",
-        "threadIds"
-      ],
-      "type": "object"
-    },
-    "MemoryCitationEntry": {
-      "properties": {
-        "lineEnd": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "lineStart": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "note": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "lineEnd",
-        "lineStart",
-        "note",
-        "path"
-      ],
-      "type": "object"
-    },
     "MessagePhase": {
       "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
       "oneOf": [
@@ -521,13 +421,6 @@
           "type": "string"
         }
       ]
-    },
-    "NonSteerableTurnKind": {
-      "enum": [
-        "review",
-        "compact"
-      ],
-      "type": "string"
     },
     "PatchApplyStatus": {
       "enum": [
@@ -663,46 +556,8 @@
         },
         {
           "properties": {
-            "fragments": {
-              "items": {
-                "$ref": "#/definitions/HookPromptFragment"
-              },
-              "type": "array"
-            },
             "id": {
               "type": "string"
-            },
-            "type": {
-              "enum": [
-                "hookPrompt"
-              ],
-              "title": "HookPromptThreadItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "fragments",
-            "id",
-            "type"
-          ],
-          "title": "HookPromptThreadItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "memoryCitation": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/MemoryCitation"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
             },
             "phase": {
               "anyOf": [
@@ -814,12 +669,8 @@
               "type": "array"
             },
             "cwd": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/AbsolutePathBuf"
-                }
-              ],
-              "description": "The command's working directory."
+              "description": "The command's working directory.",
+              "type": "string"
             },
             "durationMs": {
               "description": "The duration of the command execution in milliseconds.",
@@ -846,14 +697,6 @@
                 "string",
                 "null"
               ]
-            },
-            "source": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/CommandExecutionSource"
-                }
-              ],
-              "default": "agent"
             },
             "status": {
               "$ref": "#/definitions/CommandExecutionStatus"
@@ -932,12 +775,6 @@
             "id": {
               "type": "string"
             },
-            "mcpAppResourceUri": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "result": {
               "anyOf": [
                 {
@@ -998,12 +835,6 @@
             },
             "id": {
               "type": "string"
-            },
-            "namespace": {
-              "type": [
-                "string",
-                "null"
-              ]
             },
             "status": {
               "$ref": "#/definitions/DynamicToolCallStatus"
@@ -1160,7 +991,7 @@
               "type": "string"
             },
             "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "type": "string"
             },
             "type": {
               "enum": [
@@ -1190,16 +1021,6 @@
               "type": [
                 "string",
                 "null"
-              ]
-            },
-            "savedPath": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/AbsolutePathBuf"
-                },
-                {
-                  "type": "null"
-                }
               ]
             },
             "status": {
@@ -1294,22 +1115,6 @@
     },
     "Turn": {
       "properties": {
-        "completedAt": {
-          "description": "Unix timestamp (in seconds) when the turn completed.",
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "durationMs": {
-          "description": "Duration between turn start and completion in milliseconds, if known.",
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "error": {
           "anyOf": [
             {
@@ -1325,28 +1130,11 @@
           "type": "string"
         },
         "items": {
-          "description": "Thread items currently included in this turn payload.",
+          "description": "Only populated on a `thread/resume` or `thread/fork` response. For all other responses and notifications returning a Turn, the items field will be an empty list.",
           "items": {
             "$ref": "#/definitions/ThreadItem"
           },
           "type": "array"
-        },
-        "itemsView": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/TurnItemsView"
-            }
-          ],
-          "default": "full",
-          "description": "Describes how much of `items` has been loaded for this turn."
-        },
-        "startedAt": {
-          "description": "Unix timestamp (in seconds) when the turn started.",
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
         },
         "status": {
           "$ref": "#/definitions/TurnStatus"
@@ -1386,31 +1174,6 @@
         "message"
       ],
       "type": "object"
-    },
-    "TurnItemsView": {
-      "oneOf": [
-        {
-          "description": "`items` was not loaded for this turn. The field is intentionally empty.",
-          "enum": [
-            "notLoaded"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "`items` contains only a display summary for this turn.",
-          "enum": [
-            "summary"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "`items` contains every ThreadItem available from persisted app-server history for this turn.",
-          "enum": [
-            "full"
-          ],
-          "type": "string"
-        }
-      ]
     },
     "TurnStatus": {
       "enum": [

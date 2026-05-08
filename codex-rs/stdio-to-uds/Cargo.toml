@@ -17,13 +17,9 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-codex-uds = { workspace = true }
-tokio = { workspace = true, features = [
-    "io-std",
-    "io-util",
-    "macros",
-    "rt-multi-thread",
-] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+uds_windows = { workspace = true }
 
 [dev-dependencies]
 codex-utils-cargo-bin = { workspace = true }

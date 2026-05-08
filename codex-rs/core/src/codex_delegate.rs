@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use async_channel::Receiver;
 use async_channel::Sender;
-use codex_analytics::GuardianApprovalRequestSource;
 use codex_async_utils::OrCancelExt;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
@@ -64,7 +63,7 @@ use crate::codex::completed_session_loop_termination;
 pub(crate) async fn run_codex_thread_interactive(
     config: Config,
     auth_manager: Arc<AuthManager>,
-    models_manager: SharedModelsManager,
+    models_manager: Arc<ModelsManager>,
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
@@ -76,7 +75,6 @@ pub(crate) async fn run_codex_thread_interactive(
 
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
-        installation_id: parent_session.installation_id.clone(),
         auth_manager,
         models_manager,
         skills_manager: Arc::clone(&parent_session.services.skills_manager),
@@ -144,7 +142,7 @@ pub(crate) async fn run_codex_thread_interactive(
 pub(crate) async fn run_codex_thread_one_shot(
     config: Config,
     auth_manager: Arc<AuthManager>,
-    models_manager: SharedModelsManager,
+    models_manager: Arc<ModelsManager>,
     input: Vec<UserInput>,
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
@@ -156,7 +154,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     // Use a child token so we can stop the delegate after completion without
     // requiring the caller to cancel the parent token.
     let child_cancel = cancel_token.child_token();
-    let io = Box::pin(run_codex_thread_interactive(
+    let io = run_codex_thread_interactive(
         config,
         auth_manager,
         models_manager,
@@ -165,12 +163,11 @@ pub(crate) async fn run_codex_thread_one_shot(
         child_cancel.clone(),
         subagent_source,
         initial_history,
-    ))
+    )
     .await?;
 
     // Send the initial input to kick off the one-shot turn.
     io.submit(Op::UserInput {
-        environments: None,
         items: input,
         final_output_json_schema,
     })
@@ -242,6 +239,11 @@ async fn forward_events(
                     Err(_) => break,
                 };
                 match event {
+                    // ignore all legacy delta events
+                    Event {
+                        id: _,
+                        msg: EventMsg::AgentMessageDelta(_) | EventMsg::AgentReasoningDelta(_),
+                    } => {}
                     Event {
                         id: _,
                         msg: EventMsg::TokenCount(_),
@@ -249,6 +251,10 @@ async fn forward_events(
                     Event {
                         id: _,
                         msg: EventMsg::SessionConfigured(_),
+                    } => {}
+                    Event {
+                        id: _,
+                        msg: EventMsg::ThreadNameUpdated(_),
                     } => {}
                     Event {
                         id,

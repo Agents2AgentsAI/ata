@@ -1,13 +1,12 @@
 use anyhow::Context;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -18,7 +17,6 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
-use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use image::ImageBuffer;
 use image::Rgba;
@@ -53,7 +51,7 @@ fn find_user_message_with_image(text: &str) -> Option<ResponseItem> {
 fn extract_image_url(item: &ResponseItem) -> Option<String> {
     match item {
         ResponseItem::Message { content, .. } => content.iter().find_map(|span| match span {
-            ContentItem::InputImage { image_url, .. } => Some(image_url.clone()),
+            ContentItem::InputImage { image_url } => Some(image_url.clone()),
             _ => None,
         }),
         _ => None,
@@ -109,12 +107,9 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
     responses::mount_sse_once(&server, response).await;
 
     let session_model = session_configured.model.clone();
-    let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::Disabled, cwd.path());
 
     codex
         .submit(Op::UserTurn {
-            environments: None,
             items: vec![
                 UserInput::LocalImage {
                     path: abs_path.clone(),
@@ -127,9 +122,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             model_provider: None,
             effort: None,
@@ -156,12 +149,9 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
         role: "user".to_string(),
         content: vec![
             ContentItem::InputText {
-                text: codex_protocol::models::local_image_open_tag_text(/*label_number*/ 1),
+                text: codex_protocol::models::local_image_open_tag_text(1),
             },
-            ContentItem::InputImage {
-                image_url,
-                detail: Some(DEFAULT_IMAGE_DETAIL),
-            },
+            ContentItem::InputImage { image_url },
             ContentItem::InputText {
                 text: codex_protocol::models::image_close_tag_text(),
             },
@@ -169,6 +159,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
                 text: "pasted image".to_string(),
             },
         ],
+        end_turn: None,
         phase: None,
     };
 
@@ -201,12 +192,9 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
     responses::mount_sse_once(&server, response).await;
 
     let session_model = session_configured.model.clone();
-    let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::Disabled, cwd.path());
 
     codex
         .submit(Op::UserTurn {
-            environments: None,
             items: vec![
                 UserInput::Image {
                     image_url: image_url.clone(),
@@ -219,9 +207,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             model_provider: None,
             effort: None,
@@ -250,10 +236,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
             ContentItem::InputText {
                 text: codex_protocol::models::image_open_tag_text(),
             },
-            ContentItem::InputImage {
-                image_url,
-                detail: Some(DEFAULT_IMAGE_DETAIL),
-            },
+            ContentItem::InputImage { image_url },
             ContentItem::InputText {
                 text: codex_protocol::models::image_close_tag_text(),
             },
@@ -261,6 +244,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
                 text: "dropped image".to_string(),
             },
         ],
+        end_turn: None,
         phase: None,
     };
 

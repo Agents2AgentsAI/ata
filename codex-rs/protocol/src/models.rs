@@ -25,14 +25,7 @@ use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
 use crate::user_input::UserInput;
 use codex_execpolicy::Policy;
-// NOTE: protocol cannot depend on codex-git-utils because git-utils transitively
-// depends back on codex-protocol via codex-file-system. Until the upstream merge
-// re-introduces a cycle-free git crate that exposes a ghost-commit type, define a
-// minimal stand-in here.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema, ts_rs::TS)]
-pub struct GhostCommit {
-    pub commit_hash: String,
-}
+use codex_git_utils::GhostCommit;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;

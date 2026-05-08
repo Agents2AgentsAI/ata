@@ -1,33 +1,20 @@
 use std::collections::BTreeMap;
-use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 
-use codex_utils_string::to_ascii_json_string;
 use serde::Serialize;
-use serde_json::Value;
 use tokio::task::JoinHandle;
 
-use crate::sandbox_tags::permission_profile_sandbox_tag;
-use codex_git_utils::get_git_remote_urls_assume_git_repo;
-use codex_git_utils::get_git_repo_root;
-use codex_git_utils::get_has_changes;
-use codex_git_utils::get_head_commit_hash;
+use crate::git_info::get_git_remote_urls_assume_git_repo;
+use crate::git_info::get_git_repo_root;
+use crate::git_info::get_has_changes;
+use crate::git_info::get_head_commit_hash;
+use crate::sandbox_tags::sandbox_tag;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::models::PermissionProfile;
-use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::protocol::ThreadSource;
-use codex_utils_absolute_path::AbsolutePathBuf;
-
-const MODEL_KEY: &str = "model";
-const REASONING_EFFORT_KEY: &str = "reasoning_effort";
-const TURN_STARTED_AT_UNIX_MS_KEY: &str = "turn_started_at_unix_ms";
-
-pub(crate) struct McpTurnMetadataContext<'a> {
-    pub(crate) model: &'a str,
-    pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
-}
+use codex_protocol::protocol::SandboxPolicy;
 
 #[derive(Clone, Debug, Default)]
 struct WorkspaceGitMetadata {
@@ -67,12 +54,6 @@ impl From<WorkspaceGitMetadata> for TurnMetadataWorkspace {
 #[derive(Clone, Debug, Serialize, Default)]
 pub(crate) struct TurnMetadataBag {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    session_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    thread_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    thread_source: Option<ThreadSource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     turn_id: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     workspaces: BTreeMap<String, TurnMetadataWorkspace>,
@@ -82,43 +63,11 @@ pub(crate) struct TurnMetadataBag {
 
 impl TurnMetadataBag {
     fn to_header_value(&self) -> Option<String> {
-        to_ascii_json_string(self).ok()
+        serde_json::to_string(self).ok()
     }
-}
-
-fn merge_turn_metadata(
-    header: &str,
-    turn_started_at_unix_ms: Option<i64>,
-    responsesapi_client_metadata: Option<&HashMap<String, String>>,
-) -> Option<String> {
-    if turn_started_at_unix_ms.is_none() && responsesapi_client_metadata.is_none() {
-        return None;
-    }
-
-    let mut metadata = serde_json::from_str::<serde_json::Map<String, Value>>(header).ok()?;
-    if let Some(turn_started_at_unix_ms) = turn_started_at_unix_ms {
-        metadata.insert(
-            TURN_STARTED_AT_UNIX_MS_KEY.to_string(),
-            Value::Number(turn_started_at_unix_ms.into()),
-        );
-    }
-    if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
-        for (key, value) in responsesapi_client_metadata {
-            if key == TURN_STARTED_AT_UNIX_MS_KEY {
-                continue;
-            }
-            metadata
-                .entry(key.clone())
-                .or_insert_with(|| Value::String(value.clone()));
-        }
-    }
-    to_ascii_json_string(&metadata).ok()
 }
 
 fn build_turn_metadata_bag(
-    session_id: Option<String>,
-    thread_id: Option<String>,
-    thread_source: Option<ThreadSource>,
     turn_id: Option<String>,
     sandbox: Option<String>,
     repo_root: Option<String>,
@@ -132,27 +81,20 @@ fn build_turn_metadata_bag(
     }
 
     TurnMetadataBag {
-        session_id,
-        thread_id,
-        thread_source,
         turn_id,
         workspaces,
         sandbox,
     }
 }
 
-pub async fn build_turn_metadata_header(
-    cwd: &AbsolutePathBuf,
-    sandbox: Option<&str>,
-) -> Option<String> {
+pub async fn build_turn_metadata_header(cwd: &Path, sandbox: Option<&str>) -> Option<String> {
     let repo_root = get_git_repo_root(cwd).map(|root| root.to_string_lossy().into_owned());
 
-    let (head_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
+    let (latest_git_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
         get_head_commit_hash(cwd),
         get_git_remote_urls_assume_git_repo(cwd),
         get_has_changes(cwd),
     );
-    let latest_git_commit_hash = head_commit_hash.map(|sha| sha.0);
     if latest_git_commit_hash.is_none()
         && associated_remote_urls.is_none()
         && has_changes.is_none()
@@ -162,10 +104,7 @@ pub async fn build_turn_metadata_header(
     }
 
     build_turn_metadata_bag(
-        /*session_id*/ None,
-        /*thread_id*/ None,
-        /*thread_source*/ None,
-        /*turn_id*/ None,
+        None,
         sandbox.map(ToString::to_string),
         repo_root,
         Some(WorkspaceGitMetadata {
@@ -179,25 +118,19 @@ pub async fn build_turn_metadata_header(
 
 #[derive(Clone, Debug)]
 pub(crate) struct TurnMetadataState {
-    cwd: AbsolutePathBuf,
+    cwd: PathBuf,
     repo_root: Option<String>,
     base_metadata: TurnMetadataBag,
     base_header: String,
     enriched_header: Arc<RwLock<Option<String>>>,
-    turn_started_at_unix_ms: Arc<RwLock<Option<i64>>>,
-    responsesapi_client_metadata: Arc<RwLock<Option<HashMap<String, String>>>>,
     enrichment_task: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl TurnMetadataState {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        session_id: String,
-        thread_id: String,
-        thread_source: Option<ThreadSource>,
         turn_id: String,
-        cwd: AbsolutePathBuf,
-        permission_profile: &PermissionProfile,
+        cwd: PathBuf,
+        sandbox_policy: &SandboxPolicy,
         windows_sandbox_level: WindowsSandboxLevel,
     ) -> Self {
         let repo_root = get_git_repo_root(&cwd).map(|root| root.to_string_lossy().into_owned());
@@ -213,81 +146,21 @@ impl TurnMetadataState {
             base_metadata,
             base_header,
             enriched_header: Arc::new(RwLock::new(None)),
-            turn_started_at_unix_ms: Arc::new(RwLock::new(None)),
-            responsesapi_client_metadata: Arc::new(RwLock::new(None)),
             enrichment_task: Arc::new(Mutex::new(None)),
         }
     }
 
     pub(crate) fn current_header_value(&self) -> Option<String> {
-        let header = if let Some(header) = self
+        if let Some(header) = self
             .enriched_header
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .cloned()
         {
-            header
-        } else {
-            self.base_header.clone()
-        };
-        let turn_started_at_unix_ms = *self
-            .turn_started_at_unix_ms
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let responsesapi_client_metadata = self
-            .responsesapi_client_metadata
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        merge_turn_metadata(
-            &header,
-            turn_started_at_unix_ms,
-            responsesapi_client_metadata.as_ref(),
-        )
-        .or(Some(header))
-    }
-
-    pub(crate) fn current_meta_value_for_mcp_request(
-        &self,
-        context: McpTurnMetadataContext<'_>,
-    ) -> Option<serde_json::Value> {
-        let header = self.current_header_value()?;
-        let mut metadata = serde_json::from_str::<serde_json::Map<String, Value>>(&header).ok()?;
-        metadata.insert(
-            MODEL_KEY.to_string(),
-            Value::String(context.model.to_string()),
-        );
-        match context.reasoning_effort {
-            Some(reasoning_effort) => {
-                metadata.insert(
-                    REASONING_EFFORT_KEY.to_string(),
-                    Value::String(reasoning_effort.to_string()),
-                );
-            }
-            None => {
-                metadata.remove(REASONING_EFFORT_KEY);
-            }
+            return Some(header);
         }
-        Some(Value::Object(metadata))
-    }
-
-    pub(crate) fn set_responsesapi_client_metadata(
-        &self,
-        responsesapi_client_metadata: HashMap<String, String>,
-    ) {
-        *self
-            .responsesapi_client_metadata
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Some(responsesapi_client_metadata);
-    }
-
-    pub(crate) fn set_turn_started_at_unix_ms(&self, turn_started_at_unix_ms: i64) {
-        *self
-            .turn_started_at_unix_ms
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(turn_started_at_unix_ms);
+        Some(self.base_header.clone())
     }
 
     pub(crate) fn spawn_git_enrichment_task(&self) {
@@ -311,9 +184,6 @@ impl TurnMetadataState {
             };
 
             let enriched_metadata = build_turn_metadata_bag(
-                state.base_metadata.session_id.clone(),
-                state.base_metadata.thread_id.clone(),
-                state.base_metadata.thread_source,
                 state.base_metadata.turn_id.clone(),
                 state.base_metadata.sandbox.clone(),
                 Some(repo_root),
@@ -343,12 +213,11 @@ impl TurnMetadataState {
     }
 
     async fn fetch_workspace_git_metadata(&self) -> WorkspaceGitMetadata {
-        let (head_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
+        let (latest_git_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
             get_head_commit_hash(&self.cwd),
             get_git_remote_urls_assume_git_repo(&self.cwd),
             get_has_changes(&self.cwd),
         );
-        let latest_git_commit_hash = head_commit_hash.map(|sha| sha.0);
 
         WorkspaceGitMetadata {
             associated_remote_urls,

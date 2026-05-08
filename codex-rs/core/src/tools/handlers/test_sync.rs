@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use serde::Deserialize;
 use tokio::sync::Barrier;
 use tokio::time::sleep;
@@ -15,7 +16,6 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use codex_tools::ToolName;
 
 pub struct TestSyncHandler;
 
@@ -54,6 +54,7 @@ fn barrier_map() -> &'static tokio::sync::Mutex<HashMap<String, BarrierState>> {
     BARRIERS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
 }
 
+#[async_trait]
 impl ToolHandler for TestSyncHandler {
     type Output = FunctionToolOutput;
 

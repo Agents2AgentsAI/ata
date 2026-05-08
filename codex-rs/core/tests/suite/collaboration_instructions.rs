@@ -25,7 +25,7 @@ fn collab_mode_with_mode_and_instructions(
     CollaborationMode {
         mode,
         settings: Settings {
-            model: "gpt-5.4".to_string(),
+            model: "gpt-5.1".to_string(),
             reasoning_effort: None,
             developer_instructions: instructions.map(str::to_string),
         },
@@ -79,13 +79,11 @@ async fn no_collaboration_instructions_by_default() -> Result<()> {
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -128,7 +126,6 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
-            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             model_provider: None,
@@ -143,13 +140,11 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -179,16 +174,13 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
 
     test.codex
         .submit(Op::UserTurn {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: test.config.cwd.to_path_buf(),
+            cwd: test.config.cwd.clone(),
             approval_policy: test.config.permissions.approval_policy.value(),
-            approvals_reviewer: None,
-            sandbox_policy: test.config.legacy_sandbox_policy(),
-            permission_profile: None,
+            sandbox_policy: test.config.permissions.sandbox_policy.get().clone(),
             model: test.session_configured.model.clone(),
             model_provider: None,
             effort: None,
@@ -235,7 +227,6 @@ async fn override_then_next_turn_uses_updated_collaboration_instructions() -> Re
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
-            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             model_provider: None,
@@ -250,13 +241,11 @@ async fn override_then_next_turn_uses_updated_collaboration_instructions() -> Re
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -292,7 +281,6 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
-            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             model_provider: None,
@@ -307,16 +295,13 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
 
     test.codex
         .submit(Op::UserTurn {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: test.config.cwd.to_path_buf(),
+            cwd: test.config.cwd.clone(),
             approval_policy: test.config.permissions.approval_policy.value(),
-            approvals_reviewer: None,
-            sandbox_policy: test.config.legacy_sandbox_policy(),
-            permission_profile: None,
+            sandbox_policy: test.config.permissions.sandbox_policy.get().clone(),
             model: test.session_configured.model.clone(),
             model_provider: None,
             effort: None,
@@ -370,7 +355,6 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
-            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             model_provider: None,
@@ -385,13 +369,11 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -402,7 +384,6 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
-            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             model_provider: None,
@@ -417,13 +398,11 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -463,7 +442,6 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
-            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             model_provider: None,
@@ -478,13 +456,11 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -495,7 +471,6 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
-            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             model_provider: None,
@@ -510,13 +485,11 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -555,7 +528,6 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
-            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             model_provider: None,
@@ -573,13 +545,11 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -590,7 +560,6 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
-            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             model_provider: None,
@@ -608,13 +577,11 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -654,7 +621,6 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
-            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             model_provider: None,
@@ -672,13 +638,11 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -689,7 +653,6 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
-            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             model_provider: None,
@@ -707,13 +670,11 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -759,7 +720,6 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
-            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             model_provider: None,
@@ -775,13 +735,11 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
     initial
         .codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -790,13 +748,11 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
     resumed
         .codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "after resume".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&resumed.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -829,7 +785,6 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
-            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             model_provider: None,
@@ -851,13 +806,11 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

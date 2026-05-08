@@ -67,11 +67,10 @@
       ],
       "type": "string"
     },
-    "ThreadSource": {
+    "ServiceTier": {
       "enum": [
-        "user",
-        "subagent",
-        "memory_consolidation"
+        "fast",
+        "flex"
       ],
       "type": "string"
     }
@@ -151,24 +150,24 @@
       ]
     },
     "serviceTier": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "threadId": {
-      "type": "string"
-    },
-    "threadSource": {
       "anyOf": [
         {
-          "$ref": "#/definitions/ThreadSource"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         {
           "type": "null"
         }
-      ],
-      "description": "Optional client-supplied analytics source classification for this forked thread."
+      ]
+    },
+    "threadId": {
+      "type": "string"
     }
   },
   "required": [

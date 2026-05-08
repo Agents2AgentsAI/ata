@@ -12,10 +12,8 @@ use crate::protocol::SandboxPolicy;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
 use crate::sandboxing::SandboxPermissions;
-use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
+use crate::sandboxing::SandboxTransformError;
 use crate::state::SessionServices;
-use crate::tools::hook_names::HookToolName;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
@@ -25,23 +23,14 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
-#[cfg(test)]
-use codex_protocol::protocol::SandboxPolicy;
-use codex_sandboxing::SandboxCommand;
-use codex_sandboxing::SandboxManager;
-use codex_sandboxing::SandboxTransformError;
-use codex_sandboxing::SandboxTransformRequest;
-use codex_sandboxing::SandboxType;
-use codex_sandboxing::SandboxablePreference;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::Future;
 use futures::future::BoxFuture;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::path::Path;
 use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Default, Debug)]
 pub(crate) struct ApprovalStore {
@@ -105,7 +94,7 @@ where
 
     services.session_telemetry.counter(
         "codex.approval.requested",
-        /*inc*/ 1,
+        1,
         &[
             ("tool", tool_name),
             ("approved", decision.to_opaque_string()),
@@ -127,39 +116,8 @@ pub(crate) struct ApprovalCtx<'a> {
     pub session: &'a Arc<Session>,
     pub turn: &'a Arc<TurnContext>,
     pub call_id: &'a str,
-    /// Guardian review lifecycle ID for this approval, when guardian is reviewing it.
-    ///
-    /// This is separate from `call_id`: `call_id` identifies the tool item under
-    /// review, while this ID identifies the review itself. Keeping both lets
-    /// denial handling, overrides, and app-server notifications refer to the
-    /// review without overloading the tool call ID as a review ID.
-    pub guardian_review_id: Option<String>,
     pub retry_reason: Option<String>,
     pub network_approval_context: Option<NetworkApprovalContext>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PermissionRequestPayload {
-    pub tool_name: HookToolName,
-    pub tool_input: serde_json::Value,
-}
-
-impl PermissionRequestPayload {
-    pub(crate) fn bash(command: String, description: Option<String>) -> Self {
-        let mut tool_input = serde_json::Map::new();
-        tool_input.insert("command".to_string(), serde_json::Value::String(command));
-        if let Some(description) = description {
-            tool_input.insert(
-                "description".to_string(),
-                serde_json::Value::String(description),
-            );
-        }
-
-        Self {
-            tool_name: HookToolName::bash(),
-            tool_input: serde_json::Value::Object(tool_input),
-        }
-    }
 }
 
 // Specifies what tool orchestrator should do with a given tool call.
@@ -271,17 +229,6 @@ pub(crate) fn sandbox_override_for_first_attempt(
     }
 }
 
-pub(crate) fn managed_network_for_sandbox_permissions(
-    network: Option<&NetworkProxy>,
-    sandbox_permissions: SandboxPermissions,
-) -> Option<&NetworkProxy> {
-    if sandbox_permissions.requires_escalated_permissions() {
-        None
-    } else {
-        network
-    }
-}
-
 pub(crate) trait Approvable<Req> {
     type ApprovalKey: Hash + Eq + Clone + Debug + Serialize;
 
@@ -315,12 +262,6 @@ pub(crate) trait Approvable<Req> {
         None
     }
 
-    /// Return hook input for approval-time policy hooks when this runtime wants
-    /// hook evaluation to run before guardian or user approval.
-    fn permission_request_payload(&self, _req: &Req) -> Option<PermissionRequestPayload> {
-        None
-    }
-
     /// Decide we can request an approval for no-sandbox execution.
     fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
         match policy {
@@ -337,6 +278,15 @@ pub(crate) trait Approvable<Req> {
         req: &'a Req,
         ctx: ApprovalCtx<'a>,
     ) -> BoxFuture<'a, ReviewDecision>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SandboxablePreference {
+    Auto,
+    #[allow(dead_code)] // Will be used by later tools.
+    Require,
+    #[allow(dead_code)] // Will be used by later tools.
+    Forbid,
 }
 
 pub(crate) trait Sandboxable {
@@ -364,10 +314,6 @@ pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
         None
     }
 
-    fn sandbox_cwd<'a>(&self, _req: &'a Req) -> Option<&'a AbsolutePathBuf> {
-        None
-    }
-
     async fn run(
         &mut self,
         req: &Req,
@@ -383,7 +329,7 @@ pub(crate) struct SandboxAttempt<'a> {
     pub network_policy: NetworkSandboxPolicy,
     pub enforce_managed_network: bool,
     pub(crate) manager: &'a SandboxManager,
-    pub(crate) sandbox_cwd: &'a AbsolutePathBuf,
+    pub(crate) sandbox_cwd: &'a Path,
     pub codex_linux_sandbox_exe: Option<&'a std::path::PathBuf>,
     pub use_legacy_landlock: bool,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
@@ -393,8 +339,7 @@ pub(crate) struct SandboxAttempt<'a> {
 impl<'a> SandboxAttempt<'a> {
     pub fn env_for(
         &self,
-        command: SandboxCommand,
-        options: ExecOptions,
+        spec: CommandSpec,
         network: Option<&NetworkProxy>,
     ) -> Result<crate::sandboxing::ExecRequest, SandboxTransformError> {
         self.manager

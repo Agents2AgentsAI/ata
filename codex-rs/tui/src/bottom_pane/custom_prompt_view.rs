@@ -18,7 +18,6 @@ use super::popup_consts::standard_popup_hint_line;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
-use super::bottom_pane_view::ViewCompletion;
 use super::textarea::TextArea;
 use super::textarea::TextAreaState;
 
@@ -35,31 +34,24 @@ pub(crate) struct CustomPromptView {
     // UI state
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
-    completion: Option<ViewCompletion>,
+    complete: bool,
 }
 
 impl CustomPromptView {
     pub(crate) fn new(
         title: String,
         placeholder: String,
-        initial_text: String,
         context_label: Option<String>,
         on_submit: PromptSubmitted,
     ) -> Self {
-        let mut textarea = TextArea::new();
-        if !initial_text.is_empty() {
-            textarea.set_text_clearing_elements(&initial_text);
-            textarea.set_cursor(initial_text.len());
-        }
-
         Self {
             title,
             placeholder,
             context_label,
             on_submit,
-            textarea,
+            textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
-            completion: None,
+            complete: false,
         }
     }
 }
@@ -80,7 +72,7 @@ impl BottomPaneView for CustomPromptView {
                 let text = self.textarea.text().trim().to_string();
                 if !text.is_empty() {
                     (self.on_submit)(text);
-                    self.completion = Some(ViewCompletion::Accepted);
+                    self.complete = true;
                 }
             }
             KeyEvent {
@@ -96,16 +88,12 @@ impl BottomPaneView for CustomPromptView {
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
-        self.completion = Some(ViewCompletion::Cancelled);
+        self.complete = true;
         CancellationEvent::Handled
     }
 
     fn is_complete(&self) -> bool {
-        self.completion.is_some()
-    }
-
-    fn completion(&self) -> Option<ViewCompletion> {
-        self.completion
+        self.complete
     }
 
     fn handle_paste(&mut self, pasted: String) -> bool {

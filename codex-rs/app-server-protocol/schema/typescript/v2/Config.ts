@@ -4,6 +4,7 @@
 import type { ForcedLoginMethod } from "../ForcedLoginMethod";
 import type { ReasoningEffort } from "../ReasoningEffort";
 import type { ReasoningSummary } from "../ReasoningSummary";
+import type { ServiceTier } from "../ServiceTier";
 import type { Verbosity } from "../Verbosity";
 import type { WebSearchMode } from "../WebSearchMode";
 import type { JsonValue } from "../serde_json/JsonValue";

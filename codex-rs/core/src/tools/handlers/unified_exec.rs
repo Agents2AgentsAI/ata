@@ -1,3 +1,8 @@
+use crate::features::Feature;
+use crate::function_tool::FunctionCallError;
+use crate::is_safe_command::is_known_safe_command;
+use crate::protocol::EventMsg;
+use crate::protocol::TerminalInteractionEvent;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::get_shell_by_model_provided_path;
@@ -25,14 +30,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-#[cfg(test)]
-use crate::tools::handlers::parse_arguments;
-
-mod exec_command;
-mod write_stdin;
-
-pub use exec_command::ExecCommandHandler;
-pub use write_stdin::WriteStdinHandler;
+pub struct UnifiedExecHandler;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ExecCommandArgs {
@@ -52,7 +50,7 @@ pub(crate) struct ExecCommandArgs {
     #[serde(default)]
     sandbox_permissions: SandboxPermissions,
     #[serde(default)]
-    additional_permissions: Option<AdditionalPermissionProfile>,
+    additional_permissions: Option<PermissionProfile>,
     #[serde(default)]
     justification: Option<String>,
     #[serde(default)]
@@ -60,13 +58,15 @@ pub(crate) struct ExecCommandArgs {
 }
 
 #[derive(Debug, Deserialize)]
-struct ExecCommandEnvironmentArgs {
+struct WriteStdinArgs {
+    // The model is trained on `session_id`.
+    session_id: i32,
     #[serde(default)]
-    environment_id: Option<String>,
-    // Keep this raw until after environment selection; relative paths must be
-    // resolved against the selected environment cwd, not the process cwd.
+    chars: String,
+    #[serde(default = "default_write_stdin_yield_time_ms")]
+    yield_time_ms: u64,
     #[serde(default)]
-    workdir: Option<String>,
+    max_output_tokens: Option<usize>,
 }
 
 fn default_exec_yield_time_ms() -> u64 {
@@ -89,13 +89,9 @@ impl ToolHandler for UnifiedExecHandler {
         ToolKind::Function
     }
 
-fn post_unified_exec_tool_use_payload(
-    invocation: &ToolInvocation,
-    result: &ExecCommandToolOutput,
-) -> Option<PostToolUsePayload> {
-    let ToolPayload::Function { .. } = &invocation.payload else {
-        return None;
-    };
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
+    }
 
     async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
         let ToolPayload::Function { arguments } = &invocation.payload else {

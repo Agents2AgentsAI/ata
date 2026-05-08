@@ -11,11 +11,6 @@ use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-// macOS arm64 and Windows Bazel CI can spend tens of seconds in app-server
-// startup before the initialize response or fuzzy-search notifications arrive.
-#[cfg(any(target_os = "macos", windows))]
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-#[cfg(not(any(target_os = "macos", windows)))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const SHORT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 const STOP_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(250);
@@ -57,86 +52,54 @@ async fn wait_for_session_updated(
     query: &str,
     file_expectation: FileExpectation,
 ) -> Result<FuzzyFileSearchSessionUpdatedNotification> {
-    let description = format!("session update for sessionId={session_id}, query={query}");
-    let notification = match timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_matching_notification(&description, |notification| {
-            if notification.method != SESSION_UPDATED_METHOD {
-                return false;
-            }
-            let Some(params) = notification.params.as_ref() else {
-                return false;
-            };
-            let Ok(payload) =
-                serde_json::from_value::<FuzzyFileSearchSessionUpdatedNotification>(params.clone())
-            else {
-                return false;
-            };
-            let files_match = match file_expectation {
-                FileExpectation::Any => true,
-                FileExpectation::Empty => payload.files.is_empty(),
-                FileExpectation::NonEmpty => !payload.files.is_empty(),
-            };
-            payload.session_id == session_id && payload.query == query && files_match
-        }),
-    )
-    .await
-    {
-        Ok(result) => result?,
-        Err(_) => {
-            anyhow::bail!(
-                "timed out waiting for {description}; buffered notifications={:?}",
-                mcp.pending_notification_methods()
-            )
+    for _ in 0..20 {
+        let notification = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message(SESSION_UPDATED_METHOD),
+        )
+        .await??;
+        let params = notification
+            .params
+            .ok_or_else(|| anyhow!("missing notification params"))?;
+        let payload = serde_json::from_value::<FuzzyFileSearchSessionUpdatedNotification>(params)?;
+        if payload.session_id != session_id || payload.query != query {
+            continue;
         }
-    };
-    let params = notification
-        .params
-        .ok_or_else(|| anyhow!("missing notification params"))?;
-    Ok(serde_json::from_value::<
-        FuzzyFileSearchSessionUpdatedNotification,
-    >(params)?)
+        let files_match = match file_expectation {
+            FileExpectation::Any => true,
+            FileExpectation::Empty => payload.files.is_empty(),
+            FileExpectation::NonEmpty => !payload.files.is_empty(),
+        };
+        if files_match {
+            return Ok(payload);
+        }
+    }
+    anyhow::bail!(
+        "did not receive expected session update for sessionId={session_id}, query={query}"
+    );
 }
 
 async fn wait_for_session_completed(
     mcp: &mut McpProcess,
     session_id: &str,
 ) -> Result<FuzzyFileSearchSessionCompletedNotification> {
-    let description = format!("session completion for sessionId={session_id}");
-    let notification = match timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_matching_notification(&description, |notification| {
-            if notification.method != SESSION_COMPLETED_METHOD {
-                return false;
-            }
-            let Some(params) = notification.params.as_ref() else {
-                return false;
-            };
-            let Ok(payload) = serde_json::from_value::<FuzzyFileSearchSessionCompletedNotification>(
-                params.clone(),
-            ) else {
-                return false;
-            };
-            payload.session_id == session_id
-        }),
-    )
-    .await
-    {
-        Ok(result) => result?,
-        Err(_) => {
-            anyhow::bail!(
-                "timed out waiting for {description}; buffered notifications={:?}",
-                mcp.pending_notification_methods()
-            )
+    for _ in 0..20 {
+        let notification = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message(SESSION_COMPLETED_METHOD),
+        )
+        .await??;
+        let params = notification
+            .params
+            .ok_or_else(|| anyhow!("missing notification params"))?;
+        let payload =
+            serde_json::from_value::<FuzzyFileSearchSessionCompletedNotification>(params)?;
+        if payload.session_id == session_id {
+            return Ok(payload);
         }
-    };
+    }
 
-    let params = notification
-        .params
-        .ok_or_else(|| anyhow!("missing notification params"))?;
-    Ok(serde_json::from_value::<
-        FuzzyFileSearchSessionCompletedNotification,
-    >(params)?)
+    anyhow::bail!("did not receive expected session completion for sessionId={session_id}");
 }
 
 async fn assert_update_request_fails_for_missing_session(
@@ -242,11 +205,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
     let root_path = root.path().to_string_lossy().to_string();
     // Send fuzzyFileSearch request.
     let request_id = mcp
-        .send_fuzzy_file_search_request(
-            "abe",
-            vec![root_path.clone()],
-            /*cancellation_token*/ None,
-        )
+        .send_fuzzy_file_search_request("abe", vec![root_path.clone()], None)
         .await?;
 
     // Read response and verify shape and ordering.
@@ -266,7 +225,6 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                 {
                     "root": root_path.clone(),
                     "path": "abexy",
-                    "match_type": "file",
                     "file_name": "abexy",
                     "score": 84,
                     "indices": [0, 1, 2],
@@ -274,7 +232,6 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                 {
                     "root": root_path.clone(),
                     "path": sub_abce_rel,
-                    "match_type": "file",
                     "file_name": "abce",
                     "score": expected_score,
                     "indices": [4, 5, 7],
@@ -282,7 +239,6 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                 {
                     "root": root_path.clone(),
                     "path": "abcde",
-                    "match_type": "file",
                     "file_name": "abcde",
                     "score": 71,
                     "indices": [0, 1, 4],
@@ -307,11 +263,7 @@ async fn test_fuzzy_file_search_accepts_cancellation_token() -> Result<()> {
 
     let root_path = root.path().to_string_lossy().to_string();
     let request_id = mcp
-        .send_fuzzy_file_search_request(
-            "alp",
-            vec![root_path.clone()],
-            /*cancellation_token*/ None,
-        )
+        .send_fuzzy_file_search_request("alp", vec![root_path.clone()], None)
         .await?;
 
     let request_id_2 = mcp
@@ -367,30 +319,6 @@ async fn test_fuzzy_file_search_session_streams_updates() -> Result<()> {
     assert_eq!(completed.session_id, session_id);
 
     mcp.stop_fuzzy_file_search_session(session_id).await?;
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_fuzzy_file_search_session_update_is_case_insensitive() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let root = TempDir::new()?;
-    std::fs::write(root.path().join("alpha.txt"), "contents")?;
-    let mut mcp = initialized_mcp(&codex_home).await?;
-
-    let root_path = root.path().to_string_lossy().to_string();
-    let session_id = "session-case-insensitive";
-
-    mcp.start_fuzzy_file_search_session(session_id, vec![root_path.clone()])
-        .await?;
-    mcp.update_fuzzy_file_search_session(session_id, "ALP")
-        .await?;
-
-    let payload =
-        wait_for_session_updated(&mut mcp, session_id, "ALP", FileExpectation::NonEmpty).await?;
-    assert_eq!(payload.files.len(), 1);
-    assert_eq!(payload.files[0].root, root_path);
-    assert_eq!(payload.files[0].path, "alpha.txt");
 
     Ok(())
 }

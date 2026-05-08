@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
-use crate::legacy_core::config::set_project_trust_level;
+use codex_core::config::set_project_trust_level;
+use codex_core::git_info::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::TrustLevel;
+use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
@@ -12,8 +14,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 
-use crate::key_hint::KeyBindingListExt;
-use crate::onboarding::keys;
+use crate::key_hint;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
 use crate::render::Insets;
@@ -26,7 +27,6 @@ use super::onboarding_screen::StepState;
 pub(crate) struct TrustDirectoryWidget {
     pub codex_home: PathBuf,
     pub cwd: PathBuf,
-    pub trust_target: PathBuf,
     pub show_windows_create_sandbox_hint: bool,
     pub should_quit: bool,
     pub selection: Option<TrustDirectorySelection>,
@@ -51,34 +51,12 @@ impl WidgetRef for &TrustDirectoryWidget {
         ]));
         column.push("");
 
-        if self.cwd != self.trust_target {
-            #[allow(clippy::disallowed_methods)]
-            let git_root_warning = Paragraph::new(format!(
-                "Note: You’re in a subdirectory of a Git project. Trusting will apply to the repository root: {}",
-                self.trust_target.display()
-            ))
-            .yellow();
-            column.push(
-                git_root_warning
-                    .wrap(Wrap { trim: true })
-                    .inset(Insets::tlbr(
-                        /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
-                    )),
-            );
-            column.push("");
-        }
-
         column.push(
             Paragraph::new(
-                "Do you trust the contents of this directory? Working with untrusted \
-                 contents comes with higher risk of prompt injection. Trusting the \
-                 directory allows project-local config, hooks, and exec policies to load."
-                    .to_string(),
+                "Do you trust the contents of this directory? Working with untrusted contents comes with higher risk of prompt injection.".to_string(),
             )
-            .wrap(Wrap { trim: true })
-            .inset(Insets::tlbr(
-                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
-            )),
+                .wrap(Wrap { trim: true })
+                .inset(Insets::tlbr(0, 2, 0, 0)),
         );
         column.push("");
 
@@ -102,9 +80,7 @@ impl WidgetRef for &TrustDirectoryWidget {
                 Paragraph::new(error.to_string())
                     .red()
                     .wrap(Wrap { trim: true })
-                    .inset(Insets::tlbr(
-                        /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
-                    )),
+                    .inset(Insets::tlbr(0, 2, 0, 0)),
             );
             column.push("");
         }
@@ -112,16 +88,14 @@ impl WidgetRef for &TrustDirectoryWidget {
         column.push(
             Line::from(vec![
                 "Press ".dim(),
-                keys::CONFIRM[0].into(),
+                key_hint::plain(KeyCode::Enter).into(),
                 if self.show_windows_create_sandbox_hint {
                     " to continue and create a sandbox...".dim()
                 } else {
                     " to continue".dim()
                 },
             ])
-            .inset(Insets::tlbr(
-                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
-            )),
+            .inset(Insets::tlbr(0, 2, 0, 0)),
         );
 
         column.render(area, buf);
@@ -134,22 +108,20 @@ impl KeyboardHandler for TrustDirectoryWidget {
             return;
         }
 
-        if keys::MOVE_UP.is_pressed(key_event) {
-            self.highlighted = TrustDirectorySelection::Trust;
-        } else if keys::MOVE_DOWN.is_pressed(key_event) {
-            self.highlighted = TrustDirectorySelection::Quit;
-        } else if keys::SELECT_FIRST.is_pressed(key_event) {
-            self.handle_trust();
-        } else if keys::SELECT_SECOND.is_pressed(key_event)
-            || keys::QUIT.is_pressed(key_event)
-            || keys::CANCEL.is_pressed(key_event)
-        {
-            self.handle_quit();
-        } else if keys::CONFIRM.is_pressed(key_event) {
-            match self.highlighted {
+        match key_event.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.highlighted = TrustDirectorySelection::Trust;
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.highlighted = TrustDirectorySelection::Quit;
+            }
+            KeyCode::Char('1') | KeyCode::Char('y') => self.handle_trust(),
+            KeyCode::Char('2') | KeyCode::Char('n') => self.handle_quit(),
+            KeyCode::Enter => match self.highlighted {
                 TrustDirectorySelection::Trust => self.handle_trust(),
                 TrustDirectorySelection::Quit => self.handle_quit(),
-            }
+            },
+            _ => {}
         }
     }
 }
@@ -166,7 +138,8 @@ impl StepStateProvider for TrustDirectoryWidget {
 
 impl TrustDirectoryWidget {
     fn handle_trust(&mut self) {
-        let target = self.trust_target.clone();
+        let target =
+            resolve_root_git_project_for_trust(&self.cwd).unwrap_or_else(|| self.cwd.clone());
         if let Err(e) = set_project_trust_level(&self.codex_home, &target, TrustLevel::Trusted) {
             tracing::error!("Failed to set project trusted: {e:?}");
             self.error = Some(format!("Failed to set trust for {}: {e}", target.display()));
@@ -205,7 +178,6 @@ mod tests {
         let mut widget = TrustDirectoryWidget {
             codex_home: codex_home.path().to_path_buf(),
             cwd: PathBuf::from("."),
-            trust_target: PathBuf::from("."),
             show_windows_create_sandbox_hint: false,
             should_quit: false,
             selection: None,
@@ -231,7 +203,6 @@ mod tests {
         let widget = TrustDirectoryWidget {
             codex_home: codex_home.path().to_path_buf(),
             cwd: PathBuf::from("/workspace/project"),
-            trust_target: PathBuf::from("/workspace/project"),
             show_windows_create_sandbox_hint: false,
             should_quit: false,
             selection: None,
@@ -239,8 +210,7 @@ mod tests {
             error: None,
         };
 
-        let mut terminal =
-            Terminal::new(VT100Backend::new(/*width*/ 70, /*height*/ 14)).expect("terminal");
+        let mut terminal = Terminal::new(VT100Backend::new(70, 14)).expect("terminal");
         terminal
             .draw(|f| (&widget).render_ref(f.area(), f.buffer_mut()))
             .expect("draw");

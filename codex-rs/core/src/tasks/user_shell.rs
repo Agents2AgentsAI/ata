@@ -1,36 +1,42 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
-use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
-use codex_network_proxy::PROXY_ENV_KEYS;
-#[cfg(target_os = "macos")]
-use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use uuid::Uuid;
 
-use crate::exec::ExecCapturePolicy;
+use crate::codex::TurnContext;
+use crate::exec::ExecToolCallOutput;
+use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
+use crate::exec::StreamOutput;
 use crate::exec::execute_exec_request;
 use crate::exec_env::CODEX_SESSION_ID_ENV_VAR;
 use crate::exec_env::create_env;
+use crate::parse_command::parse_command;
+use crate::protocol::EventMsg;
+use crate::protocol::ExecCommandBeginEvent;
+use crate::protocol::ExecCommandEndEvent;
+use crate::protocol::ExecCommandSource;
+use crate::protocol::ExecCommandStatus;
+use crate::protocol::SandboxPolicy;
+use crate::protocol::TurnStartedEvent;
 use crate::sandboxing::ExecRequest;
-use crate::session::turn_context::TurnContext;
+use crate::sandboxing::SandboxPermissions;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
-use crate::turn_timing::now_unix_timestamp_ms;
 use crate::user_shell_command::user_shell_command_record_item;
 use crate::workspace_kb::CODEX_KB_PATH_ENV_VAR;
 use crate::workspace_kb::resolve_kb_env;
 
 use super::SessionTask;
 use super::SessionTaskContext;
-use crate::session::session::Session;
-use codex_protocol::models::PermissionProfile;
+use crate::codex::Session;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -59,6 +65,7 @@ impl UserShellCommandTask {
     }
 }
 
+#[async_trait]
 impl SessionTask for UserShellCommandTask {
     fn kind(&self) -> TaskKind {
         TaskKind::Regular
@@ -109,7 +116,6 @@ pub(crate) async fn execute_user_shell_command(
         // freshly reinjected context before the summary/replacement history is applied.
         let event = EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: turn_context.sub_id.clone(),
-            started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
             model_context_window: turn_context.model_context_window(),
             collaboration_mode_kind: turn_context.collaboration_mode.mode,
         });
@@ -140,24 +146,6 @@ pub(crate) async fn execute_user_shell_command(
     let mut explicit_env_overrides = turn_context.shell_environment_policy.r#set.clone();
     explicit_env_overrides.insert(CODEX_KB_PATH_ENV_VAR.to_string(), kb_env.kb_path.clone());
     let display_command = session_shell.derive_exec_args(&command, use_login_shell);
-    let mut exec_env_map = create_env(
-        &turn_context.shell_environment_policy,
-        Some(session.conversation_id),
-    );
-    if exec_env_map.contains_key(PROXY_ACTIVE_ENV_KEY) {
-        for key in PROXY_ENV_KEYS {
-            exec_env_map.remove(*key);
-        }
-        #[cfg(target_os = "macos")]
-        if exec_env_map
-            .get(PROXY_GIT_SSH_COMMAND_ENV_KEY)
-            .is_some_and(|value| {
-                value.starts_with(codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER)
-            })
-        {
-            exec_env_map.remove(PROXY_GIT_SSH_COMMAND_ENV_KEY);
-        }
-    }
     let exec_command = maybe_wrap_shell_lc_with_snapshot(
         &display_command,
         session_shell.as_ref(),
@@ -182,7 +170,6 @@ pub(crate) async fn execute_user_shell_command(
                 call_id: call_id.clone(),
                 process_id: None,
                 turn_id: turn_context.sub_id.clone(),
-                started_at_ms: now_unix_timestamp_ms(),
                 command: display_command.clone(),
                 cwd: cwd.clone(),
                 parsed_cmd: parsed_cmd.clone(),
@@ -192,7 +179,7 @@ pub(crate) async fn execute_user_shell_command(
         )
         .await;
 
-    let permission_profile = PermissionProfile::Disabled;
+    let sandbox_policy = SandboxPolicy::DangerFullAccess;
     let exec_env = ExecRequest {
         command: exec_command.clone(),
         cwd: cwd.clone(),
@@ -201,9 +188,7 @@ pub(crate) async fn execute_user_shell_command(
         // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
         // should use that instead of an "arbitrarily large" timeout here.
         expiration: USER_SHELL_TIMEOUT_MS.into(),
-        capture_policy: ExecCapturePolicy::ShellTool,
         sandbox: SandboxType::None,
-        windows_sandbox_policy_cwd: cwd.clone(),
         windows_sandbox_level: turn_context.windows_sandbox_level,
         windows_sandbox_private_desktop: turn_context
             .config
@@ -223,7 +208,7 @@ pub(crate) async fn execute_user_shell_command(
         tx_event: session.get_tx_event(),
     });
 
-    let exec_result = execute_exec_request(exec_env, stdout_stream, /*after_spawn*/ None)
+    let exec_result = execute_exec_request(exec_env, &sandbox_policy, stdout_stream, None)
         .or_cancel(&cancellation_token)
         .await;
 
@@ -253,7 +238,6 @@ pub(crate) async fn execute_user_shell_command(
                         call_id,
                         process_id: None,
                         turn_id: turn_context.sub_id.clone(),
-                        completed_at_ms: now_unix_timestamp_ms(),
                         command: display_command.clone(),
                         cwd: cwd.clone(),
                         parsed_cmd: parsed_cmd.clone(),
@@ -278,7 +262,6 @@ pub(crate) async fn execute_user_shell_command(
                         call_id: call_id.clone(),
                         process_id: None,
                         turn_id: turn_context.sub_id.clone(),
-                        completed_at_ms: now_unix_timestamp_ms(),
                         command: display_command.clone(),
                         cwd: cwd.clone(),
                         parsed_cmd: parsed_cmd.clone(),
@@ -323,7 +306,6 @@ pub(crate) async fn execute_user_shell_command(
                         call_id,
                         process_id: None,
                         turn_id: turn_context.sub_id.clone(),
-                        completed_at_ms: now_unix_timestamp_ms(),
                         command: display_command,
                         cwd,
                         parsed_cmd,
@@ -367,23 +349,11 @@ async fn persist_user_shell_output(
         session
             .record_conversation_items(turn_context, std::slice::from_ref(&output_item))
             .await;
-        // Standalone shell turns can run before any regular user turn, so
-        // explicitly materialize rollout persistence after recording output.
-        session.ensure_rollout_materialized().await;
         return;
     }
 
     let response_input_item = match output_item {
-        ResponseItem::Message {
-            role,
-            content,
-            phase,
-            ..
-        } => ResponseInputItem::Message {
-            role,
-            content,
-            phase,
-        },
+        ResponseItem::Message { role, content, .. } => ResponseInputItem::Message { role, content },
         _ => unreachable!("user shell command output record should always be a message"),
     };
 

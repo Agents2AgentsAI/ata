@@ -7,6 +7,7 @@ pub mod trace_context;
 mod otlp;
 mod targets;
 
+use crate::config::StatsigMetricsSettings;
 use crate::metrics::MetricsError;
 use crate::metrics::Result as MetricsResult;
 use serde::Serialize;

@@ -30,8 +30,8 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_features::FEATURES;
-use codex_features::Feature;
+use codex_core::features::FEATURES;
+use codex_core::features::Feature;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -197,7 +197,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
                 "-c".to_string(),
                 "print(42)".to_string(),
             ],
-            /*workdir*/ None,
+            None,
             Some(5000),
             "call-zsh-fork-decline",
         )?,
@@ -332,7 +332,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
             "-c".to_string(),
             "print(42)".to_string(),
         ],
-        /*workdir*/ None,
+        None,
         Some(5000),
         "call-zsh-fork-cancel",
     )?];
@@ -554,6 +554,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             approval_policy: Some(codex_app_server_protocol::AskForApproval::UnlessTrusted),
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![workspace.clone().try_into()?],
+                read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -822,7 +823,7 @@ fn find_test_zsh_path() -> Result<Option<std::path::PathBuf>> {
         );
         return Ok(None);
     }
-    match core_test_support::fetch_dotslash_file(&dotslash_zsh, /*dotslash_cache*/ None) {
+    match core_test_support::fetch_dotslash_file(&dotslash_zsh, None) {
         Ok(path) => return Ok(Some(path)),
         Err(error) => {
             eprintln!("failed to fetch vendored zsh via dotslash: {error:#}");

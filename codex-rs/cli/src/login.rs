@@ -27,9 +27,6 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::edit::default_model_for_provider;
 use codex_login::GeminiServerOptions;
 use codex_login::ServerOptions;
-use codex_login::login_with_access_token;
-use codex_login::login_with_api_key;
-use codex_login::logout_with_revoke;
 use codex_login::run_device_code_login;
 use codex_login::run_gemini_login_server;
 use codex_login::run_login_server;
@@ -158,7 +155,7 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
 
     match login_with_chatgpt(
-        config.codex_home.to_path_buf(),
+        config.codex_home,
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
     )
@@ -298,22 +295,6 @@ fn validate_provider_id(provider: Option<&str>) -> &str {
 }
 
 pub fn read_api_key_from_stdin() -> String {
-    read_stdin_secret(
-        "--with-api-key expects the API key on stdin. Try piping it, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`.",
-        "Reading API key from stdin...",
-        "No API key provided via stdin.",
-    )
-}
-
-pub fn read_access_token_from_stdin() -> String {
-    read_stdin_secret(
-        "--with-access-token expects the access token on stdin. Try piping it, e.g. `printenv CODEX_ACCESS_TOKEN | codex login --with-access-token`.",
-        "Reading access token from stdin...",
-        "No access token provided via stdin.",
-    )
-}
-
-fn read_stdin_secret(terminal_message: &str, reading_message: &str, empty_message: &str) -> String {
     let mut stdin = std::io::stdin();
 
     if stdin.is_terminal() {
@@ -323,21 +304,21 @@ fn read_stdin_secret(terminal_message: &str, reading_message: &str, empty_messag
         std::process::exit(1);
     }
 
-    eprintln!("{reading_message}");
+    eprintln!("Reading API key from stdin...");
 
     let mut buffer = String::new();
     if let Err(err) = stdin.read_to_string(&mut buffer) {
-        eprintln!("Failed to read stdin: {err}");
+        eprintln!("Failed to read API key from stdin: {err}");
         std::process::exit(1);
     }
 
-    let secret = buffer.trim().to_string();
-    if secret.is_empty() {
-        eprintln!("{empty_message}");
+    let api_key = buffer.trim().to_string();
+    if api_key.is_empty() {
+        eprintln!("No API key provided via stdin.");
         std::process::exit(1);
     }
 
-    secret
+    api_key
 }
 
 /// Login using the OAuth device code flow.
@@ -355,7 +336,7 @@ pub async fn run_login_with_device_code(
     }
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
     let mut opts = ServerOptions::new(
-        config.codex_home.to_path_buf(),
+        config.codex_home,
         client_id.unwrap_or(CLIENT_ID.to_string()),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
@@ -394,7 +375,7 @@ pub async fn run_login_with_device_code_fallback_to_browser(
 
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
     let mut opts = ServerOptions::new(
-        config.codex_home.to_path_buf(),
+        config.codex_home,
         client_id.unwrap_or(CLIENT_ID.to_string()),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,

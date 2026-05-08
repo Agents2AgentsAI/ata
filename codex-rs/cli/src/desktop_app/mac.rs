@@ -1,17 +1,12 @@
 use anyhow::Context as _;
-use std::ffi::CString;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::Builder;
 use tokio::process::Command;
 
-const CODEX_DMG_URL_ARM64: &str = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
-const CODEX_DMG_URL_X64: &str =
-    "https://persistent.oaistatic.com/codex-app-prod/Codex-latest-x64.dmg";
-
 pub async fn run_mac_app_open_or_install(
     workspace: PathBuf,
-    download_url_override: Option<String>,
+    download_url: String,
 ) -> anyhow::Result<()> {
     if let Some(app_path) = find_existing_codex_app_path() {
         eprintln!(
@@ -31,28 +26,6 @@ pub async fn run_mac_app_open_or_install(
     );
     open_codex_app(&installed_app, &workspace).await?;
     Ok(())
-}
-
-fn is_apple_silicon_mac() -> bool {
-    fn macos_sysctl_flag(name: &str) -> Option<bool> {
-        let name = CString::new(name).ok()?;
-        let mut value: libc::c_int = 0;
-        let mut size = std::mem::size_of_val(&value);
-        let result = unsafe {
-            libc::sysctlbyname(
-                name.as_ptr(),
-                (&mut value as *mut libc::c_int).cast::<libc::c_void>(),
-                &mut size,
-                std::ptr::null_mut(),
-                0,
-            )
-        };
-        (result == 0).then_some(value != 0)
-    }
-
-    std::env::consts::ARCH == "aarch64"
-        || macos_sysctl_flag("sysctl.proc_translated").unwrap_or(false)
-        || macos_sysctl_flag("hw.optional.arm64").unwrap_or(false)
 }
 
 fn find_existing_codex_app_path() -> Option<PathBuf> {

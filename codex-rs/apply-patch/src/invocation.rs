@@ -2,8 +2,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::LazyLock;
 
-use codex_exec_server::ExecutorFileSystem;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use tree_sitter::Parser;
 use tree_sitter::Query;
 use tree_sitter::QueryCursor;
@@ -131,12 +129,7 @@ pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
 
 /// cwd must be an absolute path so that we can resolve relative paths in the
 /// patch.
-pub async fn maybe_parse_apply_patch_verified(
-    argv: &[String],
-    cwd: &AbsolutePathBuf,
-    fs: &dyn ExecutorFileSystem,
-    sandbox: Option<&codex_exec_server::FileSystemSandboxContext>,
-) -> MaybeApplyPatchVerified {
+pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApplyPatchVerified {
     // Detect a raw patch body passed directly as the command or as the body of a shell
     // script. In these cases, report an explicit error rather than applying the patch.
     if let [body] = argv
@@ -158,20 +151,24 @@ pub async fn maybe_parse_apply_patch_verified(
         }) => {
             let effective_cwd = workdir
                 .as_ref()
-                .map(|dir| cwd.join(Path::new(dir)))
-                .unwrap_or_else(|| cwd.clone());
+                .map(|dir| {
+                    let path = Path::new(dir);
+                    if path.is_absolute() {
+                        path.to_path_buf()
+                    } else {
+                        cwd.join(path)
+                    }
+                })
+                .unwrap_or_else(|| cwd.to_path_buf());
             let mut changes = HashMap::new();
             for hunk in hunks {
                 let path = hunk.resolve_path(&effective_cwd);
                 match hunk {
                     Hunk::AddFile { contents, .. } => {
-                        changes.insert(
-                            path.into_path_buf(),
-                            ApplyPatchFileChange::Add { content: contents },
-                        );
+                        changes.insert(path, ApplyPatchFileChange::Add { content: contents });
                     }
                     Hunk::DeleteFile { .. } => {
-                        let content = match fs.read_file_text(&path, sandbox).await {
+                        let content = match std::fs::read_to_string(&path) {
                             Ok(content) => content,
                             Err(e) => {
                                 return MaybeApplyPatchVerified::CorrectnessError(
@@ -182,10 +179,7 @@ pub async fn maybe_parse_apply_patch_verified(
                                 );
                             }
                         };
-                        changes.insert(
-                            path.into_path_buf(),
-                            ApplyPatchFileChange::Delete { content },
-                        );
+                        changes.insert(path, ApplyPatchFileChange::Delete { content });
                     }
                     Hunk::UpdateFile {
                         move_path, chunks, ..
@@ -193,17 +187,17 @@ pub async fn maybe_parse_apply_patch_verified(
                         let ApplyPatchFileUpdate {
                             unified_diff,
                             content: contents,
-                        } = match unified_diff_from_chunks(&path, &chunks, fs, sandbox).await {
+                        } = match unified_diff_from_chunks(&path, &chunks) {
                             Ok(diff) => diff,
                             Err(e) => {
                                 return MaybeApplyPatchVerified::CorrectnessError(e);
                             }
                         };
                         changes.insert(
-                            path.into_path_buf(),
+                            path,
                             ApplyPatchFileChange::Update {
                                 unified_diff,
-                                move_path: move_path.map(|p| effective_cwd.join(p).into_path_buf()),
+                                move_path: move_path.map(|p| effective_cwd.join(p)),
                                 new_content: contents,
                             },
                         );
@@ -377,10 +371,7 @@ fn extract_apply_patch_from_bash(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::unified_diff_from_chunks;
     use assert_matches::assert_matches;
-    use codex_exec_server::LOCAL_FS;
-    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::PathBuf;
@@ -459,42 +450,30 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_implicit_patch_single_arg_is_error() {
+    #[test]
+    fn test_implicit_patch_single_arg_is_error() {
         let patch = "*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch".to_string();
         let args = vec![patch];
         let dir = tempdir().unwrap();
         assert_matches!(
-            maybe_parse_apply_patch_verified(
-                &args,
-                &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
-                LOCAL_FS.as_ref(),
-                /*sandbox*/ None,
-            )
-            .await,
+            maybe_parse_apply_patch_verified(&args, dir.path()),
             MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation)
         );
     }
 
-    #[tokio::test]
-    async fn test_implicit_patch_bash_script_is_error() {
+    #[test]
+    fn test_implicit_patch_bash_script_is_error() {
         let script = "*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch";
         let args = args_bash(script);
         let dir = tempdir().unwrap();
         assert_matches!(
-            maybe_parse_apply_patch_verified(
-                &args,
-                &AbsolutePathBuf::from_absolute_path(dir.path()).unwrap(),
-                LOCAL_FS.as_ref(),
-                /*sandbox*/ None,
-            )
-            .await,
+            maybe_parse_apply_patch_verified(&args, dir.path()),
             MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation)
         );
     }
 
-    #[tokio::test]
-    async fn test_literal() {
+    #[test]
+    fn test_literal() {
         let args = strs_to_strings(&[
             "apply_patch",
             r#"*** Begin Patch
@@ -518,8 +497,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_literal_applypatch() {
+    #[test]
+    fn test_literal_applypatch() {
         let args = strs_to_strings(&[
             "applypatch",
             r#"*** Begin Patch
@@ -543,20 +522,20 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_heredoc() {
-        assert_match(&heredoc_script(""), /*expected_workdir*/ None);
+    #[test]
+    fn test_heredoc() {
+        assert_match(&heredoc_script(""), None);
     }
 
-    #[tokio::test]
-    async fn test_heredoc_non_login_shell() {
+    #[test]
+    fn test_heredoc_non_login_shell() {
         let script = heredoc_script("");
         let args = strs_to_strings(&["bash", "-c", &script]);
-        assert_match_args(args, /*expected_workdir*/ None);
+        assert_match_args(args, None);
     }
 
-    #[tokio::test]
-    async fn test_heredoc_applypatch() {
+    #[test]
+    fn test_heredoc_applypatch() {
         let args = strs_to_strings(&[
             "bash",
             "-lc",
@@ -583,96 +562,93 @@ PATCH"#,
         }
     }
 
-    #[tokio::test]
-    async fn test_powershell_heredoc() {
+    #[test]
+    fn test_powershell_heredoc() {
         let script = heredoc_script("");
-        assert_match_args(args_powershell(&script), /*expected_workdir*/ None);
+        assert_match_args(args_powershell(&script), None);
     }
-    #[tokio::test]
-    async fn test_powershell_heredoc_no_profile() {
+    #[test]
+    fn test_powershell_heredoc_no_profile() {
         let script = heredoc_script("");
-        assert_match_args(
-            args_powershell_no_profile(&script),
-            /*expected_workdir*/ None,
-        );
+        assert_match_args(args_powershell_no_profile(&script), None);
     }
-    #[tokio::test]
-    async fn test_pwsh_heredoc() {
+    #[test]
+    fn test_pwsh_heredoc() {
         let script = heredoc_script("");
-        assert_match_args(args_pwsh(&script), /*expected_workdir*/ None);
+        assert_match_args(args_pwsh(&script), None);
     }
 
-    #[tokio::test]
-    async fn test_cmd_heredoc_with_cd() {
+    #[test]
+    fn test_cmd_heredoc_with_cd() {
         let script = heredoc_script("cd foo && ");
         assert_match_args(args_cmd(&script), Some("foo"));
     }
 
-    #[tokio::test]
-    async fn test_heredoc_with_leading_cd() {
+    #[test]
+    fn test_heredoc_with_leading_cd() {
         assert_match(&heredoc_script("cd foo && "), Some("foo"));
     }
 
-    #[tokio::test]
-    async fn test_cd_with_semicolon_is_ignored() {
+    #[test]
+    fn test_cd_with_semicolon_is_ignored() {
         assert_not_match(&heredoc_script("cd foo; "));
     }
 
-    #[tokio::test]
-    async fn test_cd_or_apply_patch_is_ignored() {
+    #[test]
+    fn test_cd_or_apply_patch_is_ignored() {
         assert_not_match(&heredoc_script("cd bar || "));
     }
 
-    #[tokio::test]
-    async fn test_cd_pipe_apply_patch_is_ignored() {
+    #[test]
+    fn test_cd_pipe_apply_patch_is_ignored() {
         assert_not_match(&heredoc_script("cd bar | "));
     }
 
-    #[tokio::test]
-    async fn test_cd_single_quoted_path_with_spaces() {
+    #[test]
+    fn test_cd_single_quoted_path_with_spaces() {
         assert_match(&heredoc_script("cd 'foo bar' && "), Some("foo bar"));
     }
 
-    #[tokio::test]
-    async fn test_cd_double_quoted_path_with_spaces() {
+    #[test]
+    fn test_cd_double_quoted_path_with_spaces() {
         assert_match(&heredoc_script("cd \"foo bar\" && "), Some("foo bar"));
     }
 
-    #[tokio::test]
-    async fn test_echo_and_apply_patch_is_ignored() {
+    #[test]
+    fn test_echo_and_apply_patch_is_ignored() {
         assert_not_match(&heredoc_script("echo foo && "));
     }
 
-    #[tokio::test]
-    async fn test_apply_patch_with_arg_is_ignored() {
+    #[test]
+    fn test_apply_patch_with_arg_is_ignored() {
         let script = "apply_patch foo <<'PATCH'\n*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch\nPATCH";
         assert_not_match(script);
     }
 
-    #[tokio::test]
-    async fn test_double_cd_then_apply_patch_is_ignored() {
+    #[test]
+    fn test_double_cd_then_apply_patch_is_ignored() {
         assert_not_match(&heredoc_script("cd foo && cd bar && "));
     }
 
-    #[tokio::test]
-    async fn test_cd_two_args_is_ignored() {
+    #[test]
+    fn test_cd_two_args_is_ignored() {
         assert_not_match(&heredoc_script("cd foo bar && "));
     }
 
-    #[tokio::test]
-    async fn test_cd_then_apply_patch_then_extra_is_ignored() {
+    #[test]
+    fn test_cd_then_apply_patch_then_extra_is_ignored() {
         let script = heredoc_script_ps("cd bar && ", " && echo done");
         assert_not_match(&script);
     }
 
-    #[tokio::test]
-    async fn test_echo_then_cd_and_apply_patch_is_ignored() {
+    #[test]
+    fn test_echo_then_cd_and_apply_patch_is_ignored() {
         // Ensure preceding commands before the `cd && apply_patch <<...` sequence do not match.
         assert_not_match(&heredoc_script("echo foo; cd bar && "));
     }
 
-    #[tokio::test]
-    async fn test_unified_diff_last_line_replacement() {
+    #[test]
+    fn test_unified_diff_last_line_replacement() {
         // Replace the very last line of the file.
         let dir = tempdir().unwrap();
         let path = dir.path().join("last.txt");
@@ -695,11 +671,7 @@ PATCH"#,
             _ => panic!("Expected a single UpdateFile hunk"),
         };
 
-        let path_abs = path.as_path().abs();
-        let diff =
-            unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref(), /*sandbox*/ None)
-                .await
-                .unwrap();
+        let diff = unified_diff_from_chunks(&path, chunks).unwrap();
         let expected_diff = r#"@@ -2,2 +2,2 @@
  bar
 -baz
@@ -712,8 +684,8 @@ PATCH"#,
         assert_eq!(expected, diff);
     }
 
-    #[tokio::test]
-    async fn test_unified_diff_insert_at_eof() {
+    #[test]
+    fn test_unified_diff_insert_at_eof() {
         // Insert a new line at end‑of‑file.
         let dir = tempdir().unwrap();
         let path = dir.path().join("insert.txt");
@@ -734,11 +706,7 @@ PATCH"#,
             _ => panic!("Expected a single UpdateFile hunk"),
         };
 
-        let path_abs = path.as_path().abs();
-        let diff =
-            unified_diff_from_chunks(&path_abs, chunks, LOCAL_FS.as_ref(), /*sandbox*/ None)
-                .await
-                .unwrap();
+        let diff = unified_diff_from_chunks(&path, chunks).unwrap();
         let expected_diff = r#"@@ -3 +3,2 @@
  baz
 +quux
@@ -750,8 +718,8 @@ PATCH"#,
         assert_eq!(expected, diff);
     }
 
-    #[tokio::test]
-    async fn test_apply_patch_should_resolve_absolute_paths_in_cwd() {
+    #[test]
+    fn test_apply_patch_should_resolve_absolute_paths_in_cwd() {
         let session_dir = tempdir().unwrap();
         let relative_path = "source.txt";
 
@@ -771,13 +739,7 @@ PATCH"#,
                 .to_string(),
         ];
 
-        let result = maybe_parse_apply_patch_verified(
-            &argv,
-            &AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap(),
-            LOCAL_FS.as_ref(),
-            /*sandbox*/ None,
-        )
-        .await;
+        let result = maybe_parse_apply_patch_verified(&argv, session_dir.path());
 
         // Verify the patch contents - as otherwise we may have pulled contents
         // from the wrong file (as we're using relative paths)
@@ -797,13 +759,13 @@ PATCH"#,
                     },
                 )]),
                 patch: argv[1].clone(),
-                cwd: AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap(),
+                cwd: session_dir.path().to_path_buf(),
             })
         );
     }
 
-    #[tokio::test]
-    async fn test_apply_patch_resolves_move_path_with_effective_cwd() {
+    #[test]
+    fn test_apply_patch_resolves_move_path_with_effective_cwd() {
         let session_dir = tempdir().unwrap();
         let worktree_rel = "alt";
         let worktree_dir = session_dir.path().join(worktree_rel);
@@ -825,19 +787,13 @@ PATCH"#,
         let shell_script = format!("cd {worktree_rel} && apply_patch <<'PATCH'\n{patch}\nPATCH");
         let argv = vec!["bash".into(), "-lc".into(), shell_script];
 
-        let result = maybe_parse_apply_patch_verified(
-            &argv,
-            &AbsolutePathBuf::from_absolute_path(session_dir.path()).unwrap(),
-            LOCAL_FS.as_ref(),
-            /*sandbox*/ None,
-        )
-        .await;
+        let result = maybe_parse_apply_patch_verified(&argv, session_dir.path());
         let action = match result {
             MaybeApplyPatchVerified::Body(action) => action,
             other => panic!("expected verified body, got {other:?}"),
         };
 
-        assert_eq!(action.cwd.as_path(), worktree_dir.as_path());
+        assert_eq!(action.cwd, worktree_dir);
 
         let change = action
             .changes()

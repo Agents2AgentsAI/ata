@@ -1,4 +1,5 @@
-use codex_utils_absolute_path::AbsolutePathBuf;
+use std::path::PathBuf;
+
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -21,6 +22,7 @@ use crate::render::renderable::Renderable;
 use crate::skills_helpers::match_skill;
 use crate::skills_helpers::truncate_skill_name;
 use crate::style::user_message_style;
+use codex_protocol::protocol::Op;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -37,7 +39,7 @@ pub(crate) struct SkillsToggleItem {
     pub skill_name: String,
     pub description: String,
     pub enabled: bool,
-    pub path: AbsolutePathBuf,
+    pub path: PathBuf,
 }
 
 pub(crate) struct SkillsToggleView {
@@ -185,8 +187,10 @@ impl SkillsToggleView {
         }
         self.complete = true;
         self.app_event_tx.send(AppEvent::ManageSkillsClosed);
-        self.app_event_tx
-            .list_skills(Vec::new(), /*force_reload*/ true);
+        self.app_event_tx.send(AppEvent::CodexOp(Op::ListSkills {
+            cwds: Vec::new(),
+            force_reload: true,
+        }));
     }
 
     fn rows_width(total_width: u16) -> u16 {
@@ -310,7 +314,7 @@ impl Renderable for SkillsToggleView {
             Constraint::Length(2),
             Constraint::Length(rows_height),
         ])
-        .areas(content_area.inset(Insets::vh(/*v*/ 1, /*h*/ 2)));
+        .areas(content_area.inset(Insets::vh(1, 2)));
 
         self.header.render(header_area, buf);
 
@@ -380,8 +384,6 @@ fn skills_toggle_hint_line() -> Line<'static> {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use crate::test_support::PathBufExt;
-    use crate::test_support::test_path_buf;
     use insta::assert_snapshot;
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
@@ -419,17 +421,17 @@ mod tests {
                 skill_name: "repo_scout".to_string(),
                 description: "Summarize the repo layout".to_string(),
                 enabled: true,
-                path: test_path_buf("/tmp/skills/repo_scout.toml").abs(),
+                path: PathBuf::from("/tmp/skills/repo_scout.toml"),
             },
             SkillsToggleItem {
                 name: "Changelog Writer".to_string(),
                 skill_name: "changelog_writer".to_string(),
                 description: "Draft release notes".to_string(),
                 enabled: false,
-                path: test_path_buf("/tmp/skills/changelog_writer.toml").abs(),
+                path: PathBuf::from("/tmp/skills/changelog_writer.toml"),
             },
         ];
         let view = SkillsToggleView::new(items, tx);
-        assert_snapshot!("skills_toggle_basic", render_lines(&view, /*width*/ 72));
+        assert_snapshot!("skills_toggle_basic", render_lines(&view, 72));
     }
 }

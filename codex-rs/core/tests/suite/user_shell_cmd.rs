@@ -7,9 +7,9 @@ use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExecOutputStream;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::user_input::UserInput;
-use core_test_support::PathBufExt;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -21,7 +21,6 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
-use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_event_with_timeout;
@@ -47,7 +46,7 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
     let server = start_mock_server().await;
     let cwd_path = cwd.path().to_path_buf();
     let mut builder = test_codex().with_config(move |config| {
-        config.cwd = cwd_path.abs();
+        config.cwd = cwd_path;
     });
     let codex = builder
         .build(&server)
@@ -141,7 +140,7 @@ async fn user_shell_cmd_can_be_interrupted() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()> {
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5.4");
+    let mut builder = test_codex().with_model("gpt-5.1");
     let fixture = builder.build(&server).await?;
 
     let call_id = "active-turn-shell-call";
@@ -167,24 +166,17 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
     ]);
     let mock = responses::mount_sse_sequence(&server, vec![first, second]).await;
 
-    let cwd = fixture.cwd.path().to_path_buf();
-    let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::Disabled, cwd.as_path());
-
     fixture
         .codex
         .submit(Op::UserTurn {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "run model shell command".to_string(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd,
+            cwd: fixture.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: fixture.session_configured.model.clone(),
             model_provider: None,
             effort: None,
@@ -439,9 +431,11 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
-        config.tool_output_token_limit = Some(100);
-    });
+    let mut builder = test_codex()
+        .with_model("gpt-5.1-codex")
+        .with_config(|config| {
+            config.tool_output_token_limit = Some(100);
+        });
     let fixture = builder.build(&server).await?;
 
     let call_id = "user-shell-double-truncation";
@@ -476,9 +470,9 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
     .await;
 
     fixture
-        .submit_turn_with_permission_profile(
+        .submit_turn_with_policy(
             "trigger big shell_command output",
-            PermissionProfile::Disabled,
+            SandboxPolicy::DangerFullAccess,
         )
         .await?;
 

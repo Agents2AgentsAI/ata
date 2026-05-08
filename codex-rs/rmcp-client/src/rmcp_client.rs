@@ -1,14 +1,11 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::future::Future;
 use std::io;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
-use std::time::Instant;
 
 use anyhow::Result;
 use anyhow::anyhow;
@@ -66,21 +63,16 @@ use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::sync::Mutex;
-use tokio::sync::Semaphore;
-use tokio::sync::watch;
 use tokio::time;
+use tracing::info;
 use tracing::warn;
 
-use crate::elicitation_client_service::ElicitationClientService;
-use crate::http_client_adapter::StreamableHttpClientAdapter;
-use crate::http_client_adapter::StreamableHttpClientAdapterError;
 use crate::load_oauth_tokens;
+use crate::logging_client_handler::LoggingClientHandler;
+use crate::oauth::OAuthCredentialsStoreMode;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
-use crate::stdio_server_launcher::StdioServerCommand;
-use crate::stdio_server_launcher::StdioServerLauncher;
-use crate::stdio_server_launcher::StdioServerProcessHandle;
-use crate::stdio_server_launcher::StdioServerTransport;
+use crate::program_resolver;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use crate::utils::create_env_for_mcp_server;
@@ -310,8 +302,9 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
 }
 
 enum PendingTransport {
-    Stdio {
-        transport: StdioServerTransport,
+    ChildProcess {
+        transport: TokioChildProcess,
+        process_group_guard: Option<ProcessGroupGuard>,
     },
     StreamableHttp {
         transport: StreamableHttpClientTransport<StreamableHttpResponseClient>,
@@ -327,73 +320,67 @@ enum ClientState {
         transport: Option<PendingTransport>,
     },
     Ready {
-        service: Arc<RunningService<RoleClient, ElicitationClientService>>,
+        _process_group_guard: Option<ProcessGroupGuard>,
+        service: Arc<RunningService<RoleClient, LoggingClientHandler>>,
         oauth: Option<OAuthPersistor>,
     },
-    Closed,
 }
 
-#[derive(Clone)]
-enum TransportRecipe {
-    Stdio {
-        command: StdioServerCommand,
-        launcher: Arc<dyn StdioServerLauncher>,
-    },
-    StreamableHttp {
-        server_name: String,
-        url: String,
-        bearer_token: Option<String>,
-        http_headers: Option<HashMap<String, String>>,
-        env_http_headers: Option<HashMap<String, String>>,
-        store_mode: OAuthCredentialsStoreMode,
-        http_client: Arc<dyn HttpClient>,
-        auth_provider: Option<SharedAuthProvider>,
-    },
+#[cfg(unix)]
+const PROCESS_GROUP_TERM_GRACE_PERIOD: Duration = Duration::from_secs(2);
+
+#[cfg(unix)]
+struct ProcessGroupGuard {
+    process_group_id: u32,
 }
 
-#[derive(Clone)]
-struct InitializeContext {
-    timeout: Option<Duration>,
-    client_service: ElicitationClientService,
-}
+#[cfg(not(unix))]
+struct ProcessGroupGuard;
 
-#[derive(Clone)]
-pub(crate) struct ElicitationPauseState {
-    active_count: Arc<AtomicUsize>,
-    paused: watch::Sender<bool>,
-}
-
-impl ElicitationPauseState {
-    fn new() -> Self {
-        let (paused, _rx) = watch::channel(false);
-        Self {
-            active_count: Arc::new(AtomicUsize::new(0)),
-            paused,
+impl ProcessGroupGuard {
+    fn new(process_group_id: u32) -> Self {
+        #[cfg(unix)]
+        {
+            Self { process_group_id }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = process_group_id;
+            Self
         }
     }
 
-    pub(crate) fn enter(&self) -> ElicitationPauseGuard {
-        if self.active_count.fetch_add(1, Ordering::AcqRel) == 0 {
-            self.paused.send_replace(true);
-        }
-        ElicitationPauseGuard {
-            pause_state: self.clone(),
+    #[cfg(unix)]
+    fn maybe_terminate_process_group(&self) {
+        let process_group_id = self.process_group_id;
+        let should_escalate =
+            match codex_utils_pty::process_group::terminate_process_group(process_group_id) {
+                Ok(exists) => exists,
+                Err(error) => {
+                    warn!("Failed to terminate MCP process group {process_group_id}: {error}");
+                    false
+                }
+            };
+        if should_escalate {
+            std::thread::spawn(move || {
+                std::thread::sleep(PROCESS_GROUP_TERM_GRACE_PERIOD);
+                if let Err(error) =
+                    codex_utils_pty::process_group::kill_process_group(process_group_id)
+                {
+                    warn!("Failed to kill MCP process group {process_group_id}: {error}");
+                }
+            });
         }
     }
 
-    fn subscribe(&self) -> watch::Receiver<bool> {
-        self.paused.subscribe()
-    }
+    #[cfg(not(unix))]
+    fn maybe_terminate_process_group(&self) {}
 }
 
-pub(crate) struct ElicitationPauseGuard {
-    pause_state: ElicitationPauseState,
-}
-
-impl Drop for ElicitationPauseGuard {
+impl Drop for ProcessGroupGuard {
     fn drop(&mut self) {
-        if self.pause_state.active_count.fetch_sub(1, Ordering::AcqRel) == 1 {
-            self.pause_state.paused.send_replace(false);
+        if cfg!(unix) {
+            self.maybe_terminate_process_group();
         }
     }
 }
@@ -491,10 +478,9 @@ impl RmcpClient {
     pub async fn new_stdio_client(
         program: OsString,
         args: Vec<OsString>,
-        env: Option<HashMap<OsString, OsString>>,
-        env_vars: &[McpServerEnvVar],
+        env: Option<HashMap<String, String>>,
+        env_vars: &[String],
         cwd: Option<PathBuf>,
-        launcher: Arc<dyn StdioServerLauncher>,
     ) -> io::Result<Self> {
         let transport_recipe = TransportRecipe::Stdio {
             program,
@@ -525,8 +511,6 @@ impl RmcpClient {
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
-        http_client: Arc<dyn HttpClient>,
-        auth_provider: Option<SharedAuthProvider>,
     ) -> Result<Self> {
         let transport_recipe = TransportRecipe::StreamableHttp {
             server_name: server_name.to_string(),
@@ -564,7 +548,6 @@ impl RmcpClient {
                     None => return Err(anyhow!("client already initializing")),
                 },
                 ClientState::Ready { .. } => return Err(anyhow!("client already initialized")),
-                ClientState::Closed => return Err(anyhow!("MCP client is shut down")),
             }
         };
 
@@ -588,9 +571,6 @@ impl RmcpClient {
 
         {
             let mut guard = self.state.lock().await;
-            if matches!(*guard, ClientState::Closed) {
-                return Err(anyhow!("MCP client is shut down"));
-            }
             *guard = ClientState::Ready {
                 _process_group_guard: process_group_guard,
                 service,
@@ -805,12 +785,11 @@ impl RmcpClient {
         Ok(response)
     }
 
-    async fn service(&self) -> Result<Arc<RunningService<RoleClient, ElicitationClientService>>> {
+    async fn service(&self) -> Result<Arc<RunningService<RoleClient, LoggingClientHandler>>> {
         let guard = self.state.lock().await;
         match &*guard {
             ClientState::Ready { service, .. } => Ok(Arc::clone(service)),
             ClientState::Connecting { .. } => Err(anyhow!("MCP client not initialized")),
-            ClientState::Closed => Err(anyhow!("MCP client is shut down")),
         }
     }
 
@@ -823,22 +802,6 @@ impl RmcpClient {
             } => Some(runtime.clone()),
             _ => None,
         }
-    }
-
-    /// Stop the MCP transport and any stdio server process owned by this client.
-    pub async fn shutdown(&self) {
-        let previous_state = {
-            let mut guard = self.state.lock().await;
-            std::mem::replace(&mut *guard, ClientState::Closed)
-        };
-
-        if let Some(process) = &self.stdio_process
-            && let Err(error) = process.terminate().await
-        {
-            warn!("failed to terminate MCP stdio server process: {error}");
-        }
-
-        drop(previous_state);
     }
 
     /// This should be called after every tool call so that if a given tool call triggered
@@ -1175,7 +1138,6 @@ async fn create_oauth_transport_and_runtime(
     initial_tokens: StoredOAuthTokens,
     credentials_store: OAuthCredentialsStoreMode,
     default_headers: HeaderMap,
-    http_client: Arc<dyn HttpClient>,
 ) -> Result<(
     StreamableHttpClientTransport<AuthClient<StreamableHttpResponseClient>>,
     OAuthPersistor,
@@ -1215,33 +1177,4 @@ async fn create_oauth_transport_and_runtime(
     );
 
     Ok((transport, runtime))
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use pretty_assertions::assert_eq;
-    use tokio::time;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn active_time_timeout_pauses_while_elicitation_is_pending() {
-        let pause_state = ElicitationPauseState::new();
-        let pause = pause_state.enter();
-        tokio::spawn(async move {
-            time::sleep(Duration::from_millis(75)).await;
-            drop(pause);
-        });
-
-        let result =
-            active_time_timeout(Duration::from_millis(50), pause_state.subscribe(), async {
-                time::sleep(Duration::from_millis(90)).await;
-                "done"
-            })
-            .await;
-
-        assert_eq!(Ok("done"), result);
-    }
 }

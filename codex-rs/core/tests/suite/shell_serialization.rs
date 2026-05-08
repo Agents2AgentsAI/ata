@@ -2,7 +2,7 @@
 #![allow(clippy::expect_used)]
 
 use anyhow::Result;
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -105,10 +105,10 @@ fn configure_shell_model(
 ) -> TestCodexBuilder {
     let builder = match (output_type, include_apply_patch_tool) {
         (ShellModelOutput::ShellCommand, _) => builder.with_model("test-gpt-5-codex"),
-        (ShellModelOutput::LocalShell, true) => builder.with_model("gpt-5.4"),
-        (ShellModelOutput::Shell, true) => builder.with_model("gpt-5.4"),
-        (ShellModelOutput::LocalShell, false) => builder.with_model("test-local-shell-json"),
-        (ShellModelOutput::Shell, false) => builder.with_model("test-shell-json"),
+        (ShellModelOutput::LocalShell, true) => builder.with_model("gpt-5.1-codex"),
+        (ShellModelOutput::Shell, true) => builder.with_model("gpt-5.1-codex"),
+        (ShellModelOutput::LocalShell, false) => builder.with_model("codex-mini-latest"),
+        (ShellModelOutput::Shell, false) => builder.with_model("gpt-5"),
     };
 
     builder.with_config(move |config| {
@@ -125,20 +125,16 @@ async fn shell_output_stays_json_without_freeform_apply_patch(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = configure_shell_model(
-        test_codex(),
-        output_type,
-        /*include_apply_patch_tool*/ false,
-    );
+    let mut builder = configure_shell_model(test_codex(), output_type, false);
     let test = builder.build(&server).await?;
 
     let call_id = "shell-json";
     let responses = shell_responses(call_id, vec!["/bin/echo", "shell json"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
-    test.submit_turn_with_permission_profile(
+    test.submit_turn_with_policy(
         "run the json shell command",
-        PermissionProfile::Disabled,
+        SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
@@ -181,20 +177,16 @@ async fn shell_output_is_structured_with_freeform_apply_patch(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = configure_shell_model(
-        test_codex(),
-        output_type,
-        /*include_apply_patch_tool*/ true,
-    );
+    let mut builder = configure_shell_model(test_codex(), output_type, true);
     let test = builder.build(&server).await?;
 
     let call_id = "shell-structured";
     let responses = shell_responses(call_id, vec!["/bin/echo", "freeform shell"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
-    test.submit_turn_with_permission_profile(
+    test.submit_turn_with_policy(
         "run the structured shell command",
-        PermissionProfile::Disabled,
+        SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
@@ -230,11 +222,7 @@ async fn shell_output_preserves_fixture_json_without_serialization(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = configure_shell_model(
-        test_codex(),
-        output_type,
-        /*include_apply_patch_tool*/ false,
-    );
+    let mut builder = configure_shell_model(test_codex(), output_type, false);
     let test = builder.build(&server).await?;
 
     let fixture_path = test.cwd.path().join("fixture.json");
@@ -249,9 +237,9 @@ async fn shell_output_preserves_fixture_json_without_serialization(
     )?;
     let mock = mount_sse_sequence(&server, responses).await;
 
-    test.submit_turn_with_permission_profile(
+    test.submit_turn_with_policy(
         "read the fixture JSON with sed",
-        PermissionProfile::Disabled,
+        SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
@@ -298,11 +286,7 @@ async fn shell_output_structures_fixture_with_serialization(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = configure_shell_model(
-        test_codex(),
-        output_type,
-        /*include_apply_patch_tool*/ true,
-    );
+    let mut builder = configure_shell_model(test_codex(), output_type, true);
     let test = builder.build(&server).await?;
 
     let fixture_path = test.cwd.path().join("fixture.json");
@@ -317,9 +301,9 @@ async fn shell_output_structures_fixture_with_serialization(
     )?;
     let mock = mount_sse_sequence(&server, responses).await;
 
-    test.submit_turn_with_permission_profile(
+    test.submit_turn_with_policy(
         "read the fixture JSON with structured output",
-        PermissionProfile::Disabled,
+        SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
@@ -361,20 +345,16 @@ async fn shell_output_for_freeform_tool_records_duration(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = configure_shell_model(
-        test_codex(),
-        output_type,
-        /*include_apply_patch_tool*/ true,
-    );
+    let mut builder = configure_shell_model(test_codex(), output_type, true);
     let test = builder.build(&server).await?;
 
     let call_id = "shell-structured";
     let responses = shell_responses(call_id, vec!["/bin/sh", "-c", "sleep 0.2"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
-    test.submit_turn_with_permission_profile(
+    test.submit_turn_with_policy(
         "run the structured shell command",
-        PermissionProfile::Disabled,
+        SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
@@ -415,23 +395,19 @@ async fn shell_output_reserializes_truncated_content(output_type: ShellModelOutp
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = configure_shell_model(
-        test_codex(),
-        output_type,
-        /*include_apply_patch_tool*/ true,
-    )
-    .with_config(move |config| {
-        config.tool_output_token_limit = Some(200);
-    });
+    let mut builder =
+        configure_shell_model(test_codex(), output_type, true).with_config(move |config| {
+            config.tool_output_token_limit = Some(200);
+        });
     let test = builder.build(&server).await?;
 
     let call_id = "shell-truncated";
     let responses = shell_responses(call_id, vec!["/bin/sh", "-c", "seq 1 400"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
-    test.submit_turn_with_permission_profile(
+    test.submit_turn_with_policy(
         "run the truncation shell command",
-        PermissionProfile::Disabled,
+        SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
@@ -495,9 +471,9 @@ async fn apply_patch_custom_tool_output_is_structured(
 
     harness
         .test()
-        .submit_turn_with_permission_profile(
+        .submit_turn_with_policy(
             "apply the patch via custom tool",
-            PermissionProfile::Disabled,
+            SandboxPolicy::DangerFullAccess,
         )
         .await?;
 
@@ -537,9 +513,9 @@ async fn apply_patch_custom_tool_call_creates_file(
 
     harness
         .test()
-        .submit_turn_with_permission_profile(
+        .submit_turn_with_policy(
             "apply the patch via custom tool to create a file",
-            PermissionProfile::Disabled,
+            SandboxPolicy::DangerFullAccess,
         )
         .await?;
 
@@ -555,7 +531,8 @@ A {file_name}
     );
     assert_regex_match(&expected_pattern, output.as_str());
 
-    let created_contents = harness.read_file_text(file_name).await?;
+    let new_file_path = harness.path(file_name);
+    let created_contents = fs::read_to_string(&new_file_path)?;
     assert_eq!(
         created_contents, "custom tool content\n",
         "expected file contents for {file_name}"
@@ -578,7 +555,8 @@ async fn apply_patch_custom_tool_call_updates_existing_file(
 
     let call_id = "apply-patch-update-file";
     let file_name = "custom_tool_apply_patch_existing.txt";
-    harness.write_file(file_name, "before\n").await?;
+    let file_path = harness.path(file_name);
+    fs::write(&file_path, "before\n")?;
     let patch = format!(
         "*** Begin Patch\n*** Update File: {file_name}\n@@\n-before\n+after\n*** End Patch\n"
     );
@@ -593,9 +571,9 @@ async fn apply_patch_custom_tool_call_updates_existing_file(
 
     harness
         .test()
-        .submit_turn_with_permission_profile(
+        .submit_turn_with_policy(
             "apply the patch via custom tool to update a file",
-            PermissionProfile::Disabled,
+            SandboxPolicy::DangerFullAccess,
         )
         .await?;
 
@@ -611,7 +589,7 @@ M {file_name}
     );
     assert_regex_match(&expected_pattern, output.as_str());
 
-    let updated_contents = harness.read_file_text(file_name).await?;
+    let updated_contents = fs::read_to_string(file_path)?;
     assert_eq!(updated_contents, "after\n", "expected updated file content");
 
     Ok(())
@@ -645,9 +623,9 @@ async fn apply_patch_custom_tool_call_reports_failure_output(
 
     harness
         .test()
-        .submit_turn_with_permission_profile(
+        .submit_turn_with_policy(
             "attempt a failing apply_patch via custom tool",
-            PermissionProfile::Disabled,
+            SandboxPolicy::DangerFullAccess,
         )
         .await?;
 
@@ -688,9 +666,9 @@ async fn apply_patch_function_call_output_is_structured(
     .await;
     harness
         .test()
-        .submit_turn_with_permission_profile(
+        .submit_turn_with_policy(
             "apply the patch via function-call apply_patch",
-            PermissionProfile::Disabled,
+            SandboxPolicy::DangerFullAccess,
         )
         .await?;
 
@@ -717,7 +695,7 @@ async fn shell_output_is_structured_for_nonzero_exit(output_type: ShellModelOutp
 
     let server = start_mock_server().await;
     let mut builder = test_codex()
-        .with_model("gpt-5.4")
+        .with_model("gpt-5.1-codex")
         .with_config(move |config| {
             config.include_apply_patch_tool = true;
         });
@@ -727,9 +705,9 @@ async fn shell_output_is_structured_for_nonzero_exit(output_type: ShellModelOutp
     let responses = shell_responses(call_id, vec!["/bin/sh", "-c", "exit 42"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
-    test.submit_turn_with_permission_profile(
+    test.submit_turn_with_policy(
         "run the failing shell command",
-        PermissionProfile::Disabled,
+        SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
@@ -778,9 +756,9 @@ async fn shell_command_output_is_freeform() -> Result<()> {
     ];
     let mock = mount_sse_sequence(&server, responses).await;
 
-    test.submit_turn_with_permission_profile(
+    test.submit_turn_with_policy(
         "run the shell_command script in the user's shell",
-        PermissionProfile::Disabled,
+        SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
@@ -808,7 +786,7 @@ async fn shell_command_output_is_not_truncated_under_10k_bytes() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5.4");
+    let mut builder = test_codex().with_model("gpt-5.1");
     let test = builder.build(&server).await?;
 
     let call_id = "shell-command";
@@ -830,9 +808,9 @@ async fn shell_command_output_is_not_truncated_under_10k_bytes() -> Result<()> {
     ];
     let mock = mount_sse_sequence(&server, responses).await;
 
-    test.submit_turn_with_permission_profile(
+    test.submit_turn_with_policy(
         "run the shell_command script in the user's shell",
-        PermissionProfile::Disabled,
+        SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
@@ -859,7 +837,7 @@ async fn shell_command_output_is_not_truncated_over_10k_bytes() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5.2");
+    let mut builder = test_codex().with_model("gpt-5.1");
     let test = builder.build(&server).await?;
 
     let call_id = "shell-command";
@@ -881,9 +859,9 @@ async fn shell_command_output_is_not_truncated_over_10k_bytes() -> Result<()> {
     ];
     let mock = mount_sse_sequence(&server, responses).await;
 
-    test.submit_turn_with_permission_profile(
+    test.submit_turn_with_policy(
         "run the shell_command script in the user's shell",
-        PermissionProfile::Disabled,
+        SandboxPolicy::DangerFullAccess,
     )
     .await?;
 
@@ -910,9 +888,11 @@ async fn local_shell_call_output_is_structured() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
-        config.include_apply_patch_tool = true;
-    });
+    let mut builder = test_codex()
+        .with_model("gpt-5.1-codex")
+        .with_config(|config| {
+            config.include_apply_patch_tool = true;
+        });
     let test = builder.build(&server).await?;
 
     let call_id = "local-shell-call";
@@ -929,9 +909,9 @@ async fn local_shell_call_output_is_structured() -> Result<()> {
     ];
     let mock = mount_sse_sequence(&server, responses).await;
 
-    test.submit_turn_with_permission_profile(
+    test.submit_turn_with_policy(
         "run the local shell command",
-        PermissionProfile::Disabled,
+        SandboxPolicy::DangerFullAccess,
     )
     .await?;
 

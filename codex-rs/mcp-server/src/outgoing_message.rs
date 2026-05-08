@@ -228,16 +228,15 @@ pub(crate) struct OutgoingError {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
 
     use anyhow::Result;
     use codex_protocol::ThreadId;
-    use codex_protocol::models::PermissionProfile;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionConfiguredEvent;
-    use codex_utils_absolute_path::test_support::PathBufExt;
-    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::NamedTempFile;
@@ -296,10 +295,8 @@ mod tests {
         let event = Event {
             id: "1".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: codex_protocol::SessionId::new(),
-                thread_id,
+                session_id: thread_id,
                 forked_from_id: None,
-                thread_source: None,
                 thread_name: None,
                 model: "gpt-4o".to_string(),
                 model_provider_id: "test-provider".to_string(),
@@ -309,6 +306,8 @@ mod tests {
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: Some(ReasoningEffort::default()),
+                history_log_id: 1,
+                history_entry_count: 1000,
                 initial_messages: None,
                 network_proxy: None,
                 rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -316,7 +315,7 @@ mod tests {
         };
 
         outgoing_message_sender
-            .send_event_as_notification(&event, /*meta*/ None)
+            .send_event_as_notification(&event, None)
             .await;
 
         let result = outgoing_rx.recv().await.unwrap();
@@ -337,13 +336,11 @@ mod tests {
         let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
 
-        let thread_id = ThreadId::new();
+        let conversation_id = ThreadId::new();
         let rollout_file = NamedTempFile::new()?;
         let session_configured_event = SessionConfiguredEvent {
-            session_id: codex_protocol::SessionId::new(),
-            thread_id,
+            session_id: conversation_id,
             forked_from_id: None,
-            thread_source: None,
             thread_name: None,
             model: "gpt-4o".to_string(),
             model_provider_id: "test-provider".to_string(),
@@ -353,6 +350,8 @@ mod tests {
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: Some(ReasoningEffort::default()),
+            history_log_id: 1,
+            history_entry_count: 1000,
             initial_messages: None,
             network_proxy: None,
             rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -383,7 +382,6 @@ mod tests {
             "msg": {
                 "type": "session_configured",
                 "session_id": session_configured_event.session_id,
-                "thread_id": session_configured_event.thread_id,
                 "model": "gpt-4o",
                 "model_provider_id": "test-provider",
                 "approval_policy": "never",
@@ -393,6 +391,8 @@ mod tests {
                 },
                 "cwd": "/home/user/project",
                 "reasoning_effort": session_configured_event.reasoning_effort,
+                "history_log_id": session_configured_event.history_log_id,
+                "history_entry_count": session_configured_event.history_entry_count,
                 "rollout_path": rollout_file.path().to_path_buf(),
             }
         });
@@ -408,10 +408,8 @@ mod tests {
         let thread_id = ThreadId::new();
         let rollout_file = NamedTempFile::new()?;
         let session_configured_event = SessionConfiguredEvent {
-            session_id: codex_protocol::SessionId::new(),
-            thread_id,
+            session_id: thread_id,
             forked_from_id: None,
-            thread_source: None,
             thread_name: None,
             model: "gpt-4o".to_string(),
             model_provider_id: "test-provider".to_string(),
@@ -421,6 +419,8 @@ mod tests {
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: Some(ReasoningEffort::default()),
+            history_log_id: 1,
+            history_entry_count: 1000,
             initial_messages: None,
             network_proxy: None,
             rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -452,7 +452,6 @@ mod tests {
             "msg": {
                 "type": "session_configured",
                 "session_id": session_configured_event.session_id,
-                "thread_id": session_configured_event.thread_id,
                 "model": "gpt-4o",
                 "model_provider_id": "test-provider",
                 "approval_policy": "never",
@@ -462,6 +461,8 @@ mod tests {
                 },
                 "cwd": "/home/user/project",
                 "reasoning_effort": session_configured_event.reasoning_effort,
+                "history_log_id": session_configured_event.history_log_id,
+                "history_entry_count": session_configured_event.history_entry_count,
                 "rollout_path": rollout_file.path().to_path_buf(),
             }
         });

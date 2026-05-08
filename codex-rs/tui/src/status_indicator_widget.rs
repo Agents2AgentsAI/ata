@@ -7,6 +7,7 @@
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_protocol::protocol::Op;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -18,14 +19,13 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use unicode_width::UnicodeWidthStr;
 
+use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::exec_cell::spinner;
 use crate::key_hint;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
-use crate::motion::MotionMode;
-use crate::motion::ReducedMotionIndicator;
-use crate::motion::activity_indicator;
-use crate::motion::shimmer_text;
 use crate::render::renderable::Renderable;
+use crate::shimmer::shimmer_spans;
 use crate::text_formatting::capitalize_first;
 use crate::tui::FrameRequester;
 use crate::wrapping::RtOptions;
@@ -98,7 +98,7 @@ impl StatusIndicatorWidget {
     }
 
     pub(crate) fn interrupt(&self) {
-        self.app_event_tx.interrupt();
+        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
     }
 
     /// Update the animated header label (left of the brackets).
@@ -148,6 +148,11 @@ impl StatusIndicatorWidget {
 
     pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
         self.show_interrupt_hint = visible;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn interrupt_hint_visible(&self) -> bool {
+        self.show_interrupt_hint
     }
 
     pub(crate) fn pause_timer(&mut self) {
@@ -204,7 +209,7 @@ impl StatusIndicatorWidget {
         let opts = RtOptions::new(usize::from(width))
             .initial_indent(Line::from(DETAILS_PREFIX.dim()))
             .subsequent_indent(Line::from(Span::from(" ".repeat(prefix_width)).dim()))
-            .break_words(/*break_words*/ true);
+            .break_words(true);
 
         let mut out = word_wrap_lines(details.lines().map(|line| vec![line.dim()]), opts);
 
@@ -242,21 +247,16 @@ impl Renderable for StatusIndicatorWidget {
         let now = Instant::now();
         let elapsed_duration = self.elapsed_duration_at(now);
         let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
-        let motion_mode = MotionMode::from_animations_enabled(self.animations_enabled);
 
         let mut spans = Vec::with_capacity(5);
-        if let Some(indicator) = activity_indicator(
-            Some(self.last_resume_at),
-            motion_mode,
-            ReducedMotionIndicator::Hidden,
-        ) {
-            spans.push(indicator);
-            spans.push(" ".into());
+        spans.push(spinner(Some(self.last_resume_at), self.animations_enabled));
+        spans.push(" ".into());
+        if self.animations_enabled {
+            spans.extend(shimmer_spans(&self.header));
+        } else if !self.header.is_empty() {
+            spans.push(self.header.clone().into());
         }
-        spans.extend(shimmer_text(&self.header, motion_mode));
-        if !spans.is_empty() {
-            spans.push(" ".into());
-        }
+        spans.push(" ".into());
         if self.show_interrupt_hint {
             spans.extend(vec![
                 format!("({pretty_elapsed} • ").dim(),
@@ -304,14 +304,14 @@ mod tests {
 
     #[test]
     fn fmt_elapsed_compact_formats_seconds_minutes_hours() {
-        assert_eq!(fmt_elapsed_compact(/*elapsed_secs*/ 0), "0s");
-        assert_eq!(fmt_elapsed_compact(/*elapsed_secs*/ 1), "1s");
-        assert_eq!(fmt_elapsed_compact(/*elapsed_secs*/ 59), "59s");
-        assert_eq!(fmt_elapsed_compact(/*elapsed_secs*/ 60), "1m 00s");
-        assert_eq!(fmt_elapsed_compact(/*elapsed_secs*/ 61), "1m 01s");
+        assert_eq!(fmt_elapsed_compact(0), "0s");
+        assert_eq!(fmt_elapsed_compact(1), "1s");
+        assert_eq!(fmt_elapsed_compact(59), "59s");
+        assert_eq!(fmt_elapsed_compact(60), "1m 00s");
+        assert_eq!(fmt_elapsed_compact(61), "1m 01s");
         assert_eq!(fmt_elapsed_compact(3 * 60 + 5), "3m 05s");
         assert_eq!(fmt_elapsed_compact(59 * 60 + 59), "59m 59s");
-        assert_eq!(fmt_elapsed_compact(/*elapsed_secs*/ 3600), "1h 00m 00s");
+        assert_eq!(fmt_elapsed_compact(3600), "1h 00m 00s");
         assert_eq!(fmt_elapsed_compact(3600 + 60 + 1), "1h 01m 01s");
         assert_eq!(fmt_elapsed_compact(25 * 3600 + 2 * 60 + 3), "25h 02m 03s");
     }
@@ -320,11 +320,7 @@ mod tests {
     fn renders_with_working_header() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let w = StatusIndicatorWidget::new(
-            tx,
-            crate::tui::FrameRequester::test_dummy(),
-            /*animations_enabled*/ true,
-        );
+        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
 
         // Render into a fixed-size test terminal and snapshot the backend.
         let mut terminal = Terminal::new(TestBackend::new(80, 2)).expect("terminal");
@@ -338,11 +334,7 @@ mod tests {
     fn renders_truncated() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let w = StatusIndicatorWidget::new(
-            tx,
-            crate::tui::FrameRequester::test_dummy(),
-            /*animations_enabled*/ true,
-        );
+        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
 
         // Render into a fixed-size test terminal and snapshot the backend.
         let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal");
@@ -356,17 +348,13 @@ mod tests {
     fn renders_wrapped_details_panama_two_lines() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(
-            tx,
-            crate::tui::FrameRequester::test_dummy(),
-            /*animations_enabled*/ false,
-        );
+        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), false);
         w.update_details(
             Some("A man a plan a canal panama".to_string()),
             StatusDetailsCapitalization::CapitalizeFirst,
             STATUS_DETAILS_DEFAULT_MAX_LINES,
         );
-        w.set_interrupt_hint_visible(/*visible*/ false);
+        w.set_interrupt_hint_visible(false);
 
         // Freeze time-dependent rendering (elapsed + spinner) to keep the snapshot stable.
         w.is_paused = true;
@@ -382,38 +370,11 @@ mod tests {
     }
 
     #[test]
-    fn renders_without_spinner_when_animations_disabled() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(
-            tx,
-            crate::tui::FrameRequester::test_dummy(),
-            /*animations_enabled*/ false,
-        );
-        w.is_paused = true;
-        w.elapsed_running = Duration::ZERO;
-
-        let mut terminal = Terminal::new(TestBackend::new(80, 1)).expect("terminal");
-        terminal
-            .draw(|f| w.render(f.area(), f.buffer_mut()))
-            .expect("draw");
-        let line = terminal.backend().buffer().content()[..80]
-            .iter()
-            .map(ratatui::buffer::Cell::symbol)
-            .collect::<String>();
-
-        assert!(line.starts_with("Working (0s • esc to interrupt)"));
-    }
-
-    #[test]
     fn timer_pauses_when_requested() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut widget = StatusIndicatorWidget::new(
-            tx,
-            crate::tui::FrameRequester::test_dummy(),
-            /*animations_enabled*/ true,
-        );
+        let mut widget =
+            StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
 
         let baseline = Instant::now();
         widget.last_resume_at = baseline;
@@ -434,18 +395,14 @@ mod tests {
     fn details_overflow_adds_ellipsis() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(
-            tx,
-            crate::tui::FrameRequester::test_dummy(),
-            /*animations_enabled*/ true,
-        );
+        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
         w.update_details(
             Some("abcd abcd abcd abcd".to_string()),
             StatusDetailsCapitalization::CapitalizeFirst,
             STATUS_DETAILS_DEFAULT_MAX_LINES,
         );
 
-        let lines = w.wrapped_details_lines(/*width*/ 6);
+        let lines = w.wrapped_details_lines(6);
         assert_eq!(lines.len(), STATUS_DETAILS_DEFAULT_MAX_LINES);
         let last = lines.last().expect("expected last details line");
         assert!(
@@ -458,15 +415,11 @@ mod tests {
     fn details_args_can_disable_capitalization_and_limit_lines() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(
-            tx,
-            crate::tui::FrameRequester::test_dummy(),
-            /*animations_enabled*/ true,
-        );
+        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
         w.update_details(
             Some("cargo test -p codex-core and then cargo test -p codex-tui".to_string()),
             StatusDetailsCapitalization::Preserve,
-            /*max_lines*/ 1,
+            1,
         );
 
         assert_eq!(
@@ -474,7 +427,7 @@ mod tests {
             Some("cargo test -p codex-core and then cargo test -p codex-tui")
         );
 
-        let lines = w.wrapped_details_lines(/*width*/ 24);
+        let lines = w.wrapped_details_lines(24);
         assert_eq!(lines.len(), 1);
         let last = lines.last().expect("expected one details line");
         assert!(

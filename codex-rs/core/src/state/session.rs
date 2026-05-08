@@ -2,10 +2,12 @@
 
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
-use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use tokio::task::JoinHandle;
 
+use crate::codex::PreviousTurnSettings;
+use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
 use crate::error::Result as CodexResult;
 use crate::protocol::RateLimitSnapshot;
@@ -15,7 +17,6 @@ use crate::sandboxing::merge_permission_profiles;
 use crate::tasks::RegularTask;
 use crate::truncate::TruncationPolicy;
 use codex_protocol::protocol::TurnContextItem;
-use codex_utils_output_truncation::TruncationPolicy;
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
@@ -72,16 +73,6 @@ impl SessionState {
         previous_turn_settings: Option<PreviousTurnSettings>,
     ) {
         self.previous_turn_settings = previous_turn_settings;
-    }
-
-    pub(crate) fn set_next_turn_is_first(&mut self, value: bool) {
-        self.next_turn_is_first = value;
-    }
-
-    pub(crate) fn take_next_turn_is_first(&mut self) -> bool {
-        let is_first_turn = self.next_turn_is_first;
-        self.next_turn_is_first = false;
-        is_first_turn
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {
@@ -174,11 +165,14 @@ impl SessionState {
         self.dependency_env.clone()
     }
 
-    pub(crate) fn set_session_startup_prewarm(
+    pub(crate) fn set_startup_regular_task(&mut self, task: JoinHandle<CodexResult<RegularTask>>) {
+        self.startup_regular_task = Some(task);
+    }
+
+    pub(crate) fn take_startup_regular_task(
         &mut self,
-        startup_prewarm: SessionStartupPrewarmHandle,
-    ) {
-        self.startup_prewarm = Some(startup_prewarm);
+    ) -> Option<JoinHandle<CodexResult<RegularTask>>> {
+        self.startup_regular_task.take()
     }
 
     // Adds connector IDs to the active set and returns the merged selection.

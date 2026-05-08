@@ -1,3 +1,5 @@
+use crate::codex::Session;
+use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -5,28 +7,20 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use crate::turn_timing::now_unix_timestamp_ms;
+use async_trait::async_trait;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::protocol::DynamicToolCallResponseEvent;
 use codex_protocol::protocol::EventMsg;
-use codex_tools::ToolName;
 use serde_json::Value;
 use std::time::Instant;
 use tokio::sync::oneshot;
 use tracing::warn;
 
-pub struct DynamicToolHandler {
-    tool_name: ToolName,
-}
+pub struct DynamicToolHandler;
 
-impl DynamicToolHandler {
-    pub fn new(tool_name: ToolName) -> Self {
-        Self { tool_name }
-    }
-}
-
+#[async_trait]
 impl ToolHandler for DynamicToolHandler {
     type Output = FunctionToolOutput;
 
@@ -43,6 +37,7 @@ impl ToolHandler for DynamicToolHandler {
             session,
             turn,
             call_id,
+            tool_name,
             payload,
             ..
         } = invocation;
@@ -57,19 +52,13 @@ impl ToolHandler for DynamicToolHandler {
         };
 
         let args: Value = parse_arguments(&arguments)?;
-        let response = request_dynamic_tool(
-            &session,
-            turn.as_ref(),
-            call_id,
-            self.tool_name.clone(),
-            args,
-        )
-        .await
-        .ok_or_else(|| {
-            FunctionCallError::RespondToModel(
-                "dynamic tool call was cancelled before receiving a response".to_string(),
-            )
-        })?;
+        let response = request_dynamic_tool(&session, turn.as_ref(), call_id, tool_name, args)
+            .await
+            .ok_or_else(|| {
+                FunctionCallError::RespondToModel(
+                    "dynamic tool call was cancelled before receiving a response".to_string(),
+                )
+            })?;
 
         let DynamicToolResponse {
             content_items,
@@ -83,19 +72,13 @@ impl ToolHandler for DynamicToolHandler {
     }
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "active turn checks and dynamic tool response registration must remain atomic"
-)]
 async fn request_dynamic_tool(
     session: &Session,
     turn_context: &TurnContext,
     call_id: String,
-    tool_name: ToolName,
+    tool: String,
     arguments: Value,
 ) -> Option<DynamicToolResponse> {
-    let namespace = tool_name.namespace;
-    let tool = tool_name.name;
     let turn_id = turn_context.sub_id.clone();
     let (tx_response, rx_response) = oneshot::channel();
     let event_id = call_id.clone();
@@ -114,12 +97,9 @@ async fn request_dynamic_tool(
     }
 
     let started_at = Instant::now();
-    let started_at_ms = now_unix_timestamp_ms();
     let event = EventMsg::DynamicToolCallRequest(DynamicToolCallRequest {
         call_id: call_id.clone(),
         turn_id: turn_id.clone(),
-        started_at_ms,
-        namespace: namespace.clone(),
         tool: tool.clone(),
         arguments: arguments.clone(),
     });
@@ -130,8 +110,6 @@ async fn request_dynamic_tool(
         Some(response) => EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
             call_id,
             turn_id,
-            completed_at_ms: now_unix_timestamp_ms(),
-            namespace,
             tool,
             arguments,
             content_items: response.content_items.clone(),
@@ -142,8 +120,6 @@ async fn request_dynamic_tool(
         None => EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
             call_id,
             turn_id,
-            completed_at_ms: now_unix_timestamp_ms(),
-            namespace,
             tool,
             arguments,
             content_items: Vec::new(),

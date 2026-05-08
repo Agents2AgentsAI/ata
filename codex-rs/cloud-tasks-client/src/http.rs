@@ -14,11 +14,8 @@ use crate::api::TaskText;
 use chrono::DateTime;
 use chrono::Utc;
 
-use codex_api::SharedAuthProvider;
 use codex_backend_client as backend;
 use codex_backend_client::CodeTaskDetailsResponseExt;
-use codex_git_utils::ApplyGitRequest;
-use codex_git_utils::apply_git_patch;
 
 #[derive(Clone)]
 pub struct HttpClient {
@@ -33,13 +30,13 @@ impl HttpClient {
         Ok(Self { base_url, backend })
     }
 
-    pub fn with_user_agent(mut self, ua: impl Into<String>) -> Self {
-        self.backend = self.backend.clone().with_user_agent(ua);
+    pub fn with_bearer_token(mut self, token: impl Into<String>) -> Self {
+        self.backend = self.backend.clone().with_bearer_token(token);
         self
     }
 
-    pub fn with_auth_provider(mut self, auth: SharedAuthProvider) -> Self {
-        self.backend = self.backend.clone().with_auth_provider(auth);
+    pub fn with_user_agent(mut self, ua: impl Into<String>) -> Self {
+        self.backend = self.backend.clone().with_user_agent(ua);
         self
     }
 
@@ -97,9 +94,7 @@ impl CloudBackend for HttpClient {
     }
 
     async fn apply_task(&self, id: TaskId, diff_override: Option<String>) -> Result<ApplyOutcome> {
-        self.apply_api()
-            .run(id, diff_override, /*preflight*/ false)
-            .await
+        self.apply_api().run(id, diff_override, false).await
     }
 
     async fn apply_task_preflight(
@@ -107,9 +102,7 @@ impl CloudBackend for HttpClient {
         id: TaskId,
         diff_override: Option<String>,
     ) -> Result<ApplyOutcome> {
-        self.apply_api()
-            .run(id, diff_override, /*preflight*/ true)
-            .await
+        self.apply_api().run(id, diff_override, true).await
     }
 
     async fn create_task(
@@ -462,13 +455,13 @@ mod api {
                 });
             }
 
-            let req = ApplyGitRequest {
+            let req = codex_git_utils::ApplyGitRequest {
                 cwd: std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir()),
                 diff: diff.clone(),
                 revert: false,
                 preflight,
             };
-            let r = apply_git_patch(&req)
+            let r = codex_git_utils::apply_git_patch(&req)
                 .map_err(|e| CloudTaskError::Io(format!("git apply failed to run: {e}")))?;
 
             let status = if r.exit_code == 0 {
@@ -540,8 +533,8 @@ mod api {
                 let _ = writeln!(
                     &mut log,
                     "stdout_tail=\n{}\nstderr_tail=\n{}",
-                    tail(&r.stdout, /*max*/ 2000),
-                    tail(&r.stderr, /*max*/ 2000)
+                    tail(&r.stdout, 2000),
+                    tail(&r.stderr, 2000)
                 );
                 let _ = writeln!(&mut log, "{summary}");
                 let _ = writeln!(

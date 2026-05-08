@@ -1,7 +1,7 @@
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 
-/// A simple preset pairing an approval policy with a permission profile.
+/// A simple preset pairing an approval policy with a sandbox policy.
 #[derive(Debug, Clone)]
 pub struct ApprovalPreset {
     /// Stable identifier for the preset.
@@ -12,11 +12,11 @@ pub struct ApprovalPreset {
     pub description: &'static str,
     /// Approval policy to apply.
     pub approval: AskForApproval,
-    /// Permission profile to apply.
-    pub permission_profile: PermissionProfile,
+    /// Sandbox policy to apply.
+    pub sandbox: SandboxPolicy,
 }
 
-/// Built-in list of approval presets that pair approval and permissions.
+/// Built-in list of approval presets that pair approval and sandbox policy.
 ///
 /// Keep this UI-agnostic so it can be reused by both TUI and MCP server.
 pub fn builtin_approval_presets() -> Vec<ApprovalPreset> {
@@ -26,21 +26,21 @@ pub fn builtin_approval_presets() -> Vec<ApprovalPreset> {
             label: "Read Only",
             description: "Ata can read files in the current workspace. Approval is required to edit files or access the internet.",
             approval: AskForApproval::OnRequest,
-            permission_profile: PermissionProfile::read_only(),
+            sandbox: SandboxPolicy::new_read_only_policy(),
         },
         ApprovalPreset {
             id: "auto",
             label: "Default",
             description: "Ata can read and edit files in the current workspace, and run commands. Approval is required to access the internet or edit other files. (Identical to Agent mode)",
             approval: AskForApproval::OnRequest,
-            permission_profile: PermissionProfile::workspace_write(),
+            sandbox: SandboxPolicy::new_workspace_write_policy(),
         },
         ApprovalPreset {
             id: "full-access",
             label: "Full Access",
             description: "Ata can edit files outside this workspace and access the internet without asking for approval. Exercise caution when using.",
             approval: AskForApproval::Never,
-            permission_profile: PermissionProfile::Disabled,
+            sandbox: SandboxPolicy::DangerFullAccess,
         },
     ]
 }

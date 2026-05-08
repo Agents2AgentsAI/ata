@@ -14,9 +14,9 @@ use crate::sandboxing::execute_env;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
-use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::Sandboxable;
+use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
@@ -27,13 +27,10 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
-use codex_sandboxing::SandboxType;
-use codex_sandboxing::SandboxablePreference;
-use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Instant;
 
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
@@ -105,22 +102,11 @@ impl ApplyPatchRuntime {
         })
     }
 
-    fn file_system_sandbox_context_for_attempt(
-        req: &ApplyPatchRequest,
-        attempt: &SandboxAttempt<'_>,
-    ) -> Option<FileSystemSandboxContext> {
-        if attempt.sandbox == SandboxType::None {
-            return None;
-        }
-
-        let permissions =
-            effective_permission_profile(attempt.permissions, req.additional_permissions.as_ref());
-        Some(FileSystemSandboxContext {
-            permissions,
-            cwd: Some(attempt.sandbox_cwd.clone()),
-            windows_sandbox_level: attempt.windows_sandbox_level,
-            windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
-            use_legacy_landlock: attempt.use_legacy_landlock,
+    fn stdout_stream(ctx: &ToolCtx) -> Option<crate::exec::StdoutStream> {
+        Some(crate::exec::StdoutStream {
+            sub_id: ctx.turn.sub_id.clone(),
+            call_id: ctx.call_id.clone(),
+            tx_event: ctx.session.get_tx_event(),
         })
     }
 }
@@ -152,7 +138,6 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let retry_reason = ctx.retry_reason.clone();
         let approval_keys = self.approval_keys(req);
         let changes = req.changes.clone();
-        let guardian_review_id = ctx.guardian_review_id.clone();
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
                 let action = ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id);
@@ -163,13 +148,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
             }
             if let Some(reason) = retry_reason {
                 let rx_approve = session
-                    .request_patch_approval(
-                        turn,
-                        call_id,
-                        changes.clone(),
-                        Some(reason),
-                        /*grant_root*/ None,
-                    )
+                    .request_patch_approval(turn, call_id, changes.clone(), Some(reason), None)
                     .await;
                 return rx_approve.await.unwrap_or_default();
             }
@@ -180,9 +159,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                 approval_keys,
                 || async move {
                     let rx_approve = session
-                        .request_patch_approval(
-                            turn, call_id, changes, /*reason*/ None, /*grant_root*/ None,
-                        )
+                        .request_patch_approval(turn, call_id, changes, None, None)
                         .await;
                     rx_approve.await.unwrap_or_default()
                 },
@@ -210,16 +187,6 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         req: &ApplyPatchRequest,
     ) -> Option<ExecApprovalRequirement> {
         Some(req.exec_approval_requirement.clone())
-    }
-
-    fn permission_request_payload(
-        &self,
-        req: &ApplyPatchRequest,
-    ) -> Option<PermissionRequestPayload> {
-        Some(PermissionRequestPayload {
-            tool_name: HookToolName::apply_patch(),
-            tool_input: serde_json::json!({ "command": req.action.patch }),
-        })
     }
 }
 

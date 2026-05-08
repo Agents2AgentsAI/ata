@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
+use std::path::PathBuf;
 
 use super::ChatWidget;
 use crate::app_event::AppEvent;
@@ -59,32 +61,32 @@ impl ChatWidget {
 
     pub(crate) fn open_manage_skills_popup(&mut self) {
         if self.skills_all.is_empty() {
-            self.add_info_message("No skills available.".to_string(), /*hint*/ None);
+            self.add_info_message("No skills available.".to_string(), None);
             return;
         }
 
         let mut initial_state = HashMap::new();
         for skill in &self.skills_all {
-            initial_state.insert(skill.path.clone(), skill.enabled);
+            initial_state.insert(normalize_skill_config_path(&skill.path), skill.enabled);
         }
         self.skills_initial_state = Some(initial_state);
 
         let items: Vec<SkillsToggleItem> = self
             .skills_all
             .iter()
-            .filter_map(|skill| {
-                let core_skill = protocol_skill_to_core(skill)?;
-                let display_name = skill_display_name(&core_skill);
+            .map(|skill| {
+                let core_skill = protocol_skill_to_core(skill);
+                let display_name = skill_display_name(&core_skill).to_string();
                 let description = skill_description(&core_skill).to_string();
                 let name = core_skill.name.clone();
                 let path = core_skill.path_to_skills_md;
-                Some(SkillsToggleItem {
+                SkillsToggleItem {
                     name: display_name,
                     skill_name: name,
                     description,
                     enabled: skill.enabled,
                     path,
-                })
+                }
             })
             .collect();
 
@@ -92,9 +94,10 @@ impl ChatWidget {
         self.bottom_pane.show_view(Box::new(view));
     }
 
-    pub(crate) fn update_skill_enabled(&mut self, path: AbsolutePathBuf, enabled: bool) {
+    pub(crate) fn update_skill_enabled(&mut self, path: PathBuf, enabled: bool) {
+        let target = normalize_skill_config_path(&path);
         for skill in &mut self.skills_all {
-            if skill.path == path {
+            if normalize_skill_config_path(&skill.path) == target {
                 skill.enabled = enabled;
             }
         }
@@ -107,7 +110,7 @@ impl ChatWidget {
         };
         let mut current_state = HashMap::new();
         for skill in &self.skills_all {
-            current_state.insert(skill.path.clone(), skill.enabled);
+            current_state.insert(normalize_skill_config_path(&skill.path), skill.enabled);
         }
 
         let mut enabled_count = 0;
@@ -130,53 +133,21 @@ impl ChatWidget {
         }
         self.add_info_message(
             format!("{enabled_count} skills enabled, {disabled_count} skills disabled"),
-            /*hint*/ None,
+            None,
         );
     }
 
-    pub(crate) fn set_skills_from_response(&mut self, response: &SkillsListResponse) {
-        let skills = skills_for_cwd(&self.config.cwd, &response.data);
+    pub(crate) fn set_skills_from_response(&mut self, response: &ListSkillsResponseEvent) {
+        let skills = skills_for_cwd(&self.config.cwd, &response.skills);
         self.skills_all = skills;
         self.set_skills(Some(enabled_skills_for_mentions(&self.skills_all)));
     }
-
-    pub(crate) fn annotate_skill_reads_in_parsed_cmd(
-        &self,
-        mut parsed_cmd: Vec<ParsedCommand>,
-    ) -> Vec<ParsedCommand> {
-        if self.skills_all.is_empty() {
-            return parsed_cmd;
-        }
-
-        for parsed in &mut parsed_cmd {
-            let ParsedCommand::Read { name, path, .. } = parsed else {
-                continue;
-            };
-            if name != "SKILL.md" {
-                continue;
-            }
-
-            // Best effort only: annotate exact SKILL.md path matches from the loaded skills list.
-            if let Some(skill) = self
-                .skills_all
-                .iter()
-                .find(|skill| skill.path.as_path() == path)
-            {
-                *name = format!("{name} ({} skill)", skill.name);
-            }
-        }
-
-        parsed_cmd
-    }
 }
 
-fn skills_for_cwd(
-    cwd: &AbsolutePathBuf,
-    skills_entries: &[SkillsListEntry],
-) -> Vec<ProtocolSkillMetadata> {
+fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<ProtocolSkillMetadata> {
     skills_entries
         .iter()
-        .find(|entry| entry.cwd.as_path() == cwd.as_path())
+        .find(|entry| entry.cwd.as_path() == cwd)
         .map(|entry| entry.skills.clone())
         .unwrap_or_default()
 }
@@ -185,23 +156,12 @@ fn enabled_skills_for_mentions(skills: &[ProtocolSkillMetadata]) -> Vec<SkillMet
     skills
         .iter()
         .filter(|skill| skill.enabled)
-        .filter_map(protocol_skill_to_core)
+        .map(protocol_skill_to_core)
         .collect()
 }
 
-fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> Option<SkillMetadata> {
-    let scope = serde_json::to_value(skill.scope)
-        .and_then(serde_json::from_value)
-        .inspect_err(|err| {
-            tracing::warn!(
-                skill_name = %skill.name,
-                %err,
-                "Failed to map app-server skill scope"
-            );
-        })
-        .ok()?;
-
-    Some(SkillMetadata {
+fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> SkillMetadata {
+    SkillMetadata {
         name: skill.name.clone(),
         description: skill.description.clone(),
         short_description: skill.short_description.clone(),
@@ -234,9 +194,12 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> Option<SkillMetadata
         permission_profile: None,
         managed_network_override: None,
         path_to_skills_md: skill.path.clone(),
-        scope,
-        plugin_id: None,
-    })
+        scope: skill.scope,
+    }
+}
+
+fn normalize_skill_config_path(path: &Path) -> PathBuf {
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 pub(crate) fn collect_tool_mentions(
@@ -308,12 +271,12 @@ pub(crate) fn find_app_mentions(
 
     let mut slug_counts: HashMap<String, usize> = HashMap::new();
     for app in apps.iter().filter(|app| app.is_enabled) {
-        let slug = codex_connectors::metadata::connector_mention_slug(app);
+        let slug = connector_mention_slug(app);
         *slug_counts.entry(slug).or_insert(0) += 1;
     }
 
     for app in apps.iter().filter(|app| app.is_enabled) {
-        let slug = codex_connectors::metadata::connector_mention_slug(app);
+        let slug = connector_mention_slug(app);
         let slug_count = slug_counts.get(&slug).copied().unwrap_or(0);
         if mentions.names.contains(&slug)
             && !explicit_names.contains(&slug)

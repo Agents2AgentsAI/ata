@@ -81,7 +81,7 @@ members = [
     # "v8-poc",  # excluded for Phase 1; Phase 2 follow-up
     "utils/absolute-path",
     "utils/cargo-bin",
-    "git-utils",
+    "utils/git",
     "utils/cache",
     "utils/image",
     "utils/json-to-toml",
@@ -126,6 +126,54 @@ members = [
     "treesitter",
     "test-macros",
     "artifacts",
+]
+exclude = [
+    # Phase 1 of the rust-v0.129.0 merge: these crates were introduced upstream
+    # and have not yet been integrated against the fork's HEAD APIs. Excluding
+    # them stops cargo from auto-discovering their Cargo.toml as workspace
+    # members. Phase 3+ work will either delete them, adopt them, or fold their
+    # functionality into existing fork crates.
+    "agent-graph-store",
+    "agent-identity",
+    "analytics",
+    "app-server-transport",
+    "aws-auth",
+    "builtin-mcps",
+    "bwrap",
+    "code-mode",
+    "codex-mcp",
+    "collaboration-mode-templates",
+    "cloud-tasks-mock-client",
+    "core-api",
+    "core-plugins",
+    "core-skills",
+    "device-key",
+    "exec-server",
+    "external-agent-migration",
+    "external-agent-sessions",
+    "features",
+    "file-system",
+    "install-context",
+    "memories",
+    "model-provider",
+    "model-provider-info",
+    "models-manager",
+    "plugin",
+    "realtime-webrtc",
+    "response-debug-context",
+    "rollout",
+    "rollout-trace",
+    "sandboxing",
+    "terminal-detection",
+    "test-binary-support",
+    "thread-manager-sample",
+    "thread-store",
+    "tools",
+    "uds",
+    "utils/output-truncation",
+    "utils/path-utils",
+    "utils/plugins",
+    "v8-poc",
 ]
 resolver = "2"
 
@@ -183,7 +231,7 @@ codex-features = { path = "features" }
 codex-feedback = { path = "feedback" }
 codex-install-context = { path = "install-context" }
 codex-file-search = { path = "file-search" }
-codex-git-utils = { path = "git-utils" }
+codex-git-utils = { path = "utils/git" }
 codex-hooks = { path = "hooks" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }

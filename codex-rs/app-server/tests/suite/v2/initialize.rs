@@ -30,7 +30,6 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     let responses = Vec::new();
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
-    let expected_codex_home = AbsolutePathBuf::try_from(codex_home.path().canonicalize()?)?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
 
@@ -64,7 +63,6 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
     let responses = Vec::new();
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
-    let expected_codex_home = AbsolutePathBuf::try_from(codex_home.path().canonicalize()?)?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
     let mut mcp = McpProcess::new_with_env(
         codex_home.path(),

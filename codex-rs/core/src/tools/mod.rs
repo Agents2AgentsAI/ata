@@ -5,8 +5,7 @@ pub(crate) mod discoverable;
 pub mod events;
 pub(crate) mod file_injection;
 pub(crate) mod handlers;
-pub(crate) mod hook_names;
-pub(crate) mod hosted_spec;
+pub mod js_repl;
 pub(crate) mod network_approval;
 pub mod orchestrator;
 pub mod parallel;
@@ -19,10 +18,10 @@ pub mod spec;
 pub(crate) mod url_downloader;
 pub(crate) mod url_validation;
 
-use codex_protocol::exec_output::ExecToolCallOutput;
-use codex_utils_output_truncation::TruncationPolicy;
-use codex_utils_output_truncation::formatted_truncate_text;
-use codex_utils_output_truncation::truncate_text;
+use crate::exec::ExecToolCallOutput;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::formatted_truncate_text;
+use crate::truncate::truncate_text;
 pub use router::ToolRouter;
 use serde::Serialize;
 

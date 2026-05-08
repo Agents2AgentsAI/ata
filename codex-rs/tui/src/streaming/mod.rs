@@ -70,9 +70,12 @@ impl StreamState {
             .map(|queued| queued.line)
             .collect()
     }
-    /// Clears queued lines while keeping collector/turn lifecycle state intact.
-    pub(crate) fn clear_queue(&mut self) {
-        self.queued_lines.clear();
+    /// Drains all queued lines from the front of the queue.
+    pub(crate) fn drain_all(&mut self) -> Vec<Line<'static>> {
+        self.queued_lines
+            .drain(..)
+            .map(|queued| queued.line)
+            .collect()
     }
     /// Returns whether no lines are queued for commit.
     pub(crate) fn is_idle(&self) -> bool {
@@ -116,7 +119,7 @@ mod tests {
         let mut state = StreamState::new(None, &test_cwd());
         state.enqueue(vec![Line::from("one")]);
 
-        let drained = state.drain_n(/*max_lines*/ 8);
+        let drained = state.drain_n(8);
         assert_eq!(drained, vec![Line::from("one")]);
         assert!(state.is_idle());
     }

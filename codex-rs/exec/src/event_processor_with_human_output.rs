@@ -1,17 +1,6 @@
-use std::io::IsTerminal;
-use std::path::Path;
-use std::path::PathBuf;
-
-use codex_app_server_protocol::CommandExecutionStatus;
-use codex_app_server_protocol::McpToolCallStatus;
-use codex_app_server_protocol::PatchApplyStatus;
-use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ThreadItem;
-use codex_app_server_protocol::ThreadTokenUsage;
-use codex_app_server_protocol::TurnStatus;
 use codex_core::config::Config;
-use codex_model_provider_info::WireApi;
-use codex_protocol::models::PermissionProfile;
+use codex_core::web_search::web_search_detail;
+use codex_protocol::items::TurnItem;
 use codex_protocol::num_format::format_with_separators;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
@@ -44,203 +33,151 @@ use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::SessionConfiguredEvent;
-use codex_utils_absolute_path::canonicalize_preserving_symlinks;
+use codex_protocol::protocol::StreamErrorEvent;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnDiffEvent;
+use codex_protocol::protocol::WarningEvent;
+use codex_protocol::protocol::WebSearchEndEvent;
+use codex_utils_elapsed::format_duration;
+use codex_utils_elapsed::format_elapsed;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
+use serde::Deserialize;
+use shlex::try_join;
+use std::collections::HashMap;
+use std::io::IsTerminal;
+use std::io::Write;
+use std::path::PathBuf;
+use std::time::Duration;
+use std::time::Instant;
 
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::handle_last_message;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_utils_sandbox_summary::create_config_summary_entries;
 
+/// This should be configurable. When used in CI, users may not want to impose
+/// a limit so they can see the full transcript.
+const MAX_OUTPUT_LINES_FOR_EXEC_TOOL_CALL: usize = 20;
 pub(crate) struct EventProcessorWithHumanOutput {
+    call_id_to_patch: HashMap<String, PatchApplyBegin>,
+
+    // To ensure that --color=never is respected, ANSI escapes _must_ be added
+    // using .style() with one of these fields. If you need a new style, add a
+    // new field here.
     bold: Style,
-    cyan: Style,
-    dimmed: Style,
-    green: Style,
     italic: Style,
+    dimmed: Style,
+
     magenta: Style,
     red: Style,
+    green: Style,
+    cyan: Style,
     yellow: Style,
+
+    /// Whether to include `AgentReasoning` events in the output.
     show_agent_reasoning: bool,
     show_raw_agent_reasoning: bool,
     last_message_path: Option<PathBuf>,
+    last_total_token_usage: Option<codex_protocol::protocol::TokenUsageInfo>,
     final_message: Option<String>,
-    final_message_rendered: bool,
-    emit_final_message_on_shutdown: bool,
-    last_total_token_usage: Option<ThreadTokenUsage>,
+    last_proposed_plan: Option<String>,
+    progress_active: bool,
+    progress_last_len: usize,
+    use_ansi_cursor: bool,
+    progress_anchor: bool,
+    progress_done: bool,
 }
 
 impl EventProcessorWithHumanOutput {
     pub(crate) fn create_with_ansi(
         with_ansi: bool,
+        cursor_ansi: bool,
         config: &Config,
         last_message_path: Option<PathBuf>,
     ) -> Self {
-        let style = |styled: Style, plain: Style| if with_ansi { styled } else { plain };
-        Self {
-            bold: style(Style::new().bold(), Style::new()),
-            cyan: style(Style::new().cyan(), Style::new()),
-            dimmed: style(Style::new().dimmed(), Style::new()),
-            green: style(Style::new().green(), Style::new()),
-            italic: style(Style::new().italic(), Style::new()),
-            magenta: style(Style::new().magenta(), Style::new()),
-            red: style(Style::new().red(), Style::new()),
-            yellow: style(Style::new().yellow(), Style::new()),
-            show_agent_reasoning: !config.hide_agent_reasoning,
-            show_raw_agent_reasoning: config.show_raw_agent_reasoning,
-            last_message_path,
-            final_message: None,
-            final_message_rendered: false,
-            emit_final_message_on_shutdown: false,
-            last_total_token_usage: None,
-        }
-    }
+        let call_id_to_patch = HashMap::new();
 
-    fn render_item_started(&self, item: &ThreadItem) {
-        match item {
-            ThreadItem::CommandExecution { command, cwd, .. } => {
-                eprintln!(
-                    "{}\n{} in {}",
-                    "exec".style(self.italic).style(self.magenta),
-                    command.style(self.bold),
-                    cwd.display()
-                );
+        if with_ansi {
+            Self {
+                call_id_to_patch,
+                bold: Style::new().bold(),
+                italic: Style::new().italic(),
+                dimmed: Style::new().dimmed(),
+                magenta: Style::new().magenta(),
+                red: Style::new().red(),
+                green: Style::new().green(),
+                cyan: Style::new().cyan(),
+                yellow: Style::new().yellow(),
+                show_agent_reasoning: !config.hide_agent_reasoning,
+                show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+                last_message_path,
+                last_total_token_usage: None,
+                final_message: None,
+                last_proposed_plan: None,
+                progress_active: false,
+                progress_last_len: 0,
+                use_ansi_cursor: cursor_ansi,
+                progress_anchor: false,
+                progress_done: false,
             }
-            ThreadItem::McpToolCall { server, tool, .. } => {
-                eprintln!(
-                    "{} {} {}",
-                    "mcp:".style(self.bold),
-                    format!("{server}/{tool}").style(self.cyan),
-                    "started".style(self.dimmed)
-                );
+        } else {
+            Self {
+                call_id_to_patch,
+                bold: Style::new(),
+                italic: Style::new(),
+                dimmed: Style::new(),
+                magenta: Style::new(),
+                red: Style::new(),
+                green: Style::new(),
+                cyan: Style::new(),
+                yellow: Style::new(),
+                show_agent_reasoning: !config.hide_agent_reasoning,
+                show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+                last_message_path,
+                last_total_token_usage: None,
+                final_message: None,
+                last_proposed_plan: None,
+                progress_active: false,
+                progress_last_len: 0,
+                use_ansi_cursor: cursor_ansi,
+                progress_anchor: false,
+                progress_done: false,
             }
-            ThreadItem::WebSearch { query, .. } => {
-                eprintln!("{} {}", "web search:".style(self.bold), query);
-            }
-            ThreadItem::FileChange { .. } => {
-                eprintln!("{}", "apply patch".style(self.bold));
-            }
-            ThreadItem::CollabAgentToolCall { tool, .. } => {
-                eprintln!("{} {:?}", "collab:".style(self.bold), tool);
-            }
-            _ => {}
-        }
-    }
-
-    fn render_item_completed(&mut self, item: ThreadItem) {
-        match item {
-            ThreadItem::AgentMessage { text, .. } => {
-                eprintln!(
-                    "{}\n{}",
-                    "codex".style(self.italic).style(self.magenta),
-                    text
-                );
-                self.final_message = Some(text);
-                self.final_message_rendered = true;
-            }
-            ThreadItem::Reasoning {
-                summary, content, ..
-            } => {
-                if self.show_agent_reasoning
-                    && let Some(text) =
-                        reasoning_text(&summary, &content, self.show_raw_agent_reasoning)
-                    && !text.trim().is_empty()
-                {
-                    eprintln!("{}", text.style(self.dimmed));
-                }
-            }
-            ThreadItem::CommandExecution {
-                command: _,
-                aggregated_output,
-                exit_code,
-                status,
-                duration_ms,
-                ..
-            } => {
-                let duration_suffix = duration_ms
-                    .map(|duration_ms| format!(" in {duration_ms}ms"))
-                    .unwrap_or_default();
-                match status {
-                    CommandExecutionStatus::Completed => {
-                        eprintln!(
-                            "{}",
-                            format!(" succeeded{duration_suffix}:").style(self.green)
-                        );
-                    }
-                    CommandExecutionStatus::Failed => {
-                        let exit_code = exit_code.unwrap_or(1);
-                        eprintln!(
-                            "{}",
-                            format!(" exited {exit_code}{duration_suffix}:").style(self.red)
-                        );
-                    }
-                    CommandExecutionStatus::Declined => {
-                        eprintln!(
-                            "{}",
-                            format!(" declined{duration_suffix}:").style(self.yellow)
-                        );
-                    }
-                    CommandExecutionStatus::InProgress => {
-                        eprintln!(
-                            "{}",
-                            format!(" in progress{duration_suffix}:").style(self.dimmed)
-                        );
-                    }
-                }
-                if let Some(output) = aggregated_output
-                    && !output.trim().is_empty()
-                {
-                    eprintln!("{output}");
-                }
-            }
-            ThreadItem::FileChange {
-                changes, status, ..
-            } => {
-                let status_text = match status {
-                    PatchApplyStatus::Completed => "completed",
-                    PatchApplyStatus::Failed => "failed",
-                    PatchApplyStatus::Declined => "declined",
-                    PatchApplyStatus::InProgress => "in_progress",
-                };
-                eprintln!("{} {}", "patch:".style(self.bold), status_text);
-                for change in changes {
-                    eprintln!("{}", change.path.style(self.dimmed));
-                }
-            }
-            ThreadItem::McpToolCall {
-                server,
-                tool,
-                status,
-                error,
-                ..
-            } => {
-                let status_text = match status {
-                    McpToolCallStatus::Completed => "completed".style(self.green),
-                    McpToolCallStatus::Failed => "failed".style(self.red),
-                    McpToolCallStatus::InProgress => "in_progress".style(self.dimmed),
-                };
-                eprintln!(
-                    "{} {} {}",
-                    "mcp:".style(self.bold),
-                    format!("{server}/{tool}").style(self.cyan),
-                    format!("({status_text})").style(self.dimmed)
-                );
-                if let Some(error) = error {
-                    eprintln!("{}", error.message.style(self.red));
-                }
-            }
-            ThreadItem::WebSearch { query, .. } => {
-                eprintln!("{} {}", "web search:".style(self.bold), query);
-            }
-            ThreadItem::ContextCompaction { .. } => {
-                eprintln!("{}", "context compacted".style(self.dimmed));
-            }
-            _ => {}
         }
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct AgentJobProgressMessage {
+    job_id: String,
+    total_items: usize,
+    pending_items: usize,
+    running_items: usize,
+    completed_items: usize,
+    failed_items: usize,
+    eta_seconds: Option<u64>,
+}
+
+struct PatchApplyBegin {
+    start_time: Instant,
+    auto_approved: bool,
+}
+
+/// Timestamped helper. The timestamp is styled with self.dimmed.
+macro_rules! ts_msg {
+    ($self:ident, $($arg:tt)*) => {{
+        eprintln!($($arg)*);
+    }};
+}
+
 impl EventProcessor for EventProcessorWithHumanOutput {
+    /// Print a concise summary of the effective configuration that will be used
+    /// for the session. This mirrors the information shown in the TUI welcome
+    /// screen.
     fn print_config_summary(
         &mut self,
         config: &Config,
@@ -248,28 +185,56 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         session_configured_event: &SessionConfiguredEvent,
     ) {
         const VERSION: &str = env!("CARGO_PKG_VERSION");
-        eprintln!("OpenAI Codex v{VERSION} (research preview)\n--------");
-        for (key, value) in config_summary_entries(config, session_configured_event) {
+        ts_msg!(
+            self,
+            "OpenAI Codex v{} (research preview)\n--------",
+            VERSION
+        );
+
+        let mut entries =
+            create_config_summary_entries(config, session_configured_event.model.as_str());
+        entries.push((
+            "session id",
+            session_configured_event.session_id.to_string(),
+        ));
+
+        for (key, value) in entries {
             eprintln!("{} {}", format!("{key}:").style(self.bold), value);
         }
+
         eprintln!("--------");
-        eprintln!("{}\n{}", "user".style(self.cyan), prompt);
+
+        // Echo the prompt that will be sent to the agent so it is visible in the
+        // transcript/logs before any events come in. Note the prompt may have been
+        // read from stdin, so it may not be visible in the terminal otherwise.
+        ts_msg!(self, "{}\n{}", "user".style(self.cyan), prompt);
     }
 
-    fn process_server_notification(&mut self, notification: ServerNotification) -> CodexStatus {
-        match notification {
-            ServerNotification::ConfigWarning(notification) => {
-                let details = notification
-                    .details
-                    .map(|details| format!(" ({details})"))
-                    .unwrap_or_default();
-                eprintln!(
-                    "{} {}{}",
-                    "warning:".style(self.yellow).style(self.bold),
-                    notification.summary,
-                    details
+    fn process_event(&mut self, event: Event) -> CodexStatus {
+        let Event { id: _, msg } = event;
+        if let EventMsg::BackgroundEvent(BackgroundEventEvent { message }) = &msg
+            && let Some(update) = Self::parse_agent_job_progress(message)
+        {
+            self.render_agent_job_progress(update);
+            return CodexStatus::Running;
+        }
+        if self.progress_active && !Self::should_interrupt_progress(&msg) {
+            return CodexStatus::Running;
+        }
+        if !Self::is_silent_event(&msg) {
+            self.finish_progress_line();
+        }
+        match msg {
+            EventMsg::Error(ErrorEvent { message, .. }) => {
+                let prefix = "ERROR:".style(self.red);
+                ts_msg!(self, "{prefix} {message}");
+            }
+            EventMsg::Warning(WarningEvent { message }) => {
+                ts_msg!(
+                    self,
+                    "{} {message}",
+                    "warning:".style(self.yellow).style(self.bold)
                 );
-                CodexStatus::Running
             }
             EventMsg::GuardianAssessment(_) => {}
             EventMsg::ModelReroute(_) => {}
@@ -342,76 +307,136 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 ts_msg!(
                     self,
                     "{} {}",
-                    "ERROR:".style(self.red).style(self.bold),
-                    notification.error
+                    "elicitation request".style(self.magenta),
+                    ev.server_name.style(self.dimmed)
                 );
-                CodexStatus::Running
+                ts_msg!(
+                    self,
+                    "{}",
+                    "auto-cancelling (not supported in exec mode)".style(self.dimmed)
+                );
             }
-            ServerNotification::DeprecationNotice(notification) => {
-                eprintln!(
-                    "{} {}",
-                    "deprecated:".style(self.yellow).style(self.bold),
-                    notification.summary
-                );
-                if let Some(details) = notification.details {
-                    eprintln!("{}", details.style(self.dimmed));
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                last_agent_message, ..
+            }) => {
+                let last_message = last_agent_message
+                    .as_deref()
+                    .or(self.last_proposed_plan.as_deref());
+                if let Some(output_file) = self.last_message_path.as_deref() {
+                    handle_last_message(last_message, output_file);
                 }
-                CodexStatus::Running
+
+                self.final_message = last_agent_message.or_else(|| self.last_proposed_plan.clone());
+
+                return CodexStatus::InitiateShutdown;
             }
-            ServerNotification::HookStarted(notification) => {
-                eprintln!(
-                    "{} {}",
-                    "hook:".style(self.bold),
-                    format!("{:?}", notification.run.event_name).style(self.dimmed)
+            EventMsg::TokenCount(ev) => {
+                self.last_total_token_usage = ev.info;
+            }
+
+            EventMsg::AgentReasoningSectionBreak(_) => {
+                if !self.show_agent_reasoning {
+                    return CodexStatus::Running;
+                }
+                eprintln!();
+            }
+            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
+                if self.show_raw_agent_reasoning {
+                    ts_msg!(
+                        self,
+                        "{}\n{}",
+                        "thinking".style(self.italic).style(self.magenta),
+                        text,
+                    );
+                }
+            }
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
+                ts_msg!(
+                    self,
+                    "{}\n{}",
+                    "codex".style(self.italic).style(self.magenta),
+                    message,
                 );
-                CodexStatus::Running
             }
-            ServerNotification::HookCompleted(notification) => {
-                eprintln!(
-                    "{} {} {:?}",
-                    "hook:".style(self.bold),
-                    format!("{:?}", notification.run.event_name).style(self.dimmed),
-                    notification.run.status
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::Plan(item),
+                ..
+            }) => {
+                self.last_proposed_plan = Some(item.text);
+            }
+            EventMsg::ExecCommandBegin(ExecCommandBeginEvent { command, cwd, .. }) => {
+                eprint!(
+                    "{}\n{} in {}",
+                    "exec".style(self.italic).style(self.magenta),
+                    escape_command(&command).style(self.bold),
+                    cwd.to_string_lossy(),
                 );
-                CodexStatus::Running
             }
-            ServerNotification::ItemStarted(notification) => {
-                self.render_item_started(&notification.item);
-                CodexStatus::Running
-            }
-            ServerNotification::ItemCompleted(notification) => {
-                self.render_item_completed(notification.item);
-                CodexStatus::Running
-            }
-            ServerNotification::ModelRerouted(notification) => {
-                eprintln!(
-                    "{} {} -> {}",
-                    "model rerouted:".style(self.yellow).style(self.bold),
-                    notification.from_model,
-                    notification.to_model
-                );
-                CodexStatus::Running
-            }
-            ServerNotification::ModelVerification(_) => CodexStatus::Running,
-            ServerNotification::ThreadTokenUsageUpdated(notification) => {
-                self.last_total_token_usage = Some(notification.token_usage);
-                CodexStatus::Running
-            }
-            ServerNotification::TurnCompleted(notification) => match notification.turn.status {
-                TurnStatus::Completed => {
-                    let rendered_message = self
-                        .final_message_rendered
-                        .then(|| self.final_message.clone())
-                        .flatten();
-                    if let Some(final_message) =
-                        final_message_from_turn_items(notification.turn.items.as_slice())
-                    {
-                        self.final_message_rendered =
-                            rendered_message.as_deref() == Some(final_message.as_str());
-                        self.final_message = Some(final_message);
+            EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                aggregated_output,
+                duration,
+                exit_code,
+                ..
+            }) => {
+                let duration = format!(" in {}", format_duration(duration));
+
+                let truncated_output = aggregated_output
+                    .lines()
+                    .take(MAX_OUTPUT_LINES_FOR_EXEC_TOOL_CALL)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                match exit_code {
+                    0 => {
+                        let title = format!(" succeeded{duration}:");
+                        ts_msg!(self, "{}", title.style(self.green));
                     }
-                    self.emit_final_message_on_shutdown = true;
-                    CodexStatus::InitiateShutdown
+                    _ => {
+                        let title = format!(" exited {exit_code}{duration}:");
+                        ts_msg!(self, "{}", title.style(self.red));
+                    }
+                }
+                eprintln!("{}", truncated_output.style(self.dimmed));
+            }
+            EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+                call_id: _,
+                invocation,
+            }) => {
+                ts_msg!(
+                    self,
+                    "{} {}",
+                    "tool".style(self.magenta),
+                    format_mcp_invocation(&invocation).style(self.bold),
+                );
+            }
+            EventMsg::McpToolCallEnd(tool_call_end_event) => {
+                let is_success = tool_call_end_event.is_success();
+                let McpToolCallEndEvent {
+                    call_id: _,
+                    result,
+                    invocation,
+                    duration,
+                } = tool_call_end_event;
+
+                let duration = format!(" in {}", format_duration(duration));
+
+                let status_str = if is_success { "success" } else { "failed" };
+                let title_style = if is_success { self.green } else { self.red };
+                let title = format!(
+                    "{} {status_str}{duration}:",
+                    format_mcp_invocation(&invocation)
+                );
+
+                ts_msg!(self, "{}", title.style(title_style));
+
+                if let Ok(res) = result {
+                    let val = serde_json::to_value(res)
+                        .unwrap_or_else(|_| serde_json::Value::String("<result>".to_string()));
+                    let pretty =
+                        serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string());
+
+                    for line in pretty.lines().take(MAX_OUTPUT_LINES_FOR_EXEC_TOOL_CALL) {
+                        eprintln!("{}", line.style(self.dimmed));
+                    }
                 }
             }
             EventMsg::WebSearchBegin(_) => {
@@ -540,45 +565,110 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                             }
                         }
                     }
-                    CodexStatus::InitiateShutdown
                 }
-                TurnStatus::Interrupted => {
-                    self.final_message = None;
-                    self.final_message_rendered = false;
-                    self.emit_final_message_on_shutdown = false;
-                    eprintln!("{}", "turn interrupted".style(self.dimmed));
-                    CodexStatus::InitiateShutdown
-                }
-                TurnStatus::InProgress => CodexStatus::Running,
-            },
-            ServerNotification::TurnDiffUpdated(notification) => {
-                if !notification.diff.trim().is_empty() {
-                    eprintln!("{}", notification.diff);
-                }
-                CodexStatus::Running
             }
-            ServerNotification::TurnPlanUpdated(notification) => {
-                if let Some(explanation) = notification.explanation {
-                    eprintln!("{}", explanation.style(self.italic));
+            EventMsg::PatchApplyEnd(PatchApplyEndEvent {
+                call_id,
+                stdout,
+                stderr,
+                success,
+                ..
+            }) => {
+                let patch_begin = self.call_id_to_patch.remove(&call_id);
+
+                // Compute duration and summary label similar to exec commands.
+                let (duration, label) = if let Some(PatchApplyBegin {
+                    start_time,
+                    auto_approved,
+                }) = patch_begin
+                {
+                    (
+                        format!(" in {}", format_elapsed(start_time)),
+                        format!("apply_patch(auto_approved={auto_approved})"),
+                    )
+                } else {
+                    (String::new(), format!("apply_patch('{call_id}')"))
+                };
+
+                let (exit_code, output, title_style) = if success {
+                    (0, stdout, self.green)
+                } else {
+                    (1, stderr, self.red)
+                };
+
+                let title = format!("{label} exited {exit_code}{duration}:");
+                ts_msg!(self, "{}", title.style(title_style));
+                for line in output.lines() {
+                    eprintln!("{}", line.style(self.dimmed));
                 }
-                for step in notification.plan {
-                    match step.status {
-                        codex_app_server_protocol::TurnPlanStepStatus::Completed => {
-                            eprintln!("  {} {}", "✓".style(self.green), step.step);
+            }
+            EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => {
+                ts_msg!(
+                    self,
+                    "{}",
+                    "file update:".style(self.magenta).style(self.italic)
+                );
+                eprintln!("{unified_diff}");
+            }
+            EventMsg::AgentReasoning(agent_reasoning_event) => {
+                if self.show_agent_reasoning {
+                    ts_msg!(
+                        self,
+                        "{}\n{}",
+                        "thinking".style(self.italic).style(self.magenta),
+                        agent_reasoning_event.text,
+                    );
+                }
+            }
+            EventMsg::SessionConfigured(session_configured_event) => {
+                let SessionConfiguredEvent {
+                    session_id: conversation_id,
+                    model,
+                    ..
+                } = session_configured_event;
+
+                ts_msg!(
+                    self,
+                    "{} {}",
+                    "codex session".style(self.magenta).style(self.bold),
+                    conversation_id.to_string().style(self.dimmed)
+                );
+
+                ts_msg!(self, "model: {}", model);
+                eprintln!();
+            }
+            EventMsg::PlanUpdate(plan_update_event) => {
+                let UpdatePlanArgs { explanation, plan } = plan_update_event;
+
+                // Header
+                ts_msg!(self, "{}", "Plan update".style(self.magenta));
+
+                // Optional explanation
+                if let Some(explanation) = explanation
+                    && !explanation.trim().is_empty()
+                {
+                    ts_msg!(self, "{}", explanation.style(self.italic));
+                }
+
+                // Pretty-print the plan items with simple status markers.
+                for item in plan {
+                    match item.status {
+                        StepStatus::Completed => {
+                            ts_msg!(self, "  {} {}", "✓".style(self.green), item.step);
                         }
-                        codex_app_server_protocol::TurnPlanStepStatus::InProgress => {
-                            eprintln!("  {} {}", "→".style(self.cyan), step.step);
+                        StepStatus::InProgress => {
+                            ts_msg!(self, "  {} {}", "→".style(self.cyan), item.step);
                         }
-                        codex_app_server_protocol::TurnPlanStepStatus::Pending => {
-                            eprintln!(
+                        StepStatus::Pending => {
+                            ts_msg!(
+                                self,
                                 "  {} {}",
                                 "•".style(self.dimmed),
-                                step.step.style(self.dimmed)
+                                item.step.style(self.dimmed)
                             );
                         }
                     }
                 }
-                CodexStatus::Running
             }
             EventMsg::ViewImageToolCall(view) => {
                 ts_msg!(
@@ -813,104 +903,44 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::PatchDocumentSection(_)
             | EventMsg::DynamicToolCallResponse(_) => {}
         }
-    }
-
-    fn process_warning(&mut self, message: String) -> CodexStatus {
-        eprintln!(
-            "{} {message}",
-            "warning:".style(self.yellow).style(self.bold)
-        );
         CodexStatus::Running
     }
 
     fn print_final_output(&mut self) {
-        if self.emit_final_message_on_shutdown
-            && let Some(path) = self.last_message_path.as_deref()
-        {
-            handle_last_message(self.final_message.as_deref(), path);
-        }
-
-        if let Some(usage) = &self.last_total_token_usage {
+        self.finish_progress_line();
+        if let Some(usage_info) = &self.last_total_token_usage {
             eprintln!(
                 "{}\n{}",
-                "tokens used".style(self.dimmed),
-                format_with_separators(blended_total(usage))
+                "tokens used".style(self.magenta).style(self.italic),
+                format_with_separators(usage_info.total_token_usage.blended_total())
             );
         }
 
+        // In interactive terminals we already emitted the final assistant
+        // message on stderr during event processing. Preserve stdout emission
+        // only for non-interactive use so pipes and scripts still receive the
+        // final message.
         #[allow(clippy::print_stdout)]
         if should_print_final_message_to_stdout(
-            self.emit_final_message_on_shutdown
-                .then_some(self.final_message.as_deref())
-                .flatten(),
+            self.final_message.as_deref(),
             std::io::stdout().is_terminal(),
             std::io::stderr().is_terminal(),
-        ) && let Some(message) = self.final_message.as_deref()
+        ) && let Some(message) = &self.final_message
         {
-            println!("{message}");
-        } else if should_print_final_message_to_tty(
-            self.emit_final_message_on_shutdown
-                .then_some(self.final_message.as_deref())
-                .flatten(),
-            self.final_message_rendered,
-            std::io::stdout().is_terminal(),
-            std::io::stderr().is_terminal(),
-        ) && let Some(message) = self.final_message.as_deref()
-        {
-            eprintln!(
-                "{}\n{}",
-                "codex".style(self.italic).style(self.magenta),
-                message
-            );
+            if message.ends_with('\n') {
+                print!("{message}");
+            } else {
+                println!("{message}");
+            }
         }
     }
 }
 
-fn config_summary_entries(
-    config: &Config,
-    session_configured_event: &SessionConfiguredEvent,
-) -> Vec<(&'static str, String)> {
-    let mut entries = vec![
-        ("workdir", config.cwd.display().to_string()),
-        ("model", session_configured_event.model.clone()),
-        (
-            "provider",
-            session_configured_event.model_provider_id.clone(),
-        ),
-        (
-            "approval",
-            config.permissions.approval_policy.value().to_string(),
-        ),
-        (
-            "sandbox",
-            summarize_permission_profile(
-                config.permissions.permission_profile.get(),
-                config.cwd.as_path(),
-            ),
-        ),
-    ];
-    if config.model_provider.wire_api == WireApi::Responses {
-        entries.push((
-            "reasoning effort",
-            config
-                .model_reasoning_effort
-                .map(|effort| effort.to_string())
-                .unwrap_or_else(|| "none".to_string()),
-        ));
-        entries.push((
-            "reasoning summaries",
-            config
-                .model_reasoning_summary
-                .map(|summary| summary.to_string())
-                .unwrap_or_else(|| "none".to_string()),
-        ));
+impl EventProcessorWithHumanOutput {
+    fn parse_agent_job_progress(message: &str) -> Option<AgentJobProgressMessage> {
+        let payload = message.strip_prefix("agent_job_progress:")?;
+        serde_json::from_str::<AgentJobProgressMessage>(payload).ok()
     }
-    entries.push((
-        "session id",
-        session_configured_event.session_id.to_string(),
-    ));
-    entries
-}
 
     fn render_hook_started(&self, event: HookStartedEvent) {
         if !Self::should_print_hook_started(&event) {
@@ -1064,104 +1094,74 @@ fn config_summary_entries(
             } else {
                 eprintln!();
             }
-
-            let writable_roots = file_system_policy.get_writable_roots_with_cwd(cwd);
-            if writable_roots.is_empty() {
-                let mut summary = "read-only".to_string();
-                append_network_summary(&mut summary, network_policy);
-                return summary;
-            }
-
-            let mut summary = "workspace-write".to_string();
-            let writable_entries = writable_roots
-                .iter()
-                .map(|root| writable_root_label(root.root.as_path(), cwd))
-                .collect::<Vec<_>>();
-            summary.push_str(&format!(" [{}]", writable_entries.join(", ")));
-            append_network_summary(&mut summary, network_policy);
-            summary
+            self.progress_anchor = false;
         }
     }
-}
 
-fn append_network_summary(summary: &mut String, network_policy: NetworkSandboxPolicy) {
-    if network_policy.is_enabled() {
-        summary.push_str(" (network access enabled)");
+    fn render_agent_job_progress(&mut self, update: AgentJobProgressMessage) {
+        let total = update.total_items.max(1);
+        let processed = update.completed_items + update.failed_items;
+        let percent = (processed as f64 / total as f64 * 100.0).round() as i64;
+        let job_label = update.job_id.chars().take(8).collect::<String>();
+        let eta = update
+            .eta_seconds
+            .map(|secs| format_duration(Duration::from_secs(secs)))
+            .unwrap_or_else(|| "--".to_string());
+        let columns = std::env::var("COLUMNS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0);
+        let line = format_agent_job_progress_line(
+            columns,
+            job_label.as_str(),
+            AgentJobProgressStats {
+                processed,
+                total,
+                percent,
+                failed: update.failed_items,
+                running: update.running_items,
+                pending: update.pending_items,
+            },
+            eta.as_str(),
+        );
+        let done = processed >= update.total_items;
+        if !self.use_ansi_cursor {
+            eprintln!("{line}");
+            if done {
+                self.progress_active = false;
+                self.progress_last_len = 0;
+            }
+            return;
+        }
+        if done && self.progress_done {
+            return;
+        }
+        if !self.progress_active {
+            eprintln!();
+            self.progress_anchor = true;
+            self.progress_done = false;
+        }
+        let mut output = String::new();
+        if self.progress_anchor {
+            output.push_str("\u{1b}[1A\u{1b}[1G\u{1b}[2K");
+        } else {
+            output.push_str("\u{1b}[1G\u{1b}[2K");
+        }
+        output.push_str(&line);
+        if done {
+            output.push('\n');
+            eprint!("{output}");
+            self.progress_active = false;
+            self.progress_last_len = 0;
+            self.progress_anchor = false;
+            self.progress_done = true;
+            return;
+        }
+        eprint!("{output}");
+        let _ = std::io::stderr().flush();
+        self.progress_active = true;
+        self.progress_last_len = line.len();
     }
-}
-
-fn writable_root_label(root: &Path, cwd: &Path) -> String {
-    if paths_match_after_canonicalization(root, cwd) {
-        return "workdir".to_string();
-    }
-    if paths_match_after_canonicalization(root, Path::new("/tmp")) {
-        return "/tmp".to_string();
-    }
-    if std::env::var_os("TMPDIR")
-        .filter(|tmpdir| !tmpdir.is_empty())
-        .is_some_and(|tmpdir| paths_match_after_canonicalization(root, Path::new(&tmpdir)))
-    {
-        return "$TMPDIR".to_string();
-    }
-    display_path_label(root)
-}
-
-fn paths_match_after_canonicalization(left: &Path, right: &Path) -> bool {
-    match (
-        canonicalize_preserving_symlinks(left),
-        canonicalize_preserving_symlinks(right),
-    ) {
-        (Ok(left), Ok(right)) if left == right => true,
-        _ => display_path_label(left) == display_path_label(right),
-    }
-}
-
-fn display_path_label(path: &Path) -> String {
-    path.strip_prefix("/private/tmp")
-        .ok()
-        .map(|suffix| Path::new("/tmp").join(suffix))
-        .unwrap_or_else(|| path.to_path_buf())
-        .to_string_lossy()
-        .to_string()
-}
-
-fn reasoning_text(
-    summary: &[String],
-    content: &[String],
-    show_raw_agent_reasoning: bool,
-) -> Option<String> {
-    let entries = if show_raw_agent_reasoning && !content.is_empty() {
-        content
-    } else {
-        summary
-    };
-    if entries.is_empty() {
-        None
-    } else {
-        Some(entries.join("\n"))
-    }
-}
-
-fn final_message_from_turn_items(items: &[ThreadItem]) -> Option<String> {
-    items
-        .iter()
-        .rev()
-        .find_map(|item| match item {
-            ThreadItem::AgentMessage { text, .. } => Some(text.clone()),
-            _ => None,
-        })
-        .or_else(|| {
-            items.iter().rev().find_map(|item| match item {
-                ThreadItem::Plan { text, .. } => Some(text.clone()),
-                _ => None,
-            })
-        })
-}
-
-fn blended_total(usage: &ThreadTokenUsage) -> i64 {
-    let cached_input = usage.total.cached_input_tokens.max(0);
-    let non_cached_input = (usage.total.input_tokens - cached_input).max(0);
-    (non_cached_input + usage.total.output_tokens.max(0)).max(0)
 }
 
 fn should_print_final_message_to_stdout(

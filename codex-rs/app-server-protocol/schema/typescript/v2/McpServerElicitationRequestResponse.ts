@@ -4,7 +4,7 @@
 import type { JsonValue } from "../serde_json/JsonValue";
 import type { McpServerElicitationAction } from "./McpServerElicitationAction";
 
-export type McpServerElicitationRequestResponse = { action: McpServerElicitationAction,
+export type McpServerElicitationRequestResponse = { action: McpServerElicitationAction, 
 /**
  * Structured user input for accepted elicitations, mirroring RMCP `CreateElicitationResult`.
  *

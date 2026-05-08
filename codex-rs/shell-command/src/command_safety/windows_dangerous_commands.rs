@@ -34,15 +34,12 @@ fn is_dangerous_powershell(command: &[String]) -> bool {
         return false;
     };
 
-    is_dangerous_powershell_words(&parsed.tokens)
-}
-
-pub(crate) fn is_dangerous_powershell_words(words: &[String]) -> bool {
-    let tokens_lc: Vec<String> = words
+    let tokens_lc: Vec<String> = parsed
+        .tokens
         .iter()
         .map(|t| t.trim_matches('\'').trim_matches('"').to_ascii_lowercase())
         .collect();
-    let has_url = args_have_url(words);
+    let has_url = args_have_url(&parsed.tokens);
 
     if has_url
         && tokens_lc.iter().any(|t| {
@@ -86,7 +83,11 @@ pub(crate) fn is_dangerous_powershell_words(words: &[String]) -> bool {
     }
 
     // Check for force delete operations (e.g., Remove-Item -Force)
-    has_force_delete_cmdlet(&tokens_lc)
+    if has_force_delete_cmdlet(&tokens_lc) {
+        return true;
+    }
+
+    false
 }
 
 fn is_dangerous_cmd(command: &[String]) -> bool {

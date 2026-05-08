@@ -1,15 +1,10 @@
+use async_trait::async_trait;
 use std::sync::Arc;
-use std::time::Instant;
 
 use crate::function_tool::FunctionCallError;
 use crate::mcp_tool_call::handle_mcp_tool_call;
-use crate::original_image_detail::can_request_original_image_detail;
-use crate::tools::context::McpToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
-use crate::tools::hook_names::HookToolName;
-use crate::tools::registry::PostToolUsePayload;
-use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::mcp::CallToolResult;
@@ -54,7 +49,6 @@ impl ToolHandler for McpHandler {
             call_id.clone(),
             server,
             tool,
-            self.tool_name.display(),
             arguments_str,
         )
         .await;
