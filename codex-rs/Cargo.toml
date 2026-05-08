@@ -2,7 +2,6 @@
 members = [
     # "aws-auth",  # excluded for Phase 1
     # "analytics",  # excluded for Phase 1
-    # "agent-graph-store",  # excluded for Phase 1
     # "agent-identity",  # excluded for Phase 1
     "backend-client",
     # "builtin-mcps",  # excluded for Phase 1
@@ -133,7 +132,6 @@ exclude = [
     # them stops cargo from auto-discovering their Cargo.toml as workspace
     # members. Phase 3+ work will either delete them, adopt them, or fold their
     # functionality into existing fork crates.
-    "agent-graph-store",
     "agent-identity",
     "analytics",
     "app-server-transport",
@@ -190,7 +188,6 @@ license = "Apache-2.0"
 # Internal
 app_test_support = { path = "app-server/tests/common" }
 codex-analytics = { path = "analytics" }
-codex-agent-graph-store = { path = "agent-graph-store" }
 codex-agent-identity = { path = "agent-identity" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
@@ -557,7 +554,6 @@ unwrap_used = "deny"
 # to ignore them until Phase 2-7 wires the new crates up.
 ignored = [
     "aws-types",
-    "codex-agent-graph-store",
     "codex-agent-identity",
     "codex-analytics",
     "codex-app-server-transport",
