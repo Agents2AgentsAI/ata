@@ -994,6 +994,12 @@ async fn run_debug_clear_memories_command(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
         Err(err) => return Err(err.into()),
     };
+    // Recreate the empty memories directory so subsequent runs (and the
+    // integration test that asserts the directory is empty rather than
+    // missing) see a clean, present `memories/` folder.
+    if removed_memory_root {
+        tokio::fs::create_dir_all(&memory_root).await?;
+    }
 
     let mut message = if cleared_state_db {
         format!("Cleared memory state from {}.", state_path.display())
