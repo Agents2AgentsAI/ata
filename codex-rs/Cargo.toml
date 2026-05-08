@@ -127,11 +127,13 @@ members = [
     "artifacts",
 ]
 exclude = [
-    # Phase 1 of the rust-v0.129.0 merge: these crates were introduced upstream
-    # and have not yet been integrated against the fork's HEAD APIs. Excluding
-    # them stops cargo from auto-discovering their Cargo.toml as workspace
-    # members. Phase 3+ work will either delete them, adopt them, or fold their
-    # functionality into existing fork crates.
+    # rust-v0.129.0 merge: these crates were introduced upstream and are
+    # awaiting integration against the fork's HEAD APIs. Excluding them stops
+    # cargo from auto-discovering their Cargo.toml as workspace members.
+    # Strategic stance: keep all upstream refactorings/changes and layer ATA
+    # features on top — these crates will be brought back into the workspace
+    # incrementally as their dependents are wired up.
+    "agent-graph-store",
     "agent-identity",
     "analytics",
     "app-server-transport",
@@ -188,6 +190,7 @@ license = "Apache-2.0"
 # Internal
 app_test_support = { path = "app-server/tests/common" }
 codex-analytics = { path = "analytics" }
+codex-agent-graph-store = { path = "agent-graph-store" }
 codex-agent-identity = { path = "agent-identity" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
@@ -554,6 +557,7 @@ unwrap_used = "deny"
 # to ignore them until Phase 2-7 wires the new crates up.
 ignored = [
     "aws-types",
+    "codex-agent-graph-store",
     "codex-agent-identity",
     "codex-analytics",
     "codex-app-server-transport",
