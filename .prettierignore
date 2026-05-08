@@ -5,3 +5,7 @@ pnpm-lock.yaml
 prompt.md
 *_prompt.md
 *_instructions.md
+
+# Vendored / generated files outside our prettier scope.
+/codex-rs/core/src/tools/js_repl/meriyah.umd.min.js
+/codex-rs/skills/src/assets/samples/openai-docs/scripts/resolve-latest-model-info.js
