@@ -450,7 +450,7 @@ fn spawn_host_bridge(endpoint: SocketAddr, uds_path: &Path) -> io::Result<libc::
 }
 
 fn run_host_bridge(endpoint: SocketAddr, uds_path: &Path, ready_fd: libc::c_int) -> io::Result<()> {
-    harden_bridge_process()?;
+    set_parent_death_signal()?;
     if uds_path.exists() {
         std::fs::remove_file(uds_path)?;
     }
@@ -501,7 +501,7 @@ fn spawn_local_bridge(uds_path: &Path) -> io::Result<u16> {
 }
 
 fn run_local_bridge(uds_path: &Path, ready_fd: libc::c_int) -> io::Result<()> {
-    harden_bridge_process()?;
+    set_parent_death_signal()?;
     let listener = bind_local_loopback_listener()?;
     let port = listener.local_addr()?.port();
 
@@ -614,11 +614,6 @@ fn set_parent_death_signal() -> io::Result<()> {
     }
 }
 
-fn harden_bridge_process() -> io::Result<()> {
-    set_parent_death_signal()?;
-    codex_process_hardening::disable_process_dumping()
-}
-
 fn proxy_bidirectional(mut tcp_stream: TcpStream, mut unix_stream: UnixStream) -> io::Result<()> {
     let mut tcp_reader = tcp_stream.try_clone()?;
     let mut unix_writer = unix_stream.try_clone()?;
@@ -723,8 +718,7 @@ mod tests {
     #[test]
     fn rewrites_proxy_url_to_local_loopback_port() {
         let rewritten =
-            rewrite_proxy_env_value("socks5h://127.0.0.1:8081", /*local_port*/ 43210)
-                .expect("rewritten value");
+            rewrite_proxy_env_value("socks5h://127.0.0.1:8081", 43210).expect("rewritten value");
         assert_eq!(rewritten, "socks5h://127.0.0.1:43210");
     }
 
